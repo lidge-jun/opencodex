@@ -56,8 +56,12 @@ The prefilter is only an optimization, not final process-membership authority.
 ## Explicit Codex CLI installation observation
 
 `src/cli/codex-cli-update.ts` dispatches the opt-in Windows x64 `attest` operation to
-`src/codex/cli-installation-identity.ts`. Four explicit absolute paths name the candidate,
-npm prefix, npm CLI and Node; no candidate discovery or target execution occurs. Only the
+`src/codex/cli-installation-identity.ts`. With no options, `src/codex/cli-installation-targets.ts`
+derives the four inputs from the proof-bound launcher snapshot: the configured candidate or
+the first codex on the captured PATH, an OpenCodex wrapper resolving to its renamed npm
+backing, the npm prefix layout, and the Node/npm toolchain beside the resolved node.exe.
+Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
+remain accepted as an all-or-none override. Only the
 standard npm command shim or direct Codex package entry is accepted. The native reader in
 `src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
 rejects reparse points, conflicting writers and unsupported paths/platforms. Its path-free

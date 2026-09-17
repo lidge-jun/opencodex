@@ -7,23 +7,31 @@ import type {
   CodexCliInstallationIdentityInput,
   CodexCliInstallationIdentityReport,
 } from "../codex/cli-installation-identity";
+import type {
+  CodexCliInstallationSnapshot,
+  CodexCliInstallationTargetDerivation,
+} from "../codex/cli-installation-targets";
 import { CliUsageError, isJsonOption, printData, runCliAction } from "./runtime-api";
 import { trustedNodeLauncherContext } from "./launcher-context";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
   ocx system codex-cli-update check [--json]
+  ocx system codex-cli-update attest [--json]
   ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]`;
 
 export type ParsedCodexCliUpdateArgs = Readonly<{
   json: boolean;
 }> | Readonly<{
   json: boolean;
-  attest: CodexCliInstallationIdentityInput;
+  attest: CodexCliInstallationIdentityInput | "selected";
 }>;
 
 export interface CodexCliUpdateCommandDeps {
   readonly inspectInstall?: (deps: CodexCliInstallProvenanceDeps) => Promise<CodexCliInstallReport>;
   readonly inspectIdentity?: (input: CodexCliInstallationIdentityInput) => Promise<CodexCliInstallationIdentityReport>;
+  readonly deriveInstallationInput?: (
+    snapshot: CodexCliInstallationSnapshot,
+  ) => CodexCliInstallationTargetDerivation;
 }
 
 function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
@@ -40,7 +48,7 @@ function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
     `identity-digest: ${report.identityDigest ?? "unavailable"}`,
     `proof: ${report.proof ?? "unavailable"}`,
     `toolchain: ${report.toolchain}`,
-    "scope: explicit installation identity only; runtime selection and update ownership are not attested",
+    "scope: installation identity only; runtime selection and update ownership are not attested",
   ];
 }
 
@@ -75,6 +83,11 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
     positional.push(token);
   }
   if (positional[0] === "attest") {
+    // No options: attest the selected candidate identified from the proof-bound
+    // launcher snapshot. The four explicit paths remain all-or-none.
+    if (positional.length === 1) {
+      return Object.freeze({ json, attest: "selected" as const });
+    }
     const options = new Map<string, keyof CodexCliInstallationIdentityInput>([
       ["--candidate", "candidate"], ["--npm-prefix", "npmPrefix"],
       ["--npm-cli", "npmCli"], ["--node", "node"],
@@ -127,9 +140,25 @@ export async function handleCodexCliUpdateCommand(
     if ("attest" in parsed) {
       let report: CodexCliInstallationIdentityReport;
       try {
-        const inspectIdentity = deps.inspectIdentity
-          ?? (await import("../codex/cli-installation-identity")).inspectCodexCliInstallationIdentity;
-        report = await inspectIdentity(parsed.attest);
+        const identityModule = await import("../codex/cli-installation-identity");
+        const inspectIdentity = deps.inspectIdentity ?? identityModule.inspectCodexCliInstallationIdentity;
+        if (parsed.attest === "selected") {
+          // The proof-bound launcher snapshot is the only trusted source for the
+          // selected candidate; a direct Bun/source launch has none and refuses.
+          const snapshot = trustedNodeLauncherContext()?.codexCliInspectionEnv;
+          const derive = deps.deriveInstallationInput
+            ?? (await import("../codex/cli-installation-targets")).deriveCodexCliInstallationInput;
+          const derived = derive({
+            codexCliPath: snapshot?.codexCliPath ?? null,
+            path: snapshot?.path ?? null,
+            pathExt: snapshot?.pathExt ?? null,
+          });
+          report = derived.kind === "derived"
+            ? await inspectIdentity(derived.input)
+            : identityModule.codexCliInstallationRefusal(derived.reason, "selected");
+        } else {
+          report = await inspectIdentity(parsed.attest);
+        }
       } catch {
         // Filesystem/native errors can contain the explicit private paths. The
         // read-only inspector normally returns a refusal; unexpected errors stay redacted.

@@ -38,6 +38,78 @@ const identityReport: CodexCliInstallationIdentityReport = {
 };
 
 describe("Codex CLI update CLI", () => {
+  test("bare attest selects the proof-bound candidate and forwards the derived input", async () => {
+    expect(parseCodexCliUpdateArgs(["attest"])).toEqual({ json: false, attest: "selected" });
+    expect(parseCodexCliUpdateArgs(["attest", "--json"])).toEqual({ json: true, attest: "selected" });
+    expect(parseCodexCliUpdateArgs(["--json", "attest"])).toEqual({ json: true, attest: "selected" });
+    const proof = "M".repeat(43);
+    const env: NodeJS.ProcessEnv = {
+      [NODE_LAUNCH_CONTEXT_ENV]: JSON.stringify({
+        version: 1,
+        proof,
+        anthropicEnvSlots: [],
+        codexCliInspectionEnv: {
+          codexCliPath: "C:\\managed\\codex.cmd",
+          path: "C:\\managed",
+          pathExt: ".CMD",
+          managerRoots: {},
+          configDir: "C:\\opencodex",
+        },
+      }),
+    };
+    initializeNodeLauncherContext(["bun", "cli", `${NODE_LAUNCH_PROOF_PREFIX}${proof}`], env);
+    const logs: string[] = [];
+    const oldLog = console.log;
+    let snapshot: unknown;
+    let received: unknown;
+    try {
+      console.log = (...values: unknown[]) => logs.push(values.map(String).join(" "));
+      expect(await handleCodexCliUpdateCommand(["attest", "--json"], {
+        deriveInstallationInput: input => {
+          snapshot = input;
+          return { kind: "derived", input: { ...identityInput, candidateSource: "selected" as const } };
+        },
+        inspectIdentity: async input => { received = input; return identityReport; },
+      })).toBe(0);
+      expect(snapshot).toEqual({
+        codexCliPath: "C:\\managed\\codex.cmd",
+        path: "C:\\managed",
+        pathExt: ".CMD",
+      });
+      expect(received).toEqual({ ...identityInput, candidateSource: "selected" });
+      expect(JSON.parse(logs[0]!)).toEqual(identityReport);
+    } finally {
+      console.log = oldLog;
+      initializeNodeLauncherContext(["bun", "cli"], {});
+    }
+  });
+
+  test("bare attest without a launch proof reports an unavailable selected candidate", async () => {
+    initializeNodeLauncherContext(["bun", "cli"], {});
+    const logs: string[] = [];
+    const oldLog = console.log;
+    let inspectCalls = 0;
+    try {
+      console.log = (...values: unknown[]) => logs.push(values.map(String).join(" "));
+      expect(await handleCodexCliUpdateCommand(["attest", "--json"], {
+        deriveInstallationInput: () => ({ kind: "unavailable", reason: "candidate_unavailable" }),
+        inspectIdentity: async () => { inspectCalls += 1; return identityReport; },
+      })).toBe(0);
+      expect(inspectCalls).toBe(0);
+      expect(JSON.parse(logs[0]!)).toMatchObject({
+        status: "refused",
+        reason: "candidate_unavailable",
+        candidateSource: "selected",
+        installationIdentityObserved: false,
+        selectionAttested: false,
+        managed: false,
+        applyAllowed: false,
+      });
+    } finally {
+      console.log = oldLog;
+    }
+  });
+
   test("attest requires all explicit paths and accepts the shared JSON flag positions", () => {
     expect(parseCodexCliUpdateArgs(attestArgs)).toEqual({ json: false, attest: identityInput });
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
@@ -48,7 +120,7 @@ describe("Codex CLI update CLI", () => {
 
   test("malformed attest paths and options fail before either inspector is called", async () => {
     const invalid = [
-      ["attest"], attestArgs.slice(0, -2), attestArgs.slice(0, -1),
+      attestArgs.slice(0, -2), attestArgs.slice(0, -1),
       [...attestArgs, "--node", identityInput.node], [...attestArgs, "--unknown", "/hidden"],
       [...attestArgs, "extra"], [...attestArgs, "--json", "--json=true"],
       ...["", " ", "relative/codex", "C:codex.cmd", "\\codex.cmd", "--node", "C:\\bad\npath"].map(
@@ -101,7 +173,7 @@ describe("Codex CLI update CLI", () => {
       expect(logs).toContain("managed: no");
       expect(logs).toContain("apply-allowed: no");
       expect(logs).toContain("toolchain: observed-only");
-      expect(logs).toContain("scope: explicit installation identity only; runtime selection and update ownership are not attested");
+      expect(logs).toContain("scope: installation identity only; runtime selection and update ownership are not attested");
       logs.length = 0;
       const refused: CodexCliInstallationIdentityReport = {
         ...identityReport, status: "refused", reason: "package_mismatch", installationIdentityObserved: false,

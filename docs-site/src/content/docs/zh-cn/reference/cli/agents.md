@@ -210,10 +210,11 @@ ocx system codex-cli-update check --json
 #### 显式观察 Windows x64 安装
 
 ```text
+ocx system codex-cli-update attest [--json]
 ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
 ```
 
-`attest` 是可选的只读操作，用于观察明确指定的 Windows x64 npm 安装。四个绝对路径均为必填，不自动查找候选项。`--candidate` 必须是标准 npm `<prefix>/codex.cmd` 或 `<prefix>/node_modules/@openai/codex/bin/codex.js`。`--npm-cli` 必须以 `node_modules/npm/bin/npm-cli.js` 结尾，`--node` 明确指定 `node.exe`。应用捆绑安装、已识别的版本管理器布局、opencodex 自有 shim 和自定义包装脚本均会被拒绝。
+`attest` 是可选的只读操作，用于观察所选或明确指定的 Windows x64 npm 安装。不带任何选项时，命令会观察由可信启动器快照识别的所选候选项（已配置的 `CODEX_CLI_PATH` 或所捕获 PATH 中的第一个 `codex`），其中 opencodex 包装脚本会解析到其重命名的 `codex.opencodex-real.cmd` npm 备份。提供全部四个绝对路径可覆盖自动识别；自动识别仅提出路径，持有句柄的观察才是最终依据。`--candidate` 必须是标准 npm `<prefix>/codex.cmd` 或 `<prefix>/node_modules/@openai/codex/bin/codex.js`。`--npm-cli` 必须以 `node_modules/npm/bin/npm-cli.js` 结尾，`--node` 明确指定 `node.exe`。应用捆绑安装、已识别的版本管理器布局、缺少 npm 备份的 opencodex 自有 shim 和自定义包装脚本均会被拒绝。
 
 在有界读取期间，原生句柄保持祖先目录和文件打开。非支持平台、重解析点/junction、冲突的写入者、不安全路径以及超出大小限制的文件均会被拒绝。固定格式的报告不包含路径：`status` 为 `observed` 或 `refused`，并提供 `installationIdentityObserved`；`selectionAttested`、`managed` 和 `applyAllowed` 始终为 `false`。报告拒绝时也可能返回退出码 0，因此应检查 `status`。
 

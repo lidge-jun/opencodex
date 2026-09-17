@@ -8,11 +8,13 @@ export interface CodexCliInstallationIdentityInput {
   readonly npmPrefix: string;
   readonly npmCli: string;
   readonly node: string;
+  /** Where the candidate came from; defaults to an explicit CLI argument. */
+  readonly candidateSource?: "explicit-cli" | "selected";
 }
 
 export interface CodexCliInstallationIdentityReport {
   readonly schemaVersion: 1;
-  readonly candidateSource: "explicit-cli";
+  readonly candidateSource: "explicit-cli" | "selected";
   readonly status: "observed" | "refused";
   readonly reason: string;
   readonly installationIdentityObserved: boolean;
@@ -76,14 +78,26 @@ function supportedLayoutPath(path: string): boolean {
   return !/(?:^|\\)(?:windowsapps|scoop|\.volta|\.nvm|\.asdf|\.mise|\.fnm|\.nvs|\.nodenv)(?:\\|$)|\.app(?:\\|$)/i.test(path);
 }
 
-function report(reason: string, versions?: { codex: string; npm: string; digest: string }): CodexCliInstallationIdentityReport {
+function report(
+  reason: string,
+  versions?: { codex: string; npm: string; digest: string },
+  candidateSource: CodexCliInstallationIdentityReport["candidateSource"] = "explicit-cli",
+): CodexCliInstallationIdentityReport {
   return Object.freeze({
-    schemaVersion: 1, candidateSource: "explicit-cli", status: versions ? "observed" : "refused",
+    schemaVersion: 1, candidateSource, status: versions ? "observed" : "refused",
     reason, installationIdentityObserved: !!versions, selectionAttested: false, managed: false,
     applyAllowed: false, packageVersion: versions?.codex ?? null, npmVersion: versions?.npm ?? null,
     identityDigest: versions?.digest ?? null, proof: versions ? "windows-handle-bound" : null,
     toolchain: "observed-only",
   });
+}
+
+/** A refusal before any observation ran, e.g. when no selected candidate can be identified. */
+export function codexCliInstallationRefusal(
+  reason: string,
+  candidateSource: CodexCliInstallationIdentityReport["candidateSource"] = "explicit-cli",
+): CodexCliInstallationIdentityReport {
+  return report(reason, undefined, candidateSource);
 }
 
 function manifest(file: ObservedInstallationFile, name: string, bin: string, expected: string): string | null {
@@ -135,54 +149,59 @@ export async function inspectCodexCliInstallationIdentity(
   input: CodexCliInstallationIdentityInput,
   deps: CodexCliInstallationIdentityDeps = {},
 ): Promise<CodexCliInstallationIdentityReport> {
-  if ((deps.platform ?? process.platform) !== "win32") return report("unsupported_platform");
+  const source = input.candidateSource ?? "explicit-cli";
+  const refused = (reason: string) => report(reason, undefined, source);
+  if ((deps.platform ?? process.platform) !== "win32") return refused("unsupported_platform");
   const candidate = localPath(input.candidate);
   const prefix = localPath(input.npmPrefix);
   const npmCli = localPath(input.npmCli);
   const node = localPath(input.node);
-  if (!candidate || !prefix || !npmCli || !node) return report("unsafe_path");
-  if (![candidate, prefix, npmCli, node].every(supportedLayoutPath)) return report("unsupported_layout");
+  if (!candidate || !prefix || !npmCli || !node) return refused("unsafe_path");
+  if (![candidate, prefix, npmCli, node].every(supportedLayoutPath)) return refused("unsupported_layout");
   const packageRoot = win32.join(prefix, "node_modules", "@openai", "codex");
   const codexManifest = win32.join(packageRoot, "package.json");
   const codexBin = win32.join(packageRoot, "bin", "codex.js");
   const shim = win32.join(prefix, "codex.cmd");
-  if (![key(codexBin), key(shim)].includes(key(candidate))
+  // A codex.opencodex-real.cmd backup is npm's renamed launcher: same grammar, same dir.
+  const backingShim = win32.join(prefix, "codex.opencodex-real.cmd");
+  if (![key(codexBin), key(shim), key(backingShim)].includes(key(candidate))
     || !/\\node_modules\\npm\\bin\\npm-cli\.js$/i.test(npmCli)
-    || win32.basename(node).toLowerCase() !== "node.exe") return report("unsupported_layout");
+    || win32.basename(node).toLowerCase() !== "node.exe") return refused("unsupported_layout");
   const npmManifest = win32.join(win32.dirname(win32.dirname(npmCli)), "package.json");
   try {
     const inspect = deps.inspectFiles ?? (await import("./windows-installation-files")).inspectWindowsInstallationFiles;
     // Read both manifests again with every linked file held open: first-pass bytes cannot
     // authorize links after a manifest replacement between the two observations.
     const first = await inspect([{ path: codexManifest, maxBytes: TEXT_LIMIT }, { path: npmManifest, maxBytes: TEXT_LIMIT }]);
-    if (first.kind !== "observed") return report("native_proof_unavailable");
+    if (first.kind !== "observed") return refused("native_proof_unavailable");
     const initial = new Map(first.files.map(file => [key(file.path), file]));
     const codex = initial.get(key(codexManifest));
     const npm = initial.get(key(npmManifest));
-    if (!codex || !npm) return report("read_failed");
+    if (!codex || !npm) return refused("read_failed");
     const codexVersion = manifest(codex, "@openai/codex", "codex", "bin/codex.js");
     const npmVersion = manifest(npm, "npm", "npm", "bin/npm-cli.js");
-    if (!codexVersion || !npmVersion) return report("package_mismatch");
+    if (!codexVersion || !npmVersion) return refused("package_mismatch");
     const requests: InstallationFileRequest[] = [codexManifest, npmManifest, candidate, codexBin, npmCli]
       .filter((path, index, all) => all.findIndex(other => key(other) === key(path)) === index)
       .map(path => ({ path, maxBytes: TEXT_LIMIT }));
     requests.push({ path: node, maxBytes: NODE_LIMIT, hashOnly: true });
     const second = await inspect(requests);
-    if (second.kind !== "observed") return report("native_proof_unavailable");
+    if (second.kind !== "observed") return refused("native_proof_unavailable");
     const files = new Map(second.files.map(file => [key(file.path), file]));
-    if (requests.some(request => !files.has(key(request.path)))) return report("read_failed");
+    if (requests.some(request => !files.has(key(request.path)))) return refused("read_failed");
     for (const before of [codex, npm]) {
       if (JSON.stringify(fileEvidence(before)) !== JSON.stringify(fileEvidence(files.get(key(before.path))!))) {
-        return report("identity_changed");
+        return refused("identity_changed");
       }
     }
-    if (key(candidate) === key(shim) && !npmCodexCommandShim(files.get(key(candidate))!.bytes)) {
-      return report("launcher_mismatch");
+    if ([key(shim), key(backingShim)].includes(key(candidate))
+      && !npmCodexCommandShim(files.get(key(candidate))!.bytes)) {
+      return refused("launcher_mismatch");
     }
     const observed = [...files.values()].sort((a, b) => key(a.path) < key(b.path) ? -1 : key(a.path) > key(b.path) ? 1 : 0);
-    if (observed.some(file => !/^[a-f0-9]{64}$/i.test(fileDigest(file)))) return report("read_failed");
+    if (observed.some(file => !/^[a-f0-9]{64}$/i.test(fileDigest(file)))) return refused("read_failed");
     const digest = hash(JSON.stringify(["opencodex-explicit-installation-observation-v1", key(prefix),
       key(candidate), key(npmCli), key(node), ...observed.map(fileEvidence)]));
-    return report("identity_observed", { codex: codexVersion, npm: npmVersion, digest });
-  } catch { return report("read_failed"); }
+    return report("identity_observed", { codex: codexVersion, npm: npmVersion, digest }, source);
+  } catch { return refused("read_failed"); }
 }

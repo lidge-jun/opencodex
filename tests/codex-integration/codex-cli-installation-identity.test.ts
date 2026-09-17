@@ -216,4 +216,29 @@ describe("explicit Codex CLI installation identity", () => {
       expect(JSON.stringify(result)).not.toContain("secret");
     }
   });
+
+  test("a selected candidate source is echoed without changing the observation contract", async () => {
+    const fixture = mockFiles();
+    const selected = { ...fixture.input, candidateSource: "selected" as const };
+    const observed = await inspectCodexCliInstallationIdentity(selected, { platform: "win32", inspectFiles: fixture.read });
+    expect(observed).toMatchObject({
+      status: "observed", candidateSource: "selected", installationIdentityObserved: true,
+      selectionAttested: false, managed: false, applyAllowed: false,
+    });
+    const refused = await inspectCodexCliInstallationIdentity(
+      { ...selected, candidate: "C:\\elsewhere\\codex.cmd" }, { platform: "win32", inspectFiles: fixture.read });
+    expect(refused).toMatchObject({ status: "refused", candidateSource: "selected", reason: "unsupported_layout" });
+  });
+
+  test("the renamed npm launcher codex.opencodex-real.cmd is grammar-checked like the shim", async () => {
+    const fixture = mockFiles();
+    const backing = win32.join(fixture.input.npmPrefix, "codex.opencodex-real.cmd");
+    fixture.values.set(backing, cmdShim);
+    const input = { ...fixture.input, candidate: backing, candidateSource: "selected" as const };
+    expect((await inspectCodexCliInstallationIdentity(input, { platform: "win32", inspectFiles: fixture.read })))
+      .toMatchObject({ status: "observed", reason: "identity_observed", candidateSource: "selected" });
+    fixture.values.set(backing, "@echo off\\r\\nrem arbitrary wrapper\\r\\n");
+    expect((await inspectCodexCliInstallationIdentity(input, { platform: "win32", inspectFiles: fixture.read })))
+      .toMatchObject({ status: "refused", reason: "launcher_mismatch" });
+  });
 });

@@ -260,10 +260,11 @@ ocx system codex-cli-update check --json
 #### Явное наблюдение установки Windows x64
 
 ```text
+ocx system codex-cli-update attest [--json]
 ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
 ```
 
-`attest` — необязательная операция только для чтения явно указанной установки npm на Windows x64. Все четыре абсолютных пути обязательны; автоматического поиска нет. `--candidate` указывает стандартный npm `<prefix>/codex.cmd` или `<prefix>/node_modules/@openai/codex/bin/codex.js`. Путь `--npm-cli` должен заканчиваться на `node_modules/npm/bin/npm-cli.js`, а `--node` явно указывает `node.exe`. Встроенные в приложения установки, распознанные каталоги менеджеров версий, shim opencodex и пользовательские обёртки отклоняются.
+`attest` — необязательная операция только для чтения выбранной или явно указанной установки npm на Windows x64. Без параметров команда наблюдает выбранный кандидат, определённый доверенным снимком средства запуска (настроенный `CODEX_CLI_PATH` или первый `codex` в захваченном PATH), а обёртка opencodex разрешается в переименованную npm-резервную копию `codex.opencodex-real.cmd`. Передача всех четырёх абсолютных путей переопределяет поиск; поиск лишь предлагает пути, а наблюдение с удерживаемыми дескрипторами остаётся окончательным. `--candidate` указывает стандартный npm `<prefix>/codex.cmd` или `<prefix>/node_modules/@openai/codex/bin/codex.js`. Путь `--npm-cli` должен заканчиваться на `node_modules/npm/bin/npm-cli.js`, а `--node` явно указывает `node.exe`. Встроенные в приложения установки, распознанные каталоги менеджеров версий, shim opencodex без npm-резервной копии и пользовательские обёртки отклоняются.
 
 При ограниченном чтении нативные дескрипторы удерживают родительские каталоги и файлы. Неподдерживаемые платформы, точки повторной обработки/junction, конфликтующая запись, небезопасные пути и слишком большие файлы отклоняются. Отчёт фиксированной формы не содержит путей: `status` равен `observed` или `refused`, также возвращается `installationIdentityObserved`. Поля `selectionAttested`, `managed` и `applyAllowed` остаются `false`. Проверяйте `status`: отказ в отчёте может сопровождаться кодом выхода 0.
 
