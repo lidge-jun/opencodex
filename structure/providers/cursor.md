@@ -128,11 +128,15 @@ Combo child requests normalize effort and thinking controls against the selected
 
 Cursor models sometimes emit `[TOOL_CALL]name[ARGS]{…}` inside `textDelta` instead of a
 real `toolCall*` frame. `src/adapters/cursor/text-toolcall.ts` strips every complete
-marker from the assistant text channel and yields the parsed name/args.
-`src/adapters/cursor/protobuf-events.ts` promotes an advertised name onto the atomic
-tool-call path and holds an incomplete opener across streaming deltas. An unadvertised
-or malformed marker is dropped, never rewritten back into visible text. Finalize
-clears a held prefix so a truncated stream cannot leak it. Coverage lives in
+marker from the assistant text channel and yields the parsed name/args. It retains split
+markers up to a byte-counted cap, then switches to a constant-space suppressed scan until
+the JSON object closes; neither an oversized tail nor a malformed payload returns to prose.
+Malformed argument diagnostics contain only the failure class and an optional tool name,
+never the argument content. `src/adapters/cursor/protobuf-events.ts` buffers advertised textual calls
+until turn finalization. It flushes them onto the atomic tool-call path only when the turn
+contained no real client-tool frame; any real frame, including one left incomplete, wins and
+drops the whole textual buffer. A missing advertised-name set is fail-closed. Finalize also
+clears any held or suppressed prefix. Coverage lives in
 `tests/providers/cursor/cursor-protobuf-events.test.ts`.
 
 ## Overflow remint boundary

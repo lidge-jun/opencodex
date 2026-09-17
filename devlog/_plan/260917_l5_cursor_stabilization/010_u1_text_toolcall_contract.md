@@ -95,3 +95,13 @@ marker split across deltas in a turn that also has a real frame promotes nothing
 malformed arguments promote nothing and leak no text; a hold past the cap leaks
 no tail; `[ARGS]` with a non-JSON payload leaks no text; no advertised set
 promotes nothing.
+
+## Implementation outcome
+
+Implemented in the allowed Cursor adapter surface. Textual calls are buffered until
+turn finalization, while real client-tool frames mark the turn authoritative and discard
+that fallback buffer. Oversized pending markers now switch to a byte-counted,
+constant-space suppressed scan. Malformed argument diagnostics include no argument
+content, and all six regressions above are covered in the existing Cursor protobuf event
+test file. Per lane policy, verification is static/source-based only; hosted CI remains the
+lane owner's completion gate.
