@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   beginInjection, injectionConfig, installInjectionFixture, advertiseInjection, savedResult,
-  acknowledgeInjection, completeInjection, waitForInjection, InjectionSocket, fallbackCalls,
+  acknowledgeInjection, completeInjection, continuationFrame, waitForInjection, InjectionSocket, fallbackCalls,
   type Frame,
 } from "../helpers/native-injection-fixture";
 import { NativeInjectionChannel } from "../../src/server/responses/native-injection";
@@ -88,11 +88,11 @@ test.each([false, true])("rich/custom/approval continuation uses one original so
   completeInjection(socket, { output: [func, custom, approval] });
   await waitForInjection(() => sent.some(frame => frame.type === "response.completed"));
   expect(ws.data.nativeSteering).toBeDefined();
-  const frame = { type: "response.create", previous_response_id: id,
-    input: [savedResult("call-1", "text"), customResult(), approvalResult(false)] };
+  const frame = continuationFrame({ type: "response.create", previous_response_id: id,
+    input: [savedResult("call-1", "text"), customResult(), approvalResult(false)] }, api);
   send(frame);
   await waitForInjection(() => socket.frames.length === 2);
-  expect(socket.frames[1]).toMatchObject(frame);
+  expect(socket.frames[1]).toMatchObject({ ...frame, model: "gpt-5.6-sol" });
   socket.emit({ type: "response.created", response: { id: "r2", previous_response_id: id, output: [] } });
   completeInjection(socket, {}, "r2");
   await waitForInjection(() => !ws.data.nativeSteering);
@@ -106,9 +106,9 @@ test.each([false, true])("approval %s is caller-supplied, required and never def
   try {
     x.item(approvalCall()); x.terminal();
     expect(x.channel.ended).toBe(false); expect(x.sent).toEqual([]);
-    expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [savedResult("approval-item")] })).toThrow();
+    expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [savedResult("approval-item")] })).toThrow();
     expect(x.sent).toEqual([]);
-    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [approvalResult(approve)] })).toBe(true);
+    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [approvalResult(approve)] })).toBe(true);
     expect(x.sent[0].input).toEqual([approvalResult(approve)]);
   } finally { x.detach(); }
 });
@@ -121,7 +121,7 @@ test("extended injection is refused before send and does not consume a call need
   expect(socket.frames).toHaveLength(1);
   expect(sent.at(-1)?.type).toBe("error");
   completeInjection(socket, { output: [call, custom] });
-  send({ type: "response.create", previous_response_id: id, input: [{ type: "function_call_output", call_id: "call-1", output: rich() }, customResult()] });
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [{ type: "function_call_output", call_id: "call-1", output: rich() }, customResult()] }));
   await waitForInjection(() => socket.frames.length === 2);
   expect(socket.frames[1].input[0].output).toEqual(rich());
   expect(fallbackCalls).toBe(0);
@@ -134,9 +134,9 @@ test("accepted injection and unsent custom/approval results have separate comple
   send({ type: "response.inject", response_id: id, input: [savedResult()] });
   acknowledgeInjection(socket); completeInjection(socket, { output: [func, custom, approval] });
   expect(ws.data.nativeSteering).toBeDefined();
-  send({ type: "response.create", previous_response_id: id, input: [savedResult(), customResult(), approvalResult(true)] });
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult(), customResult(), approvalResult(true)] }));
   expect(socket.frames).toHaveLength(2);
-  send({ type: "response.create", previous_response_id: id, input: [customResult(), approvalResult(true)] });
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [customResult(), approvalResult(true)] }));
   await waitForInjection(() => socket.frames.length === 3);
   expect(socket.frames[2].input).toEqual([customResult(), approvalResult(true)]);
 });
@@ -146,11 +146,27 @@ test("call type, program caller and foreign approval identity cannot be substitu
   try {
     x.item(customCall({ caller: origin, agent: { agent_name: "/root/a" } })); x.item(approvalCall(), 1); x.terminal();
     for (const bad of [savedResult("custom-call"), customResult(), customResult({ caller: { type: "program", caller_id: "program-two" } })]) {
-      expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [bad, approvalResult(true)] })).toThrow();
+      expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [bad, approvalResult(true)] })).toThrow();
     }
-    expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [customResult({ caller: origin }), { ...approvalResult(false), approval_request_id: "foreign" }] })).toThrow();
+    expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [customResult({ caller: origin }), { ...approvalResult(false), approval_request_id: "foreign" }] })).toThrow();
     expect(x.sent).toEqual([]);
-    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [customResult({ caller: origin }), approvalResult(false)] })).toBe(true);
+    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [customResult({ caller: origin }), approvalResult(false)] })).toBe(true);
+  } finally { x.detach(); }
+});
+
+test("a continuation that omits or changes a pinned setting fails closed", () => {
+  const x = unit();
+  try {
+    x.item(customCall()); x.terminal();
+    for (const frame of [
+      { type: "response.create", previous_response_id: "r1", input: [customResult()] },
+      { type: "response.create", previous_response_id: "r1", multi_agent: { enabled: false }, input: [customResult()] },
+    ]) {
+      try { x.channel.continue(frame); expect.unreachable(); }
+      catch (error) { expect((error as { code?: string }).code).toBe("injection_settings_changed"); }
+    }
+    expect(x.sent).toEqual([]);
+    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [customResult()] })).toBe(true);
   } finally { x.detach(); }
 });
 
@@ -172,9 +188,9 @@ test("oversized rich continuation is refused before send; original call remains 
   const x = unit();
   try {
     x.item(customCall()); x.terminal();
-    expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [customResult({ output: [{ type: "input_text", text: "x".repeat(MAX_NATIVE_INJECTION_BYTES) }] })] })).toThrow();
+    expect(() => x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [customResult({ output: [{ type: "input_text", text: "x".repeat(MAX_NATIVE_INJECTION_BYTES) }] })] })).toThrow();
     expect(x.sent).toEqual([]);
-    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [customResult()] })).toBe(true);
+    expect(x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [customResult()] })).toBe(true);
   } finally { x.detach(); }
 });
 
@@ -183,7 +199,7 @@ test("continuation history is detached from later caller mutation", () => {
   try {
     x.item(customCall()); x.terminal();
     const input = [customResult()];
-    x.channel.continue({ type: "response.create", previous_response_id: "r1", input });
+    x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input });
     input[0].output[0].text = "changed";
     x.channel.observe({ type: "response.created", response: { id: "r2", previous_response_id: "r1" } });
     x.channel.observe({ type: "response.completed", response: { id: "r2", output: [] } });
@@ -213,7 +229,7 @@ test("hosted sparse terminal items are retained in the committed continuation pr
   try {
     hosted.forEach((item, index) => x.item(item, index)); x.item(customCall(), 3);
     x.channel.observe({ type: "response.completed", response: { id: "r1", output: [customCall()] } });
-    x.channel.continue({ type: "response.create", previous_response_id: "r1", input: [customResult()] });
+    x.channel.continue({ type: "response.create", previous_response_id: "r1", multi_agent: { enabled: true }, input: [customResult()] });
     x.channel.observe({ type: "response.created", response: { id: "r2", previous_response_id: "r1" } });
     x.channel.observe({ type: "response.completed", response: { id: "r2", output: [] } });
     expect(x.remembered.at(-1)?.input).toEqual([...hosted, customCall(), customResult()]);
@@ -250,12 +266,12 @@ test("a completed injection turn may be followed by an explicit ordinary steerin
 test("an early same-parent rich continuation cannot escape to normal dispatch", async () => {
   const { socket, send, sent, id } = await beginInjection();
   emitItem(socket, customCall(), 0);
-  send({ type: "response.create", previous_response_id: id, input: [customResult()] });
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [customResult()] }));
   expect(sent.at(-1)?.error.code).toBe("injection_pending");
   expect(socket.frames).toHaveLength(1); expect(InjectionSocket.all).toHaveLength(1);
   expect(fallbackCalls).toBe(0);
   completeInjection(socket, { output: [customCall()] });
-  send({ type: "response.create", previous_response_id: id, input: [customResult()] });
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [customResult()] }));
   await waitForInjection(() => socket.frames.length === 2);
   expect(socket.frames[1].input).toEqual([customResult()]);
 });

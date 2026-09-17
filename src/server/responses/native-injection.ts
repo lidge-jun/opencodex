@@ -182,6 +182,9 @@ export class NativeInjectionChannel implements NativeResponseControl {
     for (const [key, value] of Object.entries(frame)) {
       if (!ENVELOPE.has(key) && this.settings.get(key) !== injectionFingerprint(value)) injectionError("injection_settings_changed", "A native injection continuation cannot change the pinned model or settings.");
     }
+    for (const key of this.settings.keys()) {
+      if (!Object.hasOwn(frame, key)) injectionError("injection_settings_changed", "A native injection continuation cannot change the pinned model or settings.");
+    }
     const results = nativeSavedResults(frame.input);
     const required = [...this.calls.entries()].filter(([, call]) => call.state !== "accepted");
     if (!required.length || results.length !== required.length) injectionError("invalid_injection", "Supply every outstanding saved tool result exactly once.");
