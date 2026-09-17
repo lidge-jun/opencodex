@@ -207,6 +207,8 @@ describe("GitHub Actions hardening", () => {
     const windowsTest = windowsSteps.find(step => step.name === "Test in fresh-process batches");
     expect(windowsTest?.env?.TEST_SHARD).toBe(`\${{ matrix.shard }}/${windowsShards.length}`);
     expect(windowsTest?.env?.BUN_TEST_FILE_SCOPE).toBe("all");
+    expect(windowsTest?.env?.BUN_TEST_BATCH_SIZE).toBe("6");
+    expect(windowsTest?.env?.BUN_TEST_BATCH_TIMEOUT_SECONDS).toBe("480");
     expect(windowsTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
     expect(ci.jobs?.["platform-windows"]?.name).toBe(`windows \${{ matrix.shard }}/${windowsShards.length}`);
     expect(workflow).toContain(`shards=${windowsShards.length}`);
@@ -349,8 +351,9 @@ describe("GitHub Actions hardening", () => {
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
-    // Windows now shares Linux's bounded process runner. Pin the two bounds and the
-    // 60-second per-test deadline at their executable owner, and keep retries absent.
+    // Windows shares Linux's bounded process runner but overrides the process shape with
+    // Windows measurements above. Pin Linux's 12-file/120s defaults at their owner so the
+    // Windows calibration cannot silently widen the correctly sized Linux lane.
     const batchRunner = await readText("scripts/ci/run-bun-test-batches.sh");
     expect(batchRunner).toContain('readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"');
     expect(batchRunner).toContain('readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"');

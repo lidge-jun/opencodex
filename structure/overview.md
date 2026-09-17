@@ -107,9 +107,10 @@ still cover the rule, which is a judgement only review makes.
   Enforced by `tests/test-layout.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
-scope leaves the dedicated Linux storage-policy and api-usage jobs out of the general shards; the
-manual Windows matrix selects all-file scope so batching changes process size without changing
-the platform suite's file set. The workflow contract and process bounds live in
+scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
+jobs out of the general shards. The manual Windows matrix selects all-file scope and overrides the
+process shape to six files and 480 seconds, so batching changes process size without changing the
+platform suite's file set. The workflow contract and process bounds live in
 [`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
 
 Two invariants are stated here without a binding, and `grace.unboundInvariants` in

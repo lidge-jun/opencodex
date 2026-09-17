@@ -758,7 +758,9 @@ jobs:
     # 25% run-to-run slowdown. Nine gives 133.2 / 9 * 1.43 * 1.25 = 26.5 minutes.
     # Keep the 30-minute bound and pay for three more concurrent runners plus their
     # repeated checkout/install/build setup so test work, rather than the ceiling,
-    # shrinks. Per-batch bounds below make a future wedge a named failure.
+    # shrinks. The per-batch timeout below is independent: it aborts a stuck Bun
+    # process but adds no delay to a healthy one, so calibrating it does not change
+    # this total-work projection.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -820,14 +822,23 @@ jobs:
         # Three of its failures were the default firing on tests that had not hung — the
         # composed-acceptance cases spawn a real `ocx start` and were still working at 41s.
         #
-        # Nothing is retried. The shared runner gives each at-most-12-file process 120 seconds;
-        # a timeout or crash makes the shard irreversibly red before the diagnostic singleton
-        # sweep starts. scope=all preserves the full Windows suite: Linux alone excludes the
-        # storage-policy and api-usage families because separate Linux jobs own them.
+        # Nothing is retried. Run 35171877721 proved Linux's 12-file/120-second defaults are
+        # not Windows defaults: 58 completed primary batches took 4.6-105.8s and seven more
+        # hit 120s. Six of those passed every file alone; splitting their attribution times
+        # into six-file halves gives a 148.0s maximum. The seventh carried
+        # codex-inject-integration.test.ts, which passed in 312.0s and 317.6s in green runs
+        # 35164979005 and 35161399172. Replacing its censored 120s attribution with 317.6s projects
+        # that six-file half at 337.4s; 25% run variance makes 421.8s, so 480s leaves 58.2s.
+        # Six-file batches add twelve Bun processes per shard, but the two green shards measured
+        # only 0.106-0.168s of wrapper overhead per process: at most ~2.1s against the margin.
+        # A timeout or crash still fixes the shard red before singleton attribution. scope=all
+        # preserves the full Windows suite; Linux keeps its correctly sized 12-file/120s defaults.
         shell: bash
         env:
           TEST_SHARD: ${{ matrix.shard }}/9
           BUN_TEST_FILE_SCOPE: all
+          BUN_TEST_BATCH_SIZE: "6"
+          BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
         run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
