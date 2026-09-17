@@ -24,6 +24,12 @@ import {
   noteSubagentModelFailure,
   resetSubagentModelFallbackStateForTests,
 } from "../../src/codex/subagent-model-fallback";
+import { clearComboTargetCooldowns } from "../../src/combos/failover";
+import { clearComboSelectionState } from "../../src/combos/resolve";
+import {
+  clearResponseStateForTests,
+  clearResponseStateMemoryForTests,
+} from "../../src/responses/state";
 import { handleResponses } from "../../src/server/responses";
 import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
 import type { ActiveTurnLease } from "../../src/server/lifecycle";
@@ -174,11 +180,15 @@ async function postSpawn(
   const requestHeaders = new Headers(headers);
   requestHeaders.set("content-type", "application/json");
   requestHeaders.set("x-openai-subagent", "collab_spawn");
-  return handleResponses(new Request("http://localhost/v1/responses", {
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: requestHeaders,
     body: JSON.stringify({ model, input, stream: false }),
   }), config, logCtx, options);
+  // handleResponses owns its translator budget through the returned body lifecycle. Draining the
+  // body also lets completed Responses schedule their state write before afterEach cancels it.
+  await response.arrayBuffer();
+  return response;
 }
 
 beforeEach(() => {
@@ -191,6 +201,9 @@ beforeEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
+  clearResponseStateMemoryForTests();
   resetSubagentModelFallbackStateForTests();
   resetCodexModelEntitlementCacheForTests();
   resetAgentTaskRecoveryState();
@@ -220,6 +233,9 @@ afterEach(() => {
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
+  clearResponseStateForTests();
   resetSubagentModelFallbackStateForTests();
   resetCodexModelEntitlementCacheForTests();
   resetAgentTaskRecoveryState();
