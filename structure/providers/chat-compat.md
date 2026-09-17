@@ -355,7 +355,7 @@ real image blocks rather than flattening them to the text `[image]`, and orders 
 blocks chronologically — history before current — so attachment order matches the
 prose the model reads beside them. Vendor tool execution stays disabled on both
 adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
-container followed by a `functions.*` invoke control line in either output channel; it
+container followed by a named bare or namespaced invoke control line in either output channel; it
 preserves preceding answer text, never promotes vendor prose into execution authority,
 and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
 refusal of original images is unchanged.
