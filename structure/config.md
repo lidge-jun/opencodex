@@ -141,6 +141,18 @@ Root TOML keys must be written before the first `[table]`. Re-injection strips t
 both shapes — opencodex blocks, injected root base-url overrides, stale root context-window
 overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue.
 
+The `name` field is the only presentation value in that table, and `codexProviderDisplayName`
+chooses it (default `OpenCodex Proxy`). `resolveCodexProviderDisplayName` in
+`src/codex/inject/config-toml.ts` is the single place that decides it, and every emitter goes
+through `buildProviderTableBlockForTarget` so the active table, the retained compatibility table,
+and the reference profile cannot disagree. Identity is deliberately not derived from it: routing
+resolves through the provider id `opencodex` in the root `model_provider` line and the
+`[model_providers.opencodex]` header, so a rename cannot reroute a thread or orphan a row that
+already names that id (#4810). The field can never be emitted empty or omitted — Codex rejects a
+provider with no name and rejects the whole config rather than one thread, which is strictly worse
+than the branding it would remove — so a blank, over-length, or control-character value falls back
+to the default instead of being written.
+
 Read-only doctor and project-routing diagnostics use a lightweight root/table TOML reader rather
 than mutating or normalizing the user's file. That reader must lexically skip both basic and literal
 multiline string bodies: instruction prose can contain key-shaped examples and `[table]` snippets,
@@ -299,6 +311,22 @@ hand-edited `config.json` must accept and reject the same provider shapes.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-provider-validation-ownership.md)
 
+## Provider relative send paths
+
+`src/config/provider-relative-send-path.ts` owns the initialization-independent
+`providerRelativeSendPathConfigError` check. The schema leaf re-exports it for compatibility;
+`src/server/auth-cors.ts` imports the pure module directly, so this validator adds no
+runtime dependency on config-schema initialization.
+Both `responsesPath` and `chatCompletionsPath`
+must be strings beginning with `/`, without a scheme, query or fragment; omission is allowed.
+Provider registration/replacement rejects invalid values before DNS, persistence or catalog
+refresh. Editor PATCH checks also validate retained paths when they revalidate a merged provider;
+pacing-only and other existing validation bypasses are unchanged. No send-path PATCH setter is added.
+`tests/server/management-provider-validation.test.ts` covers rejection without live/disk mutation
+and valid-path persistence/reload through the actual management handler.
+`tests/server/provider-send-path-import.test.ts` loads the management boundary before the
+config facade in a fresh process, so an earlier schema import cannot mask an initialization cycle.
+
 ## Restore
 
 `ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip
@@ -312,6 +340,17 @@ validates both bounded metadata files, rejects path traversal and a symlink/junc
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
 traversing their targets. Unknown files remain in place and make the command report a partial
 uninstall with their exact paths.
+
+The newly created OAuth downgrade copy is registered after copying, so owned uninstall
+includes it. Invalid-config recovery copies are deliberately NOT registered: their names carry
+a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
+the manifest stops validating past its path ceiling. A manifest that stops validating makes
+uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name
+pattern at removal time is the shape that fits; it is not in this change. Registration is best-effort: an intentionally
+unowned legacy home or a metadata-write failure must not suppress the recovery copy. Existing
+OAuth downgrade copies are neither rewritten nor retroactively claimed. Both a `false` registration
+result and a thrown registration error emit the same fixed warning without error details. Unregistered copies
+remain subject to the existing partial/refused uninstall result.
 
 Legacy nonempty config directories are deliberately not retroactively claimed. If either ownership
 file is missing, malformed, or bound to another root, uninstall refuses config deletion and reports
@@ -343,6 +382,24 @@ Usage consumers preserve positive incomplete-history metadata as specified in [u
 `dropCodexSafetyBuffering` is an optional boolean, default false. Invalid API candidates reject;
 malformed persisted values stay disabled. It controls only the allowlisted client-output hints
 described in [Responses transport](transports/responses.md), not upstream policy or model selection.
+
+## Management-backed CLI commands need a management plane
+
+`src/cli/runtime-api.ts` is the single client every headless management subcommand calls through, so
+it owns the refusal as well as the request. `runtimeBaseUrl` resolves the live listener through
+`findLiveProxy`, and when that listener reports the client role — see
+[the client role owns no management plane](gui-and-management-api.md#the-client-role-owns-no-management-plane)
+— it refuses with `RuntimeApiError` status 503 instead of dialing it. The message names the port,
+states that the listener serves only the machine routes, points custom-model and other management
+edits at the hub the machine is connected to, and gives the on-machine alternative: edit
+`customModels` in `config.json`, then run `ocx sync`. The status is also the honest exit code, since
+`runCliAction` maps 404 to exit 4 and would otherwise report a missing record.
+
+A 404 body carrying both `method` and `path` is rendered as the route that listener does not serve,
+so any not-served-here answer stays legible rather than printing a bare token. `ocx models edit` in
+`src/cli/models-runtime.ts` narrows the opposite case: only a 404 without those keys is the
+management handler's own unknown-id answer, and it names the id and `ocx models list-custom`.
+
 ## Paginated history writer boundary
 
 `src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
@@ -379,3 +436,5 @@ The text-only consumer reads exact inputModalities declarations before legacy hi
 ## Catalog auto-refresh
 
 `catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
+
+Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.

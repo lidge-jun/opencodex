@@ -109,6 +109,24 @@ describe("Console Go transient upload refusal recovery", () => {
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["console-go-upload-retry"]);
   });
 
+  test("a configured one-send total returns the original refusal without using the reserve", async () => {
+    const cfg = config();
+    cfg.providers.go!.transientRetryOn5xx = { attempts: 1 };
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      return refusal();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(UPLOAD_REFUSAL);
+    expect(sends).toBe(1);
+    expect(logCtx.activeAttempt?.recoveryKinds).toEqual([]);
+  });
+
   test("does not replay a different 400 from the same wire", async () => {
     let sends = 0;
     globalThis.fetch = (async () => {

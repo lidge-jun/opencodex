@@ -46,7 +46,15 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
  * Anthropic for these models.
  */
 const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
-  "opencode-go": new Set(["minimax-m2.5", "minimax-m2.7", "minimax-m3"]),
+  "opencode-go": new Set([
+    "minimax-m2.5",
+    "minimax-m2.7",
+    "minimax-m3",
+    // OpenCode's catalog identifies Union Alpha as @ai-sdk/anthropic while the
+    // provider defaults to OpenAI-compatible; direct Chat returns 500 and direct
+    // Messages reaches the session check (#4847).
+    "union-alpha",
+  ]),
 };
 
 function anthropicWireModelsForProvider(providerName: string): ReadonlySet<string> | undefined {

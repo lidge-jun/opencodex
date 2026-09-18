@@ -72,6 +72,7 @@ The prefilter is only an optimization, not final process-membership authority.
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
 | `src/server/ports.ts` | Owns bind availability and ephemeral-port selection. Temporary probes dispose accepted peers and wait for listener close before reporting success. |
 | `src/cli/status.ts` / `src/cli/status-probes.ts` | Status snapshot assembly and the shared read-only health/stale-process probes used by status and doctor. Probe evidence keeps recorded-port choice, before/after snapshots and per-call timer cleanup together. |
+| `src/cli/doctor.ts` | Read-only environment diagnostics. Sections print through `console.log`; each is a `collect*` helper above `runDoctor` so it is testable without the command. Only a `FAIL`-level condition records a doctor failure — a degraded-but-working install must not break a green pipeline. `collectDefaultModelExposure` compares Codex's root `model` pin against the exposed set, which it READS rather than recomputes: the running proxy's `/v1/models` when one answers, otherwise the on-disk catalog's `visibility: "list"` slugs. It reports exposed, not exposed, or undeterminable, and never the second when it could not read either surface. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. Policy execution and ordinary management dry-run share effective-provider capability evidence; unresolved, missing, and disabled providers are excluded before scoring. |
 | `src/providers/api-key-selection-capture.ts` | Pure request-owned snapshot of the configured key entry, reference, and revision. The router and stateful selection module share this leaf with type-only dependencies; `api-key-selection.ts` retains the compatibility export and owns persisted selection changes and route resolution. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
@@ -216,6 +217,10 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 
 ## Providers and adapters
 
+OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
+64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
+the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
 | Path | Responsibility |
 | --- | --- |
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |
@@ -307,9 +312,20 @@ disarmed rather than falling through to another paid search. A leg that mixes an
 `web_search` call with another client-executed tool ends the turn on that leg: the intercepted
 searches run, their hosted cells complete, the held client calls are released for the caller to
 execute, and the leg's own terminal closes the turn with no continuation sent upstream. The
-destination therefore never receives the executed search result — the caller replays the hosted
-`web_search_call` cell, which carries the query and sources but no result text, so the
-destination's own `function_call`/`function_call_output` pair is not reconstructed. A leg whose
+destination therefore does not receive that search result during the turn. It gets it on the next
+one: every search the bridge executes is recorded in `src/responses/bridge-search-replay-cache.ts`
+under the hosted cell's proxy-minted id, scoped to the upstream destination and bounded by entry
+count, total bytes, and a one-hour TTL. When the caller replays that cell,
+`restoreBridgedWebSearchCalls` in `src/adapters/openai-responses/tool-output-recovery.ts` puts the
+destination's own `function_call` and the executed `function_call_output` back in the cell's
+position before the next turn's first leg is dispatched, recording exactly the text
+`appendBridgeSearchTurn` would have sent on a continuation leg so a replayed turn and a continued
+turn show the destination one consistent conversation. The rewrite runs only for a provider with
+`webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different destination, or a
+`call_id` the body already carries — leaves the replayed item untouched. Re-running the search or
+synthesizing result text is not a permitted recovery.
+`tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
+A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
 instruction.
@@ -390,7 +406,10 @@ fingerprint mismatch are named separately rather than all reported as a missing 
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in
+[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
+their bounded cache.
 
 Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, using its enrolled data key and checking connection/token ownership before and after the read. It reports hub/client scope and never substitutes local totals on failure. Standalone commands retain their management endpoint.
 
@@ -502,6 +521,8 @@ Translated audio/file admission follows the [final-adapter input contract](adapt
 
 `src/combos/failover.ts` treats three intact HTTP 400 invalid-request envelopes as request-local incompatibilities: exactly `Unsupported parameter: user`; `unsupported_value` naming `reasoning.effort` or `reasoning_effort` with an explicit unsupported-value message; and `param: input` with a bounded model-scoped `does not support image inputs` message. A null provider code is accepted only for that observed image envelope. Only the exact proxy wrapper is unwrapped, within three envelopes and 16,384 characters; conflicting codes, malformed/truncated envelopes and reflected JSON do not gain hop permission.
 
+A `response_format` capability refusal is a fourth envelope, kept separate because it needs one code and one frame the three above do not admit. The refusal must name `response_format` AND state that it is unavailable or unsupported; a message that merely names the field, such as an invalid-schema complaint, stays terminal, because replaying a malformed request at every later target is the outcome this distinction exists to avoid. `param` may be absent or explicitly null and a param naming another field fails closed. Its code set is the shared generic one plus `invalid_parameter_error`, held separately so the `user` and image branches are not widened by it. It also unwraps a single `data:` SSE frame on a one-line body — the reported gateway answers on the stream, so the error object is never extracted and the structured code arrives undefined — while a multi-event body is left alone. The next target receives the same request with `response_format` intact: no field is dropped and the output contract the caller asked for is unchanged. Traversal stays finite because combo excludes each attempted target. This verdict records no cooldown, and cancellation, origin/cyber-policy rejection and the non-replayable post-send codes are all tested before it (#4903).
+
 The combo may advance to its next eligible unattempted target before output commitment. It records no target/provider cooldown for these request-local mismatches and does not silently drop reasoning controls or raise `none` to a supported rung. Cancellation, origin/cyber-policy rejection, non-replayable post-send errors and the existing streaming commit boundary stay authoritative. Apart from the definite context overflow below, other invalid requests remain terminal.
 
 A definite context-window overflow is the fourth request-local verdict. A heterogeneous combo mixes windows, so "this turn does not fit THIS model" is not "this turn is impossible", and stopping at the first undersized target burned the ladder on turns a later target could hold. Evidence must come from the innermost provider message: `classifyError` remaps any occurrence of `context window`, `context length`, `maximum context` or `too many tokens` anywhere in the blob, and inheriting that looseness would let a `context_length_exceeded` token sitting in a `code` field beside `Unsupported parameter: user` authorize a replay. `src/combos/failover.ts` therefore unwraps only the exact proxy wrapper, within four envelopes and 16,384 characters, and reads the leaf message. A JSON-shaped body that does not parse fails closed, because `normalizeUpstreamErrorText` caps `classificationText` at 500 characters and a long envelope arrives here as a prefix. The verdict is admitted only for statuses that speak about the request — 400, 413, 422 and 5xx — so a 401/403 body that merely quotes context prose keeps its provider-wide cooldown instead of being rescored as request-shaped. Structured `origin_rejected`, cyber policy and the non-replayable post-send codes are all tested before it.
@@ -535,3 +556,5 @@ defines identity, unknown records, and aggregation boundaries.
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
