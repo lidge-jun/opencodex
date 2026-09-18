@@ -181,10 +181,14 @@ export class SkillControlService {
       }
     }
 
-    return {
-      entryContent: `# ${versionId}\n\nNo source content registered.\n`,
-      bundledFiles: {},
-    };
+    // Fail closed: version content is only ever sourced from the in-memory file
+    // store, the import that registered it, or its original source folder. A
+    // placeholder must never be deployed as if it were the real skill, so after
+    // a restart (in-memory store cold) a version whose source is unavailable
+    // cannot be deployed silently.
+    throw new Error(
+      `Skill version content is unavailable: ${versionId}. Re-import or re-register the version before deploying.`,
+    );
   }
 
   // --- Import Pipeline ---

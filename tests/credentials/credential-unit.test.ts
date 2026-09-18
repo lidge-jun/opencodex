@@ -1,3 +1,4 @@
+import { createCipheriv, randomBytes, scryptSync } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import { AesGcmVault, MemoryVault, UnavailableVault, VaultIntegrityError, VaultUnavailableError } from "../../src/credentials/vault";
 import { canTransitionStatus } from "../../src/credentials/lifecycle";
@@ -109,6 +110,46 @@ describe("vault", () => {
   test("memory vault is usable in tests", () => {
     const vault = new MemoryVault();
     expect(vault.read(vault.write("abc"))).toBe("abc");
+  });
+
+  test("every envelope carries a fresh random salt", () => {
+    const vault = new AesGcmVault("unit-master-key", "master-v1");
+    const a = vault.write("same-secret");
+    const b = vault.write("same-secret");
+    expect(a.salt).toBeTruthy();
+    expect(b.salt).toBeTruthy();
+    expect(a.salt).not.toBe(b.salt);
+    expect(a.iv).not.toBe(b.iv);
+    expect(a.ciphertext).not.toBe(b.ciphertext);
+  });
+
+  test("legacy envelopes without a salt still decrypt (backward compatibility)", () => {
+    // A pre-salt envelope was encrypted with the fixed legacy KDF salt and had
+    // no `salt` field. Replicate that shape exactly: derive the key the old way
+    // and omit the salt, then require the current vault to still read it.
+    const vault = new AesGcmVault("unit-master-key", "master-v1");
+    const legacyKey = scryptSync("unit-master-key", "pao.credential.vault.v1", 32);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", legacyKey, iv);
+    const ciphertext = Buffer.concat([cipher.update("legacy-value", "utf8"), cipher.final()]);
+    const legacy: { version: 1; algorithm: "aes-256-gcm"; ciphertext: string; iv: string; auth_tag: string; key_id: string } = {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      ciphertext: ciphertext.toString("base64"),
+      iv: iv.toString("base64"),
+      auth_tag: cipher.getAuthTag().toString("base64"),
+      key_id: "master-v1",
+    };
+    expect(vault.read(legacy)).toBe("legacy-value");
+  });
+
+  test("replace re-encrypts with a fresh salt under the same key id", () => {
+    const vault = new AesGcmVault("unit-master-key", "master-v1");
+    const first = vault.write("old-value");
+    const next = vault.replace(first, "new-value");
+    expect(next.key_id).toBe(first.key_id);
+    expect(next.salt).not.toBe(first.salt);
+    expect(vault.read(next)).toBe("new-value");
   });
 
   test("UnavailableVault fails closed without a master key", () => {

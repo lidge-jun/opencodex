@@ -202,16 +202,24 @@ export function Security({ apiBase }: SecurityProps): React.JSX.Element {
   const hashList = useMemo(() => ["security", ...SECURITY_TAB_HASHES].join(", "), []);
 
   const post = async (path: string, body?: Record<string, unknown>) => {
-    setStatusMessage(t("security.status.posting", { path }));
-    const res = await fetch(`${apiBase}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body ?? { actor: "gui-reviewer" }),
-    });
-    const data = await res.json().catch(() => ({})) as { error?: unknown };
-    const error = typeof data.error === "string" ? data.error : String(res.status);
-    setStatusMessage(res.ok ? t("security.status.ok", { path }) : t("security.status.failed", { error }));
-    resource.refresh();
+    try {
+      setStatusMessage(t("security.status.posting", { path }));
+      const res = await fetch(`${apiBase}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? { actor: "gui-reviewer" }),
+      });
+      const data = await res.json().catch(() => ({})) as { error?: unknown };
+      const error = typeof data.error === "string" ? data.error : String(res.status);
+      setStatusMessage(res.ok ? t("security.status.ok", { path }) : t("security.status.failed", { error }));
+      resource.refresh();
+    } catch (e) {
+      setStatusMessage(
+        t("security.status.failed", {
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      );
+    }
   };
 
   return (
@@ -232,6 +240,10 @@ export function Security({ apiBase }: SecurityProps): React.JSX.Element {
       </div>
 
       {statusMessage && <div className="security-banner">{statusMessage}</div>}
+
+      {resource.state.showError && (
+        <div className="security-banner">{t("security.loadFailed")}</div>
+      )}
 
       <div className="security-tabs">
         {TABS.map(entry => (
@@ -348,7 +360,11 @@ export function Security({ apiBase }: SecurityProps): React.JSX.Element {
       {tab === "evidence" && (
         <>
           <div className="security-banner">
-            {campaigns[0] ? `Campaign evidence: ${String(campaigns[0].name ?? campaigns[0].id)}` : "No active campaign"}
+            {campaigns[0]
+              ? t("security.evidence.campaign", {
+                campaign: String(campaigns[0].name ?? campaigns[0].id),
+              })
+              : t("security.evidence.none")}
           </div>
           <table className="security-table">
             <thead><tr><th>{t("security.col.id")}</th><th>{t("security.col.type")}</th><th>{t("security.col.sha256")}</th><th>{t("security.col.preview")}</th></tr></thead>

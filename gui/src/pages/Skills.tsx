@@ -170,11 +170,16 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
   const handleImportMarketplace = async (refId: string) => {
     try {
       setStatusMessage(t("skills.status.importing", { id: refId }));
-      await fetch(`${apiBase}/api/skill-imports`, {
+      const res = await fetch(`${apiBase}/api/skill-imports`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "marketplace", ref: refId }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: unknown };
+        const error = typeof data.error === "string" ? data.error : String(res.status);
+        throw new Error(error);
+      }
       setStatusMessage(t("skills.status.imported", { id: refId }));
       resource.refresh();
     } catch (e) {
@@ -185,7 +190,12 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
   const handlePublish = async (skillId: string) => {
     try {
       setStatusMessage(t("skills.status.publishing", { id: skillId }));
-      await fetch(`${apiBase}/api/skills/${encodeURIComponent(skillId)}/publish`, { method: "POST" });
+      const res = await fetch(`${apiBase}/api/skills/${encodeURIComponent(skillId)}/publish`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: unknown };
+        const error = typeof data.error === "string" ? data.error : String(res.status);
+        throw new Error(error);
+      }
       setStatusMessage(t("skills.status.published", { id: skillId }));
       resource.refresh();
     } catch (e) {
@@ -200,17 +210,27 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ skillVersionId: `${skillId}@${version}`, agentType, scope: "user", nodeId: "local" }),
-      }).then(r => r.json()) as { plan?: { planId?: string } };
-
-      if (planRes?.plan?.planId) {
-        await fetch(`${apiBase}/api/skill-deployments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ planId: planRes.plan.planId }),
-        });
-        setStatusMessage(t("skills.status.deployed", { id: skillId, agent: agentType }));
-        resource.refresh();
+      });
+      const planData = await planRes.json().catch(() => ({})) as { error?: unknown; plan?: { planId?: string } };
+      if (!planRes.ok) {
+        const error = typeof planData.error === "string" ? planData.error : String(planRes.status);
+        throw new Error(error);
       }
+      if (!planData?.plan?.planId) {
+        throw new Error("No deployment plan id returned");
+      }
+      const deployRes = await fetch(`${apiBase}/api/skill-deployments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planId: planData.plan.planId }),
+      });
+      if (!deployRes.ok) {
+        const data = await deployRes.json().catch(() => ({})) as { error?: unknown };
+        const error = typeof data.error === "string" ? data.error : String(deployRes.status);
+        throw new Error(error);
+      }
+      setStatusMessage(t("skills.status.deployed", { id: skillId, agent: agentType }));
+      resource.refresh();
     } catch (e) {
       setStatusMessage(t("skills.status.deployFailed", { error: e instanceof Error ? e.message : String(e) }));
     }
@@ -218,11 +238,16 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
 
   const saveDraft = async () => {
     try {
-      await fetch(`${apiBase}/api/skills`, {
+      const res = await fetch(`${apiBase}/api/skills`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: editorName, markdown: editorMarkdown }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: unknown };
+        const error = typeof data.error === "string" ? data.error : String(res.status);
+        throw new Error(error);
+      }
       setStatusMessage(t("skills.status.saved"));
       resource.refresh();
     } catch (e) {
@@ -231,7 +256,7 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
   };
 
   const agentStatus = (skill: SkillItem, agent: string) => {
-    const dep = deployments.find(d => d.agent_id === agent && d.skill_version_id.startsWith(skill.id));
+    const dep = deployments.find(d => d.agent_id === agent && d.skill_version_id.startsWith(`${skill.id}@`));
     if (!dep) return { label: t("skills.notInstalled"), cls: "empty" };
     if (dep.status === "DEPLOYED") return { label: t("skills.inSync", { version: skill.current_version }), cls: "in-sync" };
     if (dep.status === "FAILED") return { label: t("skills.blocked"), cls: "blocked" };
@@ -255,6 +280,12 @@ export function Skills({ apiBase }: SkillsProps): React.JSX.Element {
       {statusMessage && (
         <div style={{ padding: "8px 14px", background: "rgba(59, 130, 246, 0.15)", border: "1px solid #3b82f6", borderRadius: 6, fontSize: 13, color: "#93c5fd" }}>
           {statusMessage}
+        </div>
+      )}
+
+      {resource.state.showError && (
+        <div style={{ padding: "8px 14px", background: "rgba(239, 68, 68, 0.15)", border: "1px solid #ef4444", borderRadius: 6, fontSize: 13, color: "#fca5a5" }}>
+          {t("skills.loadFailed")}
         </div>
       )}
 

@@ -78,6 +78,22 @@ describe("credential runtime integration", () => {
     })).toThrow(/No eligible credential/);
   });
 
+  test("degraded validation emits credential.degraded, not quarantined", async () => {
+    const svc = service();
+    const events: string[] = [];
+    svc.hooks.on(event => events.push(event.name));
+    const created = await svc.importCredential({
+      provider: "local",
+      name: "down",
+      secret: "down-local-demo",
+      actor: "operator",
+    });
+    expect(created.status).toBe("degraded");
+    expect(created.health_status).toBe("provider_down");
+    expect(events).toContain("credential.degraded");
+    expect(events).not.toContain("credential.quarantined");
+  });
+
   test("quota secret is routing-ineligible", async () => {
     const svc = service();
     const created = await svc.importCredential({

@@ -140,6 +140,30 @@ export class DeploymentEngine {
 
     const deploymentId = `dep_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
     let snapshotId: string | undefined;
+    const now = new Date().toISOString();
+
+    // Insert a pending (STAGED) deployment row BEFORE any filesystem mutation so
+    // that a verification failure can always roll back through the deployment
+    // record. Writing the row only after success would leave rollback() unable
+    // to find the deployment when it needs to restore the recovery snapshot.
+    const stagedDeployment: SkillDeploymentRecord = {
+      id: deploymentId,
+      skill_version_id: plan.skillVersionId,
+      node_id: target.nodeId,
+      agent_id: target.agentType,
+      scope: target.scope,
+      project_ref: target.projectPath,
+      target_path: target.targetPath,
+      deployment_mode: "managed-copy",
+      desired_sha256: manifest.integrity.content_sha256,
+      actual_sha256: undefined,
+      status: "STAGED",
+      managed: true,
+      deployed_by: actor,
+      deployed_at: now,
+      updated_at: now,
+    };
+    this.db.upsertDeployment(stagedDeployment);
 
     // Step 1: Backup current state if target already exists
     if (target.exists) {
@@ -250,9 +274,26 @@ export class DeploymentEngine {
       });
 
       if (!verifyRes.verified) {
-        // Verification failed! Fail closed & Rollback
+        // Verification failed! Fail closed & Rollback first (the STAGED row is
+        // already persisted, so rollback can always find the deployment), then
+        // record the FAILED state.
         if (snapshotId) {
-          await this.rollback({ deploymentId, snapshotId });
+          try {
+            await this.rollback({ deploymentId, snapshotId });
+          } catch (rollbackErr) {
+            // Never mask the original verification failure; a rollback error is
+            // recorded in the audit trail so the operator can recover manually.
+            this.db.logAudit({
+              event_type: "skill.deployment.rollback_failed",
+              actor_type: "user",
+              actor_id: actor,
+              skill_id: manifest.metadata.id,
+              skill_version_id: plan.skillVersionId,
+              deployment_id: deploymentId,
+              node_id: target.nodeId,
+              metadata: { reason: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr) },
+            });
+          }
         } else {
           rmSync(target.targetPath, { recursive: true, force: true });
         }
@@ -271,8 +312,8 @@ export class DeploymentEngine {
           status: "FAILED",
           managed: true,
           deployed_by: actor,
-          deployed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          deployed_at: now,
+          updated_at: now,
         };
         this.db.upsertDeployment(failureRecord);
         this.db.logAudit({
@@ -295,8 +336,7 @@ export class DeploymentEngine {
         };
       }
 
-      // Step 6: Commit deployment record to database
-      const now = new Date().toISOString();
+      // Step 6: Promote the STAGED row to DEPLOYED
       const deploymentRecord: SkillDeploymentRecord = {
         id: deploymentId,
         skill_version_id: plan.skillVersionId,

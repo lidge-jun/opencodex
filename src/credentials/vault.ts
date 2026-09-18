@@ -23,27 +23,38 @@ export interface VaultService {
   keyId(): string;
 }
 
-function deriveKey(master: string, salt = "pao.credential.vault.v1"): Buffer {
+const LEGACY_SALT = "pao.credential.vault.v1";
+const SALT_BYTES = 16;
+
+function deriveKey(master: string, salt: string): Buffer {
   return scryptSync(master, salt, 32);
 }
 
-function resolveMaster(env: NodeJS.ProcessEnv = process.env): { key: Buffer; keyId: string } | null {
+function resolveMaster(env: NodeJS.ProcessEnv = process.env): { raw: string; keyId: string } | null {
   const raw = env[MASTER_KEY_ENV]?.trim();
   if (!raw) return null;
   const keyId = env[MASTER_KEY_ID_ENV]?.trim() || "master-v1";
-  return { key: deriveKey(raw), keyId };
+  return { raw, keyId };
+}
+
+function deriveKeyFromEnvelope(master: string, saltB64: string): Buffer {
+  return deriveKey(master, saltB64);
 }
 
 export class AesGcmVault implements VaultService {
-  private readonly key: Buffer;
+  /** Raw master key material, kept in memory only; never persisted or logged. */
+  private readonly master: string;
+  /** Key derived with the legacy fixed salt, used to read pre-salt envelopes. */
+  private readonly legacyKey: Buffer;
   private readonly id: string;
 
   constructor(masterKey?: string, keyId = "master-v1") {
     const resolved = masterKey
-      ? { key: deriveKey(masterKey), keyId }
+      ? { raw: masterKey, keyId }
       : resolveMaster();
     if (!resolved) throw new VaultUnavailableError("CREDENTIAL_MASTER_KEY is not set.");
-    this.key = resolved.key;
+    this.master = resolved.raw;
+    this.legacyKey = deriveKey(this.master, LEGACY_SALT);
     this.id = resolved.keyId;
   }
 
@@ -52,8 +63,13 @@ export class AesGcmVault implements VaultService {
   }
 
   public write(plaintext: string, keyId?: string): EncryptedEnvelopeV1 {
+    // A fresh random salt is persisted per envelope so two envelopes holding the
+    // same secret never share a scrypt-derived key; legacy envelopes without a
+    // salt (pre-20.60-B) decrypt through the fixed legacy salt.
+    const salt = randomBytes(SALT_BYTES).toString("base64");
+    const key = deriveKeyFromEnvelope(this.master, salt);
     const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", this.key, iv);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
     const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
     const tag = cipher.getAuthTag();
     return {
@@ -63,6 +79,7 @@ export class AesGcmVault implements VaultService {
       iv: iv.toString("base64"),
       auth_tag: tag.toString("base64"),
       key_id: keyId ?? this.id,
+      salt,
     };
   }
 
@@ -73,8 +90,11 @@ export class AesGcmVault implements VaultService {
     if (envelope.key_id !== this.id) {
       throw new VaultIntegrityError("Envelope key id does not match the loaded master key.");
     }
+    const key = envelope.salt
+      ? deriveKeyFromEnvelope(this.master, envelope.salt)
+      : this.legacyKey;
     try {
-      const decipher = createDecipheriv("aes-256-gcm", this.key, Buffer.from(envelope.iv, "base64"));
+      const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64"));
       decipher.setAuthTag(Buffer.from(envelope.auth_tag, "base64"));
       const plain = Buffer.concat([
         decipher.update(Buffer.from(envelope.ciphertext, "base64")),

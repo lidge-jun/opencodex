@@ -1,5 +1,53 @@
 import { getSkillControlService } from "../skills";
-import { isJsonOption, takeFlag } from "./runtime-api";
+import { isJsonOption } from "./runtime-api";
+
+const VALID_AGENTS = new Set(["codex", "claude-code", "opencode", "universal"]);
+const VALID_SCOPES = new Set(["user", "project", "workspace"]);
+const VALID_NODE_KINDS = new Set(["local", "ssh", "docker", "kubernetes"]);
+const VALID_NODE_ENVS = new Set(["dev", "staging", "prod", "test"]);
+
+const VALUE_OPTIONS = new Set(["--agent", "--scope", "--from", "--to", "--kind", "--environment", "--hostname", "--port", "--username", "--auth-ref", "--host-key-fingerprint", "--allowed-root", "--tag"]);
+
+/**
+ * Strict option parser for skill subcommands.
+ *
+ * Rejects unknown options and options whose value is missing, so a typo like
+ * `ocx skill deploy foo --agen codex` fails before any filesystem mutation.
+ * Returns either a map of parsed options plus leftover positionals, or an
+ * error message (exit code 1) and no parsed values.
+ */
+export function parseOptions(
+  args: string[],
+  supported: Set<string>,
+): { ok: true; options: Record<string, string[]>; positionals: string[] } | { ok: false; error: string } {
+  const options: Record<string, string[]> = {};
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg.startsWith("--")) {
+      if (!supported.has(arg)) {
+        return { ok: false, error: `Unknown option: ${arg}` };
+      }
+      if (VALUE_OPTIONS.has(arg)) {
+        const value = args[i + 1];
+        if (value === undefined || value.startsWith("--")) {
+          return { ok: false, error: `Option ${arg} requires a value` };
+        }
+        (options[arg] ??= []).push(value);
+        i++;
+      } else {
+        (options[arg] ??= []).push("true");
+      }
+    } else {
+      positionals.push(arg);
+    }
+  }
+  return { ok: true, options, positionals };
+}
+
+function firstOption(options: Record<string, string[]>, name: string): string | undefined {
+  return options[name]?.[0];
+}
 
 export async function runSkill(args: string[]): Promise<number> {
   const json = args.some(a => typeof a === "string" && isJsonOption(a));
@@ -41,7 +89,8 @@ Commands:
   rollback <deployment-id>      Roll back deployment to prior recovery snapshot
   sync <id> [options]           Synchronize skill across multiple agents
   drift check|show              Check or display deployment configuration drift
-  update check|apply <id>       Check or apply skill version updates
+  update check [id]             Check for available skill version updates
+  update apply <id>             Apply an available skill version update
   audit [id]                    Display skill audit trail
 
 Options:
@@ -331,6 +380,59 @@ Options:
           }
           return 0;
         }
+        if (action === "add") {
+          const parsed = parseOptions(
+            cleanArgs.slice(2),
+            new Set(["--kind", "--environment", "--hostname", "--port", "--username", "--auth-ref", "--host-key-fingerprint", "--allowed-root", "--tag"]),
+          );
+          if (!parsed.ok) {
+            console.error(`Error: ${parsed.error}`);
+            console.error("Usage: ocx skill node add <id> [--name <name>] [--kind <kind>] [--environment <env>] [--hostname <host>] [--port <port>] [--auth-ref <ref>] [--host-key-fingerprint <fp>] [--allowed-root <path>] [--tag <tag>]");
+            return 1;
+          }
+          const [id] = parsed.positionals;
+          if (!id) {
+            console.error("Usage: ocx skill node add <id> [--name <name>] [--kind <kind>] [--environment <env>] [--hostname <host>] [--port <port>] [--auth-ref <ref>] [--host-key-fingerprint <fp>] [--allowed-root <path>]");
+            return 1;
+          }
+          const kind = firstOption(parsed.options, "--kind") ?? "ssh";
+          if (!VALID_NODE_KINDS.has(kind)) {
+            console.error(`Error: Invalid --kind value: ${kind}. Valid kinds: ${[...VALID_NODE_KINDS].join(", ")}`);
+            return 1;
+          }
+          const environment = firstOption(parsed.options, "--environment") ?? "dev";
+          if (!VALID_NODE_ENVS.has(environment)) {
+            console.error(`Error: Invalid --environment value: ${environment}. Valid environments: ${[...VALID_NODE_ENVS].join(", ")}`);
+            return 1;
+          }
+          if (kind === "ssh" && !parsed.options["--host-key-fingerprint"]) {
+            console.error("Error: SSH nodes require --host-key-fingerprint (strict host-key verification)");
+            return 1;
+          }
+          const now = new Date().toISOString();
+          service.db.upsertNode({
+            id,
+            name: id,
+            kind: kind as any,
+            hostname: firstOption(parsed.options, "--hostname"),
+            port: parsed.options["--port"] ? Number(firstOption(parsed.options, "--port")) : undefined,
+            username: firstOption(parsed.options, "--username"),
+            auth_ref: firstOption(parsed.options, "--auth-ref"),
+            host_key_fingerprint: firstOption(parsed.options, "--host-key-fingerprint"),
+            environment: environment as any,
+            status: (kind === "local" ? "ONLINE" : "UNVERIFIED") as any,
+            allowed_roots: parsed.options["--allowed-root"] ?? [],
+            tags: parsed.options["--tag"] ?? [],
+            created_at: now,
+            updated_at: now,
+          });
+          if (json) {
+            console.log(JSON.stringify({ node: { id, kind, environment, status: kind === "local" ? "ONLINE" : "UNVERIFIED" } }, null, 2));
+          } else {
+            console.log(`Node added: ${id} (${kind}) [${kind === "local" ? "ONLINE" : "UNVERIFIED"}] env: ${environment}`);
+          }
+          return 0;
+        }
         if (action === "test") {
           const id = cleanArgs[2];
           if (!id) {
@@ -351,34 +453,51 @@ Options:
       }
 
       case "deploy": {
-        const id = cleanArgs[1];
-        if (!id) {
-          console.error("Usage: ocx skill deploy <id> [--agent <agent>] [--scope <scope>] [--dry-run]");
+        const parsed = parseOptions(
+          cleanArgs.slice(1),
+          new Set(["--agent", "--scope", "--dry-run", "--node", "--force-overwrite-unmanaged"]),
+        );
+        if (!parsed.ok) {
+          console.error(`Error: ${parsed.error}`);
+          console.error("Usage: ocx skill deploy <id> [--agent <agent>] [--scope <scope>] [--dry-run] [--node <node-id>]");
           return 1;
         }
+        const [id] = parsed.positionals;
+        if (!id) {
+          console.error("Usage: ocx skill deploy <id> [--agent <agent>] [--scope <scope>] [--dry-run] [--node <node-id>]");
+          return 1;
+        }
+
+        // Validate options before any service lookup so a malformed invocation
+        // never accidentally reaches a live deployment path.
+        const agentType = firstOption(parsed.options, "--agent") ?? "codex";
+        if (!VALID_AGENTS.has(agentType)) {
+          console.error(`Error: Invalid --agent value: ${agentType}. Valid agents: ${[...VALID_AGENTS].join(", ")}`);
+          return 1;
+        }
+        const rawScope = firstOption(parsed.options, "--scope") ?? "user";
+        if (!VALID_SCOPES.has(rawScope)) {
+          console.error(`Error: Invalid --scope value: ${rawScope}. Valid scopes: ${[...VALID_SCOPES].join(", ")}`);
+          return 1;
+        }
+        const scope = rawScope as "user" | "project" | "workspace";
+        const dryRun = Boolean(parsed.options["--dry-run"]);
+        const nodeId = firstOption(parsed.options, "--node") ?? "local";
+        const forceOverwriteUnmanaged = Boolean(parsed.options["--force-overwrite-unmanaged"]);
+
         const skill = service.getSkill(id);
         if (!skill) {
           console.error(`Skill not found: ${id}`);
           return 1;
         }
 
-        let agentType = "codex";
-        let scope: any = "user";
-        let dryRun = false;
-
-        for (let i = 2; i < cleanArgs.length; i++) {
-          if (cleanArgs[i] === "--agent" && cleanArgs[i + 1]) agentType = cleanArgs[++i]!;
-          if (cleanArgs[i] === "--scope" && cleanArgs[i + 1]) scope = cleanArgs[++i]!;
-          if (cleanArgs[i] === "--dry-run") dryRun = true;
-        }
-
         const versionId = `${id}@${skill.current_version}`;
         if (dryRun) {
-          const plan = await service.planDeployment(versionId, { agentType, scope, nodeId: "local" });
+          const plan = await service.planDeployment(versionId, { agentType, scope, nodeId });
           if (json) {
             console.log(JSON.stringify({ plan }, null, 2));
           } else {
-            console.log(`Deployment Plan for ${id} to ${agentType} (${scope}):`);
+            console.log(`Deployment Plan for ${id} to ${agentType} (${scope}) on ${nodeId}:`);
             console.log(`Target path: ${plan.target.targetPath}`);
             console.log(`Policy: ${plan.policyDecision.effect} (${plan.policyDecision.reason})`);
             console.log(`Requires Approval: ${plan.requiresApproval}`);
@@ -388,7 +507,7 @@ Options:
           return 0;
         }
 
-        const res = await service.deployDirect(versionId, { agentType, scope, nodeId: "local" });
+        const res = await service.deployDirect(versionId, { agentType, scope, nodeId }, { forceOverwriteUnmanaged });
         if (json) {
           console.log(JSON.stringify({ result: res }, null, 2));
         } else {
@@ -428,16 +547,28 @@ Options:
       }
 
       case "sync": {
-        const id = cleanArgs[1];
+        const parsed = parseOptions(cleanArgs.slice(1), new Set(["--from", "--to"]));
+        if (!parsed.ok) {
+          console.error(`Error: ${parsed.error}`);
+          console.error("Usage: ocx skill sync <id> [--from <agent>] [--to <targets>]");
+          return 1;
+        }
+        const [id] = parsed.positionals;
         if (!id) {
           console.error("Usage: ocx skill sync <id> [--from <agent>] [--to <targets>]");
           return 1;
         }
-        let fromAgent = "codex";
-        let toAgents = ["claude-code", "opencode"];
-        for (let i = 2; i < cleanArgs.length; i++) {
-          if (cleanArgs[i] === "--from" && cleanArgs[i + 1]) fromAgent = cleanArgs[++i]!;
-          if (cleanArgs[i] === "--to" && cleanArgs[i + 1]) toAgents = cleanArgs[++i]!.split(",");
+        const fromAgent = firstOption(parsed.options, "--from") ?? "codex";
+        if (!VALID_AGENTS.has(fromAgent)) {
+          console.error(`Error: Invalid --from value: ${fromAgent}. Valid agents: ${[...VALID_AGENTS].join(", ")}`);
+          return 1;
+        }
+        const toArg = firstOption(parsed.options, "--to") ?? "claude-code,opencode";
+        const toAgents = toArg.split(",").map(s => s.trim()).filter(Boolean);
+        const invalidTo = toAgents.filter(a => !VALID_AGENTS.has(a));
+        if (invalidTo.length > 0) {
+          console.error(`Error: Invalid --to value(s): ${invalidTo.join(", ")}. Valid agents: ${[...VALID_AGENTS].join(", ")}`);
+          return 1;
         }
         const results = await service.syncSkill(id, fromAgent, toAgents);
         if (json) {
@@ -450,7 +581,7 @@ Options:
 
       case "drift": {
         const action = cleanArgs[1]?.toLowerCase() ?? "check";
-        if (action === "check") {
+        if (action === "check" || action === "show") {
           const all = await service.checkAllDrift();
           if (json) {
             console.log(JSON.stringify({ drift: all }, null, 2));
@@ -469,7 +600,8 @@ Options:
       case "update": {
         const action = cleanArgs[1]?.toLowerCase() ?? "check";
         if (action === "check") {
-          const skills = service.listSkills();
+          const id = cleanArgs[2];
+          const skills = id ? service.listSkills().filter(s => s.id === id) : service.listSkills();
           const updates = [];
           for (const s of skills) {
             const u = await service.checkSkillUpdates(s.id);
@@ -482,6 +614,48 @@ Options:
             for (const u of updates) {
               console.log(`- ${u.skillId}: ${u.updateAvailable ? `UPDATE AVAILABLE (v${u.currentVersion} -> v${u.latestVersion})` : "UP TO DATE"}`);
             }
+          }
+          return 0;
+        }
+        if (action === "apply") {
+          const id = cleanArgs[2];
+          if (!id) {
+            console.error("Usage: ocx skill update apply <id>");
+            return 1;
+          }
+          const skill = service.getSkill(id);
+          if (!skill) {
+            console.error(`Skill not found: ${id}`);
+            return 1;
+          }
+          const updates = await service.checkSkillUpdates(id);
+          const available = updates.find(u => u.updateAvailable);
+          if (!available) {
+            if (json) {
+              console.log(JSON.stringify({ update: { skillId: id, applied: false, reason: "already up to date" } }, null, 2));
+            } else {
+              console.log(`${id} is already up to date (v${skill.current_version})`);
+            }
+            return 0;
+          }
+          const latest = service.getSkillVersion(`${id}@${available.latestVersion}`);
+          if (!latest) {
+            console.error(`Error: Latest version ${available.latestVersion} of ${id} is not present in the registry; import it first.`);
+            return 1;
+          }
+          if (latest.id === `${id}@${skill.current_version}`) {
+            if (json) {
+              console.log(JSON.stringify({ update: { skillId: id, applied: false, reason: "already current" } }, null, 2));
+            } else {
+              console.log(`${id} is already on the latest version (v${skill.current_version})`);
+            }
+            return 0;
+          }
+          const updated = service.publishVersion(`${id}@${available.latestVersion}`, "cli-user");
+          if (json) {
+            console.log(JSON.stringify({ update: { skillId: id, applied: true, from: skill.current_version, to: updated.version } }, null, 2));
+          } else {
+            console.log(`Applied update: ${id} v${skill.current_version} -> v${updated.version} (now current)`);
           }
           return 0;
         }

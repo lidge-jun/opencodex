@@ -93,6 +93,8 @@ export interface EncryptedEnvelopeV1 {
   iv: string;
   auth_tag: string;
   key_id: string;
+  /** Random per-envelope KDF salt (base64). Absent on envelopes written before this field existed. */
+  salt?: string;
 }
 
 export interface ProviderRecord {

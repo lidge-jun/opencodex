@@ -42,7 +42,7 @@ export class CapabilityBridge implements CapabilitySkillPublisher {
       for (const entry of readdirSync(input.artifactPath)) {
         if (entry === "SKILL.md") continue;
         const full = join(input.artifactPath, entry);
-        if (existsSync(full) && statSync(full).isFile() && !bundled[entry]) {
+        if (existsSync(full) && statSync(full).isFile() && !Object.hasOwn(bundled, entry)) {
           bundled[entry] = readFileSync(full);
         }
       }

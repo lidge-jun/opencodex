@@ -246,6 +246,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "social.col.action",
   "social.status.posting",
   "social.status.ok",
+  // "Impressions" and "Engagements" are the correct French spellings of these
+  // analytics column nouns (a French plural of "impression"/"engagement").
+  "social.col.impressions",
+  "social.col.engagements",
 ]);
 
 function placeholders(value: string): string[] {

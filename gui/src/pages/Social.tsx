@@ -113,22 +113,24 @@ export function Social({ apiBase }: SocialProps): React.JSX.Element {
   }, []);
 
   const loadWorkspace = useCallback(async (signal: AbortSignal): Promise<SocialWorkspace> => {
-    const [overviewRes, accRes, pubRes, jobsRes, instRes, auditRes] = await Promise.all([
+    const [overviewRes, accRes, pubRes, jobsRes, instRes, auditRes, approvalsRes, analyticsRes] = await Promise.all([
       fetch(`${apiBase}/api/social/overview`, { signal }),
       fetch(`${apiBase}/api/social/accounts`, { signal }),
       fetch(`${apiBase}/api/social/publications`, { signal }),
       fetch(`${apiBase}/api/social/jobs`, { signal }),
       fetch(`${apiBase}/api/social/openpost/instances`, { signal }),
       fetch(`${apiBase}/api/social/audit`, { signal }),
+      fetch(`${apiBase}/api/social/approvals`, { signal }),
+      fetch(`${apiBase}/api/social/analytics`, { signal }),
     ]);
 
     return {
       overview: await readData<OverviewData | null>(overviewRes, null),
       accounts: await readData<Row[]>(accRes, []),
       publications: await readData<Row[]>(pubRes, []),
-      approvals: [],
+      approvals: await readData<Row[]>(approvalsRes, []),
       jobs: await readData<Row[]>(jobsRes, []),
-      analytics: [],
+      analytics: await readData<Row[]>(analyticsRes, []),
       instances: await readData<Row[]>(instRes, []),
       audit: await readData<Row[]>(auditRes, []),
     };
@@ -340,6 +342,82 @@ export function Social({ apiBase }: SocialProps): React.JSX.Element {
                         </button>
                       </div>
                     </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "approvals" && (
+        <div className="social-table-container">
+          <table className="social-table">
+            <thead>
+              <tr>
+                <th>{t("social.col.id")}</th>
+                <th>{t("social.col.pubId")}</th>
+                <th>{t("social.col.decision")}</th>
+                <th>{t("social.col.approver")}</th>
+                <th>{t("social.col.approvalScope")}</th>
+                <th>{t("social.col.contentHash")}</th>
+                <th>{t("social.col.when")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workspace.approvals.length === 0 ? (
+                <tr><td colSpan={7} className="social-empty">{t("social.emptyApprovals")}</td></tr>
+              ) : (
+                workspace.approvals.map(appr => (
+                  <tr key={cell(appr.id)}>
+                    <td><code>{cell(appr.id)}</code></td>
+                    <td><code>{cell(appr.publication_id)}</code></td>
+                    <td>
+                      <span className={`social-badge ${cell(appr.decision).toLowerCase()}`}>
+                        {cell(appr.decision)}
+                      </span>
+                    </td>
+                    <td>{cell(appr.approver_type)}:{cell(appr.approver_id)}</td>
+                    <td>{cell(appr.approval_scope)}</td>
+                    <td><code>{cell(appr.content_hash)}</code></td>
+                    <td>{cell(appr.created_at)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "analytics" && (
+        <div className="social-table-container">
+          <table className="social-table">
+            <thead>
+              <tr>
+                <th>{t("social.col.id")}</th>
+                <th>{t("social.col.pubId")}</th>
+                <th>{t("social.col.account")}</th>
+                <th>{t("social.col.capturedAt")}</th>
+                <th>{t("social.col.views")}</th>
+                <th>{t("social.col.impressions")}</th>
+                <th>{t("social.col.engagements")}</th>
+                <th>{t("social.col.followersDelta")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workspace.analytics.length === 0 ? (
+                <tr><td colSpan={8} className="social-empty">{t("social.emptyAnalytics")}</td></tr>
+              ) : (
+                workspace.analytics.map(snap => (
+                  <tr key={cell(snap.id)}>
+                    <td><code>{cell(snap.id)}</code></td>
+                    <td><code>{cell(snap.publication_id)}</code></td>
+                    <td><code>{cell(snap.account_id)}</code></td>
+                    <td>{cell(snap.captured_at)}</td>
+                    <td>{cell(snap.views)}</td>
+                    <td>{cell(snap.impressions)}</td>
+                    <td>{cell(snap.engagements)}</td>
+                    <td>{cell(snap.followers_delta)}</td>
                   </tr>
                 ))
               )}

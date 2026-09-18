@@ -37,6 +37,14 @@ export async function handleSocialRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ data: service.getOverview() }, 200, req, config);
     }
 
+    // 1b. Approvals and analytics (across publications)
+    if (pathname === "/api/social/approvals" && req.method === "GET") {
+      return jsonResponse({ data: service.db.listAllApprovals() }, 200, req, config);
+    }
+    if (pathname === "/api/social/analytics" && req.method === "GET") {
+      return jsonResponse({ data: service.db.listAnalyticsSnapshots() }, 200, req, config);
+    }
+
     // 2. Instances
     if (pathname === "/api/social/openpost/instances" && req.method === "GET") {
       return jsonResponse({ data: service.db.listInstances() }, 200, req, config);

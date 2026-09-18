@@ -360,7 +360,10 @@ export class CredentialRuntimeService {
     this.recordHealthSample(next, result.ok, result);
     this.emit("credential.validated", { credential_id: credentialId, actor_id: actor, metadata: { ok: result.ok, health } });
     if (result.ok) return this.activateCredential(credentialId, actor);
-    this.emit("credential.quarantined", { credential_id: credentialId, actor_id: actor, metadata: { reason: result.error_code } });
+    this.emit(
+      nextStatus === "quarantined" ? "credential.quarantined" : "credential.degraded",
+      { credential_id: credentialId, actor_id: actor, metadata: { reason: result.error_code } },
+    );
     return this.toPublicView(next, resolved.provider);
   }
 

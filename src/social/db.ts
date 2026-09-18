@@ -713,6 +713,22 @@ export class SocialDatabase {
     }));
   }
 
+  public listAllApprovals(): SocialApproval[] {
+    const rows = this.db.query("SELECT * FROM social_approvals ORDER BY created_at DESC").all() as Array<Record<string, unknown>>;
+    return rows.map(r => ({
+      id: String(r.id),
+      publication_id: String(r.publication_id),
+      rendition_id: r.rendition_id ? String(r.rendition_id) : null,
+      decision: r.decision as any,
+      approver_type: r.approver_type as any,
+      approver_id: String(r.approver_id),
+      approval_scope: r.approval_scope as any,
+      content_hash: String(r.content_hash),
+      note: r.note ? String(r.note) : null,
+      created_at: String(r.created_at),
+    }));
+  }
+
   public getLatestApproval(publicationId: string, renditionId?: string | null): SocialApproval | null {
     let sql = "SELECT * FROM social_approvals WHERE publication_id = ?";
     const params: any[] = [publicationId];

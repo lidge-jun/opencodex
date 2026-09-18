@@ -176,6 +176,28 @@ describe("security control plane integration", () => {
     expect(follow.reason_code).toBe("CIRCUIT_BREAKER_OPEN");
   });
 
+  test("fixture assets and exclusions seed independently and tolerate re-seed", () => {
+    // Seed a shareable DB twice: each asset/exclusion insert must be handled
+    // independently, so an already-present duplicate is ignored per record while
+    // the whole environment still seeds.
+    const dbPath = tempDb();
+    const first = new SecurityControlService({ dbPath, seedDemo: true });
+    const again = new SecurityControlService({ dbPath, seedDemo: true });
+
+    const assets = first.db.listAssets(DEMO.scopeId);
+    const assetValues = assets.map(a => a.value).sort();
+    expect(assetValues).toEqual([DEMO.inScope, DEMO.inScopeApp, "lab://local"].sort());
+
+    const exclusions = first.db.listExclusions(DEMO.scopeId);
+    expect(exclusions.map(e => e.value)).toContain(DEMO.excluded);
+
+    // Re-seeding must not duplicate fixture records nor leave partial groups.
+    const assetsAfter = again.db.listAssets(DEMO.scopeId).map(a => a.value).sort();
+    const exclusionsAfter = again.db.listExclusions(DEMO.scopeId).map(e => e.value).sort();
+    expect(assetsAfter).toEqual(assetValues);
+    expect(exclusionsAfter).toEqual(exclusions.map(e => e.value).sort());
+  });
+
   test("mutating API refuses when feature flag is off", async () => {
     delete process.env.PAO_SECURITY_CONTROL_PLANE;
     const url = new URL("http://127.0.0.1:10100/api/security/campaigns");

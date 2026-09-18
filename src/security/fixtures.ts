@@ -145,23 +145,36 @@ export function seedDemoEnvironment(db: SecurityDatabase, now = new Date()): typ
     created_at: ts,
     updated_at: ts,
   });
+  // Seed each asset/exclusion independently so an already-present fixture record
+// (idempotent re-seed) is ignored per record while any other DB error still
+// propagates. A single try/catch around the whole block would swallow a
+// genuine failure inflicted by one record and hide the others.
+for (const asset of [
+  { assetClass: "domain" as const, value: DEMO.inScope, criticality: 3 },
+  { assetClass: "domain" as const, value: DEMO.inScopeApp, criticality: 4 },
+  { assetClass: "local_lab" as const, value: "lab://local", criticality: 2 },
+]) {
   try {
-    addAsset(db, DEMO.scopeId, "domain", DEMO.inScope, 3, ts);
-    addAsset(db, DEMO.scopeId, "domain", DEMO.inScopeApp, 4, ts);
-    addAsset(db, DEMO.scopeId, "local_lab", "lab://local", 2, ts);
-    db.insertExclusion({
-      id: "exc_admin_lab_local",
-      scope_id: DEMO.scopeId,
-      asset_class: "domain",
-      value: DEMO.excluded,
-      normalized_asset: normalizeAsset("domain", DEMO.excluded),
-      reason: "Administrative interface excluded from recon.",
-      created_at: ts,
-    });
+    addAsset(db, DEMO.scopeId, asset.assetClass, asset.value, asset.criticality, ts);
   } catch (err: unknown) {
     const isConstraint = err instanceof Error && (err.message.includes("constraint") || err.message.includes("UNIQUE"));
     if (!isConstraint) throw err;
   }
+}
+try {
+  db.insertExclusion({
+    id: "exc_admin_lab_local",
+    scope_id: DEMO.scopeId,
+    asset_class: "domain",
+    value: DEMO.excluded,
+    normalized_asset: normalizeAsset("domain", DEMO.excluded),
+    reason: "Administrative interface excluded from recon.",
+    created_at: ts,
+  });
+} catch (err: unknown) {
+  const isConstraint = err instanceof Error && (err.message.includes("constraint") || err.message.includes("UNIQUE"));
+  if (!isConstraint) throw err;
+}
 
   db.upsertCampaign({
     id: DEMO.campaignId,
