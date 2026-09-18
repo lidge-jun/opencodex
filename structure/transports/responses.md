@@ -13,7 +13,7 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
-Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../runtime.md#hosted-search-continuation-binding).
+Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).
 
 The `openai-responses` adapter preserves the incoming `User-Agent` as a non-credential fallback in
 both key and forward modes. A configured provider header with that name wins case-insensitively;
@@ -108,6 +108,12 @@ echo is a guess rather than a nomination. The bridges check the declared set bef
 declaration is untouched throughout: that is the caller declaring the tool, not a namespace being
 discarded to manufacture a bare name.
 
+Function-call wrappers around freeform bodies are restored by
+`src/responses/apply-patch-envelope.ts`. The declared `input` field is authoritative. For bare
+`exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
+is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
+therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
@@ -195,7 +201,13 @@ wholesale assignment sends the literal reference as the bearer token. `adapter` 
 are not at risk on a stored row, because the config schema requires both.
 
 Reactive 429 rotation (`rotateProviderTransportOn429`) remains the recovery path after a
-send has already earned a throttle.
+send has already earned a throttle. Before rotating a key, the Responses dispatch path peeks at
+most 4 KiB of a 429 body under the client abort signal and a short deadline. Only the canonical
+OpenRouter quota error shape (`rate_limit_error` or numeric 429 plus a Weekly/Monthly Limit
+Exhausted message) may supply a dated cooldown; other providers continue to use `Retry-After` or
+the ordinary undated cooldown. Bytes pulled in the boundary chunk are replayed ahead of the unread
+stream, and every timeout, read failure, or cancellation cancels the reader and releases its lock. Client
+cancellation terminates dispatch before rotation can persist another key.
 
 ### Routed service-tier capability
 
@@ -220,6 +232,15 @@ alone never opt a gateway in.
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
+
+Both entry points apply the Reserve opt-in refusal in
+[providers/openai-tiers.md](../providers/openai-tiers.md#public-provider-contract) before auth, host-circuit
+admission or any upstream byte. `src/server/responses/request-prepare.ts` applies it beside the
+existing Reserve helper refusal, restricted to the native `responses` inbound wire and to
+non-terminal-helper turns: enabling the opt-in would not make a terminal vision or search helper
+work, and a `gpt-reserve` selector arriving over the Chat or Anthropic wire is an operator-authored
+route. `src/server/responses/compact.ts` repeats it against the resolved route model, because its
+native branch dispatches without replaying through `handleResponses`.
 
 Combo compaction recall uses accepted completed-response callbacks to record the final client-visible
 model and originating combo target. The existing child callback gate defers publication until an

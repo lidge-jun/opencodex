@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
+import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -184,7 +184,7 @@ async function providerOutboundRequest(
     if (!proxyConfigured) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
-    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
+    return configuredOutboundFetch(url, { ...init, method, redirect: "manual" });
   }
   // A canonical TUN exception with no scheme-matched proxy must retain the
   // validated address, even when an unrelated HTTP_PROXY/ALL_PROXY is present.
@@ -193,7 +193,7 @@ async function providerOutboundRequest(
     // When the Mihomo exception could have admitted an answer, pin the transport to the
     // proxy the admission assumed instead of letting fetch re-infer it from the environment.
     const proxy = (allowMihomoIpv6FakeIp && effectiveProxy) ? effectiveProxy : undefined;
-    return globalThis.fetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
+    return configuredOutboundFetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
   if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
     const hostname = normalizeProxyHostname(parsed.hostname);

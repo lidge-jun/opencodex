@@ -117,8 +117,8 @@ invalid-JSON message described above.
 
 Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
 Direct HTTP(S) resolves once and pins the validated address; HTTPS preserves the original Host/SNI
-and always verifies certificates. Proxy-configured requests stay on Bun fetch so HTTP(S)_PROXY,
-ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies successful local DNS answers, but
+and always verifies certificates. HTTP(S)-proxy requests stay on Bun fetch; configured SOCKS5
+requests use the explicit tunnel fetch. Both retain NO_PROXY semantics. The wrapper classifies successful local DNS answers, but
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
@@ -128,17 +128,23 @@ still rejects). The IANA benchmark range (198.18/15 and its IPv4-mapped IPv6 spe
 whenever any outbound proxy applies to the host, because the range itself marks the answer synthetic.
 Mihomo's default IPv6 fake-IP range (fdfe:dcba:9876::/48) is ULA and carries no such mark, so it is
 admitted for fixed canonical destinations under the transparent TUN exception, or when the proxy variable that matches the URL scheme is set (HTTPS_PROXY for https:,
-HTTP_PROXY for http:; ALL_PROXY is not consulted because Bun fetch does not honour it), the host is
-not in NO_PROXY, and the request is then bound to that proxy through Bun's explicit `proxy` option
+HTTP_PROXY for http:; a SOCKS5 ALL_PROXY takes precedence through the configured wrapper), the host is
+not in NO_PROXY, and the request is then bound to that same proxy through the explicit `proxy` option
 rather than environment inference. Both gates live in the outbound wrapper, not in classification:
 `classifyIpv6` and config-time validation (`providerDestinationResolvedError`) never admit the
 ULA, so provider save-time checks are unaffected (#3462).
 
-Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
-does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
+Both paths reject redirects and expose only credential-stripped final-address guidance. The shared
+SOCKS5 fetch also carries ordinary request bodies and response streams, while redirect decisions
+remain with their request owners.
 Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
 redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
 executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
+
+Crusoe model discovery is one fixed canonical destination on this path. It sends a Bearer key only
+to `https://api.inference.crusoecloud.com/v1/models`, rejects redirects, and applies the registry's
+256 KiB response and 256-row ceilings before catalog admission. A same-named custom destination
+does not inherit this policy.
 
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
@@ -211,3 +217,23 @@ The passthrough, adapter, continuation, sidecar and run-turn execution owners pa
 the same routed model during account rotation, without bypassing their send-budget
 admission or account-snapshot pairing. The forwarding contract is covered in
 `tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
+
+## SOCKS5 dispatch boundary
+
+`src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
+the compatibility config facade does not own a second activation path.
+`src/server/responses/fetch-helpers.ts` routes the built-in HTTP executor through
+configured outbound fetch, preserving physical-send admission and dispatch override.
+Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
+Proxy-selected discovery peers remain unpinnable, and private destinations still
+require explicit private-network permission plus NO_PROXY before direct transport.
+
+The tunnel reader keeps incomplete framing separate from queued socket bytes,
+waits for new input, and caps headers even when the terminating delimiter arrives
+in the same chunk. Cancellation removes the exact queued waiter; socket errors
+remain errors on later reads rather than turning into clean EOF. Buffered body
+reads pause the socket at the local high-water mark, and upload errors are observed
+before the response reader takes ownership. `tests/lib/socks5-fetch.test.ts` covers
+fragmented framing, header limits and explicit-route snapshot preservation.
+Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
+honor them and must not silently downgrade the provider contract.

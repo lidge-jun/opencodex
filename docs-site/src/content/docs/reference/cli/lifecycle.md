@@ -16,16 +16,24 @@ optionally installs the Codex autostart shim.
 
 ## Proxy lifecycle
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 Start the proxy server (preferred port `10100`). If that port is occupied, opencodex selects and
 records another available port. It writes PID/runtime-port state and refuses to start a second live
 instance. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
 native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`).
 
+`--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
+HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
+does not remove an HTTP proxy. The value survives `ocx update` because it lives in config, not in
+the installed package. A proxy username and password may be included in the URL, but startup
+logs redact them.
+
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -125,7 +133,7 @@ are left in place.
 
 Status and `ocx doctor` compare this CLI's version with the running proxy. If the CLI is newer,
 restart the proxy using the intended current installation; for a background service, run
-`ocx service restart` — a version skew leaves the service definition byte-identical, so
+`ocx service restart`. On macOS, a version skew leaves the service definition byte-identical, so
 `ocx service repair` would reload nothing and keep the old process serving. If the proxy is newer, upgrade the CLI
 or resolve `PATH` to the intended installation. These diagnostics do not repair the service or
 change whether requests are allowed.
@@ -388,8 +396,8 @@ Definitions installed before this change still carry the old versioned paths and
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run
 `ocx service repair` once after upgrading; after that, each service start follows the launcher.
 An already-running proxy is not replaced by an external upgrade: when the installed CLI is newer
-than the running proxy, run `ocx service restart` so the new build serves. `repair` is not enough
-there: the definition did not change, and a repair that changes nothing reloads nothing.
+than the running proxy, run `ocx service restart` so the new build serves. On macOS, `repair` is not
+enough there: the definition did not change, and a repair that changes nothing reloads nothing.
 If the proxy is newer instead, check the CLI installation and `PATH` as described under
 [`ocx status`](#ocx-status---json).
 
@@ -397,8 +405,8 @@ If the proxy is newer instead, check the CLI installation and `PATH` as describe
 | --- | --- |
 | none | Install and start when absent; otherwise `repair` the existing service. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
 | `install` | Create and start the service. Registers it, which on Windows needs elevation. |
-| `repair` | Refresh an installed service in place, reloading the manager only when something changed — so on macOS a healthy, unchanged job keeps running and the repair is not an outage. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
-| `restart` | The same refresh, but it always restarts. On macOS an unchanged, already-loaded job is kickstarted in place. Not an alias of `repair`. |
+| `repair` | Refresh an installed service in place. On macOS, the manager is reloaded only when something changed, so a healthy, unchanged job keeps running and the repair is not an outage. On Linux and Windows, the service is restarted; a healthy Windows scheduler definition is reused, while a stale definition may be re-registered and require elevation. |
+| `restart` | The same refresh and a guaranteed restart on every platform. On macOS an unchanged, already-loaded job is kickstarted in place. Not an alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
 | `status` | Report service and proxy diagnostics plus log paths. |

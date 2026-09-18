@@ -299,7 +299,7 @@ Qwen Cloud、Qoder Global と CN（公式 PAT + CLI）、SiliconFlow などが�
 
 ```bash
 ocx init                       # 対話式セットアップ（config を書き、Codex を接続し、shim を提案）
-ocx start [--port 10100]       # プロキシをフォアグラウンドで起動
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 の既定値は socks5://127.0.0.1:10808
 ocx stop                       # 停止してネイティブの Codex を復元
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # バックグラウンドサービス
 ocx codex-shim install         # `codex` の起動時にプロキシをオンデマンドで立ち上げる

@@ -5,10 +5,11 @@ import { join } from "node:path";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/log";
 import { loadConfig, saveConfig } from "../../src/config";
-import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { startServer } from "../../src/server";
+import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -495,6 +496,128 @@ describe("server 429 key failover (end-to-end)", () => {
     } finally { await server.stop(true); }
   });
   }
+
+  test("a 429 dated in the body parks the failed key until that instant, outranking Retry-After", async () => {
+    // #4024 regression, through the real dispatch path. The unit tests cover
+    // parseQuotaResetAt/readQuotaResetAt in isolation; nothing exercised
+    // adapter-dispatch actually READING the body and handing quotaResetAt to
+    // rotateProviderTransportOn429. Dropping it there would leave every unit
+    // test green while the key came back after the header's 30s and took the
+    // same 429 again — which is the bug.
+    const resetAt = new Date(Date.now() + 6 * 60 * 60_000);
+    const stamp = resetAt.toISOString().replace("T", " ").slice(0, 19); // bare form, read as UTC
+    const seenAuth: string[] = [];
+    upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(req) {
+        seenAuth.push(req.headers.get("authorization") ?? "");
+        if (seenAuth.length === 1) {
+          return new Response(JSON.stringify({
+            error: { code: "rate_limit_error", message: `Weekly Limit Exhausted. Your limit will reset at ${stamp}` },
+          }), { status: 429, headers: { "retry-after": "30", "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({
+          id: "chatcmpl-dated", object: "chat.completion",
+          choices: [{ index: 0, message: { role: "assistant", content: "ok after dated rotate" }, finish_reason: "stop" }],
+        }), { headers: { "content-type": "application/json" } });
+      },
+    });
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "dated",
+      providers: {
+        dated: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-dated-000111222333",
+          apiKeyPool: [
+            { id: "d1", key: "key-dated-000111222333", addedAt: 1 },
+            { id: "d2", key: "key-dated-444555666777", addedAt: 2 },
+          ],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "dated/some-model", input: "hello", stream: false }),
+      });
+      expect(res.status).toBe(200);
+      await res.json();
+      expect(seenAuth[1]).toBe("Bearer key-dated-444555666777");
+
+      const cooldownUntil = getKeyCooldownUntil("dated", "d1");
+      expect(cooldownUntil).not.toBeNull();
+      // The body's instant, not the header's 30s. Compared with a wide window
+      // because the cooldown is anchored to the server's Date.now(), not ours.
+      expect(cooldownUntil!).toBeGreaterThan(Date.now() + 5 * 60 * 60_000);
+      expect(cooldownUntil!).toBeLessThanOrEqual(resetAt.getTime() + 60_000);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("client cancellation during the 429 body peek does not rotate or cool the key", async () => {
+    const bodyRead = Promise.withResolvers<void>();
+    const bodyCancelled = Promise.withResolvers<void>();
+    const seenAuth: string[] = [];
+    upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(req) {
+        seenAuth.push(req.headers.get("authorization") ?? "");
+        let pulls = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode('{"error":{"code":"rate_limit_error","message":"Weekly Limit Exhausted.'));
+              return;
+            }
+            bodyRead.resolve();
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            bodyCancelled.resolve();
+          },
+        }), { status: 429, headers: { "content-type": "application/json" } });
+      },
+    });
+    const config = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "cancelled",
+      providers: {
+        cancelled: {
+          adapter: "openai-chat", authMode: "key",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
+          apiKey: "key-canc-000111222333",
+          apiKeyPool: [
+            { id: "c1", key: "key-canc-000111222333", addedAt: 1 },
+            { id: "c2", key: "key-cancelled-444555666777", addedAt: 2 },
+          ],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const abort = new AbortController();
+    const pending = handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "cancelled/some-model", input: "hello", stream: false }),
+    }), config, { model: "", provider: "" }, { abortSignal: abort.signal });
+
+    await bodyRead.promise;
+    abort.abort(new DOMException("client closed", "AbortError"));
+    const response = await pending;
+
+    expect(response.status).toBe(499);
+    expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+    await bodyCancelled.promise;
+    expect(seenAuth).toEqual(["Bearer key-canc-000111222333"]);
+    expect(getKeyCooldownUntil("cancelled", "c1")).toBeNull();
+    expect(loadConfig().providers.cancelled?.apiKey).toBe("key-canc-000111222333");
+  });
 
   test("reasoning replay misses after a 429 rotates to a different physical key", async () => {
     const model = "reasoning-model";

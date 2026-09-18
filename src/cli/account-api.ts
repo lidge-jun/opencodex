@@ -370,9 +370,10 @@ async function fetchOAuthRows(
     email: a.email,
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
-    // Forward the server's answer verbatim, including `null`. Collapsing null to "absent" here
-    // would destroy the one distinction this field exists to make.
-    plan: a.plan ?? null,
+    // Forward the server's answer verbatim. An absent key means the proxy predates tier
+    // reporting while `null` means it checked and found no tier — collapsing either
+    // direction would destroy the one distinction this field exists to make.
+    ...(Object.hasOwn(a, "plan") ? { plan: a.plan } : {}),
     ...(a.quota !== undefined ? { quota: a.quota } : {}),
     ...(a.quotaUnavailable !== undefined ? { quotaUnavailable: a.quotaUnavailable } : {}),
     ...(a.quotaUnavailable === true && parseQuotaFailureCode(a.quotaFailure)

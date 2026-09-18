@@ -2,6 +2,8 @@
 
 Management provider-validation calls use the [shared relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
 
+Explicit Codex CLI installation observation does not identify an account, attest provider selection or alter account state. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
 
@@ -245,6 +247,19 @@ policy errors instead of recording a network failure. A missing proof does not f
 ordinary Luna or another account. Native vision/search helpers and standalone search refuse Reserve
 under this compatibility opt-in; ordinary helper/default behavior is unchanged.
 Upstream remains the entitlement authority.
+
+`isCodexReserveOptInMissing` in `src/codex/loopback-target.ts` is the strict complement of
+`isCodexReserveRequestEligible` for the opt-in reason alone: exact `gpt-reserve`, a non-client role,
+loopback admission, and the flag off. Callers classify the destination as canonical forward first.
+A request matching it is refused locally with HTTP 400 `invalid_request_error` naming
+`codexDesktopAuthless` and `ocx system settings --desktop-authless on`, carrying no account
+identifier, credential or request body, and no retry semantics. It is not a cooldown and does not use
+`CodexReserveUnavailableError`, whose `CodexAccountCooldownError` base maps to 429
+`rate_limit_error` through `cooldownErrorResponse` and would restate the upstream verdict this
+refusal exists to replace. The other two ineligibility reasons, a client role and a non-loopback
+admission source, still forward unchanged, as does a `gpt-reserve` selector an operator has aliased
+or routed onto a noncanonical provider. Enabling the flag restores eligibility rather than the
+refusal, so the two predicates can never both hold.
 
 ### Quota cache and short-window history
 
@@ -647,6 +662,12 @@ The history read API reports a median effective token estimate and interval samp
 Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on by default, so threshold crossing alone retains a healthy account. A bound thread that does leave may move only onto an account with genuine quota headroom and strictly lower usage. Manual preference, scoped health and shared-cursor guards remain authoritative. Set the flag false to restore threshold rebinding of bound tasks, except for a conversation carrying live uploaded-file references. Independent `spark`/`reserve` quota scopes resolve reset-first to existing quota selection because shared reset timestamps do not describe those windows. The configured value stays unchanged.
 
 The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
+
+The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
+configured threshold applies to the active strategy. Manual-switch warnings use the routing usage
+score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
+future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
+extend that observation.
 
 ## Bound-thread rebind destination
 
