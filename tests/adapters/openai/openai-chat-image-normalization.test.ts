@@ -41,8 +41,30 @@ async function realPngB64(width: number, height: number): Promise<string> {
  * A flat-colour PNG compresses to almost nothing, so budget behaviour needs incompressible
  * pixels. Deterministic noise is written as an uncompressed BMP and converted, which keeps
  * the fixture in-repo and the encoded size realistic.
+ *
+ * Built once per size and shared, for #4997. Seven cases in this file ask for the same 1000x1000
+ * noise PNG, and producing one is a million-iteration fill followed by a PNG encode of pixels that
+ * are incompressible by construction. For every one of those cases that is preparation: none
+ * asserts anything about how the fixture was produced, only about what the normalizer does to it.
+ * Two of them overran the lane's 60s ceiling in the unsharded control while passing in the shards
+ * that ran the same file, and this build sat inside the window that was being measured.
+ *
+ * Sharing is safe because nothing writes to the result. The normalizer mutates freshly built wire
+ * objects rather than the base64 itself, and the one case that needs a truncated copy uses slice,
+ * which allocates. Per-case isolation is enforced by resetNormalizeStateForTests, not by fixture
+ * identity. The promise rather than the string is cached so two callers cannot both start a build.
  */
-async function noisyPngB64(width: number, height: number): Promise<string> {
+const noisyPngCache = new Map<string, Promise<string>>();
+function noisyPngB64(width: number, height: number): Promise<string> {
+  const key = width + "x" + height;
+  const cached = noisyPngCache.get(key);
+  if (cached !== undefined) return cached;
+  const built = buildNoisyPngB64(width, height);
+  noisyPngCache.set(key, built);
+  return built;
+}
+
+async function buildNoisyPngB64(width: number, height: number): Promise<string> {
   const rowSize = width * 3 + ((4 - ((width * 3) % 4)) % 4);
   const pixelBytes = rowSize * height;
   const bmp = Buffer.alloc(54 + pixelBytes);
