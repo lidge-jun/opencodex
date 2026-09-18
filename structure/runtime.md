@@ -55,6 +55,28 @@ The prefilter is only an optimization, not final process-membership authority.
 `tests/clients/desktop-app-restart.test.ts` covers both mixed-slash directions through the adapter and runs the real PowerShell filter against synthetic CIM rows on Windows.
 `tests/clients/desktop-app-restart-posix.test.ts` keeps the POSIX separator contract covered; uid-dependent macOS/Linux cases skip on Windows.
 
+## Explicit Codex CLI installation observation
+
+`src/cli/codex-cli-update.ts` dispatches the opt-in Windows x64 `attest` operation to
+`src/codex/cli-installation-identity.ts`. With no options, `src/codex/cli-installation-targets.ts`
+derives the four inputs from the proof-bound launcher snapshot: the configured candidate or
+the first codex on the captured PATH, an OpenCodex wrapper resolving to its renamed npm
+backing, the npm prefix layout, and the Node/npm toolchain beside the resolved node.exe.
+Configured values containing a path separator must be drive-absolute; otherwise derivation
+refuses with `candidate_unavailable` instead of substituting a different PATH candidate. Bare
+command names and the unset default continue to resolve only through the captured PATH.
+Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
+remain accepted as an all-or-none override. Only the
+standard npm command shim or direct Codex package entry is accepted. The native reader in
+`src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
+rejects reparse points, conflicting writers and unsupported paths/platforms. Its path-free
+report binds file identities and bytes to this observation, not a durable update permission.
+`installationIdentityObserved` can be true; `selectionAttested`, `managed` and `applyAllowed`
+remain false. Supplied Node identity does not prove launcher selection, effective npm config,
+past installer identity or tool authenticity. No package-registry request, installation,
+config write or process control occurs. Existing Windows `check` retains zero candidate/config
+filesystem I/O. A reported refusal can exit 0; consumers inspect `status`.
+
 The local account CLI and pool credential resolver share the
 [Orca source-owned import contract](codex-home.md#orca-source-owned-account-import): importing
 does not perform OAuth, and runtime credential resolution rereads the owned source.
@@ -76,6 +98,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
 | `src/server/ports.ts` | Owns bind availability and ephemeral-port selection. Temporary probes dispose accepted peers and wait for listener close before reporting success. |
 | `src/cli/status.ts` / `src/cli/status-probes.ts` | Status snapshot assembly and the shared read-only health/stale-process probes used by status and doctor. Probe evidence keeps recorded-port choice, before/after snapshots and per-call timer cleanup together. |
+| `src/cli/doctor.ts` | Read-only environment diagnostics. Sections print through `console.log`; each is a `collect*` helper above `runDoctor` so it is testable without the command. Only a `FAIL`-level condition records a doctor failure — a degraded-but-working install must not break a green pipeline. `collectDefaultModelExposure` compares Codex's root `model` pin against the exposed set, which it READS rather than recomputes: the running proxy's `/v1/models` when one answers, otherwise the on-disk catalog's `visibility: "list"` slugs. It reports exposed, not exposed, or undeterminable, and never the second when it could not read either surface. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. Policy execution and ordinary management dry-run share effective-provider capability evidence; unresolved, missing, and disabled providers are excluded before scoring. |
 | `src/providers/api-key-selection-capture.ts` | Pure request-owned snapshot of the configured key entry, reference, and revision. The router and stateful selection module share this leaf with type-only dependencies; `api-key-selection.ts` retains the compatibility export and owns persisted selection changes and route resolution. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
@@ -160,6 +183,20 @@ Callers must not replace the latter with the former merely to avoid the Windows 
 probe. Expected-PID and snapshot removal helpers are the TOCTOU boundary when a replacement proxy
 can write new state during a probe.
 
+Ownership of a pending-teardown receipt is decided by that same identity rule. The receipt records
+the PID that accepted the obligation, and `handleStop` treats an owner as still running only when
+the live PID is verifiably an opencodex process (`isProcessAlive` composed with
+`isLikelyOcxProcess`). Bare liveness is not sufficient and is a regression here: the OS reuses PID
+numbers, so once the owner exits an unrelated process can inherit its number, and a cheap probe
+then reports the stop as still in flight for as long as that process lives. The receipt is filtered
+out of the recovery loop and is never recovered, quarantined, or even mentioned, while both updater
+gates keep seeing an outstanding obligation — a permanent fail-closed `teardown-outstanding` abort
+with no proxy running and a dead owner (#4897). `isLikelyOcxProcess` asks the broader question than
+`verifyPidIdentity`, without the `start` verb, because a receipt owner is an `ocx stop` or the
+`ocx update` worker that drove it rather than the proxy. Recognizing a receipt as abandoned only
+admits it to recovery; a valid receipt must still prove its recorded endpoint is down before
+anything is restored, and the package launcher still decides nothing itself.
+
 Port reclamation must honor a rejected OCX verifier result even for a PID captured before stop or
 update. A rejected live holder prevents both termination and TCP-row deletion for that scan; later
 scans may proceed if verification succeeds or the holder exits. The allowlist narrows termination
@@ -212,174 +249,15 @@ cancelled. If the adapter generator ends without an explicit done/error event, t
 On `error` / incomplete / stall / EOF — and when assembled non-freeform tool arguments fail to parse —
 an open tool call is cancelled as `status: "incomplete"` without `function_call_arguments.done`, so
 the client never sees a completed call ahead of `response.failed` / `response.incomplete`.
+At the freeform boundary, `src/responses/apply-patch-envelope.ts` unwraps the contractual `input`
+field for every tool. Only bare `exec` and `apply_patch` calls may recover one recognized alternate
+body field or remove one complete outer Markdown fence; ambiguous alternate fields and every other
+freeform grammar pass through unchanged.
 
 The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
 
 > Decision record: [ADR-0004](decisions/ADR-0004-lifecycle.md)
-
-## Providers and adapters
-
-OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
-64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
-the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
-
-| Path | Responsibility |
-| --- | --- |
-| `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |
-| `src/providers/derive.ts` | Enrichment from provider presets into user config. |
-| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
-| `src/combos/request.ts` | Clones each selected combo target request and applies the existing target capability ladder: adaptive unknown targets and explicit empty ladders receive no unsupported reasoning/thinking controls, while known ladders retain per-target resolution. |
-| `src/adapters/openai-responses.ts` | Native OpenAI/ChatGPT Responses passthrough. |
-| `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
-| `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `tool-call-validation.ts`, `tool-schema.ts`, `errors.ts`). Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
-| `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. |
-| `src/adapters/google.ts` | Gemini bridge. |
-| `src/adapters/azure.ts` | Azure OpenAI bridge. |
-| `src/adapters/cursor.ts`, `src/adapters/cursor/` | Cursor protobuf transport: discovery, request builder, event decoding, MCP, thread continuity, native-exec policy. |
-| `src/adapters/kiro.ts` and `src/adapters/kiro/` | Kiro event/tool/thinking/truncation/retry handling. The original path is a facade over leaves for wire identity, reasoning, conversation state, token estimation, payload assembly, streaming, and the adapter. |
-| `src/adapters/mimo-free.ts` | Mimo Free transport (client identity + JWT). |
-| `src/adapters/image.ts`, `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Image conversion for adapter ingress and Anthropic-specific normalization/limits. An image's ladder position is pinned to its own identity (content hash + media type), so appending a newer image cannot re-encode older ones and bust Anthropic's prompt prefix cache (#4532). |
-| `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/upstream-http-error.ts` | Shared adapter execution support: turn queueing, tool-catalog nudging, client identity, upstream error normalization. |
-
-Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
-to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
-response. `src/bridge.ts` is the compatibility facade that re-exports both.
-
-The image/video loop bounds each hidden iteration before replay or fulfillment; see
-[media iteration retention](transports/inventory.md#media-iteration-retention).
-
-Live model discovery is bounded and registry-driven through `src/providers/model-discovery.ts`.
-Custom providers keep the conventional `${baseUrl}/models` request, normalized by
-`providerModelsUrl` the same way `openaiChatCompletionsUrl` normalizes the send path: outer
-whitespace and trailing slashes are trimmed and an already-pasted `/models` is not doubled, so a
-`baseUrl` written with or without a trailing slash yields the identical discovery URL and an
-existing path prefix is preserved. Canonical presets may select a
-trusted URL/path/query, response envelope key, model identifier field, and declarative eligibility
-filter without persisting that policy into user config. A response is rejected before caching when
-it exceeds 4 MiB, contains more than 2,000 raw rows, has a malformed declared list envelope, or
-includes an invalid model id. Tests use fixtures and
-must never depend on live provider endpoints. Newly promoted fixed key presets opt into
-`preserveCustomDestination`, so an older same-named custom provider keeps its configured adapter,
-destination, and key boundary instead of being silently canonicalized onto the new host. Fixed
-OAuth presets resolve discovery against the same canonical registry transport as normal routing
-before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
-OAuth bearer token.
-
-Provider-scoped capability hints remain authoritative when discovery returns an id without
-capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
-`deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
-routed-model fallback.
-The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
-so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
-remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
-remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
-
-The BigModel Coding Plan Responses preset uses the separately documented
-`https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
-disables live discovery: a local Codex `models.json` example does not establish an
-authenticated HTTP models endpoint. Its static context and reasoning metadata are
-kept in the canonical registry, including an explicit empty selectable effort
-ladder for `glm-5-turbo`.
-
-Raycast is a managed client export, not an upstream model provider. Its YAML
-contribution owns only the unique `providers/[id=opencodex]` entry, with the
-existing manifest and fingerprint checks protecting user-owned provider values.
-Ambiguous selector matches and incompatible containers cannot be adopted or
-mutated. Catalog refresh uses the existing owned-integration activation check;
-an unowned client remains disconnected. OpenCodex omits Raycast API-key fields
-and exports only to eligible local targets. Pro detection is an advisory hint,
-not an authentication or entitlement decision.
-
-Routed Responses continuations whose local replay state is missing resolve their recovery decision from the selected wire protocol, not the model name; the contract lives in [Responses transport](transports/responses.md).
-
-The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
-
-### Hosted-search continuation binding
-
-The opt-in key-auth Responses hosted-search bridge in `src/server/responses/passthrough-delivery.ts` captures the
-request binding that served the first leg, after any permitted initial reselection. Before every
-continuation dispatch, after provider pacing, that binding must remain an API-key selection matching
-the configured entry, reference, revision, resolved key, authentication mode, and base URL; a
-disabled or removed provider fails the same check. Drift produces the bridge's failed terminal
-without another provider request, and an unchanged binding resends the built request with its
-executed search result appended, never re-entering the initial reselection/rebuild path. Initial
-dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
-covers drift during search, while pacing, and before first-leg headers return, plus successful
-first-dispatch reselection and result preservation.
-
-`providers.<name>.webSearchBridge.backend` is explicit-only. `ollama` spends that provider's API key
-on the planned search endpoint. `openai`, `anthropic`, `xai`, `gemini`, and `exa` reuse the matching
-sidecar executor and that executor's own credential; a missing credential leaves the bridge
-disarmed rather than falling through to another paid search. A leg that mixes an intercepted
-`web_search` call with another client-executed tool ends the turn on that leg: the intercepted
-searches run, their hosted cells complete, the held client calls are released for the caller to
-execute, and the leg's own terminal closes the turn with no continuation sent upstream. The
-destination therefore does not receive that search result during the turn. It gets it on the next
-one: every search the bridge executes is recorded in `src/responses/bridge-search-replay-cache.ts`
-under the hosted cell's proxy-minted id, scoped to the upstream destination and bounded by entry
-count, total bytes, and a one-hour TTL. When the caller replays that cell,
-`restoreBridgedWebSearchCalls` in `src/adapters/openai-responses/tool-output-recovery.ts` puts the
-destination's own `function_call` and the executed `function_call_output` back in the cell's
-position before the next turn's first leg is dispatched, recording exactly the text
-`appendBridgeSearchTurn` would have sent on a continuation leg so a replayed turn and a continued
-turn show the destination one consistent conversation. The rewrite runs only for a provider with
-`webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different destination, or a
-`call_id` the body already carries — leaves the replayed item untouched. Re-running the search or
-synthesizing result text is not a permitted recovery.
-`tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
-A leg whose
-upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
-any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
-instruction.
-
-`src/web-search/passthrough-bridge.ts` withholds at most 8,388,608 UTF-16 code units of
-SSE data payloads per leg; this is not a byte or total-heap measurement. A companion cap of
-65,536 events is derived from that budget at a realistic 128-code-unit serialized delta, so it
-only bounds per-event object overhead the character budget cannot see rather than refusing a
-large client-executed tool call streamed as fine-grained argument deltas. The first over-budget
-event fails the leg before releasing any held tool call, and reports that refusal as the
-bridge's own bound rather than as an upstream read failure.
-Read failures and exhausted continuation budgets use the same cleanup: discard held calls and
-close every search cell opened by the current leg as failed before one failed terminal and DONE.
-Successful release serializes held events lazily rather than building another full frame array;
-release, discard, and the next leg reset the held payload counter and identity sets.
-`tests/web-search/web-search-progress-stream.test.ts` covers both bounds, identity-only deltas,
-upstream cancellation, cell closure, the exact event boundary, and mixed terminal controls.
-
-The bridge backend and the global `webSearchSidecar` block are configured independently, so the
-sidecar's `model` applies to a bridge search only when `resolveSidecarBackend(webSearchSidecar.backend)`
-equals that bridge backend; otherwise the bridge runs the backend's own default. An unset global
-backend resolves to `openai`, so an unset-backend model reaches an `openai` bridge and no other.
-There is no per-provider `webSearchBridge.model`, so a mismatched backend gets the default rather
-than a vendor-specific override. This is a model and settings rule, not a credential one:
-`resolvePassthroughWebSearchBridgeAuth` switches on the bridge backend and consults only that
-backend's credential locator, so no key crosses backends. `reasoning` and `xSearch` are not gated —
-`reasoning` is a generic effort level and `xSearch` is xai-only with no per-backend default and no
-`webSearchBridge` equivalent. `resolveSidecarBackend` lives in `src/web-search/sidecar-providers.ts`
-rather than the `src/web-search/index.ts` barrel so the bridge can answer this question without a
-value import of the barrel; the barrel re-exports it.
-`tests/web-search/web-search-passthrough-bridge.test.ts` covers the mismatch and matching cases for
-anthropic, xai, and gemini, plus the unset-backend default.
-
-`providers.<name>.webSearchBridge.endpoint` names the destination that receives that provider's own
-API key, so it carries the same literal destination assessment as `baseUrl`:
-`providerDestinationConfigError` runs both at management write time, inside
-`providerWebSearchBridgeConfigError`, and at plan time inside `resolveOllamaWebSearchEndpoint`.
-Metadata destinations are refused unconditionally; loopback, localhost, and private space need the
-provider's `allowPrivateNetwork` opt-in or a registry entry that is local by default, which is what
-keeps a self-hosted Ollama on `127.0.0.1` working. Both checks are synchronous and literal-only and
-resolve no DNS, so a hostname that resolves into metadata or private space is a disclosed residual
-rather than a blocked case. That residual is strictly larger than `baseUrl`'s: `baseUrl` also runs
-the async `providerDestinationResolvedError` at management write, which the endpoint does not, and
-parity there would still leave the hand-edited-file path uncovered because the plan-time boundary is
-synchronous. The plan-time check is the
-authorization boundary rather than a second opinion: a hand-edited config file, `ocx config set`,
-and `ocx config import` all reach `configSchema` only and never call
-`providerWebSearchBridgeConfigError`, and `resolveOllamaWebSearchEndpoint` is the only reader of
-this field in the tree, so a value that survives file load still cannot be spent. It refuses
-silently by design; config-time is where the operator is told why. The planner requires the
-provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
 
 ## Remote Hub hardening ownership
 
@@ -409,7 +287,10 @@ fingerprint mismatch are named separately rather than all reported as a missing 
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in
+[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
+their bounded cache.
 
 Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, using its enrolled data key and checking connection/token ownership before and after the read. It reports hub/client scope and never substitutes local totals on failure. Standalone commands retain their management endpoint.
 
@@ -465,7 +346,7 @@ The relay is transparent in both directions, and that includes the close: a down
 
 `src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.

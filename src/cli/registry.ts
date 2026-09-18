@@ -20,7 +20,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     usage: "ocx setup",
     summary: "Interactive setup for providers and Codex config injection (alias of init).",
   },
-  { name: "start", usage: "ocx start [--port <port>]", summary: "Start the proxy server and sync models to Codex." },
+  {
+    name: "start",
+    usage: "ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]",
+    summary: "Start the proxy server and sync models to Codex.",
+    details: [
+      "--socks5 [host:port]  Route outbound provider traffic through SOCKS5 (default 127.0.0.1:10808). Saved as config.proxy.",
+      "--socks5-off          Clear a saved SOCKS5 outbound proxy from config.proxy.",
+    ],
+  },
   { name: "stop", usage: "ocx stop", summary: "Stop the proxy and restore native Codex config." },
   {
     name: "restore",
@@ -390,6 +398,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "system update manages OpenCodex itself.",
       "ocx system codex-cli-update check [--json]",
+      "ocx system codex-cli-update attest [--json]",
+      "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
       "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
     ],
   },

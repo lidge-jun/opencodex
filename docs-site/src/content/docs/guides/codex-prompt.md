@@ -42,8 +42,11 @@ Sometimes there is nothing to show, and the dialog says which reason applies:
   the layer has nothing to send. The dialog names the path.
 - **It sent nothing on the turn we read.** Layers are only re-sent when they
   change, so an unchanged layer is absent from a single sample.
-- **It travels outside the readable list.** The base prompt is sent through a
-  different field and cannot be printed here.
+- **The base prompt comes from your model catalog.** Codex sends it outside the
+  readable list, so the dialog reads it from the selected model's catalog row —
+  or from the file named by `model_instructions_file` when you have set one. A
+  row that publishes only an unexpanded template is reported as not shown,
+  because that text is not what Codex sends.
 - **The prompt could not be read.** The probe failed on this machine.
 
 The reading is taken from your global Codex home (`~/.codex`), not from whatever

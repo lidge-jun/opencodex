@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -169,6 +169,8 @@
   "explicit": {
     "key-attribution.test.ts": "usage",
     "provider-send-path-import.test.ts": "server",
+    "socks5-fetch.test.ts": "lib",
+    "start-args.test.ts": "cli",
     "responses-core-modules.test.ts": "responses",
     "responses-passthrough-transient-policy.test.ts": "responses",
     "responses-spend-ledger-wiring.test.ts": "responses",
@@ -301,6 +303,7 @@
     "catalog-llamacpp-capabilities.test.ts": "codex-integration",
     "catalog-modelalias-unique-sync.test.ts": "codex-integration",
     "catalog-oauth-observation.test.ts": "codex-integration",
+    "catalog-opencode-go-context-window.test.ts": "codex-integration",
     "catalog-remote-pull.test.ts": "codex-integration",
     "catalog-retain-models.test.ts": "codex-integration",
     "catalog-seed-window-fill.test.ts": "codex-integration",
@@ -368,6 +371,8 @@
     "cleanup-orphaned-workflows.test.ts": "ci-workflows",
     "clearable-deadline.test.ts": "lib",
     "cli-account-orca-import.test.ts": "cli",
+
+    "cli-account-pin-drain.test.ts": "cli",
     "cli-account-pool-verbs.test.ts": "cli",
     "cli-account.test.ts": "cli",
     "cli-capabilities.test.ts": "cli",
@@ -458,6 +463,9 @@
     "codex-catalog-writer.test.ts": "codex-integration",
     "codex-catalog.test.ts": "codex-integration",
     "codex-cli-install-provenance.test.ts": "codex-integration",
+    "codex-cli-installation-identity.test.ts": "codex-integration",
+    "codex-cli-installation-targets.test.ts": "codex-integration",
+    "codex-cli-windows-installation-files.test.ts": "codex-integration",
     "codex-cli-update-launcher-policy.test.ts": "codex-integration",
     "codex-cli-update-zero-effect.test.ts": "codex-integration",
     "codex-composed-acceptance.test.ts": "codex-integration",
@@ -514,6 +522,7 @@
     "codex-models-cache-invalidate.test.ts": "codex-integration",
     "codex-native-residue.test.ts": "codex-integration",
     "codex-plan.test.ts": "codex-integration",
+    "codex-pin-drain-projection.test.ts": "codex-integration",
     "codex-plugins-doctor.test.ts": "codex-integration",
     "codex-pool-plan-exclusion.test.ts": "codex-integration",
     "codex-pool-rotation.test.ts": "codex-integration",
@@ -597,6 +606,7 @@
     "cost-scoring.test.ts": "usage",
     "crash-guard.test.ts": "service",
     "credential-redirect-guard.test.ts": "lib",
+    "crusoe-provider.test.ts": "providers",
     "cursor-adapter.test.ts": "providers/cursor",
     "cursor-continuity-retention.test.ts": "providers/cursor",
     "cursor-arg-normalize.test.ts": "providers/cursor",
@@ -726,6 +736,7 @@
     "fastwire-policy.test.ts": "routing",
     "featherless-provider.test.ts": "providers",
     "fetch-header-timeout.test.ts": "server",
+    "fresh-connection-optout.test.ts": "responses",
     "file-size-ratchet.test.ts": "ci-workflows",
     "fixture-dir-uniqueness.test.ts": "ci-workflows",
     "flash-route-image-modalities.test.ts": "providers",
@@ -1045,6 +1056,7 @@
     "opencode-zen-deepseek-reasoning.test.ts": "providers",
     "opencode-zen-rate-limit.test.ts": "providers",
     "openrouter-provider-routing.test.ts": "providers",
+    "openrouter-quota-reset-cooldown-4024.test.ts": "providers",
     "optional-shutdown-hooks.test.ts": "lib",
     "orca-import.test.ts": "codex-integration",
     "orcarouter-provider.test.ts": "providers",
@@ -1072,6 +1084,7 @@
     "prime-client.test.ts": "clients",
     "privacy-mask-account.test.ts": "lib",
     "privacy-scan-meta-key.test.ts": "ci-workflows",
+    "privacy-scan-ssh-endpoint.test.ts": "ci-workflows",
     "probe-lease.test.ts": "routing",
     "probe-lease-dispatch-wiring.test.ts": "routing",
     "process-control-graceful.test.ts": "lib",
@@ -1466,6 +1479,7 @@
     "ws-failure-stage.test.ts": "responses",
     "ws-upstream-reuse.test.ts": "responses",
     "ws-upstream.test.ts": "responses",
+    "ws-upstream-socks5.test.ts": "responses",
     "xai-client.test.ts": "images",
     "xai-oauth-retry.test.ts": "providers/xai",
     "xai-refresh-lock.test.ts": "providers/xai",

@@ -1,4 +1,22 @@
 /** Quota wire/storage shapes. This leaf must not import credential or config owners. */
+/**
+ * How recently a 100% burst reading must have been observed to exclude an account when it
+ * carries no reset timestamp (#3425). This is deliberately far tighter than the disk-hydration
+ * horizon so a persisted reading cannot strand a recovered account. Routing and UI share this
+ * value because both must answer whether the same short-window observation is still current.
+ */
+export const TERMINAL_SHORT_WINDOW_FRESHNESS_MS = 5 * 60_000;
+
+/**
+ * A window reading at or above this is a measured refusal, not a position on a scale.
+ *
+ * Separate from `CODEX_UNKNOWN_USAGE_SCORE` because they mean opposite things: unknown is
+ * "we have not observed this account", 100 is "we observed it and it is full". It lives on
+ * this leaf, next to the freshness window, because the dashboard has to answer the same
+ * question and cannot import the routing or disk-cache owners to do it.
+ */
+export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
+
 export type StoredAccountQuota = {
   weeklyPercent?: number;
   monthlyPercent?: number;

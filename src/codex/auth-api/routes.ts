@@ -7,7 +7,7 @@ import { getAccountQuotaHistory, listAccountQuotas } from "../quota";
 import { deleteCodexAccount } from "../account-lifecycle";
 import { isCodexAccountPaused, setCodexAccountPaused } from "../account-pause";
 import { clearCodexAccountPin, isCodexAccountPriorityKey, pinnedCodexAccountId, setCodexAccountPin, setCodexAccountPriority } from "../account-priority";
-import { codexQuotaScopeForModel, clearCodexAccountCooldown, clearThreadAccountMapForAccount, getEffectiveActiveCodexAccountId, isEffectiveCodexAccountPinned, resetCodexRoutingForManualSelection } from "../routing";
+import { codexAccountPinDrainReason, codexQuotaScopeForModel, clearCodexAccountCooldown, clearThreadAccountMapForAccount, getEffectiveActiveCodexAccountId, isEffectiveCodexAccountPinned, resetCodexRoutingForManualSelection } from "../routing";
 import { DEFAULT_ACCOUNT_PRIORITY, MAX_ACCOUNT_PRIORITY, MIN_ACCOUNT_PRIORITY, normalizeAccountPoolStickyLimit, normalizeCodexAccountPoolStrategy, parseAccountPoolStickyLimit, parseCodexAccountPoolStrategy, parseAccountPriority } from "../pool-rotation";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -235,7 +235,22 @@ export async function handleCodexAuthAPI(
     else setCodexAccountPin(runtimeConfig, targetAccountId);
     resetCodexRoutingForManualSelection(targetAccountId);
     saveRuntimeConfig(config, runtimeConfig);
-    return jsonResponse({ ok: true, activeCodexAccountId: body.accountId, appliesImmediately: true });
+    // A pin this route accepts can still be dropped by the very next resolve, and saying
+    // nothing about that is what made the setting look ignored (#4521). The checks above
+    // refuse an account that cannot be selected at all; this reports the one remaining
+    // outcome they do not cover, from the same predicate routing releases on, so the two
+    // cannot drift. Absent means the pin survives — additive for existing clients.
+    // `appliesImmediately` is unchanged: it answers whether thread affinity was cleared,
+    // not whether the pin is durable.
+    const pinDrainReason = body.accountId == null
+      ? undefined
+      : codexAccountPinDrainReason(runtimeConfig, targetAccountId);
+    return jsonResponse({
+      ok: true,
+      activeCodexAccountId: body.accountId,
+      appliesImmediately: true,
+      ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
+    });
   }
 
   if (url.pathname === "/api/codex-auth/active" && req.method === "GET") {

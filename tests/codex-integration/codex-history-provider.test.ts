@@ -7,6 +7,7 @@ import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyB
 import { codexHistoryBackupId, legacyCodexHistoryBackupId, sameCodexHistoryPath } from "../../src/codex/history-manifest";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "../helpers/codex-history-manifest-fixtures";
 import { preflightCodexHistoryInjection, setHistoryAppendHooksForTests } from "../../src/codex/history-provider";
+import { setStateDbPreflightOpenFailureForTests } from "../../src/codex/history-state-open";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
 // bun's 5s default per-test timeout by itself. Fail fast into withHistoryRetry instead.
@@ -18,6 +19,7 @@ setDefaultTimeout(30_000);
 const noopSnapshotArtifacts = new Set<string>();
 afterEach(() => {
   setHistoryAppendHooksForTests(undefined);
+  setStateDbPreflightOpenFailureForTests(undefined);
   setBeforeHistoryBackupConsumeForTests(undefined);
   setBeforeStrictHistoryRolloutAppendForTests(undefined);
   setAfterStrictHistoryRolloutAppendForTests(undefined);
@@ -1644,5 +1646,77 @@ describe("Windows history path identity (#4442)", () => {
     // Neither exists: a new manifest is written under the canonical name.
     present.clear();
     expect(resolveExistingHistoryBackupPath(stateDb, exists)).toBe(canonical);
+  });
+});
+
+describe("Codex history injection preflight on a WAL store with no live writer", () => {
+  /**
+   * The store the issue describes: `journal_mode=wal` recorded in the database header, and
+   * no `-wal`/`-shm` on disk because the last writer closed cleanly.
+   *
+   * The sidecars are removed explicitly rather than left to close semantics. Whether a clean
+   * close unlinks them or truncates them to zero bytes varies by platform, and this fixture
+   * has to mean "no sidecar is present" on every runner for the assertions below to be about
+   * the preflight rather than about the host.
+   */
+  function checkpointedWalFixture(options?: { includeLegacy?: boolean }) {
+    const fixture = makeFixture(options);
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const db = new Database(fixture.dbPath);
+    db.exec("PRAGMA journal_mode = wal");
+    db.close();
+    rmSync(`${fixture.dbPath}-wal`, { force: true });
+    rmSync(`${fixture.dbPath}-shm`, { force: true });
+    return fixture;
+  }
+
+  /** What SQLite answers when it needs the `-shm` and may not create one. */
+  const missingSharedMemory = () => Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" });
+
+  test("reaches a verdict on a cleanly-closed WAL store rather than the catch-all refusal", () => {
+    const fixture = checkpointedWalFixture();
+    // No forced failure here: whichever way this runner's SQLite build answers a bare
+    // read-only open of a checkpointed WAL store, the operator must get a real answer.
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+  });
+
+  test("admits the immutable read when no sidecar is on disk", () => {
+    const fixture = checkpointedWalFixture();
+    setStateDbPreflightOpenFailureForTests(missingSharedMemory);
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+  });
+
+  test("the fallback still produces the paginated refusal it exists to produce", () => {
+    // The narrowing must not cost the preflight its evidence: the same store that refuses
+    // through a normal open has to refuse through the fallback, or the fix would trade a
+    // spurious refusal for a config transition over history Codex owns.
+    const fixture = checkpointedWalFixture({ includeLegacy: true });
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    db.run("UPDATE threads SET history_mode='paginated' WHERE id='thread-3'");
+    db.close();
+    rmSync(`${fixture.dbPath}-wal`, { force: true });
+    rmSync(`${fixture.dbPath}-shm`, { force: true });
+    setStateDbPreflightOpenFailureForTests(missingSharedMemory);
+    expect(preflightCodexHistoryInjection(false, false, fixture.dbPath)).toBe("history_paginated_requires_native_writer");
+  });
+
+  test.each(["-wal", "-shm"])("STILL refuses when a %s sidecar is present", (suffix) => {
+    const fixture = checkpointedWalFixture();
+    // A `-wal` holds committed content an immutable connection would not read, and a `-shm`
+    // means a writer is attached. Either one makes the snapshot potentially stale, so the
+    // refusal has to stand even though the open failure looks identical.
+    writeFileSync(`${fixture.dbPath}${suffix}`, "");
+    setStateDbPreflightOpenFailureForTests(missingSharedMemory);
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBe("history_injection_preflight_unavailable");
+  });
+
+  test("STILL refuses when the open failed for some other reason", () => {
+    const fixture = checkpointedWalFixture();
+    // Absent sidecars do not make every open failure recoverable. A permission error is not
+    // the missing-shared-memory condition, and reading around it with an immutable snapshot
+    // would be guessing at a store this process cannot open.
+    setStateDbPreflightOpenFailureForTests(() => Object.assign(new Error("access to the database file is denied"), { code: "SQLITE_PERM" }));
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBe("history_injection_preflight_unavailable");
   });
 });

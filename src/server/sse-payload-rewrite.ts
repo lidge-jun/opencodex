@@ -178,17 +178,44 @@ export function createSseBlockBuffer(
 
 /** Join all data lines from one SSE event according to the event-stream field rules. */
 export function sseDataPayload(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (line === "data") {
-      data.push("");
-      continue;
+  let result = "";
+  let found = false;
+  let lineStart = 0;
+  const len = block.length;
+
+  while (lineStart < len) {
+    const nextNewline = block.indexOf("\n", lineStart);
+    let lineEnd = nextNewline === -1 ? len : nextNewline;
+    const nextStart = nextNewline === -1 ? len : nextNewline + 1;
+    if (lineEnd > lineStart && block.charCodeAt(lineEnd - 1) === 13) {
+      lineEnd -= 1;
     }
-    if (!line.startsWith("data:")) continue;
-    const value = line.slice(5);
-    data.push(value.startsWith(" ") ? value.slice(1) : value);
+
+    const lineLen = lineEnd - lineStart;
+    if (lineLen === 4 && block.startsWith("data", lineStart)) {
+      if (found) {
+        result += "\n";
+      } else {
+        found = true;
+      }
+    } else if (lineLen >= 5 && block.startsWith("data:", lineStart)) {
+      let valueStart = lineStart + 5;
+      if (valueStart < lineEnd && block.charCodeAt(valueStart) === 32) {
+        valueStart += 1;
+      }
+      const value = block.slice(valueStart, lineEnd);
+      if (found) {
+        result += "\n" + value;
+      } else {
+        result = value;
+        found = true;
+      }
+    }
+
+    lineStart = nextStart;
   }
-  return data.length > 0 ? data.join("\n") : null;
+
+  return found ? result : null;
 }
 
 /** Replace an SSE event's data field while preserving non-data fields and newline style. */
