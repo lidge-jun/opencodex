@@ -97,21 +97,35 @@ export function antigravitySessionId(parsed: OcxParsedRequest): string {
  * collision, is the failure mode this function exists to prevent.
  */
 function clientThreadAnchor(parsed: OcxParsedRequest): string | undefined {
-  // The request's OWN thread first. `_clientThreadId` carries `x-codex-parent-thread-id`, which
-  // every parallel child of one parent presents identically, so anchoring on it collapsed
-  // concurrent children onto a single upstream Cloud Code Assist session. A thread id is only
-  // unique within its parent, which is why `codexConversationIdentity` keys on both; this surface
-  // needs the narrower half, not the shared one (#5033).
+  // `_clientThreadId` carries `x-codex-parent-thread-id`, which every parallel child of one
+  // parent presents identically, so anchoring on it alone collapsed concurrent children onto a
+  // single upstream Cloud Code Assist session (#5033).
   //
-  // A root turn is unaffected: it presents `thread-id` equal to its parent id, so the anchor is
-  // byte-identical to what it was. Only a child's anchor moves, and it moves once.
+  // A thread id is only unique WITHIN its parent, which is why `codexConversationIdentity` keys
+  // on both. #5054 anchored on the child alone and therefore only moved the collision: two
+  // parents can each have a child of the same id (#5058). The pair is the identity, joined by a
+  // NUL so the encoding is injective: no Codex id contains one, so a pair cannot be re-read as a
+  // different pair, nor as the parent-only anchor below.
   //
   // Deliberately NOT the general lane key: `codexConversationKeyFor` is an HMAC under a
   // process-random secret, so it changes across a proxy restart — and instability, not sharing,
-  // is the failure mode this derivation has to avoid. `thread-id` is Codex's own value and
-  // survives both compaction and restart.
-  const threadId = parsed._codexOwnThreadId?.trim() || parsed._clientThreadId?.trim();
-  return threadId ? `codex-thread:${threadId}` : undefined;
+  // is the failure mode this derivation has to avoid. These ids are Codex's own values and
+  // survive both compaction and restart.
+  const own = parsed._codexOwnThreadId?.trim();
+  const parent = parsed._clientThreadId?.trim();
+  if (own && parent) return `codex-thread:${parent}\u0000${own}`;
+  // Parent-only clients keep the anchor they already had.
+  if (parent) return `codex-thread:${parent}`;
+  // A parentless ROOT deliberately omits the parent header. `src/server/context-history.ts` says
+  // so in as many words: root model requests use (session-id=root, thread-id=root) and do not
+  // fabricate a parent key. It has no pair to key on, and #5054's claim that a root presents
+  // `thread-id` equal to its parent was simply wrong.
+  //
+  // So it keeps the pre-#5054 anchor rather than gaining an own-thread one. That is not a
+  // preference: durable Antigravity replay state is keyed by model plus session id, and moving a
+  // root's anchor on upgrade strands every signature stored under the old session — the exact
+  // instability this derivation exists to avoid, introduced while fixing sharing.
+  return undefined;
 }
 
 /** A Gemini content part as it appears in an Antigravity request body. */
