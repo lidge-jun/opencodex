@@ -19,7 +19,7 @@ otomatik başlatma dolgusunu kurar.
 
 ## Proxy yaşam döngüsü
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 Proxy sunucusunu başlatın (tercih edilen port `10100`). Bu port doluysa
 opencodex başka bir kullanılabilir port seçer ve kaydeder. PID/çalışma zamanı
@@ -28,9 +28,16 @@ her sağlayıcının modellerini Codex'in kataloğuna senkronize eder. Kapatıld
 — yönetilen bir servis olarak başlatılmadığı sürece (`OCX_SERVICE=1`) — yerel
 Codex'i geri yükler.
 
+`--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
+HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş
+SOCKS5 proxy'sini temizler; HTTP proxy'sini silmez. Değer yapılandırmada tutulduğu için `ocx update`
+sonrasında da korunur. URL kullanıcı adı ve parola içerebilir, ancak başlangıç günlüklerinde gizlenir.
+
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -293,10 +300,10 @@ UAC onayı gerekebilir. Zaten normal veya yüksek öncelik ayarlanmışsa yalnı
 
 | Alt komut | Eylem |
 | --- | --- |
-| none | Servis yoksa kurup başlatın; varsa yenileyip yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
+| none | Servis yoksa kurup başlatın; varsa mevcut servise `repair` uygulayın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `install` | Servisi oluşturun ve başlatın. Kaydeder, bu da Windows'ta yükseltme gerektirir. |
-| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
-| `restart` | `repair` komutunun takma adıdır. |
+| `repair` | Kurulu bir servisi yerinde yenileyin. macOS'ta yönetici yalnızca bir şey değiştiğinde yeniden yüklenir; böylece sağlıklı, değişmemiş bir iş çalışmaya devam eder ve yenileme bir kesinti olmaz. Linux ve Windows'ta servis yeniden başlatılır; sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır, eski bir tanım ise yeniden kaydedilebilir ve yükseltme gerektirebilir. |
+| `restart` | Aynı yenileme ve her platformda garantili yeniden başlatma. macOS'ta değişmemiş, zaten yüklü bir iş yerinde kickstart edilir. `repair` komutunun takma adı değildir. |
 | `start` | Kurulu bir servisi başlatın. |
 | `stop` | Servisi durdurun ve yerel Codex'i geri yükleyin. |
 | `status` | Servis ve proxy tanılamalarını artı günlük yollarını bildirin. |

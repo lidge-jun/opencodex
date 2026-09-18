@@ -11,7 +11,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -169,6 +169,8 @@
   "explicit": {
     "key-attribution.test.ts": "usage",
     "provider-send-path-import.test.ts": "server",
+    "socks5-fetch.test.ts": "lib",
+    "start-args.test.ts": "cli",
     "responses-core-modules.test.ts": "responses",
     "responses-passthrough-transient-policy.test.ts": "responses",
     "responses-spend-ledger-wiring.test.ts": "responses",
@@ -602,6 +604,7 @@
     "cost-scoring.test.ts": "usage",
     "crash-guard.test.ts": "service",
     "credential-redirect-guard.test.ts": "lib",
+    "crusoe-provider.test.ts": "providers",
     "cursor-adapter.test.ts": "providers/cursor",
     "cursor-continuity-retention.test.ts": "providers/cursor",
     "cursor-arg-normalize.test.ts": "providers/cursor",
@@ -1473,6 +1476,7 @@
     "ws-failure-stage.test.ts": "responses",
     "ws-upstream-reuse.test.ts": "responses",
     "ws-upstream.test.ts": "responses",
+    "ws-upstream-socks5.test.ts": "responses",
     "xai-client.test.ts": "images",
     "xai-oauth-retry.test.ts": "providers/xai",
     "xai-refresh-lock.test.ts": "providers/xai",

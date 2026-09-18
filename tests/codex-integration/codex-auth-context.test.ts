@@ -24,6 +24,7 @@ import {
   isCodexAuthContextUsable,
   codexPoolAffinityKey,
   resolveCodexAuthContext,
+  releaseCodexAuthContextProbeLease,
   shouldMarkAccountNeedsReauthForCodexAuthFailure,
   stripCodexRuntimeProviderFields,
 } from "../../src/codex/auth-context";
@@ -1762,9 +1763,22 @@ describe("Codex auth context", () => {
       await expect(resolveCodexAuthContext(headers, config(), "pool"))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
 
+      // A caller that exits before sending upstream can return its lease; the account then
+      // admits the next paced probe instead of pinning the lease until restart.
+      releaseCodexAuthContextProbeLease(probeCtx);
+      const retryAt = probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      Date.now = () => retryAt;
+      const replacementProbeCtx = await resolveCodexAuthContext(headers, config(), "pool");
+      const replacementProbeLeaseId = (replacementProbeCtx as { probeLeaseId?: string }).probeLeaseId;
+      expect(replacementProbeLeaseId).toBeTruthy();
+      expect(replacementProbeLeaseId).not.toBe(probeLeaseId);
+
       // The probe succeeds: the account is proven healthy and routes normally again.
-      recordCodexUpstreamOutcome(config(), "pool-a", 200, { now: probeAt + 500, probeLeaseId });
-      Date.now = () => probeAt + 500;
+      recordCodexUpstreamOutcome(config(), "pool-a", 200, {
+        now: retryAt + 500,
+        probeLeaseId: replacementProbeLeaseId,
+      });
+      Date.now = () => retryAt + 500;
       await expect(resolveCodexAuthContext(headers, config(), "pool")).resolves.toMatchObject({
         kind: "pool",
         accountId: "pool-a",

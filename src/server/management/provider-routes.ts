@@ -516,7 +516,14 @@ function applyProviderPatchFields(
       delete next.modelContextWindows;
     } else {
       if (!isPlainRecord(value)) return { error: "modelContextWindows must be a plain object or null" };
-      const windows: Record<string, number> = { ...(next.modelContextWindows ?? {}) };
+      // A prototype-named model id must survive the merge: assigning
+      // "__proto__" on an ordinary object invokes the inherited setter instead
+      // of creating an own property, so the PATCH would report success while
+      // silently dropping that override.
+      const windows: Record<string, number> = Object.assign(
+        Object.create(null),
+        next.modelContextWindows ?? {},
+      );
       for (const [model, window] of Object.entries(value)) {
         if (!model.trim()) return { error: "modelContextWindows keys must be nonblank model ids" };
         if (window === null) {

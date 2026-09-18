@@ -288,7 +288,7 @@ Qwen Cloud、Qoder Global 和 CN（官方 PAT + CLI）、SiliconFlow，以及更
 
 ```bash
 ocx init                       # 交互式设置（写入配置、接入 Codex、提供 shim）
-ocx start [--port 10100]       # 在前台启动代理
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 默认为 socks5://127.0.0.1:10808
 ocx stop                       # 停止并恢复原生 Codex
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # 后台服务
 ocx codex-shim install         # 每当启动 `codex` 时按需启动代理
