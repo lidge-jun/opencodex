@@ -86,6 +86,9 @@ matters for maintainers is which groups exist and who resolves them:
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
 
+The account CLI in `src/cli/account-extended.ts` persists zero as the disabled auto-switch
+threshold and reports that stored value as off even when the generic pool kernel is active.
+
 Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
 

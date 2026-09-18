@@ -403,16 +403,16 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
     // shared kernel, and absent is a server that does not speak this field at all. Collapsing
     // false into absent would render the live feature as an unknown capability.
     const inert = typeof settings.inert === "boolean" ? settings.inert : null;
-    // A stored threshold only steers selection once the pool consumes it, which is exactly
-    // what `inert: false` reports.
-    const enabled = inert === false && storedThreshold !== null;
+    // A positive stored threshold only steers selection once the pool consumes it, which is
+    // exactly what `inert: false` reports. Zero remains the explicit disabled value.
+    const enabled = inert === false && storedThreshold !== null && storedThreshold > 0;
     if (wantsJson) {
       console.log(JSON.stringify({ provider: name, autoSwitchThreshold: storedThreshold, enabled, poolEnabled, inert }, null, 2));
     } else {
       const value = storedThreshold === null ? "unset" : `${storedThreshold}%`;
       const state = inert === false ? (enabled ? "on" : "off") : inert === true ? "inactive" : "unavailable";
       const why = inert === false
-        ? (enabled ? "applied by this pool" : "no threshold stored")
+        ? (enabled ? "applied by this pool" : storedThreshold === 0 ? "usage-based switching disabled" : "no threshold stored")
         : inert === true ? "not applied by this pool" : "threshold support is unknown";
       console.log(`auto-switch: ${state} (stored threshold ${value}; ${why})`);
     }
