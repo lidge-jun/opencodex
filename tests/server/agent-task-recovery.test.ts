@@ -1211,3 +1211,32 @@ describe("FINAL_ANSWER encrypted task recovery", () => {
     expect(fetches).toBe(0);
   });
 });
+
+describe("recovery refuses a wrong-family echoed routing header", () => {
+  beforeEach(() => resetAgentTaskRecoveryState());
+  afterEach(() => { globalThis.fetch = originalFetch; resetAgentTaskRecoveryState(); });
+
+  const echoCases: Array<[string, string, string]> = [
+    ["FINAL_ANSWER envelope echoing a NEW_TASK header", FINAL_ANSWER_ENVELOPE, `${ROUTING_ENVELOPE}Recovered final answer.`],
+    ["FINAL_ANSWER envelope echoing a NEW_TASK header mid-assignment", FINAL_ANSWER_ENVELOPE, `Recovered final answer.\n\n${ROUTING_ENVELOPE}`],
+    ["NEW_TASK envelope echoing a FINAL_ANSWER header", ROUTING_ENVELOPE, `${FINAL_ANSWER_ENVELOPE}Recovered final answer.`],
+    ["MESSAGE envelope echoing a FINAL_ANSWER header", ROUTING_ENVELOPE.replace("NEW_TASK", "MESSAGE"), `${FINAL_ANSWER_ENVELOPE}Recovered final answer.`],
+  ];
+
+  test.each(echoCases)("refuses %s", async (_label, envelopeText, assignment) => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse(assignment));
+    }) as typeof fetch;
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    const input = agentMessage([
+      { type: "input_text", text: envelopeText },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    const before = structuredClone(input);
+    expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, routedConfig())).toEqual({ recovered: false, reason: "recovery_invalid_output" });
+    expect(input).toEqual(before);
+    expect(fetches).toBe(1);
+  });
+});

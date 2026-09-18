@@ -187,7 +187,12 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
 function stripMatchingEnvelope(assignment: string, envelope: AgentEnvelope): string | null {
   const header = envelope.messageType === "FINAL_ANSWER" ? FINAL_ANSWER_HEADER : ROUTING_HEADER;
   const match = header.exec(assignment);
-  if (!match) return assignment;
+  if (!match) {
+    // A routing header of the other family is still an echoed envelope: a bare payload does not
+    // carry one, and a same-family header past the start already fails closed, so reject it too.
+    const foreign = (header === FINAL_ANSWER_HEADER ? ROUTING_HEADER : FINAL_ANSWER_HEADER).exec(assignment);
+    return foreign ? null : assignment;
+  }
   if (match.index !== 0) return null;
   if (envelope.messageType === "FINAL_ANSWER") {
     if ((match[1] ?? null) !== envelope.taskName || match[2] !== envelope.sender) return null;
