@@ -118,23 +118,29 @@ function parseHttpDate(value: string, now: number): number | undefined {
 export function parseRetryAfterMs(
   value: string | null | undefined,
   now = Date.now(),
-  options?: { preserveImmediate?: boolean },
+  options?: { preserveImmediate?: boolean; preserveServerDelay?: boolean },
 ): number | undefined {
   const text = value?.trim();
   if (!text) return undefined;
+  // A local wait ceiling must not make an explicit upstream reset expire early.
+  // Keep legacy bounded parsing for other callers. The opt-in stores a timestamp;
+  // the combo picker still independently limits how long a live request waits.
+  const maximum = options?.preserveServerDelay === true
+    ? Number.MAX_SAFE_INTEGER - Math.max(0, now)
+    : MAX_COOLDOWN_MS;
   if (/^\d+(?:\.\d+)?$/.test(text)) {
     const seconds = Number(text);
     if (
       Number.isFinite(seconds)
       && (seconds > 0 || (options?.preserveImmediate && seconds === 0))
     ) {
-      return Math.min(Math.max(Math.ceil(seconds * 1000), 1), MAX_COOLDOWN_MS);
+      return Math.min(Math.max(Math.ceil(seconds * 1000), 1), maximum);
     }
   }
   const timestamp = parseHttpDate(text, now);
   if (timestamp === undefined) return undefined;
   const delay = timestamp - now;
-  if (delay > 0) return Math.min(delay, MAX_COOLDOWN_MS);
+  if (delay > 0) return Math.min(delay, maximum);
   return options?.preserveImmediate ? 1 : undefined;
 }
 
@@ -215,7 +221,11 @@ export function coolComboTarget(
   // A server-provided Retry-After is authoritative, including an immediate `0` directive.
   // A quota reset is the next-most-specific signal (#3256); configured and default cooldowns
   // are only fallbacks when upstream supplied neither usable value.
-  const cooldownMs = parseRetryAfterMs(options?.retryAfter, now, { preserveImmediate: true })
+  const serverDelayMs = parseRetryAfterMs(options?.retryAfter, now, {
+    preserveImmediate: true,
+    preserveServerDelay: true,
+  });
+  const cooldownMs = serverDelayMs
     ?? parseResetCooldownMs(options?.resetAt, now)
     ?? options?.cooldownMs
     ?? (isTransientRequestRateLimit({
@@ -224,7 +234,9 @@ export function coolComboTarget(
       message: options?.message,
     }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
-    cooldownUntil: now + Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS),
+    // Only the locally chosen fallback is capped at ten minutes. An explicit
+    // server lower bound (including one hour) remains authoritative.
+    cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
   });
   sweepExpiredOnWrite(now);
 }

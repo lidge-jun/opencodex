@@ -1,3 +1,5 @@
+import { parseRetryAfterFromMessage } from "./retry-delay";
+
 export interface OcxErrorPayload {
   message: string;
   type: string;
@@ -376,46 +378,7 @@ export function isRateLimitOrQuotaFailureMessage(message: string): boolean {
   return normalized.toLowerCase().includes("usage limit");
 }
 
-/**
- * Time units an upstream may write into a retry hint. The first letter decides
- * the multiplier, so the alternations below never need a lookup table.
- */
-const RETRY_HINT_UNIT_SECONDS: Readonly<Record<string, number>> = { s: 1, m: 60, h: 3600 };
-
-/**
- * Best-effort parse of a retry delay embedded in an upstream error message.
- *
- * Recognised phrasings, all case-insensitive:
- *   - "try again in 7s" / "retry after 30s" — seconds were the only unit the
- *     original patterns understood; minutes and hours now parse too.
- *   - "Retry-After: 30" — header syntax inside a body; a bare number stays
- *     seconds per RFC 9110, but an explicit unit is honoured when present.
- *   - "Your limit will reset in 35 seconds" — Cognition/Devin's free-tier cap
- *     states its own recovery delay in the trailer message. Without this the
- *     stated wait was discarded: clients got the synthetic 2s fallback and
- *     combo cooldowns fell back to the 60s default, so a retry fired straight
- *     back into the live cap. The unit is REQUIRED here — "reset in 2026"
- *     names a year, not a delay.
- */
-export function parseRetryAfterFromMessage(message: string): number | undefined {
-  const patterns = [
-    /try again in (\d+(?:\.\d+)?)\s*(s(?:econds?|ecs?)?|m(?:inutes?|ins?)?|h(?:ours?|rs?)?)/i,
-    /retry after (\d+(?:\.\d+)?)\s*(s(?:econds?|ecs?)?|m(?:inutes?|ins?)?|h(?:ours?|rs?)?)/i,
-    // Header syntax tolerates a missing unit: a bare Retry-After number is
-    // already seconds by definition.
-    /retry[- ]after[:\s]+(\d+(?:\.\d+)?)(?:\s*(s(?:econds?|ecs?)?|m(?:inutes?|ins?)?|h(?:ours?|rs?)?))?/i,
-    /\breset[s]?\s+in\s+(\d+(?:\.\d+)?)\s*(s(?:econds?|ecs?)?|m(?:inutes?|ins?)?|h(?:ours?|rs?)?)\b/i,
-  ];
-  for (const re of patterns) {
-    const match = message.match(re);
-    if (!match?.[1]) continue;
-    const amount = Number.parseFloat(match[1]);
-    const unit = match[2]?.[0]?.toLowerCase() ?? "s";
-    const seconds = amount * (RETRY_HINT_UNIT_SECONDS[unit] ?? 1);
-    if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
-  }
-  return undefined;
-}
+export { parseRetryAfterFromMessage };
 
 /** Infer HTTP status from adapter terminal error text (provider-agnostic keyword matching). */
 export function inferHttpStatusFromAdapterMessage(message: string): number {
