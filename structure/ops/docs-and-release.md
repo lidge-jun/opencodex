@@ -93,14 +93,15 @@ container bootstrap helper, but still publishes no registry image. The source bu
 base by multi-platform digest, runs non-root with a read-only root filesystem and dropped
 capabilities, publishes the data port on host loopback by default (remote binding is an explicit
 `OPENCODEX_BIND_ADDRESS` opt-in), persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
-owner-only canonical token file. Before every image build, operators run
-`bun scripts/generate-compatibility-version.ts` in the host Git checkout. The runtime copies
-that untracked JSON artifact without including `.git` in the Docker context or changing the
-generator's tracked-source authority. `docker/verify-compatibility.ts` rejects stale manifests
-by comparing all file hashes and the complete source inventory in the read-only build context
-and copied runtime tree. It rejects symlinks, missing/mismatched entries, and extra source files.
+owner-only canonical token file. A build-only manifest stage uses Git metadata from a read-only
+context mount to run `scripts/generate-compatibility-version.ts`; remote Git contexts retain that
+metadata through `BUILDKIT_CONTEXT_KEEP_GIT_DIR=1`. A verified host-generated artifact remains a
+compatible input. No `COPY` includes `.git`, and the Git executable does not reach the runtime stage.
+`docker/verify-compatibility.ts` compares all file hashes and the complete source inventory in the
+read-only build context before source copy and again in the copied runtime tree. It rejects symlinks,
+missing/mismatched entries, and extra source files.
 The required roots are `package.json`, `bun.lock`, and `scripts/model-metadata.source.json`;
-the context admits only that exact scripts artifact.
+the context also admits the canonical generator, while the runtime includes only the metadata source.
 Operators must still prove liveness, readiness, authenticated
 catalog access, and a real routed response before promotion.
 

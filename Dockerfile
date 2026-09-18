@@ -3,12 +3,54 @@
 # Keep the runtime aligned with package.json and pin the multi-platform image index.
 ARG BUN_IMAGE=oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6
 
-FROM ${BUN_IMAGE} AS build
+FROM ${BUN_IMAGE} AS manifest
 WORKDIR /home/bun/app
 
-# Inspect the read-only context before COPY can dereference a source symlink.
+# The pinned Bun image does not include Git. Keep it confined to this build-only stage.
+RUN apt-get update -qq \
+  && apt-get install -qq --no-install-recommends git \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/generate-compatibility-version.ts /tmp/generate-compatibility-version.ts
 COPY docker/verify-compatibility.ts /tmp/verify-compatibility.ts
-RUN --mount=type=bind,target=/build-context bun /tmp/verify-compatibility.ts /build-context
+
+# Inspect the read-only context before COPY can dereference a source symlink, and produce the
+# canonical manifest for the later stages. Two supported inputs, in order:
+#
+#   1. A manifest the host already generated. This is the pre-existing workflow and it still
+#      wins, verified rather than silently replaced, so a prepared checkout keeps building
+#      byte-for-byte as before.
+#   2. A clean Git context, including a remote one. The generator's canonical file list comes
+#      from `git ls-files`, which reads the index and never opens an object or a ref, so the
+#      context carries only .git/index and .git/HEAD. Copying them into a scratch GIT_DIR owned
+#      by this stage supplies the empty objects/ and refs/ directories Git's repository check
+#      requires, keeps the read-only bind mount pristine, and sidesteps the dubious-ownership
+#      refusal a context-owned .git would trigger.
+#
+# Neither input is allowed to be missing: a placeholder manifest would defeat the identity the
+# runtime check exists to prove.
+RUN --mount=type=bind,target=/build-context set -eu; \
+  context_manifest=/build-context/src/generated/compatibility-version.json; \
+  generated=/manifest/src/generated/compatibility-version.json; \
+  if [ -e "$context_manifest" ] || [ -L "$context_manifest" ]; then \
+    bun /tmp/verify-compatibility.ts /build-context; \
+    install -D -m 0644 "$context_manifest" "$generated"; \
+  elif [ -f /build-context/.git/index ] && [ -f /build-context/.git/HEAD ]; then \
+    mkdir -p /gitdir/objects /gitdir/refs; \
+    cp /build-context/.git/index /build-context/.git/HEAD /gitdir/; \
+    GIT_DIR=/gitdir GIT_WORK_TREE=/build-context \
+      bun /tmp/generate-compatibility-version.ts /build-context "$generated"; \
+    bun /tmp/verify-compatibility.ts /build-context "$generated"; \
+  else \
+    echo "No compatibility manifest and no Git index in the build context." >&2; \
+    echo "Build from a Git context (add BUILDKIT_CONTEXT_KEEP_GIT_DIR=1 for a remote one)," >&2; \
+    echo "or run: bun scripts/generate-compatibility-version.ts" >&2; \
+    exit 1; \
+  fi
+
+FROM ${BUN_IMAGE} AS build
+WORKDIR /home/bun/app
 
 COPY --chown=bun:bun package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile
@@ -17,6 +59,7 @@ COPY --chown=bun:bun gui/package.json gui/bun.lock ./gui/
 RUN cd gui && bun install --frozen-lockfile
 
 COPY --chown=bun:bun src ./src
+COPY --from=manifest --chown=bun:bun /manifest/src/generated/compatibility-version.json ./src/generated/compatibility-version.json
 COPY --chown=bun:bun scripts/model-metadata.source.json ./scripts/model-metadata.source.json
 COPY --chown=bun:bun docker ./docker
 COPY --chown=bun:bun gui ./gui
@@ -42,9 +85,6 @@ COPY --from=build --chown=bun:bun /home/bun/app/bun.lock ./bun.lock
 COPY --from=build --chown=bun:bun /home/bun/app/node_modules ./node_modules
 COPY --from=build --chown=bun:bun /home/bun/app/src ./src
 COPY --from=build --chown=bun:bun /home/bun/app/scripts/model-metadata.source.json ./scripts/model-metadata.source.json
-# Run `bun scripts/generate-compatibility-version.ts` on the host before building.
-# Explicit COPY makes a missing artifact a build failure; .git stays outside the context.
-COPY --chown=bun:bun src/generated/compatibility-version.json ./src/generated/compatibility-version.json
 COPY --from=build --chown=bun:bun /home/bun/app/docker ./docker
 COPY --from=build --chown=bun:bun /home/bun/app/gui/dist ./gui/dist
 
