@@ -320,6 +320,11 @@ Codex account panels expose no Spark quota toggle or setting and retain quota re
 
 ## Dashboard surfaces
 
+Dashboard localization uses the English `gui/src/i18n/en.ts` catalog as the complete key and
+placeholder contract. Every registered locale, including Vietnamese, supplies the same keys;
+locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
+maps remain total rather than silently falling back to English.
+
 `src/server/management/api-access.ts` publishes an `audio` projection through the
 existing `/api/keys` response in `src/server/management/oauth-account-routes.ts`.
 URLs derive from the same advertised inference base as text APIs, with HTTP(S)
