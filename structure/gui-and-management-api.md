@@ -1,6 +1,7 @@
 # GUI And Management API
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
@@ -318,6 +319,11 @@ hard-lock evidence and reset-notification history; their retention rules are doc
 Codex account panels expose no Spark quota toggle or setting and retain quota refresh, pause/resume, selection order, reset-credit confirmation and Advanced settings; account/provider quota DTOs suppress retired windows upstream of the generic quota renderer, under [OpenAI quota scopes](providers/openai-tiers.md#public-provider-contract).
 
 ## Dashboard surfaces
+
+Dashboard localization uses the English `gui/src/i18n/en.ts` catalog as the complete key and
+placeholder contract. Every registered locale, including Vietnamese, supplies the same keys;
+locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
+maps remain total rather than silently falling back to English.
 
 `src/server/management/api-access.ts` publishes an `audio` projection through the
 existing `/api/keys` response in `src/server/management/oauth-account-routes.ts`.

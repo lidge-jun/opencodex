@@ -110,16 +110,29 @@ export function removeRuntimePortIfPidIs(snapshotPid: number | null): void {
   try { unlinkSync(getRuntimePortPath()); } catch { /* ignore */ }
 }
 
-export function isOcxStartCommandLine(commandLine: string): boolean {
+/**
+ * Does this command line belong to an opencodex process at all, whatever it is doing?
+ *
+ * {@link isOcxStartCommandLine} answers the narrower question the pidfile needs — "is this
+ * the proxy?" — by additionally requiring the `start` verb. Ownership of a pending-teardown
+ * receipt is the broader question: the owner is whichever invocation claimed it, which is an
+ * `ocx stop` or the `ocx update` worker that drove it, never an `ocx start`. Asking the
+ * start-shaped question there would call every real owner foreign.
+ */
+export function isOcxCommandLine(commandLine: string): boolean {
   const normalized = commandLine.toLowerCase().replace(/\\/g, "/");
   // Keep legacy source launches and npm's in-place Windows rename recognizable:
   // a service wrapper may respawn from `.opencodex-*` during a global update.
-  const hasOcxEntrypoint = normalized.includes("src/cli.ts")
+  return normalized.includes("src/cli.ts")
     || normalized.includes("src/cli/index.ts")
     || normalized.includes("@bitkyc08/opencodex")
     || /@bitkyc08\/\.opencodex-/.test(normalized)
     || /(?:^|[\s/"'])(?:ocx|opencodex)(?:\.cmd)?(?:$|[\s"'])/.test(normalized);
-  return hasOcxEntrypoint && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
+}
+
+export function isOcxStartCommandLine(commandLine: string): boolean {
+  const normalized = commandLine.toLowerCase().replace(/\\/g, "/");
+  return isOcxCommandLine(commandLine) && /(?:^|[\s"'])start(?:$|[\s"'])/.test(normalized);
 }
 
 /** Avoid spawning WMIC/PowerShell on every short liveness poll. */
@@ -225,6 +238,26 @@ export function verifyPidIdentity(candidatePid: number): number | null {
     if ((error as NodeJS.ErrnoException).code !== "EPERM") return null;
   }
   return isLikelyOcxStartProcess(candidatePid) ? candidatePid : null;
+}
+
+/**
+ * Is this PID an opencodex process, rather than merely a live one?
+ *
+ * `process.kill(pid, 0)` answers "does this number name a process", which is not the same
+ * question. PIDs are reused, so a recorded owner that exited can have its number handed to
+ * an unrelated process, and bare liveness then reports the owner as still running forever.
+ *
+ * Deliberately uncached, unlike {@link isLikelyOcxStartProcess}. That cache exists because
+ * liveness polling asks about the same PID many times a second; this is asked once per
+ * outstanding teardown receipt in a short-lived `ocx stop`, so the cache would only add an
+ * unswept map. The Windows WMIC/PowerShell probe cost is the point rather than a regression:
+ * the runtime contract requires the identity check, not the cheap one, before acting on
+ * stale state.
+ */
+export function isLikelyOcxProcess(pid: number): boolean {
+  const commandLine = readProcessCommandLine(pid);
+  if (commandLine === undefined) return false;
+  return isOcxCommandLine(commandLine);
 }
 
 type ProcessCommandLineExec = (

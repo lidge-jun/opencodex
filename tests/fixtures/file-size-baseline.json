@@ -8,6 +8,7 @@
     "gui/src/i18n/ko.ts",
     "gui/src/i18n/ru.ts",
     "gui/src/i18n/tr.ts",
+    "gui/src/i18n/vi.ts",
     "gui/src/i18n/zh-TW.ts",
     "gui/src/i18n/zh.ts",
     "scripts/model-metadata.source.json",
