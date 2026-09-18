@@ -29,8 +29,11 @@ export function isStateDbCantOpenError(error: unknown): boolean {
   return code === "SQLITE_CANTOPEN" || message.includes("unable to open database file");
 }
 
+/** Which step of the primary attempt a test wants to fail. */
+export type StateDbPreflightOpenPhase = "open" | "first-read";
+
 /**
- * Test-only knob: force the primary read-only open to fail with a supplied error.
+ * Test-only knob: force the primary attempt to fail with a supplied error.
  *
  * The fallback below turns on a condition this repository cannot reproduce deterministically
  * from a test: whether a plain read-only open of a cleanly-closed WAL store fails or quietly
@@ -38,8 +41,11 @@ export function isStateDbCantOpenError(error: unknown): boolean {
  * Pinning the NARROWING — sidecars absent admits the immutable read, either sidecar present
  * still refuses — therefore needs the failure supplied rather than provoked, or the test would
  * assert the host's SQLite build instead of this decision (#4943).
+ *
+ * The phase exists because the platforms disagree about WHEN the condition is raised, not only
+ * about whether it is: see the first-read note on `openCodexStateForPreflight`.
  */
-let openFailureForTests: ((path: string) => unknown) | undefined;
+let openFailureForTests: ((path: string, phase: StateDbPreflightOpenPhase) => unknown) | undefined;
 export function setStateDbPreflightOpenFailureForTests(hook: typeof openFailureForTests): void {
   openFailureForTests = hook;
 }
@@ -68,13 +74,28 @@ export function setStateDbPreflightOpenFailureForTests(hook: typeof openFailureF
  * error and the refusal that follows from it — a `-wal` holds content this connection would
  * not read, and a `-shm` means a writer is attached, and neither is a store this preflight
  * may inspect from a snapshot.
+ *
+ * The first read belongs INSIDE this attempt. `sqlite3_open_v2` does not touch page 1, so a
+ * store whose header says WAL is not inspected until the first prepare — which is where the
+ * missing shared memory is discovered on macOS, one caller frame above this function. Opening
+ * here and reading there put the classification and the failure in different scopes: the
+ * fallback was never reached, and the operator got the catch-all refusal the fix was supposed
+ * to remove. Linux hides this because its SQLite materializes the sidecars on that first read
+ * and never fails at all (#4943, macOS CI).
  */
 export function openCodexStateForPreflight(resolvedPath: string): Database {
+  let db: Database | undefined;
   try {
-    const forced = openFailureForTests?.(resolvedPath);
+    const forced = openFailureForTests?.(resolvedPath, "open");
     if (forced) throw forced;
-    return new Database(resolvedPath, { readonly: true });
+    db = new Database(resolvedPath, { readonly: true });
+    const forcedRead = openFailureForTests?.(resolvedPath, "first-read");
+    if (forcedRead) throw forcedRead;
+    // Page 1, read while the failure is still this function's to classify.
+    db.query<{ tables: number }, []>("SELECT count(*) AS tables FROM sqlite_master").get();
+    return db;
   } catch (error) {
+    db?.close();
     if (!isStateDbCantOpenError(error)) throw error;
     if (existsSync(`${resolvedPath}-wal`) || existsSync(`${resolvedPath}-shm`)) throw error;
     // pathToFileURL percent-encodes the reserved characters a naive `file:${path}` would
