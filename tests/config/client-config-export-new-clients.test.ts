@@ -64,7 +64,7 @@ describe("no secret reaches a client config", () => {
     // credential wiring is deliberately deferred from those initial generated
     // integrations -- omo reuses Pi's builder, which emits no headers at all.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
