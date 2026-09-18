@@ -747,6 +747,7 @@
   "management-integration-journal-delete.test.ts": "server",
   "management-integration-routes.test.ts": "server",
   "management-origin-tls.test.ts": "server",
+  "management-provider-proto-override.test.ts": "server",
   "management-provider-validation.test.ts": "server",
   "management-route-registry.test.ts": "server",
   "management-workflow-budget-routes.test.ts": "server",
