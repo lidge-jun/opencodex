@@ -10,10 +10,12 @@ import {
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
-  
 } from "../src/account-pool-strategy";
+import { computeCodexUsageScore } from "../src/codex-quota-utils";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
 import AccountPoolStrategyControls from "../src/components/AccountPoolStrategyControls";
 import CodexPoolStrategySetting from "../src/components/CodexPoolStrategySetting";
+import { CodexAccountSwitchModal } from "../src/components/codex-account-switch-modal";
 import { LanguageProvider } from "../src/i18n/provider";
 
 let previousLanguage: unknown;
@@ -87,6 +89,50 @@ async function teardownDom(): Promise<void> {
 }
 
 describe("account pool strategy helpers", () => {
+  test("uses the server short-observation clock for reset-less terminal usage", () => {
+    const now = 1_800_000_000_000;
+
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now - 5 * 60_000,
+      updatedAt: now - 6 * 60 * 60_000,
+    }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now - 5 * 60_000 - 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now + 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+  });
+
+  // Both halves of the boundary are now one value each, shared by import from the types leaf.
+  // These assert the dashboard actually uses them rather than a literal that happens to match.
+  test("the dashboard's terminal-burst boundary is the server's boundary", () => {
+    const now = 1_800_000_000_000;
+    const atBoundary = { shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT, shortObservedAt: now, updatedAt: now };
+    const belowBoundary = { shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT - 1, shortObservedAt: now, updatedAt: now };
+    expect(computeCodexUsageScore(atBoundary, undefined, now)).toBe(CODEX_EXHAUSTED_USAGE_PERCENT);
+    expect(computeCodexUsageScore(belowBoundary, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT,
+      shortObservedAt: now - TERMINAL_SHORT_WINDOW_FRESHNESS_MS,
+      updatedAt: now,
+    }, undefined, now)).toBe(CODEX_EXHAUSTED_USAGE_PERCENT);
+    expect(computeCodexUsageScore({
+      shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT,
+      shortObservedAt: now - TERMINAL_SHORT_WINDOW_FRESHNESS_MS - 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+  });
+
   test("normalizes known strategies and defaults unknowns to quota", () => {
     expect(normalizeAccountPoolStrategy("quota")).toBe("quota");
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
@@ -261,6 +307,114 @@ describe("AccountPoolStrategyControls", () => {
     // Round-robin adds its own row, and the sticky help text is a desc rather than a card-sub.
     expect(markup).toContain("New/unbound assignments before rotate");
     expect((markup.match(/class="setting-row"/g) ?? []).length).toBe(2);
+  });
+
+  test("AccountPoolStrategyControls renders threshold badge reflecting effective strategy", () => {
+    const renderControls = (strategy: "quota" | "fill-first" | "round-robin" | "reset-first", threshold?: number) => renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls
+          strategy={strategy}
+          threshold={threshold}
+          stickyDraft="1"
+          onStrategyChange={() => {}}
+          onStickyDraftChange={() => {}}
+          onStickyCommit={() => {}}
+        />
+      </LanguageProvider>,
+    );
+
+    // Quota with 80% threshold
+    expect(renderControls("quota", 80)).toContain("switch at 80%");
+    // Reset-first shows reset-first specific threshold badge
+    expect(renderControls("reset-first", 80)).toContain("nearest reset below 80%");
+    // Fill-first with 80% threshold
+    expect(renderControls("fill-first", 80)).toContain("drain at 80%");
+    // Round-robin with threshold configured
+    expect(renderControls("round-robin", 80)).toContain("threshold not used");
+    // Quota with threshold = 0 (proactive switching off)
+    expect(renderControls("quota", 0)).toContain("proactive switching off");
+    // Undefined threshold renders no badge
+    expect(renderControls("quota", undefined)).not.toContain("account-pool-threshold-badge");
+  });
+
+  test("CodexAccountSwitchModal warns when target account meets or exceeds auto-switch threshold", () => {
+    const accountExceeding = {
+      id: "a2",
+      email: "user2@example.com",
+      isMain: false,
+      paused: false,
+      priority: 0,
+      hasCredential: true,
+      quota: { fiveHourPercent: 85, weeklyPercent: 40, monthlyPercent: null },
+      quotaAutoRefresh: { fiveHourAvailable: true, weeklyAvailable: false, fiveHourEnabled: false, weeklyEnabled: false },
+    };
+    const markupExceeding = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountExceeding}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupExceeding).toContain("switch threshold (80%)");
+    expect(markupExceeding).toContain("The pinned selection will be released");
+
+    const accountOk = {
+      ...accountExceeding,
+      quota: { fiveHourPercent: 50, weeklyPercent: 40, monthlyPercent: null },
+    };
+    const markupOk = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountOk}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupOk).not.toContain("switch threshold (80%)");
+
+    // Account with 30-day only plan (free/go) ignores weekly window
+    const accountFreePlan = {
+      ...accountExceeding,
+      plan: "free",
+      quota: { fiveHourPercent: 50, weeklyPercent: 95, monthlyPercent: 40 },
+    };
+    const markupFreePlan = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountFreePlan}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupFreePlan).not.toContain("switch threshold (80%)");
+
+    // Regression: when round-robin strategy or unresolved strategy is active (threshold is undefined), no warning appears even for accounts exceeding quota
+    const markupUndefined = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountExceeding}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={undefined}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupUndefined).not.toContain("switch threshold");
   });
 });
 

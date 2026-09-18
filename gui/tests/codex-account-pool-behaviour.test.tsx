@@ -563,6 +563,29 @@ test("an accepted manual switch moves the pin before reconciliation lands", asyn
   });
 });
 
+test("a post-switch read accepts a newer server-side active account", async () => {
+  accounts = [
+    { id: "a1", email: "main", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a2", email: "selected", isMain: false, paused: false, priority: 0, hasCredential: true, quota: null },
+    { id: "a3", email: "failover", isMain: false, paused: false, priority: 0, hasCredential: true, quota: null },
+  ];
+  const seen = await mountController();
+
+  // The PUT accepts a2, but routing legitimately moves to a3 before the
+  // reconciliation read. That fresh response must retire the optimistic marker.
+  activeGetId = "a3";
+  await act(async () => {
+    expect(await seen.current!.switchAccount("a2")).toEqual({ ok: true, activeId: "a2" });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  // One mismatch may be the eventually-consistent response the optimistic marker
+  // exists to absorb.
+  expect(seen.current!.activeId).toBe("a2");
+
+  await act(async () => { await seen.current!.load(); });
+  expect(seen.current!.activeId).toBe("a3");
+});
+
 test("the main sentinel writes through to its distinct account row", async () => {
   const seen = await mountController();
 

@@ -1,3 +1,5 @@
+import { CODEX_EXHAUSTED_USAGE_PERCENT, TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
+
 export interface AccountQuota {
   weeklyPercent?: number;
   fiveHourPercent?: number;
@@ -7,6 +9,8 @@ export interface AccountQuota {
   weeklyResetAt?: number;
   fiveHourResetAt?: number;
   shortResetAt?: number;
+  /** Local observation time for the short-window percentage. */
+  shortObservedAt?: number;
   shortWindowSeconds?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
@@ -52,4 +56,45 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
     ...(normalized.resetCredits !== undefined ? { resetCredits: normalized.resetCredits } : {}),
     updatedAt: normalized.updatedAt,
   };
+}
+
+/**
+ * Compute the governing Codex usage score matching the server's auto-switch threshold evaluation.
+ *
+ * Evaluates governing quota windows based on the account's plan:
+ * - For 30-day only plans (e.g. Free/Go), only the monthly window governs.
+ * - For standard plans, weekly and monthly windows govern.
+ * - A known five-hour / short window refines a known governing long-window score.
+ * - If no long window has been observed, an active terminal short burst (at 100%) acts as exhausted (100).
+ * - Unknown or unprimed quota returns `null` so callers do not spuriously trigger threshold actions.
+ */
+export function computeCodexUsageScore(
+  quota: AccountQuota | null | undefined,
+  plan?: string | null,
+  now: number = Date.now(),
+): number | null {
+  if (!quota) return null;
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  const shortPercent = finite(quota.fiveHourPercent)
+    ? quota.fiveHourPercent
+    : (finite(quota.shortPercent) ? quota.shortPercent : undefined);
+  const longWindows = isThirtyDayOnlyPlan(plan)
+    ? [quota.monthlyPercent]
+    : [quota.weeklyPercent, quota.monthlyPercent];
+  const knownLong = longWindows.filter(finite);
+  if (knownLong.length === 0) {
+    const shortReset = quota.fiveHourResetAt ?? quota.shortResetAt;
+    const shortObservationAge = typeof quota.shortObservedAt === "number"
+      ? now - quota.shortObservedAt
+      : undefined;
+    const isExhausted = finite(shortPercent) && shortPercent >= CODEX_EXHAUSTED_USAGE_PERCENT && (
+      (typeof shortReset === "number" && shortReset > now) ||
+      (typeof shortObservationAge === "number"
+        && shortObservationAge >= 0
+        && shortObservationAge <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS)
+    );
+    return isExhausted ? 100 : null;
+  }
+  const values = finite(shortPercent) ? [...knownLong, shortPercent] : knownLong;
+  return values.length ? Math.max(...values) : null;
 }
