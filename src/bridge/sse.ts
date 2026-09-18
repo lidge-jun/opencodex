@@ -16,7 +16,12 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
-import { mayBecomePatchEnvelope, repairFreeformToolInput } from "../responses/apply-patch-envelope";
+import {
+  freeformFallbackKeys,
+  mayBecomePatchEnvelope,
+  repairFreeformToolInput,
+  unwrapFreeformToolInput,
+} from "../responses/apply-patch-envelope";
 import { encodeCompactionSummary } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
@@ -145,7 +150,7 @@ export function bridgeToResponsesSSE(
   ): string => {
     const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
     return helper
-      ? compileCodeModeHelperInput(args, helper)
+      ? compileCodeModeHelperInput(args, helper, codeModeHelperName ?? toolName)
       : repairFreeformToolInput(args, toolName, namespace);
   };
   // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
@@ -153,8 +158,38 @@ export function bridgeToResponsesSSE(
   // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
   // buffers get their string value progressively unescaped; anything else streams raw.
   const FREEFORM_WRAP_PREFIX = '{"input":"';
-  const freeformPartialInput = (args: string): string => {
-    if (!args.startsWith(FREEFORM_WRAP_PREFIX)) return args;
+  /** `{"key":"` for every wrapper this tool name accepts. Keys are distinct, so order is free. */
+  const freeformWrapPrefixes = (toolName: string): string[] => [
+    FREEFORM_WRAP_PREFIX,
+    ...freeformFallbackKeys(toolName).map(key => `{"${key}":"`),
+  ];
+  /**
+   * The value to stream so far, or `null` to HOLD because nothing can be decided yet.
+   *
+   * `input` is decidable from its prefix: `unwrapFreeformToolInput` returns it whenever the
+   * key is present, whatever else the object carries, so its value can be unescaped
+   * progressively and never retracted.
+   *
+   * A fallback key is not. It only unwraps when it is the SINGLE string field, and a second
+   * key can still arrive — so a value emitted early would have to be taken back. That is the
+   * rewind this holds instead: stream nothing until the object closes, then publish the one
+   * repaired body. The routed passthrough in `responses-custom-tool-repair.ts` already holds
+   * any object prefix for the same reason (#5047).
+   */
+  const freeformPartialInput = (args: string, toolName: string): string | null => {
+    const prefixes = freeformWrapPrefixes(toolName);
+    // Still an ambiguous prefix of some wrapper: which wrapper, if any, is not known yet.
+    if (prefixes.some(prefix => prefix.startsWith(args))) return null;
+    if (!args.startsWith(FREEFORM_WRAP_PREFIX)) {
+      if (!prefixes.some(prefix => args.startsWith(prefix))) return args;
+      // Committed to a fallback wrapper. Undecidable until the object is complete.
+      try {
+        JSON.parse(args);
+      } catch {
+        return null;
+      }
+      return unwrapFreeformToolInput(args, toolName);
+    }
     const body = args.slice(FREEFORM_WRAP_PREFIX.length);
     let out = "";
     for (let i = 0; i < body.length; i++) {
@@ -1075,10 +1110,21 @@ export function bridgeToResponsesSSE(
                   });
                 }
                 if (currentToolCall.freeform && !currentToolCall.codeModeHelperName) {
-                  // Hold while the buffer is still an ambiguous prefix of the JSON wrapper,
-                  // then stream only the unwrapped input suffix (never rewind on mode flips).
-                  if (!FREEFORM_WRAP_PREFIX.startsWith(currentToolCall.args)) {
-                    const full = freeformPartialInput(currentToolCall.args);
+                  // `freeformPartialInput` holds while the buffer is still an ambiguous prefix
+                  // of a JSON wrapper; otherwise stream only the unwrapped input suffix, never
+                  // rewinding on a mode flip.
+                  //
+                  // The name is dropped for a namespaced tool that does not own the apply-patch
+                  // grammar, because `repairFreeformToolInput` drops it at completion for the
+                  // same reason. Streaming under a vocabulary the completed item does not use
+                  // is the same disagreement in the other direction.
+                  const ownsFreeformGrammar = currentToolCall.namespace === undefined
+                    || currentToolCall.namespace === "functions";
+                  const full = freeformPartialInput(
+                    currentToolCall.args,
+                    ownsFreeformGrammar ? currentToolCall.name : "",
+                  );
+                  if (full !== null) {
                     const emitted = currentToolCall.inputEmitted ?? "";
                     // Also hold a buffer that could still become a complete patch envelope:
                     // at completion such a body is recompiled into an apply_patch helper call,

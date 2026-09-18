@@ -65,12 +65,18 @@ function sourceFiles(root: string, path = "src"): string[] {
   return readdirSync(join(root, path)).flatMap(name => sourceFiles(root, `${path}/${name}`));
 }
 
-/** Validate a Git-free build snapshot against the host-generated tracked-source manifest. */
-export function verifyCompatibilitySnapshot(snapshotRoot: string): void {
+/** Validate a build snapshot against a canonical tracked-source manifest. */
+export function verifyCompatibilitySnapshot(snapshotRoot: string, externalManifest?: string): void {
   const root = resolve(snapshotRoot);
   const stat = lstatSync(root);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid compatibility snapshot root");
-  const manifestFile = regularFile(root, MANIFEST_PATH);
+  const manifestFile = externalManifest ? resolve(externalManifest) : regularFile(root, MANIFEST_PATH);
+  if (externalManifest) {
+    const manifestStat = lstatSync(manifestFile);
+    if (manifestStat.isSymbolicLink() || !manifestStat.isFile()) {
+      throw new Error("Non-regular external compatibility manifest");
+    }
+  }
   const rows = parseRows(JSON.parse(readFileSync(manifestFile, "utf8")));
   const expected = new Set(rows.map(row => row.path));
   for (const required of REQUIRED_ROOT_FILES) {
@@ -96,5 +102,5 @@ export function verifyCompatibilitySnapshot(snapshotRoot: string): void {
 }
 
 if (import.meta.main) {
-  verifyCompatibilitySnapshot(process.argv[2] ?? resolve(import.meta.dir, ".."));
+  verifyCompatibilitySnapshot(process.argv[2] ?? resolve(import.meta.dir, ".."), process.argv[3]);
 }

@@ -87,6 +87,28 @@ export function resolveAutoContext(claudeCode: AutoContextConfigSlice | undefine
 }
 
 /**
+ * Config value -> ENABLE_TOOL_SEARCH wire value (#4838).
+ *
+ * Claude Code parses this variable itself and accepts more than a boolean:
+ * "true", "auto", "auto:N" (N is a percentage floor for non-deferred tools; its
+ * parser rejects anything under 100) and "force", which also overrides an
+ * OS-level managed-settings suppression. Passing a string through verbatim keeps
+ * that whole vocabulary reachable instead of flattening it to a boolean that
+ * would have to be re-expanded here later.
+ *
+ * `false`, absent and blank inject nothing rather than injecting "false". Every
+ * caller injects with user-wins semantics, so an operator's own export survives
+ * either way, and writing "false" would be the one path that could quietly
+ * disagree with it.
+ */
+export function claudeToolSearchEnv(value: boolean | string | undefined): string | undefined {
+  if (value === true) return "true";
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * [1m]-marking predicate. Windows >= 1M always mark (CLI accounts exactly 1M).
  * Auto-context additionally marks windows > 200k that can safely host the compact
  * window — marking a model whose real window is BELOW the compact window would put

@@ -29,6 +29,12 @@ const memoryJournal = (): SpendJournal & { lines: string[] } => {
   };
 };
 
+/** A journal that cannot persist: the disk-full and permission case durability exists for. */
+const unwritableJournal = (): SpendJournal => ({
+  read: () => [],
+  append: () => { throw new Error("ENOSPC: no space left on device"); },
+});
+
 const logContext = (overrides: Record<string, unknown> = {}) => ({
   provider: "test-pool",
   accountLogLabel: "k0123456789abcdef0123456789abcdef",
@@ -137,5 +143,72 @@ describe("the request path books every physical send on the durable ledger", () 
     const third = createSpendReservationLedger({ journal });
     expect(third.snapshot("root", "root-e")?.unresolved).toBe(1000);
     expect(third.snapshot("root", "root-e")?.reserved).toBe(0);
+  });
+
+  test("a send that already left is recorded past the ceiling, so the next one can be refused", () => {
+    // The canonical passthrough ladder does not reserve its physical sends; it reports them
+    // after the fetch through onSendsConsumed, which assigns through budget.used. A ceiling
+    // cannot refuse those -- the tokens are spent -- and DROPPING them is a fixpoint: the send
+    // that would cross the limit never joins the total, the total sits one send short of the
+    // ceiling forever, and nothing is ever refused. Recording it is what arms the refusal.
+    const ledger = createSpendReservationLedger({
+      journal: memoryJournal(),
+      policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 900 } },
+    });
+    const tracker = createRequestSpendTracker(logContext(), "root-f", ledger);
+    const budget = createRequestExecutionBudget(undefined, "lr-reported", tracker);
+
+    budget.used += 1;
+    expect(ledger.snapshot("root", "root-f")?.reserved).toBe(500);
+    expect(ledger.exhausted("root", "root-f")).toBe(false);
+
+    // This one projects 1000 against a ceiling of 900 and is booked anyway, because it left.
+    budget.used += 1;
+    expect(ledger.snapshot("root", "root-f")?.reserved).toBe(1000);
+    expect(ledger.exhausted("root", "root-f")).toBe(true);
+    // Nothing was refused after the fact -- there was nothing left to refuse.
+    expect(tracker.refusals).toBe(0);
+
+    // The ceiling is now armed: the next send that asks BEFORE dispatching is refused.
+    const refused = budget.reserveDispatch({ sendClass: "transient", targetKey: "p|m" });
+    expect(refused.allowed).toBe(false);
+    if (refused.allowed) throw new Error("unreachable");
+    expect(refused.reason).toBe("spend-exhausted");
+
+    // And a send that already left cannot be handed back for free afterwards: it is marked
+    // dispatched when it is recorded, so a refund keeps the tokens as unresolved spend.
+    tracker.refund();
+    const root = ledger.snapshot("root", "root-f");
+    expect(root?.reserved).toBe(500);
+    expect(root?.unresolved).toBe(500);
+  });
+
+  test("under a configured ceiling a reservation that cannot be made durable refuses the send", () => {
+    // Durability before admission is the reason this store is on disk at all: a send whose
+    // record a restart would forget is how an exhausted budget comes back with a fresh
+    // allowance. The ledger raises this denial only when a limit is configured, so the
+    // unconfigured case below is unchanged.
+    const ceiling = createSpendReservationLedger({
+      journal: unwritableJournal(),
+      policy: { ...DEFAULT_SPEND_RESERVATION_POLICY, root: { maxTokens: 10_000 } },
+    });
+    const guarded = createRequestExecutionBudget(
+      undefined,
+      "lr-undurable",
+      createRequestSpendTracker(logContext(), "root-g", ceiling),
+    );
+    const refused = guarded.reserveDispatch({ sendClass: "initial", targetKey: "p|m" });
+    expect(refused.allowed).toBe(false);
+    if (refused.allowed) throw new Error("unreachable");
+    expect(refused.reason).toBe("spend-exhausted");
+
+    // With no ceiling configured, the same unwritable journal is a degradation to report and
+    // never an outage to cause.
+    const observing = createRequestExecutionBudget(
+      undefined,
+      "lr-observe",
+      createRequestSpendTracker(logContext(), "root-h", createSpendReservationLedger({ journal: unwritableJournal() })),
+    );
+    expect(observing.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(true);
   });
 });

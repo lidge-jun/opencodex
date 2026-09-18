@@ -70,6 +70,69 @@ describe("vertex retry fetch", () => {
     });
   }
 
+  // #5044. A refused recovery used to leave nothing behind: one physical send, no recovery
+  // kind, and a real upstream response — byte-identical in the log to a request where no
+  // retry was ever eligible. Those two need opposite follow-ups.
+  test.each([429, 503] as const)("a retry the budget refuses is attributed, not silent (%s)", async status => {
+    const parent = createRequestExecutionBudget();
+    parent.used = 3;
+    const { owner, dispose } = budgetOwner(parent);
+    const first = new Response(`fixture ${status}`, { status, headers: { "Retry-After": "60" } });
+    const fixture = mockFetch([first, new Response("unexpected replay")]);
+    const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    const ordinals: number[] = [];
+    const withheld: string[] = [];
+    try {
+      const hop = owner.reserveCredentialHop("auth-recovery", request.url, true);
+      if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+      owner.pendingHopPermit = hop.permit;
+      const scope = owner.adapterDispatchBudget;
+      if (!scope) throw new Error("Expected an adapter dispatch budget");
+      const response = await fetchVertexWithRetry(request, {
+        sendBudget: scope,
+        returnRawErrors: true,
+        onPhysicalSend: send => ordinals.push(send.ordinal),
+        onRecoveryWithheld: event => withheld.push(event.reason),
+      });
+
+      // The upstream answer is preserved exactly; the attribution is additional evidence, not
+      // a substitute for it.
+      expect(response).toBe(first);
+      expect(withheld).toEqual(["retry-send-budget"]);
+      // And it did not become a send: `sendCount` must keep meaning "requests actually made".
+      expect(ordinals).toEqual([1]);
+      expect(fixture.calls).toHaveLength(1);
+      expect(parent.used).toBe(4);
+      expect(waits).not.toHaveBeenCalled();
+    } finally { waits.mockRestore(); dispose(); }
+  });
+
+  test("a status the ladder would never retry reports nothing withheld", async () => {
+    // The other half of the four-way distinction: no recovery kind AND no withheld reason has
+    // to keep meaning "nothing was eligible", or the new field says everything and so nothing.
+    const parent = createRequestExecutionBudget();
+    parent.used = 3;
+    const { owner, dispose } = budgetOwner(parent);
+    const first = new Response(vertexError(404, "NOT_FOUND", "no such model"), { status: 404 });
+    mockFetch([first, new Response("unexpected replay")]);
+    const withheld: string[] = [];
+    try {
+      const hop = owner.reserveCredentialHop("auth-recovery", request.url, true);
+      if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+      owner.pendingHopPermit = hop.permit;
+      const scope = owner.adapterDispatchBudget;
+      if (!scope) throw new Error("Expected an adapter dispatch budget");
+      const response = await fetchVertexWithRetry(request, {
+        sendBudget: scope,
+        returnRawErrors: true,
+        onRecoveryWithheld: event => withheld.push(event.reason),
+      });
+      expect(response).toBe(first);
+      expect(withheld).toEqual([]);
+    } finally { dispose(); }
+  });
+
+
   test("successful response bodies survive beyond the response-header timeout", async () => {
     globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
       async start(controller) {

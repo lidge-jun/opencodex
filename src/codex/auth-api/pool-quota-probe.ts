@@ -9,7 +9,7 @@ import { codexWarmupFailureReason, warmCodexAccount } from "../warmup";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { ResourceAdmissionError } from "../../lib/admission";
 import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
-import { claimQuotaRecovery, quotaRecoveryTerminalFor, releaseQuotaRecovery, settleQuotaRecovery, settleQuotaRecoveryTerminal } from "../quota-401-recovery";
+import { claimQuotaRecovery, fencePropagatedQuotaRecovery, quotaRecoveryTerminalFor, releaseQuotaRecovery, settleQuotaRecovery, settleQuotaRecoveryTerminal } from "../quota-401-recovery";
 import { seedLoginRowsForTests } from "./login-state";
 import { nonEmptyPlan } from "./runtime-config";
 
@@ -205,6 +205,12 @@ export async function recoverPoolQuotaFrom401(ctx: {
       onSettled: outcome => {
         if (outcome.kind === "resolved") {
           settleQuotaRecovery(accountId, claim.claimId, outcome);
+          // A propagated alias adopted the rotated grant without spending its own claim. Fence
+          // each committed alias generation so a later 401 on it cannot claim a second refresh
+          // of the same underlying grant.
+          for (const alias of outcome.propagatedAliases ?? []) {
+            fencePropagatedQuotaRecovery(alias.id, alias.generation);
+          }
         } else if (outcome.error instanceof TokenRefreshError && isTerminalRefreshError(outcome.error)) {
           // A revoked or expired grant does not become valid on the next poll. Releasing it
           // into backoff would let the following bare 401 find a non-terminal record and

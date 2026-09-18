@@ -354,6 +354,25 @@ describe("sidecar on429 wiring", () => {
     expect(coreSource.indexOf("apiKey: snapshot.accessToken")).toBeGreaterThan(helperStart);
   });
 
+  test("terminal continuation rotation rebinds both OAuth replay owners", () => {
+    // The continuation loop's generic OAuth arm rotates the credential through
+    // applyFailoverSnapshot, but until now it never rebound the reasoning replay scope. The
+    // terminal-guard clone (nextParsed) and the outer request (parsed) kept the FAILED
+    // account's replay identity, so the replayed turn could disclose or cache reasoning under
+    // the previous account's scope. The key-pool arm right above rebinds both owners; this
+    // arm must do the same.
+    const armStart = coreSource.indexOf("// Generic OAuth rotation for the continuation loop.");
+    expect(armStart).toBeGreaterThan(-1);
+    const armEnd = coreSource.indexOf("if (shouldAttemptImageTierRetry", armStart);
+    const arm = coreSource.slice(armStart, armEnd);
+
+    expect(arm).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
+    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(2);
+    expect(arm).toContain("parsed: nextParsed");
+    expect(arm).toMatch(/bindRouteReasoningReplayScope\(\{\s*parsed,/);
+    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(2);
+  });
+
   test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {
     // This unit found the same defect twice: the streaming loop grew generic OAuth rotation and
     // the continuation loop did not, and the sidecar hook grew generic rotation while Anthropic

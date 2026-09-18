@@ -326,7 +326,7 @@ export function restoreRoutedCustomCalls(
         id: customToolItemId(item.id),
         name: aliased ? targetName : item.name,
         input: helper
-          ? compileCodeModeHelperInput(sourceInput, helper)
+          ? compileCodeModeHelperInput(sourceInput, helper, aliased ? String(item.name) : targetName)
           : repairFreeformToolInput(
             sourceInput,
             targetName,

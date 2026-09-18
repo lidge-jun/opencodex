@@ -136,17 +136,30 @@ l'état et le catalogue Codex. Ce n'est pas une commande de mise à jour ou de r
 
 Il n’existe pas d’image Docker officielle, mais le dépôt fournit un `Dockerfile` et un `compose.yaml` maintenus pour construire localement une image Bun épinglée par digest. Initialisez une seule fois la clé de données via stdin ; elle est enregistrée avec des permissions réservées au propriétaire dans le volume `ocx-state` et n’est jamais affichée.
 
-Installez Git et Bun sur l’hôte. Avant chaque construction, générez le manifeste canonique depuis les sources suivies par Git, sans modifier les sources entre la génération et la construction. Le JSON généré reste non suivi ; `.git` est exclu du contexte Docker. Le port hôte est lié à `127.0.0.1` par défaut. Pour un accès distant, utilisez explicitement `OPENCODEX_BIND_ADDRESS=<IP-LAN-ou-Tailscale> docker compose up -d` ; `0.0.0.0` expose toutes les interfaces. Protégez cet accès par un pare-feu et un frontal TLS/tailnet authentifié.
+Pour un checkout local, l’hôte a besoin de Git et Docker Compose ; avec un contexte Git distant, Docker Compose suffit. Bun et la génération manuelle ne sont plus requis. Une étape de construction dédiée génère le manifeste canonique depuis l’instantané Git sélectionné, puis le vérifie avant toute copie des sources. Les métadonnées `.git` ne sont accessibles que par un montage en lecture seule et ne sont copiées dans aucune couche. Un manifeste déjà généré sur l’hôte reste accepté après vérification. Le port hôte est lié à `127.0.0.1` par défaut. Pour un accès distant, utilisez explicitement `OPENCODEX_BIND_ADDRESS=<IP-LAN-ou-Tailscale> docker compose up -d` ; `0.0.0.0` expose toutes les interfaces. Protégez cet accès par un pare-feu et un frontal TLS/tailnet authentifié.
 
 La construction rejette les manifestes périmés en comparant chaque SHA-256 aux fichiers du contexte puis de l’image. Les fichiers manquants ou divergents, les sources supplémentaires et les liens symboliques sont refusés. `package.json`, `bun.lock` et le seul fichier autorisé de `scripts/`, `scripts/model-metadata.source.json`, sont obligatoires.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
+```
+
+Pour construire directement depuis un contexte Git distant, conservez les métadonnées Git avec l’argument BuildKit intégré :
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
 ```
 
 Le conteneur s’exécute avec l’utilisateur non-root `bun`, un système de fichiers racine en lecture seule et uniquement le port `10100` publié. Ne publiez jamais `10101` et ne placez aucun secret dans `ARG`, `ENV`, `COPY`, Compose, l’historique d’image ou argv. Après le healthcheck, vérifiez séparément `/readyz`, le catalogue authentifié et une réponse réelle. `docker compose down` conserve le volume ; `docker compose down --volumes` supprime aussi la configuration, les identifiants et la clé.

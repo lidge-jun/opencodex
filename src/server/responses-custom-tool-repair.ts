@@ -298,7 +298,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       releaseCall(upstreamItemId);
       return [replaceSseDataPayload(block, JSON.stringify({
         ...parsed,
-        input: helper ? compileCodeModeHelperInput(source, helper) : source,
+        input: helper ? compileCodeModeHelperInput(source, helper, name) : source,
       }))];
     }
     if (
@@ -381,7 +381,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
         type: nextType,
         item_id: customToolItemId(upstreamItemId),
         input: helper
-          ? compileCodeModeHelperInput(source, helper)
+          ? compileCodeModeHelperInput(source, helper, itemName?.name ?? "")
           : unwrapRoutedCustomToolArguments(source, itemName?.name ?? "", itemName?.namespace),
       };
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];

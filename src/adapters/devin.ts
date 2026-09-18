@@ -9,7 +9,7 @@
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTool, OcxToolCall, OcxToolResultMessage, OcxUsage } from "../types";
 import { namespacedToolName } from "../types";
 import type { IncomingMeta, ProviderAdapter } from "./base";
-import { streamChatEvents, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
+import { streamChatEventsWithResetRetry, allocateCascadeId, CloudChatError, type ChatHistoryItem, type ToolDef } from "./devin/cloud-direct";
 import type { ContentPart } from "./devin/cloud-direct/chat";
 import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog";
 import { collapseDevinModelUid } from "./devin/live-models";
@@ -563,7 +563,11 @@ export function createDevinAdapter(
         const maxInputTokens = resolveDevinMaxInputTokens(
           provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
         );
-        for await (const event of streamChatEvents({
+        // The reset-retry wrapper waits out a 429 that states its own recovery
+        // delay ("limit will reset in 35 seconds") and replays the identical
+        // request — but only while zero events have been yielded, so a
+        // post-output failure still takes the terminal path untouched.
+        for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
           modelUid,

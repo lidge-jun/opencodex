@@ -1481,6 +1481,9 @@ describe("compact alternate-account attempt (#913)", () => {
         models: ["gpt-5.6-sol"],
       };
       const headers = { "x-codex-parent-thread-id": "compact-routed-handoff-thread" };
+      // The remembered route is keyed by the admitted principal, so every call in
+      // this scenario authenticates as the same configured client.
+      const admission = { kind: "configured", keyId: "compact-client", source: "dedicated", contextPrincipalId: "compact-client-principal" } as const;
       const calls: Array<{ model: string; nativeCompact: boolean }> = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === "string"
@@ -1505,8 +1508,7 @@ describe("compact alternate-account attempt (#913)", () => {
           undefined,
           headers,
         ),
-        config,
-        { model: "", provider: "" },
+        config, { model: "", provider: "" }, undefined, admission,
       );
       expect(manual.status).toBe(200);
       expect(calls).toEqual([{ model: "deepseek-v4-flash", nativeCompact: false }]);
@@ -1518,8 +1520,7 @@ describe("compact alternate-account attempt (#913)", () => {
           undefined,
           { "x-codex-parent-thread-id": "different-compact-thread" },
         ),
-        config,
-        { model: "", provider: "" },
+        config, { model: "", provider: "" }, undefined, admission,
       );
       expect(unrelated.status).toBe(502);
       expect(calls.length).toBeGreaterThan(0);
@@ -1533,8 +1534,7 @@ describe("compact alternate-account attempt (#913)", () => {
           undefined,
           headers,
         ),
-        config,
-        logCtx,
+        config, logCtx, undefined, admission,
       );
 
       expect(automatic.status).toBe(200);

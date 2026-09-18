@@ -20,7 +20,7 @@ const streamBudgets = new WeakMap<ReadableStream<Uint8Array>, TranslatorBudget>(
 function responsesSseToAnthropicSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { pingIntervalMs?: number; translatorBudget?: TranslatorBudget } = {},
+  opts: { pingIntervalMs?: number; translatorBudget?: TranslatorBudget; inputTokenFloor?: number } = {},
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget ?? createTestTranslatorBudget();
   const stream = responsesSseToAnthropicSseProduction(upstream, model, {
@@ -233,6 +233,44 @@ describe("claude outbound SSE", () => {
       cache_read_input_tokens: 100,
       cache_creation_input_tokens: 5,
     });
+   expect(events.find(event => event.name === "message_delta")!.data.usage).toEqual({
+     input_tokens: 15,
+     output_tokens: 30,
+     cache_read_input_tokens: 100,
+     cache_creation_input_tokens: 5,
+   });
+ });
+
+  test("a caller-counted prompt reaches message_start when the upstream reports none early", async () => {
+    // The path this report came from: the internal bridge attaches usage: null to its lifecycle
+    // frames, so #4891 has nothing to publish and the first frame used to claim an empty prompt.
+    const upstream = [
+      sse("response.created", { response: { id: "resp_floor", status: "in_progress", usage: null } }),
+      sse("response.in_progress", { response: { id: "resp_floor", status: "in_progress", usage: null } }),
+      sse("response.output_text.delta", { delta: "ready" }),
+      sse("response.completed", {
+        response: {
+          status: "completed",
+          usage: {
+            input_tokens: 120,
+            output_tokens: 30,
+            input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
+          },
+        },
+      }),
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(
+      streamFrom(upstream),
+      "claude-ocx-test",
+      { inputTokenFloor: 97_000 },
+    ));
+    expect(events.find(event => event.name === "message_start")!.data.message.usage).toEqual({
+      input_tokens: 97_000,
+      output_tokens: 0,
+    });
+    // The floor is a first-frame courtesy, never a claim about the upstream tokenizer: the
+    // terminal frame is still the authoritative count and is untouched by it.
     expect(events.find(event => event.name === "message_delta")!.data.usage).toEqual({
       input_tokens: 15,
       output_tokens: 30,
@@ -241,7 +279,63 @@ describe("claude outbound SSE", () => {
     });
   });
 
-  test("message_start documents unknown pre-content usage as zero while terminal usage stays authoritative", async () => {
+  test("confirmed early usage outranks the caller floor", async () => {
+    // An upstream measurement beats the proxy counting its own outbound prompt, always. The
+    // floor exists for the destinations that report nothing before content, not beside them.
+    const earlyUsage = {
+      input_tokens: 120,
+      output_tokens: 0,
+      input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
+    };
+    const upstream = [
+      sse("response.in_progress", { response: { id: "resp_both", status: "in_progress", usage: earlyUsage } }),
+      sse("response.output_text.delta", { delta: "ready" }),
+      sse("response.completed", { response: { status: "completed", usage: { ...earlyUsage, output_tokens: 30 } } }),
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(
+      streamFrom(upstream),
+      "claude-ocx-test",
+      { inputTokenFloor: 97_000 },
+    ));
+    expect(events.find(event => event.name === "message_start")!.data.message.usage).toEqual({
+      input_tokens: 15,
+      output_tokens: 0,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 5,
+    });
+  });
+
+  test("a floor that measures nothing is not published", async () => {
+    // Zero and negative are not measurements of a prompt, and a fractional token is not a token.
+    // A caller that cannot count must not be able to turn that into a number on the wire.
+    const upstream = [
+      sse("response.created", { response: { id: "resp_no_floor", status: "in_progress", usage: null } }),
+      sse("response.output_text.delta", { delta: "ready" }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 5, output_tokens: 1 } } }),
+    ].join("");
+
+    for (const inputTokenFloor of [0, -1, Number.NaN]) {
+      const events = await collectEvents(responsesSseToAnthropicSse(
+        streamFrom(upstream),
+        "claude-ocx-test",
+        { inputTokenFloor },
+      ));
+      expect({ inputTokenFloor, usage: events.find(event => event.name === "message_start")!.data.message.usage })
+        .toEqual({ inputTokenFloor, usage: { input_tokens: 0, output_tokens: 0 } });
+    }
+
+    const fractional = await collectEvents(responsesSseToAnthropicSse(
+      streamFrom(upstream),
+      "claude-ocx-test",
+      { inputTokenFloor: 12.7 },
+    ));
+    expect(fractional.find(event => event.name === "message_start")!.data.message.usage)
+      .toEqual({ input_tokens: 12, output_tokens: 0 });
+  });
+
+
+  test("message_start reports zero only when the caller supplies no measurement either", async () => {
     const upstream = [
       sse("response.created", { response: { id: "resp_terminal_usage", status: "in_progress", usage: null } }),
       sse("response.output_text.delta", { delta: "ready" }),
@@ -258,8 +352,17 @@ describe("claude outbound SSE", () => {
     ].join("");
 
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ocx-test"));
-    // Zero is the documented honest placeholder when no input measurement has arrived. Do not
-    // replace it with an estimate or delay the first content frame to await terminal usage.
+    // No caller floor and no early upstream usage: there is nothing to report, and the
+    // Anthropic schema makes the field required, so zero is what goes out. This is the case the
+    // Lab conformance executor exercises, and it is unchanged.
+    //
+    // This case used to read "zero is the documented honest placeholder ... do not replace it
+    // with an estimate", and the position narrowed rather than reversed. Zero is not honest
+    // about a prompt that exists: it asserts an empty one, which is what showed a Paseo context
+    // ring at a few hundred tokens for a turn whose own context command reported ~97k (#4857).
+    // When the caller HAS counted the prompt it forwarded, publishing that count beats
+    // publishing a false one -- see the three floor cases in this file. What survives from the
+    // old position is its second half: the first content frame is never delayed to await usage.
     expect(events.find(event => event.name === "message_start")!.data.message.usage).toEqual({
       input_tokens: 0,
       output_tokens: 0,

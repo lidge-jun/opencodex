@@ -27,6 +27,7 @@ runs helper features around provider requests.
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
+| `spend?` | `{ root?: { maxTokens?: number }; identity?: { maxTokens?: number }; pool?: { maxTokens?: number }; retentionDays?: number }` | unset | Durable token ceilings, off unless you write one. Each scope bounds settled spend plus in-flight reservations plus unresolved spend: `root` is one task including its whole fan-out, `identity` is one account across every task it serves, and `pool` is one provider pool. They intersect, so a request is admitted only when all three have room — which is what holds a ceiling against a client that mints a new task id per request. A reservation is the request's whole input plus its enforceable output ceiling, counted as if every cached prefix misses. Spend survives a restart, so it does not roll forward the way the send-count window does; raising or removing the value is what grants more. `maxTokens` must be a positive integer (0 would refuse everything), `retentionDays` is 1–365 and defaults to 7, and an unknown key in this section is rejected rather than ignored. A refusal is a local HTTP 429 carrying `x-opencodex-local-refusal: workflow_spend_exhausted`, and its message names the scope and the ceiling; no provider is contacted. |
 | `codexAutoStart?` | `boolean` | `true` | Let the Codex shim run `ocx ensure` before launching Codex. False makes ensure a no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Restore an installed shim after a completed external Codex update replaces it. Environment opt-out: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `codexDesktopAuthless?` | `boolean` | `false` | Opt-in authless Codex Desktop routing on a loopback bind: inject the dedicated `opencodex` provider with `requires_openai_auth = false` so Desktop opens without a ChatGPT login. Ignored on non-loopback binds. `ocx system settings --desktop-authless on`. See [Codex integration](/guides/codex-integration/#authless-codex-desktop-opt-in). |
@@ -142,6 +143,28 @@ proxy setting or an explicit HTTP(S) proxy URL when needed.
 Compare the diagnostic on the same machine and account under the two network
 modes. A successful TUN test alone does not identify why the service's HTTP proxy
 path failed, and does not establish a general fix.
+
+## Connection reuse for specific upstream hosts
+
+Some upstreams keep a connection open after they have stopped serving it. The next request reuses
+that pooled socket and fails without reaching the provider. `OCX_FRESH_CONNECTION_HOSTS` names the
+hosts that should never reuse a pooled connection, as an environment variable rather than a config
+field, so it can be applied to one machine without editing shared configuration:
+
+```bash
+OCX_FRESH_CONNECTION_HOSTS="api.example.com, relay.example.net" ocx start
+```
+
+The value is a comma-separated list of hostnames. Matching is case-insensitive, covers each named
+host and its subdomains, and ignores leading dots, so `.example.com` and `example.com` both match
+`api.example.com`. Do not include a scheme, port or path. An unset or empty variable leaves the
+default connection behavior unchanged.
+
+A matching send carries `Connection: close` and is dispatched with keep-alive disabled. The
+decision is made against the address actually used on the wire, so it still applies when a provider
+transport rewrites the destination after credential selection. Per-request latency rises slightly
+for those hosts, since each request pays a fresh TCP and TLS handshake; name only the hosts that
+need it.
 
 ## Remote access
 

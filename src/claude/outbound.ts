@@ -189,7 +189,27 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
   return { id, input, resultContent, completed };
 }
 
-function messageSnapshot(model: string, confirmedUsage?: Rec): Rec {
+/**
+ * `inputTokenFloor` is this proxy's own count of the prompt it forwarded, used only when the
+ * upstream sent no confirmed usage before the first frame.
+ *
+ * Real Anthropic fills `message_start.message.usage.input_tokens` with the turn's prompt size,
+ * and third-party clients read it there — Paseo's context meter takes input from this frame and
+ * output from `message_delta`, so a hardcoded zero showed a nearly-empty ring for a turn whose
+ * `/context` reported ~97k (#4857). #4891 fixed the destinations that report usage up front;
+ * the internal bridge attaches `usage: null` to its lifecycle frames, so those paths had
+ * nothing to report and kept sending zero.
+ *
+ * A floor is a measurement, which is what makes it publishable here: it counts the prompt this
+ * proxy actually sent, the same estimate `claude-messages.ts` already trusts as a log floor. It
+ * is not a claim about upstream's tokenizer, and it is not final — `message_delta` carries the
+ * authoritative count for every reader that waits for it, exactly as before.
+ */
+function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: number): Rec {
+  const usage = confirmedUsage
+    ?? (typeof inputTokenFloor === "number" && Number.isFinite(inputTokenFloor) && inputTokenFloor > 0
+      ? { input_tokens: Math.trunc(inputTokenFloor), output_tokens: 0 }
+      : { input_tokens: 0, output_tokens: 0 });
   return {
     id: `msg_${uuid()}`,
     type: "message",
@@ -198,7 +218,7 @@ function messageSnapshot(model: string, confirmedUsage?: Rec): Rec {
     model,
     stop_reason: null,
     stop_sequence: null,
-    usage: confirmedUsage ?? { input_tokens: 0, output_tokens: 0 },
+    usage,
   };
 }
 
@@ -228,7 +248,15 @@ interface OpenBlock {
 export function responsesSseToAnthropicSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { pingIntervalMs?: number; translatorBudget: TranslatorBudget },
+  opts: {
+    pingIntervalMs?: number;
+    translatorBudget: TranslatorBudget;
+    /**
+     * This proxy's count of the prompt it forwarded, published on `message_start` only when the
+     * upstream sent no confirmed usage before the first frame. See `messageSnapshot` (#4857).
+     */
+    inputTokenFloor?: number;
+  },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
   const pingIntervalMs = opts?.pingIntervalMs ?? 20_000;
@@ -283,7 +311,10 @@ export function responsesSseToAnthropicSse(
       const ensureStarted = () => {
         if (started) return;
         started = true;
-        emit("message_start", { type: "message_start", message: messageSnapshot(model, earlyAnthropicUsage) });
+        emit("message_start", {
+          type: "message_start",
+          message: messageSnapshot(model, earlyAnthropicUsage, opts.inputTokenFloor),
+        });
         emit("ping", { type: "ping" });
       };
       // Keepalive pings protect remote deployments behind LB/NAT idle timeouts even

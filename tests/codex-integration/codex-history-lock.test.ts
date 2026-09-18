@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,12 +9,23 @@ import {
   withHistoryWriteSerialization,
   type HistoryWritePermit,
 } from "../../src/codex/history-lock";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const repoRoot = resolveRepoRoot();
 const sandboxes: string[] = [];
+const historyLockImportPrologue = `
+    import { existsSync, writeFileSync } from "node:fs";
+    const { withHistoryWriteSerialization } = await import("./src/codex/history-lock.ts");
+`;
+
+// The shared key with codex-history-worker is intentional: this machine-level graph cost
+// is paid by whichever file runs first in the worker, warming the other before its timed child.
+beforeAll(async () => {
+  await warmModuleGraph({ graph: "codex/history-lock-eval", source: historyLockImportPrologue, cwd: repoRoot });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
 interface Sandbox {
   readonly root: string;
@@ -74,9 +85,7 @@ test("H excludes a second process across the whole history unit", async () => {
 
   // A real second process holds H and parks inside the callback, which is where
   // the DB, manifest and rollout writes all happen.
-  const holder = Bun.spawn([process.execPath, "--eval", `
-    import { existsSync, writeFileSync } from "node:fs";
-    const { withHistoryWriteSerialization } = await import("./src/codex/history-lock.ts");
+  const holder = Bun.spawn([process.execPath, "--eval", `${historyLockImportPrologue}
     const outcome = withHistoryWriteSerialization(
       ${JSON.stringify(sandbox.codexHome)},
       ${JSON.stringify(sandbox.stateDb)},

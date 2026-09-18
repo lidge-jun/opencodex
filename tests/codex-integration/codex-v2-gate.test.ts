@@ -2089,5 +2089,22 @@ describe("3-state multi-agent mode", () => {
     expect(defaults.has("gpt-5.5")).toBe(true);
     expect(defaults.get("gpt-5.5")).toBeNull();
   });
+
+  test("mode default keeps a live pin the supplied baseline does not mention", () => {
+    // A supplied baseline is authoritative only for the slugs it contains. When
+    // the backup omits the bundled "gpt-5.6-sol" row, the live catalog's preserved
+    // "v1" pin must survive: falling back to the bundled "v2" snapshot here would
+    // rewrite a pin the baseline never spoke about. The preservation branch below
+    // can only run when the bundled lookup yields no pin for this row.
+    const liveSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v1" };
+    const merged = mergeCatalogEntriesForSync(
+      [liveSol as never], [], new Map(), [], false,
+      new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [],
+      new Set(), new Set(), undefined, false,
+      new Map<string, string | null>([["gpt-5.5", "v1"]]),
+    );
+    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v1");
+  });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";

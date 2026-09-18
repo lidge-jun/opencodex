@@ -86,6 +86,7 @@ const MODEL_KEYED_RECORDS = [
   "modelMaxOutputTokens",
   "modelInputModalities",
   "modelReasoningEfforts",
+  "modelSuppressSyntheticMax",
   "modelDefaultReasoningEfforts",
   "modelReasoningEffortMap",
 ] as const;

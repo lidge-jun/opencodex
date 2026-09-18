@@ -122,14 +122,14 @@ round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레�
 <details>
 <summary>Docker Compose</summary>
 
-이 저장소는 digest로 고정하고 root를 쓰지 않는 Compose 빌드를 제공합니다. 호스트에 Git과 Bun이
-설치되어 있으면, 이미지를 빌드할 때마다 정식 호환성 매니페스트를 만든 다음, stdin으로 데이터 플레인
-토큰을 한 번 초기화하고 허브를 시작하세요:
+이 저장소는 digest로 고정하고 root를 쓰지 않는 Compose 빌드를 제공합니다. 빌드는 선택한 Git 스냅샷에서
+정식 호환성 매니페스트를 생성하고 검증합니다. 로컬 클론에는 Git과 Docker Compose가 필요하고, 원격 Git
+컨텍스트에는 Docker Compose가 필요합니다. 어느 쪽도 호스트의 Bun이나 준비 단계는 필요하지 않습니다.
+stdin으로 데이터 플레인 토큰을 한 번 초기화하고 허브를 시작하세요:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -140,10 +140,27 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 기본 호스트 바인딩은 `127.0.0.1:10100`입니다. 원격 노출은
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`를 명시해야 하며, `0.0.0.0`은
 호스트의 모든 인터페이스를 엽니다. 방화벽과 인증된 TLS/tailnet 프론트엔드로 접근을 제한하세요.
-생성된 JSON은 추적하지 않으며, `.git` 없이 이미지로 복사됩니다. 소스가 바뀌면 다시 생성하고,
-생성과 빌드 사이에 소스를 고치지 마세요. 빌드는 낡은 매니페스트, 없거나 불일치하는 파일, 여분의
-소스 파일, 심볼릭 링크를 거부합니다. 기록된 SHA-256을 빌드 컨텍스트와 복사된 런타임 파일
+생성된 JSON은 추적하지 않습니다. 빌드 컨텍스트에는 `git ls-files`가 인벤토리를 읽는 `.git/index`와
+`.git/HEAD`만 들어갑니다. 전체 오브젝트 저장소 대신 약 1 MB이며, 읽기 전용 마운트를 통해 빌드 전용
+매니페스트 단계에서만 볼 수 있으므로 어떤 `COPY`에도 `.git`이 포함되지 않습니다. 호스트에서 이미 생성한
+매니페스트는 검증을 통과해야만 사용하고, 그렇지 않으면 빌드가 직접 생성합니다. 빌드는 낡은 매니페스트,
+없거나 불일치하는 파일, 여분의 소스 파일, 심볼릭 링크를 거부합니다. 기록된 SHA-256을 빌드 컨텍스트와 복사된 런타임 파일
 (`package.json`, `bun.lock`, 특별히 포함된 `scripts/model-metadata.source.json`)과 대조합니다.
+
+원격 Git 컨텍스트에서는 BuildKit이 Git 메타데이터를 유지해야 합니다. 다음 Compose 빌드 조각은 원격
+스냅샷을 선택하고 필요한 기본 인자를 전달합니다:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 토큰과 가변 상태는 `ocx-state` named volume에 남습니다. 이미지, Compose 파일, 환경, 셸 인자에는
 자격 증명을 넣지 않습니다. 프로바이더 설정, 인증된 수락 검사, 원격 관리, 롤백은

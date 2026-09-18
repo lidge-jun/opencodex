@@ -10,6 +10,8 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { preparePassthroughExchange } from "./passthrough-dispatch";
 import { deliverPassthroughResponse } from "./passthrough-delivery";
+import { guardDirectPassthroughBodyInactivity } from "../../lib/response-body-inactivity";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 
@@ -36,7 +38,7 @@ export async function executePassthroughResponse(
       sendBudgetState,
     );
     if (nativeExchange instanceof Response) return nativeExchange;
-    return await deliverPassthroughResponse(
+    const response = await deliverPassthroughResponse(
       requestContext,
       admissionState,
       requestState,
@@ -44,6 +46,14 @@ export async function executePassthroughResponse(
       sidecarState,
       responseEffects,
       nativeExchange,
+    );
+    // Delivery has already classified SSE (including a missing upstream content type)
+    // and consumed bounded JSON/errors. Guard only its remaining direct body, outside
+    // the relay/lifetime wrappers so their prefetch cannot arm our inactivity clock.
+    return guardDirectPassthroughBodyInactivity(
+      response,
+      nativeExchange.upstream.signal,
+      resolveStallTimeoutSec(requestContext.config.stallTimeoutSec) * 1000,
     );
   } finally {
     if (nativeHostState.lease) {

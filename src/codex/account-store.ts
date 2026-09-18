@@ -641,7 +641,14 @@ export type CodexRefreshProvenance = "self-refresh" | "joined-lineage" | "extern
 
 /** Terminal outcome of one forced refresh, as seen by the caller that requested it. */
 export type ForcedRefreshOutcome =
-  | { kind: "resolved"; provenance: CodexRefreshProvenance; generation: number; rotated: boolean }
+  | {
+      kind: "resolved";
+      provenance: CodexRefreshProvenance;
+      generation: number;
+      rotated: boolean;
+      /** Same-grant records advanced by this refresh, at their committed generations. */
+      propagatedAliases?: { id: string; generation: number }[];
+    }
   | { kind: "failed"; error: unknown };
 const MAX_CODEX_REFRESH_FLIGHTS = 32;
 const CODEX_REFRESH_FLIGHT_STALE_MS = 120_000;
@@ -937,6 +944,9 @@ export async function forceRefreshCodexPoolToken(
         provenance: classify(resolved),
         generation: resolved.generation,
         rotated: resolved.accessToken !== options.rejectedAccessToken,
+        ...(resolved.propagatedAliases?.length
+          ? { propagatedAliases: resolved.propagatedAliases }
+          : {}),
       });
     },
     error => {
@@ -1396,6 +1406,7 @@ async function resolveCodexToken(
     // Provenance rides out with the rest: a joiner that adopts this result needs the
     // flight's own classification, not a guess made at the adoption site (#3019).
     ...(result.provenance !== undefined ? { provenance: result.provenance } : {}),
+    ...(result.propagatedAliases?.length ? { propagatedAliases: result.propagatedAliases } : {}),
     ...(result.resolvedGrantFingerprint !== undefined
       ? { resolvedGrantFingerprint: result.resolvedGrantFingerprint }
       : {}),
