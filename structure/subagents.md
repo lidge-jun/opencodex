@@ -384,6 +384,10 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
+That shared rule includes the Crusoe registry entry's five explicit text-and-image model ids;
+subagent eligibility consumes the same derived metadata as the main catalog and does not infer
+vision support from a provider-wide multimodal label.
+
 [Anthropic seed image metadata](runtime.md#capability-aware-image-admission) supplies missing capability evidence; subagent selection and eligibility rules remain unchanged.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.

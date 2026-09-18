@@ -26,6 +26,10 @@ The surfaces below are examples chosen to show the design direction, not an inve
 surface list lives in `gui/src/app-routing.ts` and
 [`gui-and-management-api.md`](gui-and-management-api.md).
 
+Provider catalog additions reuse the existing mark system: provenance is recorded beside the
+self-hosted asset, and multicolor brand artwork keeps its own paint instead of entering the
+monochrome mask set. Crusoe follows this path with its four-stop gradient lozenge.
+
 | Surface | Current design | Notes |
 |---|---|---|
 | Dashboard | Data-dense, light, rounded, sans-serif | Default Bun/React template aesthetic |
