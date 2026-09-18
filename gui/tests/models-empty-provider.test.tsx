@@ -112,7 +112,18 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   });
   testWindow.localStorage.setItem("ocx-models-collapsed:v2", JSON.stringify([]));
   const provider = "fallback-provider";
-  const ids = ["claude-opus", "claude-sonnet", "gemini-pro", "gemini-flash", "gpt-oss"];
+  // Provider model IDs are arbitrary strings. Prototype property names must behave like normal
+  // IDs rather than reading inherited values from the context-window draft dictionary.
+  const ids = [
+    "__proto__",
+    "constructor",
+    "toString",
+    "claude-opus",
+    "claude-sonnet",
+    "gemini-pro",
+    "gemini-flash",
+    "gpt-oss",
+  ];
   let selected = ["gemini-pro", "gemini-flash"];
   const disabled = new Set(["gpt-oss"]);
   const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
@@ -216,7 +227,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
 
     const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/${id}"]`)!;
     const buttonText = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!;
-    expect(container.textContent).toContain("2/5 visible");
+    expect(container.textContent).toContain("2/8 visible");
     expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
     expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
@@ -225,7 +236,9 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     await act(async () => buttonText("Custom windows").click());
     const contextDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Custom windows"]')!;
     const contextInputs = contextDialog.querySelectorAll<HTMLInputElement>("input");
-    expect([...contextInputs].map(input => input.value)).toEqual(["256000", "64000"]);
+    // The picker sorts model IDs, so "__proto__" is selected first. Its field must render an
+    // empty draft, not the inherited Object.prototype member a plain map read would return.
+    expect([...contextInputs].map(input => input.value)).toEqual(["256000", ""]);
     const setValue = Object.getOwnPropertyDescriptor(
       testWindow.HTMLInputElement.prototype,
       "value",
@@ -233,7 +246,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     await act(async () => {
       setValue.call(contextInputs[0]!, "350000");
       contextInputs[0]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
-      setValue.call(contextInputs[1]!, "100000");
+      setValue.call(contextInputs[1]!, "90000");
       contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
     });
     const pickContextModel = async (modelId: string, dialog: HTMLElement = contextDialog) => {
@@ -244,6 +257,17 @@ test("Models page combines final visibility, atomic actions, discovery status, a
         .find(candidate => candidate.textContent === modelId)!;
       await act(async () => option.click());
     };
+    await pickContextModel("claude-opus");
+    expect(contextInputs[1]!.value).toBe("64000");
+    await act(async () => {
+      setValue.call(contextInputs[1]!, "100000");
+      contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    // Inherited members such as Object.prototype.toString must not leak into the draft field.
+    await pickContextModel("constructor");
+    expect(contextInputs[1]!.value).toBe("");
+    await pickContextModel("toString");
+    expect(contextInputs[1]!.value).toBe("");
     await pickContextModel("claude-sonnet");
     expect(contextInputs[1]!.value).toBe("");
     await act(async () => {
@@ -258,6 +282,9 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     // or the user can neither see nor clear it.
     await pickContextModel("retired-model");
     expect(contextInputs[1]!.value).toBe("72000");
+    // The prototype-name draft is an own property, so it survives a picker round-trip.
+    await pickContextModel("__proto__");
+    expect(contextInputs[1]!.value).toBe("90000");
     await pickContextModel("claude-opus");
     const applyContext = [...contextDialog.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Apply")!;
@@ -274,7 +301,14 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     // model mid-modal must not make Apply revert it.
     expect(contextBodies.at(-1)).toEqual({
       contextWindow: 350_000,
-      modelContextWindows: { "claude-opus": 100_000, "claude-sonnet": 80_000 },
+      // Object.fromEntries defines "__proto__" as a real own property; a
+      // `{ "__proto__": n }` literal would silently skip it, which is exactly the
+      // defect under test.
+      modelContextWindows: Object.fromEntries([
+        ["__proto__", 90_000],
+        ["claude-opus", 100_000],
+        ["claude-sonnet", 80_000],
+      ]),
     });
     expect(container.querySelector('[role="dialog"][aria-label="Custom windows"]')).toBeNull();
 
@@ -473,7 +507,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
 
     await act(async () => { switchFor("claude-sonnet").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "models", targets: [{ id: "claude-sonnet" }], enabled: true });
-    expect(container.textContent).toContain("3/5 visible");
+    expect(container.textContent).toContain("3/8 visible");
 
     failNext = true;
     await act(async () => { switchFor("claude-opus").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
@@ -482,10 +516,10 @@ test("Models page combines final visibility, atomic actions, discovery status, a
 
     await act(async () => { buttonText("All on").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: true });
-    expect(container.textContent).toContain("5/5 visible");
+    expect(container.textContent).toContain("8/8 visible");
     await act(async () => { buttonText("All off").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: false });
-    expect(container.textContent).toContain("0/5 visible");
+    expect(container.textContent).toContain("0/8 visible");
 
     // A failed poll must keep the catalog on screen but make the stale state visible.
     failCatalog = true;

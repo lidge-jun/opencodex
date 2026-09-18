@@ -4,6 +4,7 @@ import { formatUsageReport } from "../../src/cli/usage-report";
 /** formatUsageReport returns lines; assertions here are about rendered text. */
 const joinReport = (input: Parameters<typeof formatUsageReport>[0]): string => formatUsageReport(input).join("\n");
 import { formatAccountTable, type AccountRowForTest } from "../../src/cli/account";
+import { fetchRows, type AccountDeps } from "../../src/cli/account-api";
 
 /**
  * #2700, #2703: the CLI discarded fields the API already returned.
@@ -257,5 +258,44 @@ describe("#2705 access key usage columns", () => {
 
   test("no keys still reports the empty state", async () => {
     expect(await listOutput({ keys: [] })).toContain("No API access keys configured.");
+  });
+});
+
+/**
+ * The OAuth account DTO declares `plan` optional because older proxies never sent it.
+ * An absent key means the proxy predates tier reporting while `plan: null` means the
+ * proxy checked and found no tier -- the same silently-wrong-output class of defect as
+ * the fields above, one layer earlier: the wire value was fine and the projection
+ * rewrote it.
+ */
+describe("OAuth plan field preserves the wire presence signal", () => {
+  const deps = (accounts: Array<Record<string, unknown>>): AccountDeps => ({
+    baseUrl: "http://127.0.0.1:10100",
+    fetchImpl: (async () =>
+      Response.json({ activeAccountId: null, accounts })) as unknown as typeof fetch,
+  });
+
+  test("an absent plan key stays absent instead of being synthesized as null", async () => {
+    const { rows } = await fetchRows(
+      deps([{ id: "legacy" }]),
+      "http://127.0.0.1:10100",
+      "anthropic",
+      "oauth",
+    );
+    expect(rows[0]).not.toHaveProperty("plan");
+  });
+
+  test("an explicit null and a reported tier both reach the row verbatim", async () => {
+    const { rows } = await fetchRows(
+      deps([
+        { id: "unknown", plan: null },
+        { id: "known", plan: "max" },
+      ]),
+      "http://127.0.0.1:10100",
+      "anthropic",
+      "oauth",
+    );
+    expect(rows[0]).toHaveProperty("plan", null);
+    expect(rows[1]).toHaveProperty("plan", "max");
   });
 });

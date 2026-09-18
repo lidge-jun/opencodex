@@ -13,13 +13,17 @@ description: 安装、启动、停止、服务、诊断、同步和更新命令�
 
 ## 代理生命周期
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 启动代理服务器（首选端口 `10100`）。如果该端口已被占用，opencodex 会选择并记录另一个可用端口。它会写入 PID/运行时端口状态，并拒绝启动第二个存活实例。启动时，它会把每个提供方的模型同步到 Codex 的目录中。关闭时，它会恢复原生 Codex，除非它是作为受管服务启动的（`OCX_SERVICE=1`）。
+
+`--socks5`（默认 `127.0.0.1:10808`）会将 SOCKS5 URL 保存到 `config.proxy`，并通过真正的 SOCKS5 隧道转发出站 HTTP(S) 请求。`--socks5-off` 只会清除已保存的 SOCKS5 代理，不会删除 HTTP 代理。该值保存在配置中，因此会在 `ocx update` 后保留。URL 可以包含用户名和密码，但启动日志会将其隐藏。
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -180,10 +184,10 @@ Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。
 
 | 子命令 | 操作 |
 | --- | --- |
-| none | 服务不存在时安装并启动；已存在时刷新并重启。正常的 Windows 任务计划程序定义会复用；过时定义可能会重新注册并需要提升权限。 |
+| none | 服务不存在时安装并启动；已存在时执行 `repair`。正常的 Windows 任务计划程序定义会复用；过时定义可能会重新注册并需要提升权限。 |
 | `install` | 创建并启动服务。 |
-| `repair` | 就地刷新已安装的服务并重启。正常的 Windows 任务计划程序定义会复用；过时定义可能会重新注册并需要提升权限。 |
-| `restart` | `repair` 的别名。 |
+| `repair` | 就地刷新已安装的服务。在 macOS 上，仅当有变更时才重新加载管理器，因此正常且未变更的任务会继续运行，repair 不会造成中断。在 Linux 和 Windows 上会重启服务；正常的 Windows 任务计划程序定义会复用，过时定义可能会重新注册并需要提升权限。 |
+| `restart` | 执行相同的刷新，并在所有平台上保证重启。在 macOS 上，未变更且已加载的任务会就地 kickstart。不是 `repair` 的别名。 |
 | `start` | 启动已安装的服务。 |
 | `stop` | 停止服务并恢复原生 Codex。 |
 | `status` | 报告服务和代理诊断信息及日志路径。 |
