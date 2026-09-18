@@ -55,6 +55,15 @@ describe("per-model wire override (#404)", () => {
       .toBe("anthropic");
   });
 
+  test("hard-pins Union Alpha to the Anthropic wire without changing siblings", () => {
+    const provider = gateway();
+
+    expect(resolveWireProtocolOverride("opencode-go", "union-alpha", provider).adapter)
+      .toBe("anthropic");
+    expect(resolveWireProtocolOverride("opencode-go", "glm-5.2", provider).adapter)
+      .toBe("openai-chat");
+  });
+
   test("a pinned model survives a second resolve pass", () => {
     // The resolver runs twice per request (route time and adapter build). A pin check
     // phrased against the current adapter would pass the first time and then let the

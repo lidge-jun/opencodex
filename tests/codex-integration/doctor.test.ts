@@ -10,6 +10,7 @@ import {
   collectPaths,
   detectFsType,
   collectConfiguredProxy,
+  collectDefaultModelExposure,
   collectProxyEnv,
   collectRunningProxyEnv,
   chatgptPublicEndpointHint,
@@ -1011,5 +1012,97 @@ describe("doctor reports an unclean prior proxy exit", () => {
     const output = logged.join("\n");
     expect(output).toContain("public ChatGPT endpoint");
     expect(output).toContain("assumed");
+  });
+});
+
+// #4646: Codex pins a default model in its own config.toml, and nothing compared that pin
+// against the models this install exposes. Every dependency is injected here, so these cases
+// touch neither the real `CODEX_HOME` nor the network.
+describe("doctor Codex default model exposure (#4646)", () => {
+  const live = { pid: 4321, port: 10100, source: "config" as const };
+  const respondWith = (body: unknown, status = 200) => (
+    (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch
+  );
+
+  test("no root model pin is not a finding", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => null,
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("not_configured");
+    expect(result.model).toBeNull();
+    expect(result.action).toBeUndefined();
+  });
+
+  test("a pin the running proxy advertises is exposed, and names the proxy as the source", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "  gpt-5.6-sol  ",
+      live,
+      fetchFn: respondWith({ data: [{ id: "gpt-5.6-sol" }, { id: "kiro/claude-opus-4.6" }] }),
+      readCatalogModelsFn: () => null,
+    });
+
+    expect(result.status).toBe("exposed");
+    // Trimmed: a pin written with surrounding whitespace is the same pin.
+    expect(result.model).toBe("gpt-5.6-sol");
+    expect(result.source).toBe("proxy");
+  });
+
+  test("a pin missing from every readable surface is the warning, and says which surfaces it read", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "kiro/claude-opus-4.6",
+      live,
+      fetchFn: respondWith({ data: [{ id: "gpt-5.6-sol" }] }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("not_exposed");
+    expect(result.detail).toContain("kiro/claude-opus-4.6");
+    expect(result.detail).toContain("/v1/models");
+    expect(result.detail).toContain("on-disk Codex catalog");
+    expect(result.action).toBeDefined();
+  });
+
+  test("an unreadable exposed set is undeterminable, never 'not exposed'", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live: null,
+      readCatalogModelsFn: () => null,
+    });
+
+    expect(result.status).toBe("undeterminable");
+    expect(result.source).toBeNull();
+    expect(result.detail).not.toContain("NOT exposed");
+    expect(result.action).toContain("ocx start");
+  });
+
+  test("a proxy that refuses the read falls back to the catalog instead of guessing", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      // What a non-loopback bind returns to doctor, which holds no data-plane key.
+      fetchFn: respondWith({ error: "opencodex API key required" }, 401),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
+  test("a retained hide row is not exposure: the pin Desktop can still show is still reported", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-terra",
+      live: null,
+      // Exactly the shape a disabled bare native leaves behind (see native-model-toggle.test.ts).
+      readCatalogModelsFn: () => [
+        { slug: "gpt-5.6-terra", visibility: "hide" },
+        { slug: "gpt-5.6-sol", visibility: "list" },
+      ],
+    });
+
+    expect(result.status).toBe("not_exposed");
+    expect(result.source).toBe("catalog");
+    expect(result.detail).not.toContain("/v1/models");
   });
 });

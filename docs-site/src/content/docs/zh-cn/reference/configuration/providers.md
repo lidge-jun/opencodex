@@ -79,6 +79,7 @@ selector，而不是分配一个新名称。
 | `baseUrl` | `string` | 上游 API 基础 URL。大多数内置固定端点会忽略不匹配的值；具备冲突安全键的预设会保留一个更早、同名的自定义目标。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 可选的客户端出站请求启动节流，与上游用量、计费和限流指标相互独立。提供商限制适用于所有模型，`models` 按上游模型精确 ID 匹配且只能增加延迟。排队等待不计入响应头超时。覆盖 HTTP、Responses WebSocket 以及显式适配器 `fetchResponse`/`runTurn` 调用。 |
 | `responsesPath?` | `string` | 用于 key-auth `openai-responses` 请求的相对资源路径。必须以 `/` 开头，且不能包含 scheme、query 或 fragment。 |
+| `chatCompletionsPath?` | `string` | 用于 `openai-chat` 请求的相对资源路径，是 `responsesPath` 的对应项，适用相同的路径规则。当同一上游以不同前缀提供 Chat Completions 和 Responses 时需要此配置：按模型的 wire override 只更换适配器而不改动 `baseUrl`，否则已启用的 Chat 请求会被发送到 Responses base。随附示例为 Z.AI。 |
 | `upstreamWebsocket?` | `boolean` | 为 `openai-responses` 请求选择性启用上游 Responses WebSocket 传输（默认 `false`）。当上游支持该协议时，流式 POST 请求会使用配置的 Responses 路径（默认 `/v1/responses`），通过 HTTPS 基础 URL 以 WSS 连接，并重新编码为常规流程使用的 SSE。forward 提供者使用 `{baseUrl}/responses`；key-auth 提供者使用 `responsesPath`，未设置时回退到传统的 `/v1/responses`。普通 HTTP 仍使用 SSE；非 Responses 路径和 `openai-chat` 请求仍使用 HTTP。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` 能力的三态。`true`：fast 模式可以注入，调用方提供的值也会被保留。`false`：剥离该字段且绝不注入（已明确不支持的上游不会收到它）。未设置：未分类——调用方提供的值原样保留，fast 模式绝不注入。注册表已对官方 OpenAI（`true`）、DeepSeek 和 Volcengine Ark（`false`）分类；仅对真正支持分层的自定义网关显式设置。 |
 | `preserveResponsesReasoningContent?` | `boolean` | 在重放的 Responses reasoning 项中保留明文 reasoning 内容，而不是清空（清空是 ChatGPT 后端的规则）。对接受 reasoning 重放的上游（如 DeepSeek）启用。代理生成的 `ocxr1` 信封始终会被剥离。 |
@@ -128,7 +129,7 @@ selector，而不是分配一个新名称。
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及（`repairInvalidIds`）缺少规范 `msg_`/`rs_` 前缀的 message/reasoning id。function-call id 永远不会被重写。内置 DeepSeek 默认启用后两项。 |
 | `responsesSnapshotRepair?` | `boolean` | 默认关闭的客户端修复，用于补全 SSE 与 JSON 中稀疏 Responses 生命周期快照缺失的 status、output 和工具元数据；原始检查与持久化保持不变。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | 仅限 API-key 提供商（`authMode: "key"`）。可选的同目标 429 重试：未配置 `retryOn429` 时功能关闭；对象存在即启用，除非 `enabled: false`。收到 429 时等待（上游 `Retry-After` 或固定间隔）后在相同 key 上重放完全相同请求，再进入任何 key 故障转移——覆盖主文本恢复循环、Responses passthrough、图像/视频桥、web-search 侧车与终结续接。重放仅适用于流开始前的 HTTP 429 响应；自定义 `runTurn` 传输不在 HTTP 重试循环范围内。`attempts` 是首个 429 之后的同 key 重放次数（总发送次数 = `attempts` + 1），是主恢复循环、终结守卫续接与桥接重试共享的按请求统一预算；`attempts` 耗尽只会停止进一步的同 key 重放：随后按可用目标进行正常的 key 故障转移或最终错误处理——key 认证的 passthrough 线路上没有故障转移，因此耗尽的 429 会原样透出。Codex 自身从不重试 429，因此这是单 key 提供商唯一的防线。默认值：`enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`（单次等待以 `maxIntervalMs` 为上限，其本身上限 600000）、`respectRetryAfter: true`。 |
-| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 仅限使用 key 认证的 `openai-chat` 提供商。`adapter` 为 `openai-responses` 的提供商改由 Responses 透传路径派发，该路径应用自己固定的瞬态重试次数，从不读取此选项。可选的流开始前上游瞬态状态码（500、502、503、504、520、521、522）重试：未配置时关闭；对象存在即启用，除非 `enabled: false`。覆盖初始 Responses 请求、终结守卫续接、原生 `/v1/chat/completions`，以及 429/账户恢复重新获取。`attempts` 是单个请求允许向上游发送的总次数，包含首次发送（1..10，默认 3）；它是与连接重置恢复共享的按请求预算，因此 `3` 表示最多只有三个实际请求到达提供商。等待采用固定 400 毫秒的指数退避，上限为 5 秒，并遵循 `Retry-After`。此选项独立于处理速率限制的 `retryOn429`；流开始后的故障绝不会重放。 |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 仅限使用 key 认证的 `openai-chat` 与 `openai-responses` 提供商。`authMode: "forward"` 的提供商（ChatGPT 账号池）从不读取此选项，保持默认重试次数。可选的流开始前上游瞬态状态码（500、502、503、504、520、521、522）重试：未配置时关闭；对象存在即启用，除非 `enabled: false`。覆盖初始 Responses 请求、终结守卫续接、原生 `/v1/chat/completions`，以及 429/账户恢复重新获取。`attempts` 是单个请求允许向上游发送的总次数，包含首次发送（1..10，默认 3）；它是与连接重置恢复共享的按请求预算，因此 `3` 表示最多只有三个实际请求到达提供商。等待采用固定 400 毫秒的指数退避，上限为 5 秒，并遵循 `Retry-After`。此选项独立于处理速率限制的 `retryOn429`；流开始后的故障绝不会重放。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；强制选择会被降级。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。 |
 | `reasoningDetailsModels?` | `string[]` | 以结构化 `reasoning_details` 数组返回思考内容的模型（启用 `reasoning_split` 的 MiniMax M 系列）；流式增量为累积快照，按前缀差分处理，保留的推理以 `reasoning_details` 数组而非 `reasoning_content` 字符串回放。 |
@@ -145,6 +146,8 @@ selector，而不是分配一个新名称。
 | `desktopExecutor?` | `DesktopExecutorConfig` | 仅 Cursor：外部 computer-use 和录屏命令。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本地执行策略。`off` 是默认值；`codex-sandbox` 目前会像 `off` 一样失败关闭。 |
+
+注册或替换提供商（`POST /api/providers`）时，会先验证 `responsesPath` 和 `chatCompletionsPath`，再修改内存或磁盘中的配置。`PATCH /api/providers?name=<provider>` 会将请求体与已保存的提供商合并；除仅更新 `requestPacing` 的请求外，凡是修改 `disabled` 以外字段的更新，都会在保存前以同样方式验证合并后提供商的路径，若保留的既有路径无效则返回 `400`，且不更改配置。加载配置文件时也适用同样的路径规则。
 
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
 

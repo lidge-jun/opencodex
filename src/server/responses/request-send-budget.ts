@@ -13,6 +13,28 @@ import type {
   SingleUseDispatchPermit,
 } from "../../lib/request-execution-budget";
 
+/**
+ * The transient-5xx ladder cap for ONE leg, given the provider's configured request total.
+ *
+ * `remainingTransientSendBudget(cap)` treats `cap` as a ceiling on what REMAINS, which is the
+ * right shape for the fixed constant: every leg may ask for up to three, and the request-wide
+ * base allowance is what actually bounds the total. A configured `transientRetryOn5xx.attempts`
+ * is documented as the total for one request including the first send, so it has to be reduced
+ * by what the request already sent before it is intersected with that allowance. Passing it
+ * straight through would make it a per-leg ceiling instead, and a request configured at one send
+ * could still reach upstream again on a recovery leg (#4893).
+ *
+ * An absent policy returns the constant unchanged, so a provider that configures nothing behaves
+ * exactly as it does today at every call site.
+ */
+export function transientSendCapFor(
+  configuredAttempts: number | undefined,
+  sendsUsed: number,
+): number {
+  if (configuredAttempts === undefined) return TRANSIENT_RETRY_MAX_ATTEMPTS;
+  return Math.max(0, configuredAttempts - Math.max(0, sendsUsed));
+}
+
 /** Owns the shared request send counter and recovery permits. */
 export function createResponsesSendBudget(
   requestContext: Pick<ResponsesRequestContext, "options" | "req" | "logCtx">,
@@ -71,8 +93,18 @@ export function createResponsesSendBudget(
     if (send.ordinal <= 1) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
-  const sendBudgetExhausted = (): boolean =>
-    remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) === 0;
+  /**
+   * Whether this request has any base send left under `cap`.
+   *
+   * The cap is a parameter because a lane that reads a provider's configured
+   * `transientRetryOn5xx` ladder has to ask this question at the SAME cap its sends use.
+   * Asking at the constant while dispatching at a configured value lets a provider with
+   * headroom be told it is exhausted, and lets one configured below the constant pass this
+   * check and then be refused at the send (#4893). Defaulted, so every existing caller keeps
+   * the constant it already used.
+   */
+  const sendBudgetExhausted = (cap: number = TRANSIENT_RETRY_MAX_ATTEMPTS): boolean =>
+    remainingTransientSendBudget(cap) === 0;
   /**
    * A credential hop reserves the send its own replay will make, and that replay is a recovery
    * leg. The leg must SPEND the hop's reservation instead of taking a second one: the
@@ -113,16 +145,22 @@ export function createResponsesSendBudget(
    * The base allowance is spent first. Once it is gone a recovery class may still draw the
    * single shared final-recovery reserve -- which is what keeps the validated sanitized rebuild
    * after a 5xx streak alive at four total sends -- but an account move and a rebuild cannot
-   * each take one. `countedExternally` is set because these legs run through the retry helper,
-   * which reports the same send again through `onSendsConsumed`.
+   * each take one. A caller with an exact provider total can suppress that reserve. The
+   * `countedExternally` flag exists because these legs run through the retry helper, which reports
+   * the same send again through `onSendsConsumed`.
    */
   const recoverySendAllowance = (
     cap: number,
     sendClass: SendClass,
     targetKey: string,
+    options: { allowFinalRecoveryReserve?: boolean } = {},
   ): { attempts: number; permit?: SingleUseDispatchPermit } => {
     const base = remainingTransientSendBudget(cap);
     if (base > 0) return { attempts: base };
+    // A provider-configured transient total is an exact physical-send ceiling. Once it is
+    // exhausted, the request-wide recovery reserve must not silently widen it. The default stays
+    // permissive so unconfigured providers retain the guarded profile's fourth recovery send.
+    if (options.allowFinalRecoveryReserve === false) return { attempts: 0 };
     if (pendingHopPermit) {
       const hopPermit = pendingHopPermit;
       pendingHopPermit = undefined;
@@ -178,6 +216,14 @@ export function createResponsesSendBudget(
     workflowRootId,
     noteTransientSends,
     remainingTransientSendBudget,
+    /**
+     * Physical sends this logical request has already made.
+     *
+     * A live getter, not a snapshot: it is read once per dispatch leg to resolve a configured
+     * ladder, and a value frozen at construction would answer for a request that had sent
+     * nothing.
+     */
+    get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
     adapterDispatchBudget,
     noteAdapterPhysicalSend,

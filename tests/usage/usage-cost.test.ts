@@ -258,6 +258,36 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
+  // OpenCode Go serves five ids with no jawcode bundle row and no vendor-level
+  // fallback, so every request through them resolved to null and the Usage cost
+  // column rendered an em dash. Each row reuses the vendor's published list price
+  // as a verified-derived estimate (Go itself is subscription-billed).
+  test("17h. OpenCode Go ids resolve vendor list prices as estimates", () => {
+    for (const [modelId, cost4] of [
+      ["qwen3.8-max", { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 }],
+      ["qwen3.8-flash", { input: 0.16, output: 0.47, cacheRead: 0, cacheWrite: 0 }],
+      ["deepseek-v4.1-flash", { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 }],
+      ["glm-5.3-flash", { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 }],
+      ["muse-spark-1.3-contributor", { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 }],
+    ] as const) {
+      const price = resolveMatchedPrice("opencode-go", modelId);
+      expect(price, `opencode-go/${modelId}`).toMatchObject({ cost4, source: "expected", status: "verified-derived" });
+    }
+    // The Flash rows must keep carrying what the vendor figure does NOT cover:
+    // Qwen publishes no cache rate, DeepSeek's off-peak window is not baked in.
+    expect(resolveMatchedPrice("opencode-go", "qwen3.8-flash")?.sourceRef).toContain("cache rates unpublished");
+    expect(resolveMatchedPrice("opencode-go", "deepseek-v4.1-flash")?.sourceRef).toContain("off-peak");
+    // End to end: a real request through a previously unpriced id now estimates
+    // instead of resolving to null.
+    const estimate = estimateRequestCost({
+      provider: "opencode-go",
+      model: "qwen3.8-flash",
+      usage: { inputTokens: 1700, outputTokens: 0 },
+      usageStatus: "estimated",
+    });
+    expect(estimate?.cost.total).toBeCloseTo(1700 * 0.16 / 1e6, 12);
+  });
+
   test("6. unmatched exact key is null", () => {
     expect(resolveMatchedPrice("no-such-provider", "no-such-model")).toBeNull();
     expect(resolveMatchedPrice("openai", "definitely-not-a-model")).toBeNull();
@@ -298,8 +328,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 121 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(121);
+  test("16. shipped overlay membership: 126 keys, including canonical Fable 5.1, Opus 5, OpenCode Go and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(126);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -369,6 +399,13 @@ describe("resolveMatchedPrice", () => {
       "kimi-code/kimi-for-coding",
       "alibaba-token-plan/qwen3.8-max",
       "alibaba-token-plan-intl/qwen3.8-max",
+      // OpenCode Go — served ids with no jawcode bundle row; each reuses the
+      // vendor's published list price as a verified-derived estimate.
+      "opencode-go/qwen3.8-max",
+      "opencode-go/qwen3.8-flash",
+      "opencode-go/deepseek-v4.1-flash",
+      "opencode-go/glm-5.3-flash",
+      "opencode-go/muse-spark-1.3-contributor",
       "cursor/auto",
       // Z.AI GLM family — the zai bundle is all-zero upstream, so each exposing
       // provider surface carries its own verified-derived rows (z.ai USD list).

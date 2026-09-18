@@ -55,6 +55,46 @@ export function applyEol(content: string, eol: "\r\n" | "\n"): string {
   return eol === "\n" ? lf : lf.replace(/\n/g, "\r\n");
 }
 
+/** Label Codex shows for the injected provider when the operator has not chosen one. */
+export const DEFAULT_CODEX_PROVIDER_DISPLAY_NAME = "OpenCodex Proxy";
+
+/** Longest label accepted, matching the display-label policy used for provider names. */
+const MAX_CODEX_PROVIDER_DISPLAY_NAME_LENGTH = 128;
+
+/** Would this label put a control character into config.toml? */
+function hasControlCharacter(value: string): boolean {
+  // Checked by code point rather than by a control-character regex, which needs a lint
+  // suppression this repository's hygiene gate rejects — and which reads no more clearly.
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * Which label to write, given whatever the config holds.
+ *
+ * Presentation only, and deliberately separate from identity: routing resolves through the
+ * provider id `opencodex` in the root `model_provider` line and the `[model_providers.opencodex]`
+ * header, neither of which is derived from this value. So a rename cannot reroute a thread or
+ * orphan a row that already names that id (#4810).
+ *
+ * Every rejected value falls back to the default rather than being emitted or omitted. Codex
+ * refuses to load a provider with no name, so writing a blank one would break the whole config
+ * file rather than one thread — strictly worse than the branding it was meant to remove. That is
+ * also why there is no way to suppress the field: suppression here means choosing a neutral
+ * label. A control character or an over-long value is rejected for the same reason, because
+ * `tomlString` would faithfully encode something Codex may still reject.
+ */
+export function resolveCodexProviderDisplayName(configured?: string): string {
+  const trimmed = (configured ?? "").trim();
+  if (!trimmed) return DEFAULT_CODEX_PROVIDER_DISPLAY_NAME;
+  if (trimmed.length > MAX_CODEX_PROVIDER_DISPLAY_NAME_LENGTH) return DEFAULT_CODEX_PROVIDER_DISPLAY_NAME;
+  if (hasControlCharacter(trimmed)) return DEFAULT_CODEX_PROVIDER_DISPLAY_NAME;
+  return trimmed;
+}
+
 export function buildProviderTableBlock(
   port: number,
   supportsWebsockets?: boolean,
@@ -84,12 +124,13 @@ export function buildProviderTableBlock(
 export function buildProviderTableBlockForTarget(
   target: CodexRoutingTarget,
   supportsWebsockets = false,
+  displayName?: string,
 ): string {
   const lines = [
     "",
     OCX_SECTION_MARKER,
     "[model_providers.opencodex]",
-    'name = "OpenCodex Proxy"',
+    `name = ${tomlString(resolveCodexProviderDisplayName(displayName))}`,
     `base_url = ${tomlString(target.baseUrl)}`,
     'wire_api = "responses"',
     // false only in the authless Desktop opt-in (#1107); true keeps the App/TUI account gate.
@@ -518,6 +559,7 @@ export function buildProfileFileForTarget(
   catalogPath?: string | null,
   supportsWebsockets = false,
   fastMode?: boolean,
+  displayName?: string,
 ): string {
   const origin = routingTargetOrigin(target);
   const host = new URL(origin).host;
@@ -542,7 +584,7 @@ export function buildProfileFileForTarget(
   ];
   if (catalogPath) lines.push(`model_catalog_json = ${tomlString(catalogPath)}`);
   if (fastMode !== undefined) lines.push("", "[features]", `fast_mode = ${fastMode ? "true" : "false"}`);
-  lines.push(buildProviderTableBlockForTarget(target, supportsWebsockets).trimEnd(), "");
+  lines.push(buildProviderTableBlockForTarget(target, supportsWebsockets, displayName).trimEnd(), "");
   return lines.join("\n");
 }
 

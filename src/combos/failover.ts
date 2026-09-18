@@ -394,6 +394,103 @@ function isRequestLocalTargetIncompatibility(status: number, message: string, co
   return false;
 }
 
+/**
+ * Codes a gateway uses when it declines a request field it cannot serve.
+ *
+ * Wider than the set {@link isRequestLocalTargetIncompatibility} accepts, by exactly one member:
+ * Alibaba's gateway reports `invalid_parameter_error`. It is kept in its own set rather than
+ * added to the shared one, because that set also governs the `user` parameter and image-input
+ * branches and widening it there would admit shapes those branches were reasoned about without.
+ */
+const RESPONSE_FORMAT_REFUSAL_CODES = new Set([
+  "",
+  "invalid_request_error",
+  "invalid_parameter_error",
+  "unsupported_parameter",
+  "unsupported_value",
+]);
+
+/**
+ * Does this message say the target cannot PROVIDE `response_format`, rather than that the
+ * request's `response_format` was malformed?
+ *
+ * That distinction is the whole point of #4903 and it is why neither obvious option was taken.
+ * Hopping on every 400 would replay a genuinely malformed request against every remaining
+ * target. Dropping `response_format` would silently change the output contract the caller
+ * asked for, on a path whose entire purpose is a structured result.
+ *
+ * So both halves are required: the message must name the field, AND it must say the field is
+ * unavailable or unsupported. "Invalid schema for response_format" names the field and claims
+ * nothing about capability, so it stays terminal.
+ *
+ * `param` may be absent or explicitly null -- the reported gateway sends `param: null` -- but a
+ * param naming a DIFFERENT field contradicts the message and fails closed.
+ */
+function namesResponseFormatIncapability(message: string, param: unknown): boolean {
+  if (param !== undefined && param !== null && param !== "response_format") return false;
+  const text = message.toLowerCase();
+  if (!text.includes("response_format")) return false;
+  return /(unavailable|not available|unsupported|not supported|does not support|doesn't support|cannot be used|is not enabled)/u
+    .test(text);
+}
+
+/**
+ * A `response_format` capability gap is target-local: this model cannot produce the requested
+ * output shape, which says nothing about the next target in the combo.
+ *
+ * Reported against a shadow title-generation call, where a combo's first target rejects
+ * `response_format` and the chain stops instead of trying the target behind it (#4903).
+ *
+ * The next target receives the SAME request, `response_format` included, so a target that can
+ * honour the contract honours it and one that cannot is skipped in turn. Traversal stays finite
+ * because combo excludes each attempted target and policy tries each candidate once.
+ *
+ * The envelope is bounded exactly like {@link isRequestLocalTargetIncompatibility}: an intact
+ * provider JSON object, a depth budget, `type: "invalid_request_error"`, and a code from a
+ * closed set. Nothing is inferred from echoed prompt text and no field is removed.
+ */
+function isResponseFormatCapabilityRefusal(
+  status: number,
+  message: string,
+  code?: string | null,
+): boolean {
+  if (status !== 400 || message.length > 16_384) return false;
+  if (!RESPONSE_FORMAT_REFUSAL_CODES.has(normalizedFailureCode(code))) return false;
+  let text = message.trim();
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (text.startsWith("Provider error 400: ")) {
+      text = text.slice("Provider error 400: ".length).trim();
+    }
+    // A chat gateway can report the refusal inside a single SSE frame, and the combo consumer
+    // keeps the raw text when that frame stops the error object from being extracted -- which is
+    // why the reported classification text reads `data: {"error":...}` and why the structured
+    // code arrives undefined. Exactly one `data:` prefix is removed, and only when the body is
+    // one line: this unwraps a single frame rather than parsing a stream, so a multi-event body
+    // is left alone and still fails closed.
+    if (text.startsWith("data:") && !text.includes("\n")) {
+      text = text.slice("data:".length).trim();
+    }
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { return false; }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const error = (payload as Record<string, unknown>).error;
+    if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+    const e = error as Record<string, unknown>;
+    if (e.code !== undefined && e.code !== null && typeof e.code !== "string") return false;
+    if (typeof e.message !== "string") return false;
+    // Our own wrapper, re-wrapped by a downstream hop. Peel it and look again, within budget.
+    if (e.message.startsWith("Provider error 400: ") && e.param === undefined) {
+      text = e.message;
+      continue;
+    }
+    if (e.type !== "invalid_request_error") return false;
+    const errorCode = normalizedFailureCode(typeof e.code === "string" ? e.code : undefined);
+    if (!RESPONSE_FORMAT_REFUSAL_CODES.has(errorCode)) return false;
+    return namesResponseFormatIncapability(e.message, e.param);
+  }
+  return false;
+}
+
 export function comboFailureCooldownScope(
   status: number,
   message: string,
@@ -411,6 +508,9 @@ export function comboFailureCooldownScope(
     || isProviderTargetContextOverflow(status, message, options?.code)
     || isDefiniteContextOverflow(status, message)
     || isRequestLocalTargetIncompatibility(status, message, options?.code)
+    // A capability gap says the target is healthy and the request did not fit it, which is the
+    // same reason every other entry here refuses to cool a target.
+    || isResponseFormatCapabilityRefusal(status, message, options?.code)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, options?.code)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
@@ -595,6 +695,11 @@ export function comboFailureDecision(
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.
   if (failureCode === "free_rate_limited") return "hop";
   if (isRequestLocalTargetIncompatibility(status, message, options?.code)) return "hop";
+  // Must precede the generic `invalid_request_error` stop below, which is where this refusal
+  // ended the chain: the gateway reports `type: "invalid_request_error"`, so the classifier
+  // reaches that list and returns terminal before anything can ask whether the next target
+  // could have served the request (#4903).
+  if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

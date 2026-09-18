@@ -32,6 +32,7 @@ import {
   resolveCodexModelEntitlements,
   invalidateCodexModelEntitlementsForAccount,
   entitledCodexAccountIdsForModel,
+  recordCodexModelDenialEvidence,
 } from "../../codex/model-entitlements";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
@@ -161,23 +162,80 @@ export function normalizeCodexUnsupportedModelDetail(value: string): string {
 }
 
 
+/**
+ * The model id an authenticated Codex refusal names, or `undefined` when the body is not that
+ * refusal.
+ *
+ * Extracted rather than string-compared so the caller can learn WHICH model was refused. The
+ * route and the wire can legitimately disagree: `applyCodexAccountGatedWireNormalization`
+ * rewrites `gpt-daybreak-blue-latest` to `gpt-5.6-sol` before dispatch, so upstream names the
+ * model it was actually sent. Building the expected sentence from `route.modelId` alone made
+ * that comparison fail for the one model that is still account-gated, which silently disabled
+ * both the alternate-account retry and the same-account ladder built for exactly that case.
+ *
+ * The envelope is unchanged and stays exact: a top-level `detail` string, whitespace-collapsed
+ * and case-folded, matching the whole sentence with nothing before or after it. No prose is
+ * inferred and no other 400 shape is admitted, because a 400 is also what a malformed request
+ * earns and that must never read as an entitlement fact.
+ */
+export function codexUnsupportedModelFromDetail(
+  status: number,
+  bodyText: string,
+): string | undefined {
+  if (status !== 400) return undefined;
+  try {
+    const payload = JSON.parse(bodyText) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail !== "string") return undefined;
+    const matched = /^the '([^']{1,256})' model is not supported when using codex with a chatgpt account\.$/u
+      .exec(normalizeCodexUnsupportedModelDetail(detail));
+    return matched?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+
+/**
+ * The refused model id when this response is the exact unsupported-model refusal for this
+ * request, read from a bounded clone.
+ *
+ * Same admission rules {@link shouldRetryCodexPoolAccountModel400} always applied, which is now
+ * a predicate over this: a truncated or non-display-safe body proves nothing and is refused.
+ * Returning the id lets the caller record the denial against the model upstream actually named.
+ */
+export async function codexPoolAccountModel400Denial(
+  response: Response,
+  modelId: string,
+  signal?: AbortSignal,
+  wireModelId?: string,
+): Promise<string | undefined> {
+  if (response.status !== 400) return undefined;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    if (!body.displaySafe || body.truncated) return undefined;
+    return isAllowListedCodexAccountModel400(response.status, body.text, modelId, wireModelId)
+      ? codexUnsupportedModelFromDetail(response.status, body.text)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+
 export function isAllowListedCodexAccountModel400(
   status: number,
   bodyText: string,
   modelId: string,
+  wireModelId?: string,
 ): boolean {
-  if (status !== 400) return false;
-  try {
-    const payload = JSON.parse(bodyText) as unknown;
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-    const detail = (payload as { detail?: unknown }).detail;
-    if (typeof detail !== "string") return false;
-    const expected = `The '${modelId}' model is not supported when using Codex with a ChatGPT account.`;
-    return normalizeCodexUnsupportedModelDetail(detail)
-      === normalizeCodexUnsupportedModelDetail(expected);
-  } catch {
-    return false;
-  }
+  const refused = codexUnsupportedModelFromDetail(status, bodyText);
+  if (refused === undefined) return false;
+  return [modelId, wireModelId].some(candidate => (
+    candidate !== undefined
+    && refused === normalizeCodexUnsupportedModelDetail(candidate)
+  ));
 }
 
 
@@ -185,16 +243,9 @@ export async function shouldRetryCodexPoolAccountModel400(
   response: Response,
   modelId: string,
   signal?: AbortSignal,
+  wireModelId?: string,
 ): Promise<boolean> {
-  if (response.status !== 400) return false;
-  try {
-    const body = await readBoundedResponseBody(response.clone(), { signal });
-    return body.displaySafe
-      && !body.truncated
-      && isAllowListedCodexAccountModel400(response.status, body.text, modelId);
-  } catch {
-    return false;
-  }
+  return await codexPoolAccountModel400Denial(response, modelId, signal, wireModelId) !== undefined;
 }
 
 
@@ -778,15 +829,25 @@ export async function retryCodexPoolOnAlternateAccount(
       }
       retrySendCount += 1;
       args.onResponse?.(upstreamResponse, retryAuthCtx, request);
+      // The alternate account can refuse the same model, and that refusal is evidence about the
+      // account that produced it. Read BEFORE the ladder's own break, so the ordinary
+      // single-retry path -- every flagship model, which is the #4906 case -- records it too
+      // rather than only the gated ladder below. Without this the pool learns nothing from a
+      // refusal and the next request repeats the same selection.
+      const retryModelDenial = await codexPoolAccountModel400Denial(
+        upstreamResponse,
+        route.modelId,
+        options.abortSignal,
+        parsed.modelId,
+      );
+      if (retryModelDenial !== undefined) {
+        recordCodexModelDenialEvidence(retryAuthCtx.accountId, retryModelDenial);
+      }
       if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
       // Caller-owned main is an alternate-account replay and can never enter the bounded
       // same-stored-account 400 loop above. Keep that invariant explicit for the account-id reads.
       if (retryAuthCtx.kind === "main") break;
-      if (!await shouldRetryCodexPoolAccountModel400(
-        upstreamResponse,
-        route.modelId,
-        options.abortSignal,
-      )) break;
+      if (retryModelDenial === undefined) break;
       invalidateCodexModelEntitlementsForAccount(retryAuthCtx.accountId);
       let refreshed: Awaited<ReturnType<typeof resolveCodexModelEntitlements>>;
       try {

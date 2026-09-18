@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as atomicWrite from "../../src/config/atomic-write";
 import * as oauthStore from "../../src/oauth/store";
+import * as configOwnership from "../../src/lib/config-ownership";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import {
   resetHardenedStateForTests,
@@ -36,6 +37,7 @@ import {
 } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
 let previousOpencodexHome: string | undefined;
@@ -150,6 +152,65 @@ describe("multi-account auth store", () => {
     const raw = JSON.parse(readFileSync(authPath, "utf-8"));
     expect(Array.isArray(raw.xai.accounts)).toBe(true);
     expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+  });
+
+  test("uninstall removes a legacy recovery backup from an owned home", async () => {
+    const dir = join(TEST_DIR, "owned");
+    const path = join(dir, "auth.json");
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      const original = JSON.stringify({ xai: cred({ email: "old@example.test" }) });
+      writeFileSync(path, original);
+      await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      expect(readFileSync(`${path}.pre-multiauth`, "utf8")).toBe(original);
+      await flushConfigDirHardeningForTests();
+      expect(removeOwnedConfigState(dir).status).toBe("removed");
+      expect(existsSync(`${path}.pre-multiauth`)).toBe(false);
+    } finally {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+    }
+  });
+
+  test.each(["false", "throw"] as const)("recovery survives registration %s and warns without exposing credentials", async (failure) => {
+    const path = join(TEST_DIR, "auth.json");
+    const backup = `${path}.pre-multiauth`;
+    const original = JSON.stringify({ xai: cred({ email: "old@example.test" }) });
+    writeFileSync(path, original);
+    const register = configOwnership.recordOwnedConfigPath;
+    const registration = spyOn(configOwnership, "recordOwnedConfigPath").mockImplementation((dir, candidate) => {
+      if (candidate !== backup) return register(dir, candidate);
+      if (failure === "throw") throw new Error("private ownership failure fixture");
+      return false;
+    });
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await saveCredential("xai", cred({ email: "old@example.test", access: "new-access" }));
+      expect(registration).toHaveBeenCalledWith(TEST_DIR, backup);
+      expect(readFileSync(backup, "utf8")).toBe(original);
+      expect(getCredential("xai")?.access).toBe("new-access");
+      expect(warning.mock.calls).toEqual([["[oauth] Recovery backup created, but uninstall ownership registration failed."]]);
+    } finally {
+      warning.mockRestore();
+      registration.mockRestore();
+    }
+  });
+
+  test("migration leaves a pre-existing unregistered backup unchanged and unclaimed", async () => {
+    const dir = join(TEST_DIR, "existing-backup");
+    const path = join(dir, "auth.json");
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      writeFileSync(path, JSON.stringify({ xai: cred({ email: "old@example.test" }) }));
+      writeFileSync(`${path}.pre-multiauth`, "prior-recovery-fixture");
+      await saveCredential("xai", cred({ email: "old@example.test" }));
+      await flushConfigDirHardeningForTests();
+      expect(removeOwnedConfigState(dir).status).toBe("partial");
+      expect(readFileSync(`${path}.pre-multiauth`, "utf8")).toBe("prior-recovery-fixture");
+    } finally {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+    }
   });
 
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {

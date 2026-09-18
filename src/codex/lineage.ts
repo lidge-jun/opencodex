@@ -14,9 +14,11 @@
  *
  * What it is for, and what it is not for:
  *
- * - FIRST PLACEMENT. A child with no binding of its own may start where its family is already
- *   warm; see `pickLineageServingAccount` in ./routing. Once bound, the child is an ordinary
- *   binding, so a later move of the parent does not drag it.
+ * - FIRST PLACEMENT. Largely subsumed by cohort keying (#4780): a member of a tree that any
+ *   other member has already bound resolves to that same binding, so there is nothing to place.
+ *   `pickLineageServingAccount` in ./routing remains for the one case cohort keying cannot
+ *   unify -- a session-less chain whose parent is not recorded in this scope -- and is gated on
+ *   the parent's key actually differing from this request's.
  * - COST ATTRIBUTION. {@link codexThreadLineageLookup} and {@link codexLineageRootForRequest}
  *   answer which root workflow a conversation belongs to, so a grandchild's spend aggregates
  *   onto the root. No budget is implemented here.
@@ -156,29 +158,82 @@ export function codexConversationKeyFor(familyId: string, threadId: string): str
 }
 
 /**
+ * The cohort anchor's key: the same string on both sides of the derivation.
+ *
+ * A cohort is identified by one value the whole tree shares, so the key is that value keyed
+ * against itself rather than against a member. Using {@link codexConversationKeyFor} keeps one
+ * derivation in the module, which is what guarantees a lineage record's `conversationKey` stays
+ * byte-identical to the key the thread actually binds under.
+ */
+function cohortKeyFromAnchor(sessionId: string | undefined, fallbackAnchor: string): string {
+  const anchor = sessionId ?? fallbackAnchor;
+  return codexConversationKeyFor(anchor, anchor);
+}
+
+/**
+ * The cohort this request belongs to, or undefined when it names no cohort at all.
+ *
+ * The session IS the cohort, which is exactly how upstream keys the prompt cache:
+ * `prompt_cache_key()` returns `responses_metadata.session_id` (or `{source}:{parent_thread_id}`
+ * for an internal session), and `AgentControl.session_id` is the root thread's id, shared with
+ * every sub-agent spawned from that root. Two requests carrying the same `prompt_cache_key` must
+ * not be served by different accounts, and keying on the session is what makes that structural
+ * rather than a hint (#4780).
+ *
+ * Without a session there is nothing in the headers that names the tree, so the cohort is
+ * whatever the parent is already bound to. That lookup is what keeps a chain of parent-only
+ * turns converging on one key: anchoring each depth on its own parent would split the cohort
+ * again at every hop. When the parent has not been seen in this scope the parent id anchors it,
+ * which is the same key that parent derives for itself.
+ */
+function cohortConversationKey(
+  headers: Headers,
+  sessionId: string | undefined,
+  parentThreadId: string | undefined,
+  now: number,
+): string | undefined {
+  if (sessionId !== undefined) return cohortKeyFromAnchor(sessionId, sessionId);
+  if (parentThreadId === undefined) return undefined;
+  const recorded = liveLineageRecord(
+    lineageByScope.get(codexLineageScopeKey(headers)),
+    parentThreadId,
+    now,
+  );
+  return recorded?.conversationKey ?? cohortKeyFromAnchor(undefined, parentThreadId);
+}
+
+/**
  * Resolve a request's conversation identity, or undefined when it carries no bindable thread
  * identity at all.
  *
- * The set of requests that produce NO key is deliberately unchanged from the pre-#4546 rule: a
- * bare `thread-id` with neither a session nor a parent stays unbound, exactly as the Desktop
- * fallback required both halves of its pair. Only the VALUE moves, and only for requests that
- * name a parent:
+ * The set of requests that produce NO key is deliberately unchanged, through both #4546 and
+ * #4780: a bare `thread-id` with neither a session nor a parent stays unbound, exactly as the
+ * Desktop fallback required both halves of its pair. Only the VALUE moves.
  *
- * - root (`session-id` + `thread-id`) -> HMAC(session, thread), unchanged;
- * - child (parent + own `thread-id`) -> HMAC(session ?? parent, thread), previously the raw parent
- *   id, which is what made siblings share one entry and made a child's first turn land on a key
- *   the root had never bound;
- * - parent-only (no `thread-id`) -> the parent's OWN recorded key when this scope has one, and
- *   otherwise HMAC(session ?? parent, parent).
+ * Every member of one tree resolves to the SAME key, because the cohort is the binding unit
+ * (#4780):
  *
- * That last case is the one with a trap in it. A parent-only turn belongs to the parent's
- * conversation, so it has to land on the binding the parent is already using -- but the parent's
- * key is HMAC(session, thread), and HMAC(parent, parent) reproduces it only when the session id
- * and the thread id are the same string. Codex's own root happens to satisfy that, which is
- * exactly why deriving the key looks correct until a caller whose session differs from its thread
- * starts a COLD conversation on every parent-only turn and overwrites the parent's record on the
- * way through. So the recorded key wins, the session-derived key is the fallback that reproduces
- * it when the parent has not been seen in this scope, and the raw parent id is never the answer.
+ * - root (`session-id` + `thread-id`) -> the session's cohort key;
+ * - child and grandchild (parent + own `thread-id`) -> the same cohort key, since they carry the
+ *   same session;
+ * - parent-only (no `thread-id`) -> the same cohort key, derived from the session or, without
+ *   one, read from the parent's record.
+ *
+ * THIS IS NOT A REVERT OF #4546 wp8, and reading it as one would flip it straight back. wp8
+ * fixed a real incoherence: a child keyed under the RAW parent id, which is a different identity
+ * from the root's own `app:HMAC(session, thread)` binding, so siblings shared an entry unrelated
+ * to the root's and a grandchild keying on its own parent landed on a key nobody had ever bound.
+ * A cohort key cannot produce that, because the root's own binding IS the cohort key: there is
+ * one identity for the tree rather than two competing ones. What wp8 additionally gave each
+ * thread -- a binding of its own -- is what #4780 deliberately gives up, and the reason is that
+ * upstream never agreed to it: `prompt_cache_key` is keyed on the session the whole tree shares,
+ * so a proxy that splits the tree makes every split member assert a warm prefix that is cold on
+ * its account.
+ *
+ * The parent-only case keeps the trap it always had. Such a turn belongs to the parent's
+ * conversation, so it must land on the binding the parent is already using. With a session in
+ * hand that is immediate, since both derive the same cohort key. Without one, the recorded key
+ * wins and the parent id anchors the fallback; the raw parent id is never the answer.
  */
 export function codexConversationIdentity(
   headers: Headers,
@@ -190,24 +245,20 @@ export function codexConversationIdentity(
 
   if (threadId === undefined) {
     if (parentThreadId === undefined) return undefined;
-    const recorded = liveLineageRecord(
-      lineageByScope.get(codexLineageScopeKey(headers)),
-      parentThreadId,
-      now,
-    );
+    const parentOnlyKey = cohortConversationKey(headers, sessionId, parentThreadId, now);
+    if (parentOnlyKey === undefined) return undefined;
     return {
-      conversationKey: recorded?.conversationKey
-        ?? codexConversationKeyFor(sessionId ?? parentThreadId, parentThreadId),
+      conversationKey: parentOnlyKey,
       recordThreadId: parentThreadId,
       ...(sessionId !== undefined ? { sessionId } : {}),
       legacyConversationKey: parentThreadId,
       declaresParent: false,
     };
   }
-  const familyId = sessionId ?? parentThreadId;
-  if (familyId === undefined) return undefined;
+  const conversationKey = cohortConversationKey(headers, sessionId, parentThreadId, now);
+  if (conversationKey === undefined) return undefined;
   return {
-    conversationKey: codexConversationKeyFor(familyId, threadId),
+    conversationKey,
     recordThreadId: threadId,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(parentThreadId !== undefined ? { parentThreadId } : {}),
@@ -313,7 +364,7 @@ function lineageFor(
   const parentConversationKey = parentThreadId === undefined
     ? undefined
     : parentRecord?.conversationKey
-      ?? codexConversationKeyFor(identity.sessionId ?? parentThreadId, parentThreadId);
+      ?? cohortKeyFromAnchor(identity.sessionId, parentThreadId);
   const rootSessionKey = parentConversationKey === undefined
     ? identity.conversationKey
     : parentRecord?.rootSessionKey ?? parentConversationKey;

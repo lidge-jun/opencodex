@@ -36,7 +36,8 @@ import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOn
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
-import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems } from "./tool-output-recovery";
+import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
+import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -321,6 +322,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      // #4587: on a bridged provider, hand the destination back the search call and result the
+      // proxy executed on its behalf, in place of the hosted cell the caller replays. Scoped to
+      // this destination and recorded by the bridge itself, so a provider without the opt-in
+      // computes no identity and keeps the body reference it already had. This runs before the
+      // query backfill below because a restored cell is no longer a web_search_call to repair.
+      if (provider.webSearchBridge?.enabled === true) {
+        outBody = restoreBridgedWebSearchCalls(outBody, bridgeSearchReplayScope(provider.baseUrl));
+      }
       // Repair stored history from before the bridge emitted both keys, in either
       // direction: a conversation that already recorded a web_search_call replays it
       // every turn, and a strict parser rejects the whole request over the missing key —
