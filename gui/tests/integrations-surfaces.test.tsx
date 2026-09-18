@@ -646,6 +646,21 @@ test("the overview does not claim nothing is installed while it is still loading
   expect(container.textContent ?? "").toContain("No installed clients were detected");
 });
 
+test("a failed first read does not claim nothing is installed either", async () => {
+  /*
+   * A failed-cold read carries no data, so it is not an answer: the error
+   * notice must stand alone, without the "nothing detected" panel, and the
+   * file clients stay as unknown rows rather than a server-side omission.
+   */
+  stateResponse = () => json({ error: "nope" }, 500);
+  await mountOverview();
+
+  const text = container.textContent ?? "";
+  expect(text).toContain("Could not load integration state.");
+  expect(text).not.toContain("No installed clients were detected");
+  expect(text).toContain("Hermes");
+});
+
 test("bulk disable confirms the result with the server before claiming success", async () => {
   /*
    * The resource layer's `refresh()` is fire-and-forget, so awaiting it proves
