@@ -801,3 +801,47 @@ describe("ocx claude Windows launch (devlog 260715_cross_platform_audit/020)", (
     expect(claudeNotFoundHint(0, null, "win32")).toBeNull();
   });
 });
+
+describe("ocx claude tool-search deferral (#4838)", () => {
+  test("nothing is injected by default, so a routed session keeps today's behaviour", () => {
+    const env = buildClaudeEnv(cfg(), 10100, {});
+    expect(env.ENABLE_TOOL_SEARCH).toBeUndefined();
+  });
+
+  test("opting in injects Claude Code's own vocabulary verbatim", () => {
+    expect(buildClaudeEnv(cfg({ claudeCode: { toolSearch: true } }), 10100, {}).ENABLE_TOOL_SEARCH)
+      .toBe("true");
+    expect(buildClaudeEnv(cfg({ claudeCode: { toolSearch: "auto:25" } }), 10100, {}).ENABLE_TOOL_SEARCH)
+      .toBe("auto:25");
+    expect(buildClaudeEnv(cfg({ claudeCode: { toolSearch: "force" } }), 10100, {}).ENABLE_TOOL_SEARCH)
+      .toBe("force");
+  });
+
+  test("false, blank and absent inject nothing rather than forcing the variable off", () => {
+    // Claude Code reads a literal "false" as an explicit opt-out that also loses the
+    // auto/force forms, and the operator asked for the default, not for an override.
+    for (const toolSearch of [false, "", "   "] as const) {
+      expect(buildClaudeEnv(cfg({ claudeCode: { toolSearch } }), 10100, {}).ENABLE_TOOL_SEARCH)
+        .toBeUndefined();
+    }
+  });
+
+  test("an operator who exported the variable keeps their own value", () => {
+    const env = buildClaudeEnv(cfg({ claudeCode: { toolSearch: true } }), 10100, {
+      ENABLE_TOOL_SEARCH: "auto:40",
+    });
+    expect(env.ENABLE_TOOL_SEARCH).toBe("auto:40");
+  });
+
+  test("a native fallback keeps the value: first-party deferral is the user's own knob", () => {
+    // Every other lever in NATIVE_STRIPPED_LEVERS points a native session at a gateway
+    // that is not there. This one is meaningful natively, so shedding it would delete a
+    // working preference.
+    const env = buildNativeClaudeEnv(cfg({ claudeCode: { toolSearch: true } }), {
+      ENABLE_TOOL_SEARCH: "auto:40",
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
+    });
+    expect(env.ENABLE_TOOL_SEARCH).toBe("auto:40");
+    expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBeUndefined();
+  });
+});

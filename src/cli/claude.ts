@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
-import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
+import { claudeToolSearchEnv, effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
 import { claudeConfigDir, refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
@@ -357,6 +357,22 @@ export function buildClaudeEnv(
   if (config.claudeCode?.alwaysEnableEffort === true) {
     setDefault("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
   }
+  // Tool-search deferral (#4838). Claude Code disables MCP tool deferral whenever
+  // ANTHROPIC_BASE_URL is not a first-party Anthropic host — keyed on the host, not
+  // the model — so every routed session inlines all MCP tool schemas. Its own log
+  // line states the precondition: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N)
+  // if your proxy forwards tool_reference blocks."
+  //
+  // We forward them on the native Anthropic passthrough route only. A translated
+  // route cannot honour the shape: deferred tools still carry input_schema on the
+  // wire (deferral is a server-side context optimisation, not a smaller request),
+  // toolsToResponses drops the tool_search server tool and ignores defer_loading,
+  // and compatibility.ts lists tool_search/tool_reference/deferred_tools as
+  // unsupported. Turning it on there leaves the routed provider holding every
+  // schema while Claude Code stops counting them and stops compacting, which is
+  // worse than the problem. So this stays opt-in per config rather than
+  // unconditional, and setDefault keeps an operator's own export.
+  setDefault("ENABLE_TOOL_SEARCH", claudeToolSearchEnv(config.claudeCode?.toolSearch));
   // Context-window override: the official pair — MAX_CONTEXT_TOKENS alone is ignored
   // for recognized claude-shaped ids unless DISABLE_COMPACT=1 rides along (devlog 135).
   const maxCtx = config.claudeCode?.maxContextTokens;
@@ -542,6 +558,18 @@ export function claudeLaunchPreflight(
     : { kind: "native", notice: CLAUDE_NATIVE_ROUTING_OFF };
 }
 
+/**
+ * Levers a native (non-routed) launch must shed. The loop below deletes them
+ * unconditionally, because each one either points Claude Code at a gateway that
+ * is not there or asserts host ownership that a native session does not have.
+ *
+ * ENABLE_TOOL_SEARCH is deliberately NOT in this list (#4838). It is the only
+ * one of these whose value is meaningful to a native session: natively the base
+ * URL is first-party, where deferral is already Claude Code's default and the
+ * variable is the user's own tuning knob (auto:N, force). Stripping it would
+ * delete a preference that works, to protect a session that does not need
+ * protecting.
+ */
 const NATIVE_STRIPPED_LEVERS = [
   "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
   "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",

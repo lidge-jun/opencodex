@@ -94,6 +94,31 @@ export interface OcxClaudeCodeConfig {
    */
   alwaysEnableEffort?: boolean;
   /**
+   * Opt-in ENABLE_TOOL_SEARCH injection for launched Claude Code sessions (#4838).
+   *
+   * Claude Code turns MCP tool deferral off whenever ANTHROPIC_BASE_URL names a
+   * non-first-party host, so an `ocx claude` session ships every tool schema in
+   * full on every request. Its own diagnostic states the precondition for turning
+   * that back on: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your proxy
+   * forwards tool_reference blocks."
+   *
+   * Default OFF, because opencodex only forwards them on the NATIVE ANTHROPIC
+   * PASSTHROUGH route, where the body reaches Anthropic untouched. On a translated
+   * route the deferral shape is not representable: compatibility.ts marks
+   * tool_search/tool_reference/deferred_tools unsupported, and toolsToResponses
+   * drops the tool_search server tool while ignoring defer_loading — deferred tools
+   * still carry input_schema on the wire, so the routed provider receives every
+   * schema anyway while Claude Code stops accounting for them and therefore stops
+   * compacting. Under `claudeCode.compatibility: "enforce"` the same request is
+   * rejected with 400 instead.
+   *
+   * `true` injects "true"; a string is passed through verbatim so Claude Code's own
+   * vocabulary (`auto`, `auto:N`, `force`) stays reachable. `false` and absent
+   * inject nothing — they do not force the variable off, because a value the
+   * operator exported themselves always wins.
+   */
+  toolSearch?: boolean | string;
+  /**
    * Subagent tier slots (devlog 260712 B2): injected as ANTHROPIC_DEFAULT_*_MODEL so
    * Claude Code's Agent-tool aliases (opus/sonnet/haiku/fable + parent-inherit) route
    * to proxy models. haiku falls back to smallFastModel (one effective value feeds

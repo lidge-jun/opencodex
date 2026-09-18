@@ -25,6 +25,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (선택 사항, 기존 `ANTHROPIC_SMALL_FAST_MODEL`도 지원) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (선택 사항) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본값은 꺼짐) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens`가 설정된 경우 기존 컨텍스트 재정의 값 (조건부) |
 직접 내보낸 변수가 항상 우선해요. 추가 인자는 그대로 전달돼요: `ocx claude -p "hello"`.
 
