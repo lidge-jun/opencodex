@@ -1,3 +1,5 @@
+import { configureSocks5Fetch } from "../lib/proxy-env";
+import { redactUrlForLog } from "../lib/redact";
 import { join } from "node:path";
 import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./subagent-models";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION } from "./multi-agent-surface";
@@ -102,10 +104,15 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
  * variables win; config fills missing scheme proxies, which take precedence over ALL_PROXY for WS.
  * localhost/127.0.0.1 are appended to NO_PROXY so the CLI's own health checks and
  * running-proxy API calls stay direct. Call once per process entry that makes outbound provider
- * requests (server start, catalog sync).
+ * requests (server start, catalog sync). `announce` prints the one-line startup banner naming
+ * the outbound proxy actually in effect; only server start passes it, because on catalog sync
+ * that line is noise. The URL is redacted because a proxy URL can carry credentials.
  */
-export function applyProxyEnv(config: OcxConfig): void {
+export function applyProxyEnv(config: OcxConfig, announce = false): void {
   applyProxyEnvWith(config);
+  if (!announce) return;
+  const outbound = process.env.ALL_PROXY?.trim() || process.env.HTTPS_PROXY?.trim() || process.env.HTTP_PROXY?.trim();
+  if (outbound) console.log(`   outbound proxy: ${redactUrlForLog(outbound)}`);
 }
 
 /** Test seam for `proxy: "auto"`: the registry reader and platform are injectable. */
@@ -123,6 +130,7 @@ export function applyProxyEnvWith(
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
+    configureSocks5Fetch();
     return;
   }
   if (proxy.trim().toLowerCase() === "auto") {
@@ -151,8 +159,18 @@ export function applyProxyEnvWith(
     }
   }
   if (proxy) {
-  if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
-  if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+    if (/^socks/i.test(proxy.trim()) && !/^socks5h?:\/\//i.test(proxy.trim())) {
+      throw new Error("Only SOCKS5 proxy URLs are supported; use socks5://host:port");
+    }
+    if (/^socks5h?:\/\//i.test(proxy.trim())) {
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"] as const) {
+        delete process.env[key];
+      }
+      process.env.ALL_PROXY = proxy;
+    } else {
+      if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
+      if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+    }
   }
   const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
@@ -184,5 +202,5 @@ export function applyProxyEnvWith(
     }
   }
   process.env.NO_PROXY = entries.join(",");
+  configureSocks5Fetch();
 }
-

@@ -663,6 +663,12 @@ Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on
 
 The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic and Anthropic parsers reject reset-first. The dashboard offers it only for Codex; API, CLI and translated guides preserve the same contract.
 
+The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
+configured threshold applies to the active strategy. Manual-switch warnings use the routing usage
+score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
+future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
+extend that observation.
+
 ## Bound-thread rebind destination
 
 A quota-strategy re-evaluation may move a LIVE thread binding only to an account that has genuine

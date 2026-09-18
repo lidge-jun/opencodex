@@ -306,7 +306,7 @@ Qwen Cloud, Qoder Global и CN (официальный PAT + CLI), SiliconFlow �
 
 ```bash
 ocx init                       # интерактивная настройка (пишет конфиг, подключает Codex, предлагает shim)
-ocx start [--port 10100]       # запустить прокси на переднем плане
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 по умолчанию: socks5://127.0.0.1:10808
 ocx stop                       # остановить + восстановить нативный Codex
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # фоновая служба
 ocx codex-shim install         # запускать прокси по требованию при старте `codex`
