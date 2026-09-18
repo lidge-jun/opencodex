@@ -336,6 +336,12 @@ placeholder contract. Every registered locale, including Vietnamese, supplies th
 locale-specific Compatibility Lab, log-guard, routing, vision, status-code, and quota-formatting
 maps remain total rather than silently falling back to English.
 
+The Models catalog names three distinct delivery states. A successful management mutation confirms
+only that the catalog is saved on the hub. `gui/src/api-targets.ts` carries the local machine's
+`catalogSyncedAt` into `gui/src/pages/Models.tsx` as the time this client last fetched a catalog; the
+timestamp does not prove that fetch contains a later hub save. Runtime activation remains explicitly
+unverified because process age and catalog-file age are not client acknowledgement.
+
 `src/server/management/api-access.ts` publishes an `audio` projection through the
 existing `/api/keys` response in `src/server/management/oauth-account-routes.ts`.
 URLs derive from the same advertised inference base as text APIs, with HTTP(S)
