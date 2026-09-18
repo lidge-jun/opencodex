@@ -49,6 +49,8 @@ import {
 } from "../lib/translator-budget";
 import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
+import { adapterEventDiagnosticDetails, type BridgeDiagnosticContext } from "./diagnostic";
+import { debugStreamDiagnostic } from "../lib/debug";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -127,13 +129,15 @@ export function bridgeToResponsesSSE(
      */
     replayCacheScope?: OcxReasoningReplayScopeRef;
     /**
-     * Test seam for the wire/stall beat loop. Production omits this and uses the
-     * global timers; injecting here must not change scheduling semantics.
-     */
+    * Test seam for the wire/stall beat loop. Production omits this and uses the
+    * global timers; injecting here must not change scheduling semantics.
+    */
     timers?: {
       setInterval: (handler: () => void, ms: number) => unknown;
       clearInterval: (id: unknown) => void;
     };
+    /** Internal, opt-in structural stream diagnostics. */
+    diagnostic?: BridgeDiagnosticContext;
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope;
@@ -386,6 +390,7 @@ export function bridgeToResponsesSSE(
   };
   const responseId = options?.responseId ?? `resp_${uuid()}`;
   let seq = 0;
+  let diagnosticSequence = 0;
   // Set once the client is gone (cancel) or an enqueue throws on a torn-down controller, so we
   // never enqueue again and never throw a second time inside start() — the RC2 double-throw that
   // otherwise surfaced as proxy-side stream noise on every client disconnect.
@@ -941,6 +946,17 @@ export function bridgeToResponsesSSE(
           }
           if (next.done) { upstreamDone = true; break; }
           const event = next.value;
+          if (options?.diagnostic) {
+            debugStreamDiagnostic(
+              options.diagnostic,
+              "bridge",
+              options.diagnostic.sequence
+                ? ++options.diagnostic.sequence.value
+                : ++diagnosticSequence,
+              event.type,
+              adapterEventDiagnosticDetails(event),
+            );
+          }
           let terminalEvent = false;
           // Invisible adapter heartbeats (and buffered web-search progress) count as upstream
           // liveness only — they must not suppress wire keepalives that re-arm Codex idle timers.

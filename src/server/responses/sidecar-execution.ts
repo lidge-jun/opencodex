@@ -66,6 +66,8 @@ export async function executeResponsesSidecars(
     | "resolveSelectionAdapter"
     | "oauthDispatch"
     | "noteRoutedAttemptSend"
+    | "noteDiagnosticAttemptSend"
+    | "streamDiagnostic"
     | "bindKeyUsageFromBridge"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
@@ -326,7 +328,12 @@ export async function executeResponsesSidecars(
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       forwardHeaders: requestState.selectedForwardHeaders,
       onAttemptSend: (recovery?: AttemptRecoveryKind) =>
-        transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery),
+        transportState.noteDiagnosticAttemptSend(
+          logCtx.usageLogInputTokens,
+          recovery,
+          transportState.adapter.name,
+        ),
+      ...(transportState.streamDiagnostic ? { diagnostic: transportState.streamDiagnostic.context } : {}),
       abortSignal: options.abortSignal,
       maxRounds: imgPlan && vidPlan
         ? clampImageMaxRounds(Math.min(config.images?.maxRounds ?? 3, config.images?.videoMaxRounds ?? 2))

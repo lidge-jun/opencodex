@@ -5,3 +5,5 @@ export { setOwnedBudgetAbandonedMsForTests } from "./bridge/internal";
 export { buildResponseJSON } from "./bridge/response-json";
 export { bridgeToResponsesSSE } from "./bridge/sse";
 export type { ResponsesTerminalStatus } from "./bridge/sse";
+export { adapterEventDiagnosticDetails, diagnoseAdapterEvent } from "./bridge/diagnostic";
+export type { BridgeDiagnosticContext, BridgeDiagnosticSequence } from "./bridge/diagnostic";
