@@ -317,8 +317,9 @@ ocx v2 <...>                   # contrôle les surfaces multi-agents v1/v2
 ocx update [--tag preview]     # met à jour opencodex
 ```
 
-Les démarrages sans port imposé peuvent choisir un autre port libre si celui qui est préféré est occupé ; un `--port`
-explicite ne change jamais de port. Référence complète : [documentation de la CLI](https://opencodex.me/fr/reference/cli/).
+Si le port préféré est occupé, le démarrage s'arrête et indique le processus qui l'occupe au lieu de passer à un autre port,
+afin de ne jamais laisser un second proxy fonctionner aux côtés du premier. Libérez le port ou indiquez-en un autre avec
+`--port`. Référence complète : [documentation de la CLI](https://opencodex.me/fr/reference/cli/).
 
 ### État de fonctionnement et disponibilité
 

@@ -303,8 +303,8 @@ ocx v2 <...>                   # 多智能体 v1/v2 表面控制
 ocx update [--tag preview]     # 更新 opencodex
 ```
 
-未固定端口的启动在首选端口被占用时可能改选其他空闲端口；显式 `--port`
-绝不会换端口。完整参考：[CLI 文档](https://opencodex.me/zh-cn/reference/cli/)。
+首选端口被占用时，启动会停止并指出占用者，而不会改用其他端口，因此绝不会在第一个代理旁留下另一个
+运行中的代理。请释放该端口，或用 `--port` 指定其他端口。完整参考：[CLI 文档](https://opencodex.me/zh-cn/reference/cli/)。
 
 ### 健康与就绪
 

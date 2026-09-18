@@ -314,8 +314,9 @@ ocx v2 <...>                   # çoklu ajan v1/v2 yüzey denetimleri
 ocx update [--tag preview]     # opencodex'i güncelle
 ```
 
-Sabitlenmemiş başlatmalar, tercih edilen bağlantı noktası meşgulse başka bir boş bağlantı noktasına
-geçebilir; açıkça verilen bir `--port` asla değişmez. Tam başvuru:
+Tercih edilen bağlantı noktası meşgulse başlatma başka bir bağlantı noktasına geçmek yerine durur ve bağlantı
+noktasını hangi işlemin tuttuğunu bildirir; böylece ilkinin yanında ikinci bir proxy çalışır durumda kalamaz.
+Bağlantı noktasını boşaltın veya `--port` ile farklı bir tane belirtin. Tam başvuru:
 [CLI belgeleri](https://opencodex.me/tr/reference/cli/).
 
 ### Sağlık ve hazırlık
