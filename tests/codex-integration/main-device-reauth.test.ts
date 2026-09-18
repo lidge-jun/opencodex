@@ -135,34 +135,32 @@ describe("native main device reauth flow (#3898)", () => {
     expect(commitCalled).toBe(false);
   });
 
-  test("a commit already in flight publishes; the cancel loses", async () => {
-    let releaseCommit!: () => void;
-    const commitGate = new Promise<void>(resolve => { releaseCommit = resolve; });
+  test("cancelling a commit in flight fences publication", async () => {
+    let commitSignal: AbortSignal | undefined;
     const started = startMainDeviceReauth({
       login: loginStub(async () => grant()),
       beginCommit: () => ({
-        commit: async () => { await commitGate; return { chatgptAccountId: "acct-main-1" }; },
+        commit: async (_tokens, options) => {
+          commitSignal = options?.signal;
+          await new Promise<void>((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+          });
+          return { chatgptAccountId: "acct-main-1" };
+        },
       }),
     });
-    // Wait until the flow is committing, then cancel; the publication wins.
+    // Wait until the flow is committing, then cancel through the same signal
+    // that fences the native-main exclusive claim and filesystem write.
     const deadline = Date.now() + 2_000;
     while (getMainDeviceReauthStatus(started.flowId)?.status !== "committing") {
       if (Date.now() > deadline) throw new Error("flow never reached committing");
       await Bun.sleep(5);
     }
-    cancelMainDeviceReauth(started.flowId);
-    releaseCommit();
-    // Publication beats the racing cancellation — but the flip lands when the
-    // commit resolves, so a transient cancelled read is allowed between the
-    // cancel and the commit's return.
-    let terminal: MainDeviceReauthStatus | null = null;
-    const settleDeadline = Date.now() + 2_000;
-    while (Date.now() < settleDeadline) {
-      terminal = getMainDeviceReauthStatus(started.flowId);
-      if (terminal?.status === "succeeded") break;
-      await Bun.sleep(5);
-    }
-    expect(terminal).toMatchObject({ status: "succeeded", credentialUpdated: true });
+    expect(commitSignal?.aborted).toBe(false);
+    expect(cancelMainDeviceReauth(started.flowId)).toMatchObject({ status: "cancelled" });
+    expect(commitSignal?.aborted).toBe(true);
+    await Bun.sleep(20);
+    expect(getMainDeviceReauthStatus(started.flowId)).toMatchObject({ status: "cancelled" });
   });
 
   test("cancellation after publication returns succeeded, never cancelled", async () => {
@@ -299,6 +297,20 @@ describe("beginNativeMainReauth commit (#3898)", () => {
       idToken: "new-id-token",
       chatgptAccountId: "acct-main-1",
     })).rejects.toThrow(NativeMainReauthUnavailableError);
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+  });
+
+  test("an aborted commit cannot replace the native credential", async () => {
+    const before = readFileSync(authPath, "utf8");
+    const prepared = beginNativeMainReauth();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(prepared.commit({
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+      idToken: "new-id-token",
+      chatgptAccountId: "acct-main-1",
+    }, { signal: controller.signal })).rejects.toHaveProperty("name", "AbortError");
     expect(readFileSync(authPath, "utf8")).toBe(before);
   });
 
