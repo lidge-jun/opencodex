@@ -1121,6 +1121,7 @@
   "server-xai-responses-streaming.test.ts": "server",
   "service-probe-docker.test.ts": "service",
   "service-secrets.test.ts": "service",
+  "service-sqlite-home.test.ts": "service",
   "service-stop-verification.test.ts": "service",
   "service-tier-capability.test.ts": "service",
   "service.test.ts": "service",
