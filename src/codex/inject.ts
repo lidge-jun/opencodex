@@ -253,9 +253,43 @@ async function injectCodexConfigImpl(
     };
   }
 
+  /*
+   * The v1-surface reconcile persists its own config.toml transition, so the
+   * write gates are evaluated before it may run: a skip or guard refusal after
+   * it would leave the file changed while the result reports that nothing
+   * changed. The under-lock re-checks below still apply for races after this
+   * pre-check; the reconcile-aware messages below keep those rare outcomes
+   * truthful as well.
+   */
+  if (!options.validateOnly && config?.multiAgentMode === "v1") {
+    const gateSnapshot = loadConfig();
+    if (!shouldSyncCodexOnStart(gateSnapshot)) {
+      return {
+        success: true,
+        status: "skipped",
+        skippedReason: localClientSkipReason(gateSnapshot),
+        message: localClientSkipMessage(
+          gateSnapshot,
+          "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+          "No Codex config, catalog, cache, or history was changed.",
+        ),
+      };
+    }
+    runClientWriteGuard(options.beforeClientWrite);
+  }
   const v1Surface = await reconcileInjectedV1Surface(config, options, rawContent);
   if (!v1Surface.ok) return { success: false, message: v1Surface.message };
   rawContent = v1Surface.content;
+
+  // A skip or refusal reached after the reconcile already persisted must not
+  // repeat the stock "nothing changed" clause.
+  const reconcileAware = (message: string): string =>
+    v1Surface.changed
+      ? message.replace(
+        /no Codex config, catalog, cache, or history was changed./i,
+        "the v1-surface reconcile was applied to config.toml; no catalog, cache, or history was changed.",
+      )
+      : message;
 
   // Marker-owned native defaults are OpenCodex residue, never part of the
   // user's journal baseline. Clean them before either snapshotting or adding a
@@ -271,7 +305,9 @@ async function injectCodexConfigImpl(
       success: false,
       message:
         `Codex config injection refused: existing OpenCodex-managed native sub-agent defaults are ambiguous: ${nativeDefaultsBaseline.error}. ` +
-        `No files were changed; inspect ${CODEX_CONFIG_PATH}.`,
+        (v1Surface.changed
+          ? `The v1-surface reconcile was applied to config.toml before this refusal; inspect ${CODEX_CONFIG_PATH}.`
+          : `No files were changed; inspect ${CODEX_CONFIG_PATH}.`),
     };
   }
   const baselineContent = nativeDefaultsBaseline.content;
@@ -584,7 +620,15 @@ async function injectCodexConfigImpl(
     : null;
   const unverifiedJournalMessage = "Codex configuration was not written: the journal has no verified baseline for the current config/profile. Current files and the journal were preserved.";
   if (!journalBaselineIsNative() && hasUnverifiedJournalBaseline(baselineContent, readCurrentProfile())) {
-    return { success: false, message: unverifiedJournalMessage };
+    return {
+      success: false,
+      message: v1Surface.changed
+        ? unverifiedJournalMessage.replace(
+          "Current files and the journal were preserved.",
+          "The v1-surface reconcile was applied to config.toml; other current files and the journal were preserved.",
+        )
+        : unverifiedJournalMessage,
+    };
   }
 
   if (options.validateOnly) {
@@ -657,11 +701,11 @@ async function injectCodexConfigImpl(
           success: true,
           status: "skipped",
           skippedReason: localClientSkipReason(legacyGateSnapshot),
-          message: localClientSkipMessage(
+          message: reconcileAware(localClientSkipMessage(
             legacyGateSnapshot,
             "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
             "No Codex config, catalog, cache, or history was changed.",
-          ),
+          )),
         };
       }
       runClientWriteGuard(options.beforeClientWrite);
@@ -767,7 +811,11 @@ async function injectCodexConfigImpl(
     );
 
     if (coordinated.status !== "acquired") {
-      return codexInjectLockOutcome(coordinated);
+      const outcome = codexInjectLockOutcome(coordinated);
+      if (v1Surface.changed && outcome.success) {
+        outcome.message = reconcileAware(outcome.message);
+      }
+      return outcome;
     }
     recordCodexNativeTransactionProvenance(
       coordinated.value.preImages,
