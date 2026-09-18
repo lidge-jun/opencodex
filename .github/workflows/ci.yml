@@ -60,8 +60,27 @@ permissions:
 
 # Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
 concurrency:
-  group: cross-platform-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # `push` and `pull_request` want supersession: a newer head on the same ref
+  # makes the older one irrelevant, and cancelling it saves an hour of runners
+  # for an answer nobody will read.
+  #
+  # `workflow_dispatch` is the opposite. An operator dispatching a lane has
+  # asked for evidence about one specific commit, and the next merge into
+  # `dev` is not a newer answer to that question — it is an unrelated commit
+  # that happens to share `github.ref`. Keyed on the ref alone, the merge
+  # cancelled the dispatch, so the `macos control` lane — the longest job in
+  # this workflow at roughly fifty minutes — could not complete on any branch
+  # under active development. Run 35318264610 was cancelled in the same second
+  # its job started, three minutes after it was queued. Cancellations of that
+  # shape were read as runner capacity for months, and a maintainer dispatching
+  # the lane for release evidence usually got nothing back without noticing,
+  # because a cancelled job reports neither pass nor fail (#5037).
+  #
+  # `github.run_id` is unique per run, so each dispatch is a group of one: it
+  # cancels nothing and nothing cancels it, including a second dispatch of the
+  # same ref.
+  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   # Which Windows runner this run is allowed to use.
