@@ -8,7 +8,7 @@ import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaW
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
-import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT } from "./quota-types";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT, resetAtToMs } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 
 export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
@@ -63,7 +63,7 @@ const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
  * dashboard was the reader that did not have it (#5045). Re-exported here so the existing
  * callers of this module keep their import path.
  */
-export { resetAtToMs } from "./quota-types";
+export { resetAtToMs };
 
 const accountQuota = new Map<string, StoredAccountQuota>();
 const quotaHistory = new CodexQuotaHistory();
