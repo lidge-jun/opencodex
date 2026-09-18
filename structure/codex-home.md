@@ -103,9 +103,12 @@ owner lifecycle), path/hash/inode re-verification inside the claim, and one
 atomic write of access/refresh/id token + account_id. The old identity token
 is never retained beside the new grant. No claim is held while the human
 completes the device page, and no DTO, log, or error carries tokens, emails,
-or raw account ids. Cancellation remains bound to the commit's exclusive claim
-and is rechecked immediately before publication, so a cancelled flow cannot
-replace `auth.json` or clear its reauthentication quarantine.
+or raw account ids. Cancellation is bound to the commit's exclusive claim and
+is rechecked immediately before publication, so a cancel delivered while the
+claim is contended aborts the wait and a cancelled flow cannot replace
+`auth.json` or clear its reauthentication quarantine. A cancel that arrives
+after the write still reports `succeeded`: the credential was replaced, so
+that is the honest terminal.
 
 > Decision record: [ADR-0008](decisions/ADR-0008-codex-home.md)
 

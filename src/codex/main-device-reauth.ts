@@ -85,9 +85,16 @@ function sweepTerminal(now: number): void {
 }
 
 function finish(flow: ActiveFlow, status: MainDeviceReauthStatus, now: number): void {
-  // Terminal results are first-write-wins. In particular, a commit completing
-  // after cancellation must not replace the cancellation with success.
-  if (isTerminal(flow.status)) return;
+  // Terminal results are first-write-wins, with one exception (080): once the
+  // commit actually replaced auth.json, the honest terminal is succeeded. The
+  // signal now fences the claim wait and the pre-write recheck, but it cannot
+  // fence the gap between the synchronous write and this call — the claim
+  // teardown and the promise resolution both yield, so a cancel arriving there
+  // would otherwise report "cancelled" for a credential that was replaced and
+  // a reauth quarantine that was cleared.
+  if (isTerminal(flow.status)) {
+    if (!(flow.published && status.status === "succeeded")) return;
+  }
   if (status.status === "succeeded") flow.published = true;
   flow.status = status;
   terminalFlows.set(flow.flowId, { status, expiresAt: now + TERMINAL_RETENTION_MS });
