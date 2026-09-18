@@ -5,12 +5,14 @@ import {
   MODEL_DISCOVERY_MAX_MODELS,
 } from "../providers/model-discovery-limits";
 import { isDeclaredReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { encodeRoutedModelId } from "../providers/slug-codec";
 import {
   isWirePinnedModel,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   REASONING_SUMMARY_DELIVERY_VALUES,
   UPSTREAM_HTTP_VERSION_VALUES,
   type OcxProviderConfig,
+  type ModelCapabilities,
 } from "../types";
 
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -233,6 +235,85 @@ export function modelDisplayNamesConfigError(
   return null;
 }
 
+/** Characters that make a Codex catalog selector ambiguous or unrepresentable. */
+export const AUTO_REVIEW_MODEL_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\s]/;
+
+/** Validate one auto-review target (provider-wide value or map value). */
+export function autoReviewModelTargetConfigError(
+  value: unknown,
+  field = "autoReviewModel",
+  allowClear = false,
+): string | null {
+  if (value === undefined || (allowClear && (value === null || value === ""))) return null;
+  if (typeof value !== "string") return `${field} must be a string`;
+  const trimmed = value.trim();
+  if (!trimmed) return `${field} must be nonblank`;
+  if (trimmed.length > 1024 || AUTO_REVIEW_MODEL_CONTROL_CHARS.test(trimmed)) {
+    return `${field} must be a catalog selector without whitespace or control characters`;
+  }
+  return null;
+}
+
+/** True when the value is a valid Codex catalog auto-review selector. */
+export function isValidAutoReviewModel(value: unknown): value is string {
+  return typeof value === "string" && autoReviewModelTargetConfigError(value) === null;
+}
+
+/** Canonical model key used for map matching, duplicate detection, and route tombstones. */
+export function canonicalAutoReviewModelKey(modelId: string): string {
+  return encodeRoutedModelId(modelId.trim());
+}
+
+/** Validate a per-model auto-review override map. */
+export function autoReviewModelOverridesConfigError(
+  value: unknown,
+  field = "autoReviewModelOverrides",
+  allowTombstones = false,
+): string | null {
+  if (value === undefined) return null;
+  if (value === null && allowTombstones) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `${field} must be a plain object with own properties`;
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MODEL_DISCOVERY_MAX_MODELS) {
+    return `${field} must contain at most ${MODEL_DISCOVERY_MAX_MODELS} entries`;
+  }
+  const canonicalKeys = new Set<string>();
+  for (const [modelId, target] of entries) {
+    if (!isValidModelDiscoveryModelId(modelId) || ["__proto__", "prototype", "constructor"].includes(modelId)) {
+      return `${field} keys must be valid non-reserved model ids`;
+    }
+    const safeModelId = JSON.stringify(redactSecretString(modelId));
+    const canonicalKey = canonicalAutoReviewModelKey(modelId);
+    if (canonicalKeys.has(canonicalKey)) {
+      return `${field} keys must be unique after trimming and slash normalization`;
+    }
+    canonicalKeys.add(canonicalKey);
+    if (allowTombstones && (target === null || target === "")) continue;
+    const targetError = autoReviewModelTargetConfigError(target, `${field}.${safeModelId}`);
+    if (targetError) return targetError;
+  }
+  return null;
+}
+
+/** Normalize a persisted auto-review override map (trim, drop blanks, keep insertion order). */
+export function normalizeAutoReviewModelOverrides(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const out = Object.create(null) as Record<string, string>;
+  for (const [modelId, target] of Object.entries(value)) {
+    const key = modelId.trim();
+    if (!key) continue;
+    if (target === null || typeof target !== "string") continue;
+    const trimmed = target.trim();
+    if (!trimmed) continue;
+    out[key] = trimmed;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Validate the management DTO boundary for the opt-in empty-tool-output annotation. */
 export function providerEmptyToolOutputConfigError(name: string, provider: unknown): string | null {
   const raw = provider as Record<string, unknown> | null | undefined;
@@ -294,4 +375,99 @@ export function modelAdapterRecordConfigError(
     }
   }
   return null;
+}
+
+
+function capabilityRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+}
+
+/** Strict writes; only PATCH may carry deletion tombstones. Model IDs are exact. */
+export function modelCapabilitiesConfigError(value: unknown, allowTombstones = false): string | null {
+  if (value === undefined || (allowTombstones && value === null)) return null;
+  if (!capabilityRecord(value)) return "modelCapabilities must be a plain object";
+  if (Object.keys(value).length > MODEL_DISCOVERY_MAX_MODELS) return "modelCapabilities has too many models";
+  for (const [id, row] of Object.entries(value)) {
+    if (!isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id)) {
+      return "modelCapabilities keys must be exact non-reserved model ids without surrounding whitespace";
+    }
+    if (allowTombstones && row === null) continue;
+    if (!capabilityRecord(row)) return "modelCapabilities rows must be plain objects";
+    for (const [axis, declaration] of Object.entries(row)) {
+      if (!["inputModalities", "contextTier", "video"].includes(axis)) return "modelCapabilities contains an unknown axis";
+      if (allowTombstones && declaration === null) continue;
+      if (axis === "inputModalities") {
+        if (!Array.isArray(declaration) || declaration.length === 0
+          || declaration.some(item => typeof item !== "string" || !["text", "image", "audio", "video"].includes(item))) {
+          return "modelCapabilities inputModalities must be a nonempty array of text, image, audio or video";
+        }
+      } else if (axis === "contextTier") {
+        if (declaration !== "default" && declaration !== "long_context") return "modelCapabilities contextTier must be default or long_context";
+      } else {
+        if (!capabilityRecord(declaration) || Object.keys(declaration).some(key => key !== "processing")) {
+          return "modelCapabilities video must be a plain object containing only processing";
+        }
+        if (Object.hasOwn(declaration, "processing") && declaration.processing !== "static" && declaration.processing !== "agentic"
+          && !(allowTombstones && declaration.processing === null)) return "modelCapabilities video processing must be static or agentic";
+      }
+    }
+  }
+  return null;
+}
+
+/** Merge a validated patch without sharing nested objects with the live provider. */
+export function mergeModelCapabilities(
+  current: Record<string, ModelCapabilities> | undefined,
+  patch: unknown,
+): Record<string, ModelCapabilities> | undefined {
+  if (patch === null) return undefined;
+  const next = Object.fromEntries(Object.entries(current ?? {}).map(([id, row]) => [id, structuredClone(row)]));
+  if (patch !== undefined) for (const [id, raw] of Object.entries(patch as Record<string, Record<string, unknown> | null>)) {
+    if (raw === null) { delete next[id]; continue; }
+    const row: ModelCapabilities = Object.hasOwn(next, id) ? next[id]! : {};
+    for (const [axis, value] of Object.entries(raw)) {
+      if (axis === "inputModalities") {
+        if (value === null) delete row.inputModalities;
+        else row.inputModalities = [...(value as NonNullable<ModelCapabilities["inputModalities"]>)];
+      } else if (axis === "contextTier") {
+        if (value === null) delete row.contextTier;
+        else row.contextTier = value as ModelCapabilities["contextTier"];
+      } else if (axis === "video") {
+        if (value === null) delete row.video;
+        else {
+          const video = { ...(row.video ?? {}) };
+          const change = value as { processing?: "static" | "agentic" | null };
+          if (Object.hasOwn(change, "processing")) {
+            if (change.processing === null) delete video.processing;
+            else video.processing = change.processing;
+          }
+          if (Object.keys(video).length) row.video = video;
+          else delete row.video;
+        }
+      }
+    }
+    if (Object.keys(row).length) next[id] = row;
+    else delete next[id];
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+
+/** Load-only repair preserves independent valid axes; malformed explicit modalities restrict to text. */
+export function sanitizeModelCapabilitiesForLoad(value: unknown): Record<string, ModelCapabilities> | undefined {
+  if (!capabilityRecord(value)) return undefined;
+  const rows: Record<string, ModelCapabilities> = Object.create(null);
+  for (const [id, raw] of Object.entries(value).slice(0, MODEL_DISCOVERY_MAX_MODELS)) {
+    if (!capabilityRecord(raw) || !isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id)) continue;
+    const row: Record<string, unknown> = {};
+    for (const axis of ["inputModalities", "contextTier", "video"] as const) {
+      if (!Object.hasOwn(raw, axis)) continue;
+      const declaration = raw[axis];
+      if (modelCapabilitiesConfigError({ [id]: { [axis]: declaration } }) === null) row[axis] = declaration;
+      else if (axis === "inputModalities") row.inputModalities = ["text"];
+    }
+    const normalized = mergeModelCapabilities(undefined, { [id]: row });
+    if (normalized?.[id]) rows[id] = normalized[id];
+  }
+  return Object.keys(rows).length ? rows : undefined;
 }

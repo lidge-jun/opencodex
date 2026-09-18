@@ -1,3 +1,4 @@
+import { getPoolSettings, putPoolSettings, putCodexPoolStrategy } from "../src/pool-settings";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
@@ -9,10 +10,12 @@ import {
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
-  putCodexPoolStrategy,
 } from "../src/account-pool-strategy";
+import { computeCodexUsageScore } from "../src/codex-quota-utils";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
 import AccountPoolStrategyControls from "../src/components/AccountPoolStrategyControls";
 import CodexPoolStrategySetting from "../src/components/CodexPoolStrategySetting";
+import { CodexAccountSwitchModal } from "../src/components/codex-account-switch-modal";
 import { LanguageProvider } from "../src/i18n/provider";
 
 let previousLanguage: unknown;
@@ -86,10 +89,55 @@ async function teardownDom(): Promise<void> {
 }
 
 describe("account pool strategy helpers", () => {
+  test("uses the server short-observation clock for reset-less terminal usage", () => {
+    const now = 1_800_000_000_000;
+
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now - 5 * 60_000,
+      updatedAt: now - 6 * 60 * 60_000,
+    }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now - 5 * 60_000 - 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      shortObservedAt: now + 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: 100,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+  });
+
+  // Both halves of the boundary are now one value each, shared by import from the types leaf.
+  // These assert the dashboard actually uses them rather than a literal that happens to match.
+  test("the dashboard's terminal-burst boundary is the server's boundary", () => {
+    const now = 1_800_000_000_000;
+    const atBoundary = { shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT, shortObservedAt: now, updatedAt: now };
+    const belowBoundary = { shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT - 1, shortObservedAt: now, updatedAt: now };
+    expect(computeCodexUsageScore(atBoundary, undefined, now)).toBe(CODEX_EXHAUSTED_USAGE_PERCENT);
+    expect(computeCodexUsageScore(belowBoundary, undefined, now)).toBeNull();
+    expect(computeCodexUsageScore({
+      shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT,
+      shortObservedAt: now - TERMINAL_SHORT_WINDOW_FRESHNESS_MS,
+      updatedAt: now,
+    }, undefined, now)).toBe(CODEX_EXHAUSTED_USAGE_PERCENT);
+    expect(computeCodexUsageScore({
+      shortPercent: CODEX_EXHAUSTED_USAGE_PERCENT,
+      shortObservedAt: now - TERMINAL_SHORT_WINDOW_FRESHNESS_MS - 1,
+      updatedAt: now,
+    }, undefined, now)).toBeNull();
+  });
+
   test("normalizes known strategies and defaults unknowns to quota", () => {
     expect(normalizeAccountPoolStrategy("quota")).toBe("quota");
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
     expect(normalizeAccountPoolStrategy("fill-first")).toBe("fill-first");
+    expect(normalizeAccountPoolStrategy("reset-first")).toBe("reset-first");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
   });
@@ -133,9 +181,11 @@ describe("account pool strategy helpers", () => {
     );
     expect(result).toEqual({ ok: true, strategy: "round-robin", stickyLimit: 3 });
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe("http://proxy/api/codex-auth/pool-strategy");
+    expect(calls[0]!.url).toBe("http://proxy/api/pool/settings");
     expect(calls[0]!.init.method).toBe("PUT");
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      // The Codex pool is addressed by provider id like every other kind now.
+      provider: "openai",
       strategy: "round-robin",
       stickyLimit: 3,
     });
@@ -158,7 +208,7 @@ describe("AccountPoolStrategyControls", () => {
     // Custom Select only paints the active label until opened (sidecar DNA).
     expect(quota).toContain("Quota");
     expect(quota).toContain("select-trigger");
-    expect(quota).toContain("Quota can also rebind an existing task on its next request after the usage threshold is crossed.");
+    expect(quota).toContain("rebinds an existing task at the usage threshold only when");
     expect(quota).not.toContain("New/unbound assignments before rotate");
 
     const rr = renderToStaticMarkup(
@@ -175,6 +225,19 @@ describe("AccountPoolStrategyControls", () => {
     expect(rr).toContain("Round-robin");
     expect(rr).toContain("New/unbound assignments before rotate");
     expect(rr).toContain('value="2"');
+  });
+
+  test("reset-first renders the dual-window threshold explanation", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls codex strategy="reset-first" stickyDraft="1"
+          onStrategyChange={() => {}} onStickyDraftChange={() => {}} onStickyCommit={() => {}} />
+      </LanguageProvider>,
+    );
+    expect(markup).toContain("Soonest reset first");
+    expect(markup).toContain("nearest future 5-hour or weekly reset");
+    expect(markup).toContain("Bound tasks follow the configured affinity policy");
+    expect(markup).not.toContain("New/unbound assignments before rotate");
   });
 
   test("renders a canonical setting row: visible name, control beside it, no sr-only label", () => {
@@ -245,6 +308,114 @@ describe("AccountPoolStrategyControls", () => {
     expect(markup).toContain("New/unbound assignments before rotate");
     expect((markup.match(/class="setting-row"/g) ?? []).length).toBe(2);
   });
+
+  test("AccountPoolStrategyControls renders threshold badge reflecting effective strategy", () => {
+    const renderControls = (strategy: "quota" | "fill-first" | "round-robin" | "reset-first", threshold?: number) => renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls
+          strategy={strategy}
+          threshold={threshold}
+          stickyDraft="1"
+          onStrategyChange={() => {}}
+          onStickyDraftChange={() => {}}
+          onStickyCommit={() => {}}
+        />
+      </LanguageProvider>,
+    );
+
+    // Quota with 80% threshold
+    expect(renderControls("quota", 80)).toContain("switch at 80%");
+    // Reset-first shows reset-first specific threshold badge
+    expect(renderControls("reset-first", 80)).toContain("nearest reset below 80%");
+    // Fill-first with 80% threshold
+    expect(renderControls("fill-first", 80)).toContain("drain at 80%");
+    // Round-robin with threshold configured
+    expect(renderControls("round-robin", 80)).toContain("threshold not used");
+    // Quota with threshold = 0 (proactive switching off)
+    expect(renderControls("quota", 0)).toContain("proactive switching off");
+    // Undefined threshold renders no badge
+    expect(renderControls("quota", undefined)).not.toContain("account-pool-threshold-badge");
+  });
+
+  test("CodexAccountSwitchModal warns when target account meets or exceeds auto-switch threshold", () => {
+    const accountExceeding = {
+      id: "a2",
+      email: "user2@example.com",
+      isMain: false,
+      paused: false,
+      priority: 0,
+      hasCredential: true,
+      quota: { fiveHourPercent: 85, weeklyPercent: 40, monthlyPercent: null },
+      quotaAutoRefresh: { fiveHourAvailable: true, weeklyAvailable: false, fiveHourEnabled: false, weeklyEnabled: false },
+    };
+    const markupExceeding = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountExceeding}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupExceeding).toContain("switch threshold (80%)");
+    expect(markupExceeding).toContain("The pinned selection will be released");
+
+    const accountOk = {
+      ...accountExceeding,
+      quota: { fiveHourPercent: 50, weeklyPercent: 40, monthlyPercent: null },
+    };
+    const markupOk = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountOk}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupOk).not.toContain("switch threshold (80%)");
+
+    // Account with 30-day only plan (free/go) ignores weekly window
+    const accountFreePlan = {
+      ...accountExceeding,
+      plan: "free",
+      quota: { fiveHourPercent: 50, weeklyPercent: 95, monthlyPercent: 40 },
+    };
+    const markupFreePlan = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountFreePlan}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={80}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupFreePlan).not.toContain("switch threshold (80%)");
+
+    // Regression: when round-robin strategy or unresolved strategy is active (threshold is undefined), no warning appears even for accounts exceeding quota
+    const markupUndefined = renderToStaticMarkup(
+      <LanguageProvider>
+        <CodexAccountSwitchModal
+          confirm={accountExceeding}
+          accountModeState="pool"
+          switchingId={null}
+          threshold={undefined}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markupUndefined).not.toContain("switch threshold");
+  });
 });
 
 describe("CodexPoolStrategySetting optimistic strategy select", () => {
@@ -281,12 +452,12 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
       if (url.endsWith("/api/codex-auth/active") && (!init || init.method === undefined)) {
         return active.promise;
       }
-      if (url.endsWith("/api/codex-auth/pool-strategy") && init?.method === "PUT") {
+      if (url.endsWith("/api/pool/settings") && init?.method === "PUT") {
         puts.push(init.body ? JSON.parse(String(init.body)) : null);
         return new Response(JSON.stringify({
           ok: true,
-          accountPoolStrategy: "round-robin",
-          accountPoolStickyLimit: 1,
+          strategy: "round-robin",
+          stickyLimit: 1,
         }), { status: 200 });
       }
       throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
@@ -331,7 +502,7 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
           accountPoolStickyLimit: 1,
         }), { status: 200 });
       }
-      if (url.endsWith("/api/codex-auth/pool-strategy") && init?.method === "PUT") {
+      if (url.endsWith("/api/pool/settings") && init?.method === "PUT") {
         return put.promise;
       }
       throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
@@ -380,7 +551,7 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
           accountPoolStickyLimit: 1,
         }), { status: 200 });
       }
-      if (url.endsWith("/api/codex-auth/pool-strategy") && init?.method === "PUT") {
+      if (url.endsWith("/api/pool/settings") && init?.method === "PUT") {
         return new Response("fail", { status: 500 });
       }
       throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
@@ -416,7 +587,7 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
 
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/codex-auth/pool-strategy") && init?.method === "PUT") {
+      if (url.endsWith("/api/pool/settings") && init?.method === "PUT") {
         return put.promise;
       }
       throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
@@ -514,4 +685,15 @@ describe("CodexPoolStrategySetting optimistic strategy select", () => {
     const select = host.querySelector<HTMLSelectElement>("#codex-pool-strategy");
     expect(select?.getAttribute("aria-label")).toBe("Rotation strategy");
   });
+});
+
+
+test("canonical reset-first settings survive a read and an empty successful write", async () => {
+  const read = await getPoolSettings("", "openai", async () => Response.json({ provider: "openai", kind: "codex", strategy: "reset-first", stickyLimit: 1 }));
+  expect(read?.strategy).toBe("reset-first");
+  const written = await putPoolSettings("", "openai", { strategy: "reset-first" }, async (_url, init) => {
+    expect(JSON.parse(String(init?.body))).toMatchObject({ provider: "openai", strategy: "reset-first" });
+    return new Response(null, { status: 204 });
+  });
+  expect(written?.strategy).toBe("reset-first");
 });

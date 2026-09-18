@@ -29,7 +29,20 @@ interface MissingEntry {
   insertAt: number;
 }
 
-type LocatedPath = { kind: "existing"; entry: LocatedEntry } | { kind: "missing"; entry: MissingEntry };
+interface ReplaceLineEntry {
+  lines: readonly SourceLine[];
+  index: number;
+  indent: number;
+  missingDepth: number;
+}
+
+type LocatedPath =
+  | { kind: "existing"; entry: LocatedEntry }
+  | { kind: "missing"; entry: MissingEntry }
+  // `key: {}` — an empty inline map the block-key scanner cannot see (#4260).
+  | { kind: "replace-line"; entry: ReplaceLineEntry }
+  // A populated flow container. Still refused, but nameable as its own cause.
+  | { kind: "unsupported-style" };
 
 export type YamlFragmentMutation =
   | { kind: "upsert"; value: unknown }
@@ -80,6 +93,61 @@ function isPlainBlockKey(line: string, indent: number, key: string): boolean {
   if (spaces !== indent) return false;
   const rest = line.slice(indent);
   return new RegExp(`^${regexpEscape(key)}:[ ]*(?:#.*)?$`, "u").test(rest);
+}
+
+/** The inline value written after `key:` on this line, or null if the key is not here. */
+function inlineValueAfterKey(line: string, indent: number, key: string): string | null {
+  const spaces = leadingSpaces(line);
+  if (spaces !== indent) return null;
+  const rest = line.slice(indent);
+  const head = `${key}:`;
+  // Compared as text, not as a pattern: a path segment is arbitrary user data,
+  // and brace escaping inside a `u`-flag regex is its own hazard.
+  if (!rest.startsWith(head)) return null;
+  return rest.slice(head.length).trim();
+}
+
+/** Exactly `key: {}` (any inner spacing) — an empty inline map, no inline comment. */
+function isEmptyInlineMapKey(line: string, indent: number, key: string): boolean {
+  const value = inlineValueAfterKey(line, indent, key);
+  if (value === null) return false;
+  return value.startsWith("{") && value.endsWith("}") && value.slice(1, -1).trim().length === 0;
+}
+
+/** `key: { ... }` or `key: [ ... ]` on one line: content we would have to re-render. */
+function isPopulatedInlineFlowKey(line: string, indent: number, key: string): boolean {
+  const value = inlineValueAfterKey(line, indent, key);
+  if (value === null) return false;
+  if (!value.startsWith("{") && !value.startsWith("[")) return false;
+  return !isEmptyInlineMapKey(line, indent, key);
+}
+
+/**
+ * A plain block key whose first child opens a flow collection:
+ *
+ *     providers:
+ *       { native: { ... } }
+ *
+ * DSH writes this shape itself. The walk passes straight through it — the key
+ * line is a plain block key and `containerEnd` does not stop at `}` — so the
+ * refusal used to surface only as a failed re-parse at the very end and got
+ * reported as a comment or formatting problem that was not there (#4260).
+ */
+function firstChildOpensFlow(
+  lines: readonly SourceLine[],
+  start: number,
+  end: number,
+  parentIndent: number,
+): boolean {
+  for (let index = start + 1; index < end; index += 1) {
+    const body = lines[index]!.body;
+    if (isBlank(body) || isComment(body)) continue;
+    const spaces = leadingSpaces(body);
+    if (spaces === null || spaces <= parentIndent) continue;
+    const trimmed = body.trimStart();
+    return trimmed.startsWith("{") || trimmed.startsWith("[");
+  }
+  return false;
 }
 
 function containerEnd(lines: readonly SourceLine[], start: number, indent: number): number | null {
@@ -193,9 +261,24 @@ function locatePath(text: string, parsed: unknown, path: readonly string[]): Loc
     if (matches.length > 1) return null;
     prefix.push(path[depth]!);
     if (matches.length === 0) {
+      const seen = readPath(parsed, prefix);
+      // An empty inline map is the one flow shape we can adopt: rewriting that
+      // single line into block form adds our subtree and re-renders nothing the
+      // user wrote, because there is nothing in it (#4260).
+      const inline: number[] = [];
+      const populatedFlow: number[] = [];
+      for (let index = rangeStart; index < rangeEnd; index += 1) {
+        const body = lines[index]!.body;
+        if (isEmptyInlineMapKey(body, indent, path[depth]!)) inline.push(index);
+        else if (isPopulatedInlineFlowKey(body, indent, path[depth]!)) populatedFlow.push(index);
+      }
+      if (inline.length === 1 && isPlainRecord(seen) && Object.keys(seen).length === 0) {
+        return { kind: "replace-line", entry: { lines, index: inline[0]!, indent, missingDepth: depth } };
+      }
+      if (populatedFlow.length === 1 && seen !== undefined) return { kind: "unsupported-style" };
       // The parser saw this key through syntax we do not patch (quoted/flow,
       // merge aliases, or an ambiguous indentation shape).
-      if (readPath(parsed, prefix) !== undefined) return null;
+      if (seen !== undefined) return null;
       const insertAt = rangeEnd < lines.length ? lines[rangeEnd]!.start : text.length;
       return { kind: "missing", entry: { lines, missingDepth: depth, indent, insertAt } };
     }
@@ -209,7 +292,20 @@ function locatePath(text: string, parsed: unknown, path: readonly string[]): Loc
       if (leafEnd === null) return null;
       return { kind: "existing", entry: { lines, index, indent, endIndex: leafEnd } };
     }
-    if (!isPlainRecord(readPath(parsed, prefix))) return null;
+    const container = readPath(parsed, prefix);
+    // `key:` with no children parses as null. The key line matched, so the
+    // missing-key branch above never runs, and `isPlainRecord(null)` is false —
+    // so an empty container used to refuse the whole document (#4260). Insert
+    // our subtree as its first child instead.
+    if (container === null) {
+      const insertAt = end < lines.length ? lines[end]!.start : text.length;
+      return {
+        kind: "missing",
+        entry: { lines, missingDepth: depth + 1, indent: indent + 2, insertAt },
+      };
+    }
+    if (!isPlainRecord(container)) return null;
+    if (firstChildOpensFlow(lines, index, end, indent)) return { kind: "unsupported-style" };
     rangeStart = index + 1;
     rangeEnd = end;
     parentIndent = indent;
@@ -241,7 +337,7 @@ function upsertSource(
   value: unknown,
 ): string | null {
   const located = locatePath(text, parsed, path);
-  if (located === null) return null;
+  if (located === null || located.kind === "unsupported-style") return null;
   const eol = lineEnding(text);
   if (located.kind === "existing") {
     const { lines, index, indent, endIndex } = located.entry;
@@ -249,6 +345,13 @@ function upsertSource(
     const endOffset = endIndex < lines.length ? lines[endIndex]!.start : text.length;
     const candidate = `${text.slice(0, startOffset)}${rendered({ [path[path.length - 1]!]: value }, indent, eol)}${text.slice(endOffset)}`;
     return preserveFinalNewline(candidate, text, eol);
+  }
+  if (located.kind === "replace-line") {
+    const { lines, index, indent, missingDepth } = located.entry;
+    const startOffset = lines[index]!.start;
+    const endOffset = index + 1 < lines.length ? lines[index + 1]!.start : text.length;
+    const insertion = rendered(nestedValue(path.slice(missingDepth), value), indent, eol);
+    return preserveFinalNewline(`${text.slice(0, startOffset)}${insertion}${text.slice(endOffset)}`, text, eol);
   }
 
   const { missingDepth, indent, insertAt } = located.entry;
@@ -336,6 +439,22 @@ export function patchYamlFragmentSource(
     ? upsertSource(text, parsed, path, mutation.value)
     : removeSource(text, path, mutation.createdContainers);
   return patched !== null && semanticallyMatches(patched, expected) ? patched : null;
+}
+
+/**
+ * True when a refusal on this path is caused by a flow-style container rather
+ * than by comments or formatting we would have to re-render. DSH writes that
+ * shape itself, so naming it is the difference between an actionable message
+ * and one that sends the user hunting for a comment that is not there (#4260).
+ */
+export function yamlFragmentUnsupportedStyle(text: string, path: readonly string[]): boolean {
+  let parsed: unknown;
+  try {
+    parsed = text.trim().length === 0 ? {} : Bun.YAML.parse(text);
+  } catch {
+    return false;
+  }
+  return locatePath(text, parsed, path)?.kind === "unsupported-style";
 }
 
 /** Backward-compatible OMP wrapper around the generic path patcher. */

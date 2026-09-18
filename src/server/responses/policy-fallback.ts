@@ -2,6 +2,7 @@ import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
+import { linkRequestSessionLane } from "../request-log-conversation";
 import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
 import { handleResponses as handleResponsesCore } from "./core";
@@ -56,12 +57,17 @@ function requestWithCandidate(
   headers.delete("content-encoding");
   headers.delete("content-length");
   headers.set("content-type", "application/json");
-  return new Request(req.url, {
+  const retryRequest = new Request(req.url, {
     method: req.method,
     headers,
     body: JSON.stringify({ ...rawBody, model: `${candidate.provider}/${candidate.model}` }),
     signal: req.signal,
   });
+  // A sessionless request keeps the lane it was already allocated. Without this the second
+  // candidate reaches OpenCode Go under a different x-opencode-session than the first attempt,
+  // which is the same conversation split the header exists to prevent.
+  linkRequestSessionLane(req, retryRequest);
+  return retryRequest;
 }
 
 function errorCodeFromText(text: string): string | undefined {

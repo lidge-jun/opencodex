@@ -184,6 +184,12 @@ function parseKiroProfileArn(value: unknown): string | undefined {
   return KIRO_PROFILE_ARN_PATTERN.test(trimmed) ? trimmed : undefined;
 }
 
+/** Account identity must never use the request-scoped Builder ID service profile. */
+function accountScopedProfileArn(value: unknown): string | undefined {
+  const parsed = parseKiroProfileArn(value);
+  return parsed && parsed !== KIRO_BUILDER_ID_SERVICE_PROFILE_ARN ? parsed : undefined;
+}
+
 function profileArnFromWhoami(parsed: Record<string, unknown>): string | undefined {
   // Only narrowly-named documented-ish shapes; never invent an ARN (#993).
   return parseKiroProfileArn(parsed.profileArn)
@@ -210,8 +216,9 @@ async function readKiroCliIdentity(runner: KiroCliRunner, signal?: AbortSignal):
 }
 
 function metadataFromImported(imported: ImportedKiroCredential): KiroOAuthMetadata | undefined {
+  const profileArn = accountScopedProfileArn(imported.profileArn);
   const metadata: KiroOAuthMetadata = {
-    ...(imported.profileArn ? { profileArn: imported.profileArn } : {}),
+    ...(profileArn ? { profileArn } : {}),
     ...(imported.ssoRegion ? { ssoRegion: imported.ssoRegion } : {}),
     ...(imported.apiRegion ? { apiRegion: imported.apiRegion } : {}),
     ...(imported.clientId ? { clientId: imported.clientId } : {}),
@@ -283,19 +290,24 @@ async function oauthCredentialFromImported(
     // active Kiro CLI session between the SQLite read and whoami. Accept
     // whoami's identity only when the session token STILL matches the import —
     // refresh token, or access token when refresh is absent.
-    if (identity.profileArn !== undefined) {
+    if (identity.profileArn !== undefined || identity.email !== undefined) {
       const current = readKiroCliSqliteCredential();
       const importedKey = imported.refresh || imported.access;
       const currentKey = current ? current.refresh || current.access : "";
       if (!current || currentKey !== importedKey) identity = {};
     }
   }
-  // Builder ID imports often lack a profileArn in SQLite; whoami against the
-  // SAME active CLI session can supply it (#993). Imported stays authoritative.
-  const resolvedProfileArn = imported.profileArn ?? identity.profileArn;
+  // Same-session whoami is the live identity. SQLite state can still hold the
+  // previous account's profile after a CLI switch; treating that leftover ARN
+  // as accountId upserts the new login onto the old slot (#4435). The #993
+  // session-switch guard above already discards whoami when the token changed,
+  // so imported remains the fallback when whoami is unavailable.
+  const resolvedProfileArn = accountScopedProfileArn(identity.profileArn)
+    ?? accountScopedProfileArn(imported.profileArn);
   const metadata: KiroOAuthMetadata | undefined = (() => {
     const base = metadataFromImported(imported) ?? {};
-    if (resolvedProfileArn && !base.profileArn) base.profileArn = resolvedProfileArn;
+    if (resolvedProfileArn) base.profileArn = resolvedProfileArn;
+    else delete base.profileArn;
     return Object.keys(base).length > 0 ? base : undefined;
   })();
   return {

@@ -8,7 +8,7 @@ import { isSelectableCodexPoolAccount } from "./account-id";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import { isCodexAccountPaused } from "./account-pause";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
-import { getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
+import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
 import { getMainAccountToken, getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import { isMainAccountHardLocked } from "./main-account-hard-lock";
@@ -170,10 +170,11 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
     if (!record?.credential || record.deletedAt != null || record.codexValidationPending
       || record.generation !== token.generation) return false;
     if (isCodexAccountPaused(config, accountId) || isAccountNeedsReauth(accountId)) return false;
+    const poolWriter = capturePoolQuotaWriter(accountId, token);
     try {
       await warmCodexAccount({ ...token, onCompleted: headers => {
         if (isCodexAccountGenerationLive(accountId, token.generation)) {
-          applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration);
+          applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, undefined, { poolWriter });
         }
       } });
     } catch (error) {

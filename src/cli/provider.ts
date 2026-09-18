@@ -9,7 +9,7 @@
  *   set-default <name>  Change the default provider
  */
 import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig } from "../config";
-import { apiKeyTransportConfigError } from "../config/provider-validation";
+import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
@@ -139,7 +139,7 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--model <id> --text-only] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
 
 async function handleAdd(args: string[]): Promise<void> {
   const name = args[0];
@@ -164,7 +164,13 @@ async function handleAdd(args: string[]): Promise<void> {
   const adapter = consumeFlagValue(restArgs, "--adapter");
   const baseUrl = consumeFlagValue(restArgs, "--base-url");
   const defaultModel = consumeFlagValue(restArgs, "--default-model");
+  const textOnly = consumeFlag(restArgs, "--text-only");
+  const capabilityModel = consumeFlagValue(restArgs, "--model");
   rejectUnknownArgs(restArgs, ADD_USAGE);
+  if (capabilityModel !== undefined && !textOnly) {
+    console.error("Error: --model requires --text-only for provider add.");
+    process.exit(1);
+  }
 
   const config = loadConfig();
 
@@ -224,6 +230,20 @@ async function handleAdd(args: string[]): Promise<void> {
   }
 
   const existingProvider = config.providers[name];
+  if (existingProvider?.modelCapabilities !== undefined && provConfig.modelCapabilities === undefined) {
+    provConfig.modelCapabilities = structuredClone(existingProvider.modelCapabilities);
+  }
+  if (textOnly) {
+    const modelId = capabilityModel ?? defaultModel ?? provConfig.defaultModel;
+    if (!modelId) {
+      console.error("Error: --text-only requires --model or a default model.");
+      process.exit(1);
+    }
+    const declaration = { [modelId]: { inputModalities: ["text"] } };
+    const error = modelCapabilitiesConfigError(declaration);
+    if (error) { console.error(`Error: ${error}.`); process.exit(1); }
+    provConfig.modelCapabilities = mergeModelCapabilities(provConfig.modelCapabilities, declaration);
+  }
   const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
   initializeProviderModelSelection(name, provConfig, existingProvider, config);
   config.providers[name] = provConfig;

@@ -1,5 +1,5 @@
 import type { OcxConfig, OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../types";
-import type { VisionReasoningEffort } from "../reasoning-effort";
+import { modelRecordValue, type VisionReasoningEffort } from "../reasoning-effort";
 import type { VisionSettings } from "./describe";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { CodexAuthPolicyConfig } from "../codex/auth-context";
@@ -11,7 +11,7 @@ import { resolveSidecarAuth } from "../sidecar/auth";
 import { DEFAULT_VISION_TIMEOUT_MS, MAX_VISION_TIMEOUT_MS, MIN_VISION_TIMEOUT_MS } from "./timeout-bounds";
 import { carriesImages } from "./image-rewrite";
 
-const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
+const DEFAULT_VISION_MODEL = "gpt-5.6-luna";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
 const DEFAULT_REASONING: VisionReasoningEffort = "low";
 export const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
@@ -92,15 +92,59 @@ function messagesHaveImage(parsed: OcxParsedRequest): boolean {
     carriesImages(m.role) && Array.isArray(m.content) && (m.content as OcxContentPart[]).some(p => p.type === "image"));
 }
 
+/**
+ * Direct-image admission for a routed target. Returns true when capability evidence proves the
+ * target cannot accept image input, so the caller must describe or strip the image first.
+ * Explicit text-only config, an explicit per-model modality list without `image`, and
+ * proven-negative registry/vendor metadata each require the vision preprocessor. A genuinely
+ * unknown custom model is NOT guessed blind: it keeps the established pass-through behaviour.
+ * The provider-only fallback keeps legacy unit callers stable; production dispatch always
+ * supplies providerName so the complete capability chain is consulted.
+ */
+export function requiresVisionPreprocessing(
+  config: Pick<OcxConfig, "providers">,
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities" | "modelCapabilities">,
+  modelId: string,
+  providerName?: string,
+): boolean {
+  if (isModelTextOnly(provider, modelId)) return true;
+  const runtimeDeclared = Object.hasOwn(provider.modelCapabilities ?? {}, modelId)
+    ? provider.modelCapabilities?.[modelId]?.inputModalities
+    : undefined;
+  if (runtimeDeclared !== undefined) return !runtimeDeclared.includes("image");
+  const runtimeModalities = modelRecordValue(provider.modelInputModalities, modelId);
+  if (Array.isArray(runtimeModalities) && runtimeModalities.length > 0) {
+    return !runtimeModalities.includes("image");
+  }
+  if (!providerName) return false;
+  return modelAcceptsImageInput(config, { provider: providerName, id: modelId }) === false;
+}
+
+/** Shared by auth admission and planning so a routed describer never borrows OpenAI auth. */
+function usableRoutedVisionModel(config: OcxConfig): string | undefined {
+  const cfg = config.visionSidecar;
+  if (cfg?.backend !== "routed") return undefined;
+  const routedModel = cfg.model;
+  const sep = routedModel ? routedModel.indexOf("/") : -1;
+  if (!routedModel || sep <= 0) return undefined;
+  const targetProvider = routedModel.slice(0, sep);
+  const targetId = routedModel.slice(sep + 1);
+  const targetProviderConfig = config.providers?.[targetProvider];
+  return modelAcceptsImageInput(config, { provider: targetProvider, id: targetId }) !== false
+    && !(targetProviderConfig && isModelTextOnly(targetProviderConfig, targetId)) ? routedModel : undefined;
+}
+
 export function shouldResolveOpenAiVisionSidecar(
   config: OcxConfig,
   provider: OcxProviderConfig,
- modelId: string,
- parsed: OcxParsedRequest,
+  modelId: string,
+  parsed: OcxParsedRequest,
+  providerName?: string,
 ): boolean {
-  if (!isModelTextOnly(provider, modelId) || !messagesHaveImage(parsed)) return false;
+  if (!requiresVisionPreprocessing(config, provider, modelId, providerName) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
+  if (usableRoutedVisionModel(config)) return false;
   return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
 }
 
@@ -110,17 +154,19 @@ export interface VisionPlan {
   anthropicSidecar?: AnthropicVisionProvider;
   /** Namespaced "provider/model" describer for the routed backend (roadmap 180). */
   routedModel?: string;
-  /** Loopback dispatch inputs for the routed backend. */
-  routedConfig?: Pick<OcxConfig, "port" | "apiKeys">;
+  /** Loopback dispatch inputs for the routed backend (the listener decides WHICH local port). */
+  routedConfig?: Pick<OcxConfig, "port" | "hostname" | "apiKeys" | "unauthenticatedLoopbackListener">;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
 }
 
 /**
- * Decide whether the vision sidecar should pre-describe images for this request, returning the plan
- * if so. Active when: the routed model is in `provider.noVisionModels`, the request actually carries
- * an image, the sidecar isn't disabled, and the selected backend has usable auth. Returns undefined
- * otherwise (the caller strips images before sending to a text-only model).
+ * Decide whether the vision sidecar should pre-describe images for this request. Raw image
+ * delivery is capability-driven: targets proven text-only are preprocessed, targets proven
+ * image-capable bypass this planner, and genuinely unknown custom targets retain legacy behavior.
+ * The request must
+ * carry an image, the sidecar must be enabled, and the selected backend must be dispatchable.
+ * Returns undefined otherwise; the caller strips images before any unverified upstream send.
  */
 export function planVisionSidecar(
   config: OcxConfig,
@@ -128,9 +174,13 @@ export function planVisionSidecar(
   modelId: string,
   parsed: OcxParsedRequest,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
-  options: { admission?: Pick<DataPlaneAdmission, "source">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
+  options: {
+    admission?: Pick<DataPlaneAdmission, "source">;
+    codexAuthPolicy?: CodexAuthPolicyConfig;
+    providerName?: string;
+  } = {},
 ): VisionPlan | undefined {
-  if (!isModelTextOnly(provider, modelId)) return undefined;
+  if (!requiresVisionPreprocessing(config, provider, modelId, options.providerName)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;
@@ -140,33 +190,31 @@ export function planVisionSidecar(
   // fence: the target must not be provably blind, and must not itself be a
   // model this planner would re-enter for (belt; the terminal marker on the
   // loopback request is the braces).
-  if (cfg.backend === "routed") {
-    const routedModel = cfg.model;
-    const sep = routedModel ? routedModel.indexOf("/") : -1;
-    if (routedModel && sep > 0) {
-      const targetProvider = routedModel.slice(0, sep);
-      const targetId = routedModel.slice(sep + 1);
-      const targetProviderConfig = config.providers?.[targetProvider];
-      const targetVisible = modelAcceptsImageInput(config, { provider: targetProvider, id: targetId }) !== false
-        && !(targetProviderConfig && isModelTextOnly(targetProviderConfig, targetId));
-      if (targetVisible) {
-        return {
-          backend: "routed",
-          routedModel,
-          routedConfig: { port: config.port, ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}) },
-          settings: {
-            model: routedModel,
-            reasoning: DEFAULT_REASONING,
-            timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
-          },
-          maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn),
-        };
-      }
-    }
-    // Misconfigured routed backend (bare id, unknown provider, or provably
-    // blind target): fall through to the legacy default order below rather
-    // than dispatching a describe that cannot work.
+  const routedModel = usableRoutedVisionModel(config);
+  if (routedModel) {
+    return {
+      backend: "routed",
+      routedModel,
+      routedConfig: {
+        port: config.port,
+        ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
+        // The self-fetch has to honor the unauthenticated loopback listener AND, with no
+        // listener, the bind address — so BOTH fields the destination resolver reads have to
+        // survive the narrowing or it silently resolves to the wrong local socket (#4236).
+        ...(config.hostname ? { hostname: config.hostname } : {}),
+        ...(config.unauthenticatedLoopbackListener
+          ? { unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener }
+          : {}),
+      },
+      settings: {
+        model: routedModel,
+        reasoning: DEFAULT_REASONING,
+        timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
+      },
+      maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn),
+    };
   }
+  // A non-dispatchable routed configuration keeps the legacy backend fallback below.
 
   const anthropicSidecar = findAnthropicVisionProvider(config);
   const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);

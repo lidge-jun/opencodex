@@ -1,4 +1,5 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { chatBodyCarriesImage, chatBodyCarriesToolResultImage } from "../chat/image-parts";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import {
   chatCompletionsErrorBody,
@@ -19,13 +20,17 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
-import { isModelTextOnly } from "../vision";
+import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
+  isNonReplayableResponse,
+  isReplayRefusalCode,
+  isReplayRefusalResponse,
   prepareSameTarget429Wait,
   type UpstreamSendRecovery,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -33,6 +38,7 @@ import {
 } from "../lib/translator-budget";
 import {
   hasKeyPoolFailover,
+  selectProactiveApiKeyTransport,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
@@ -49,7 +55,9 @@ import { linkAbortSignal } from "./responses";
 import {
   addFinalRequestLog,
   beginRequestAttempt,
-  noteAttemptSend,
+  noteProviderAttemptSend,
+  recordKeyAttemptFailure,
+  recordKeyWireAttemptUsage,
   recordFirstOutput,
   recordAttemptCredentialSource,
   sealRequestAttemptIdentity,
@@ -104,19 +112,27 @@ function normalizePinnedChatEffort(options: HandleNativeChatOptions): void {
   const from = typeof chatBody.reasoning_effort === "string" ? chatBody.reasoning_effort : undefined;
   logCtx.requestedEffort = from;
   // Compaction is normally excluded by native-route eligibility; preserve that boundary here too.
-  const pinned = chatBody.compaction_trigger === undefined
+  const compaction = chatBody.compaction_trigger !== undefined;
+  const pinned = !compaction
     ? resolvePinnedEffort(route, selector, config)
     : undefined;
+  let normalizeForWire = false;
   if (pinned !== undefined) {
     logCtx.requestedEffort = from ? `${from}->${pinned}` : pinned;
     if (pinned === "none") delete chatBody.reasoning_effort;
     else chatBody.reasoning_effort = pinned;
-    // The native lane historically passes caller effort through, including with caps set.
-    // Only a newly operator-pinned value enters the cap and provider-mapping pipeline.
-    if (effortCapAppliesTo(chatCollabSurface(chatBody), req.headers, config)) {
-      const capped = applyChatEffortCap(chatBody, req.headers, config, supportedLadderFor(route));
-      if (capped) logCtx.requestedEffort = `${logCtx.requestedEffort}->${capped.to}`;
+    normalizeForWire = true;
+  }
+  // A qualifying turn's ceiling is independent of whether an operator pin resolved.
+  if (effortCapAppliesTo(chatCollabSurface(chatBody), req.headers, config, compaction)) {
+    const capped = applyChatEffortCap(chatBody, req.headers, config, supportedLadderFor(route));
+    if (capped) {
+      logCtx.requestedEffort = `${logCtx.requestedEffort ?? capped.from}->${capped.to}`;
+      normalizeForWire = true;
     }
+  }
+  // Normalize operator-pinned values and cap rewrites; otherwise preserve caller spelling.
+  if (normalizeForWire) {
     const effort = typeof chatBody.reasoning_effort === "string" ? chatBody.reasoning_effort : undefined;
     const wireEffort = mapReasoningEffort(route.provider, route.modelId, effort);
     if (wireEffort === undefined) delete chatBody.reasoning_effort;
@@ -129,7 +145,7 @@ function isRec(value: unknown): value is Rec {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boolean {
+export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec, config?: OcxConfig): boolean {
   const provider = route.provider;
   if (provider.adapter !== "openai-chat") return false;
   if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return false;
@@ -138,12 +154,24 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
   if (rawBody.store === true || rawBody.background === true) return false;
   if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return false;
   if (rawBody.compaction_trigger !== undefined) return false;
+  // A standard Chat tool message accepts a string or text parts, not image_url, so
+  // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —
+  // the part is still inside a tool message. The translated adapter already places
+  // tool-result images in a following user carrier after the complete paired batch
+  // (flushToolResultImages), so divert these requests there. Ordinary user images and
+  // text-only tool results keep the native fast path.
+  if (chatBodyCarriesToolResultImage(rawBody)) return false;
   // Vision sidecar coverage (roadmap 180): a text-only routed model with an
   // image-bearing body must go through the Responses pipeline, whose plan
   // site describes or strips the image. The native fast path has no vision
   // handling, so letting it keep such a request forwards raw pixels to a
   // model the operator declared blind.
-  if (isModelTextOnly(provider, route.modelId) && chatBodyCarriesImage(rawBody)) return false;
+  if (chatBodyCarriesImage(rawBody)) {
+    const needsVision = config
+      ? requiresVisionPreprocessing(config, provider, route.modelId, route.providerName)
+      : isModelTextOnly(provider, route.modelId);
+    if (needsVision) return false;
+  }
   if (Array.isArray(rawBody.tools)) {
     for (const tool of rawBody.tools) {
       if (!isRec(tool)) continue;
@@ -153,19 +181,6 @@ export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec): boo
     }
   }
   return true;
-}
-
-/** Any messages[].content[] part of type image_url. */
-function chatBodyCarriesImage(rawBody: Rec): boolean {
-  const messages = rawBody.messages;
-  if (!Array.isArray(messages)) return false;
-  for (const message of messages) {
-    if (!isRec(message) || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (isRec(part) && part.type === "image_url") return true;
-    }
-  }
-  return false;
 }
 
 function chatCompletionJson(value: unknown): Rec | null {
@@ -235,6 +250,14 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     unregisterTurn(upstream);
   };
   const connectMs = config.connectTimeoutMs ?? 200_000;
+  // Native chat is its own entry path -- chat-completions.ts routes here directly and never
+  // through the Responses core -- so the pre-dispatch key preference is applied again here
+  // rather than inherited. Assigned before the adapter binds below, for the same reason it is
+  // assigned before the transport pin in core.ts.
+  // Transport variant: the bare picker answers with the persisted row, which for a built-in
+  // provider carries no adapter id or base URL until routedProviderConfig backfills it.
+  const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+  if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
   let activeProvider: OcxProviderConfig = route.provider;
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
@@ -245,7 +268,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     retainedRequestBytes = 0;
   };
   const retainRequest = (request: AdapterRequest) => {
-    const bytes = new TextEncoder().encode(request.body).byteLength;
+    const bytes = Buffer.byteLength(request.body);
     translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
     retainedRequestBytes = bytes;
   };
@@ -309,7 +332,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
               dispatchOverride: async (_input, init, execute) => {
                 if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
                   const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody)) {
+                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody, config)) {
                     throw new Error("Provider key selection is no longer available for native Chat");
                   }
                   activeProvider = current;
@@ -327,10 +350,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                 const encoding = new Headers(init.headers).get("accept-encoding");
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
-                noteAttemptSend(attempt, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
-                return ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
+                noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
+                const dispatched = await ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
                   ...init, method: request.method, headers, body: request.body,
                 }, transportRecovery));
+                if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
+                return dispatched;
               },
             }),
           );
@@ -358,6 +383,11 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     let retries = 0;
     while (
       response.status === 429
+      // A 429 this proxy synthesized for a refused reset replay is not a provider rate
+      // limit: waiting and re-sending here is exactly the duplicate inference the refusal
+      // exists to stop. It kept the same shape under the old 502 only because 502 never
+      // matched this branch.
+      && !isNonReplayableResponse(response)
       && retryPolicy
       && retries < retryPolicy.attempts
       && transientSendAvailable()
@@ -371,7 +401,9 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       if (upstream.signal.aborted) throw upstream.signal.reason;
       response = await send(activeRequest, "rate-limit-429");
     }
-    while (response.status === 429 && hasKeyPoolFailover(activeProvider)) {
+    // Same reason as above, plus a second one: rotating here would write a cooldown against
+    // a key that rate-limited nothing, and that false signal outlives the request.
+    while (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(activeProvider)) {
       const rotated = rotateProviderTransportOn429(config, route.providerName, activeProvider, {
         retryAfter: response.headers.get("retry-after"),
         now: Date.now(),
@@ -457,6 +489,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(upstreamType);
+    } else if (isReplayRefusalResponse(response) || isReplayRefusalCode(upstreamCode)) {
+      // 429 classifies as a rate limit and a rate limit already carries a code, so the branch
+      // below -- which only fills an EMPTY code -- could never restore this one. Without it the
+      // client is told the provider throttled the turn, when what happened is that this proxy
+      // declined to send it a second time.
+      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     } else if (upstreamCode === "model_not_found") {
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
@@ -464,7 +502,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       classified.code = upstreamCode;
     }
     const status = isCyberPolicyCode(classified.code) ? 400 : response.status;
-    const retryAfter = isCyberPolicyCode(classified.code)
+    // A refusal this proxy made has no wait to report. Synthesizing one here would hand the
+    // client the default two-second retry for a rate limit that never happened, which is the
+    // duplicate send the refusal exists to prevent.
+    const retryAfter = isCyberPolicyCode(classified.code) || isReplayRefusalCode(classified.code)
       ? undefined
       : resolveClientRetryAfter({
         status: response.status,
@@ -484,24 +525,31 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
     if (requestedStream) transferTurnToStream();
+    let terminalStatus: number | undefined;
     const stream = nativeChatSse(response.body, {
       requestedModel,
       translatorBudget,
       signal: upstream.signal,
+      stallTimeoutSec: config.stallTimeoutSec,
       onFirstOutput: logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined,
       onUsage: usage => {
-        logCtx.usage = usage;
-        attempt.usage = usage;
+        if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+          logCtx.usage = usage;
+          attempt.usage = usage;
+        }
+      },
+      onTerminal: (status: number, message?: string) => {
+        terminalStatus = status;
+        if (!requestedStream) return;
+        try {
+          cleanupAbort();
+          finishLog(status, message, "terminal");
+          if (status >= 400) upstream.abort();
+        } finally {
+          releaseStreamTurn();
+        }
       },
       ...(requestedStream ? {
-        onTerminal: (status: number, message?: string) => {
-          try {
-            cleanupAbort();
-            finishLog(status, message, "terminal");
-          } finally {
-            releaseStreamTurn();
-          }
-        },
         onCancel: () => {
           try {
             cleanupAbort();
@@ -526,11 +574,20 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     try {
       const completion = await collectChatCompletion(stream, requestedModel, translatorBudget);
       cleanupAbort();
+      // A cancelled native relay closes its downstream body. EOF alone must not
+      // promote the buffered prefix to a successful Chat completion. A terminal
+      // already accepted by the relay retains precedence over a later abort.
+      if (req.signal.aborted && terminalStatus === undefined) {
+        return fail(499, "Client cancelled request", "client_cancelled");
+      }
       finishLog(200);
       return Response.json(completion);
     } catch (error) {
       cleanupAbort();
       upstream.abort();
+      if (req.signal.aborted && terminalStatus === undefined) {
+        return fail(499, "Client cancelled request", "client_cancelled");
+      }
       if (isChatCompletionsStreamError(error)) {
         return fail(error.status, error.message, error.type, error.code);
       }
@@ -569,8 +626,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   if (!completion) return fail(502, "upstream response contained no choices", "upstream_error");
   const usage = usageFromChat(completion.usage);
   if (usage) {
-    logCtx.usage = usage;
-    attempt.usage = usage;
+    if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+      logCtx.usage = usage;
+      attempt.usage = usage;
+    }
   }
   if (logIds) recordFirstOutput(logCtx, logIds.start);
   try {

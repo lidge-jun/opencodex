@@ -8,12 +8,14 @@ import { NumberStepper } from "./NumberStepper";
 import { Select } from "../ui";
 
 const STRATEGY_LABEL_KEYS = {
+  "reset-first": "accountPool.strategyResetFirst",
   quota: "accountPool.strategyQuota",
   "round-robin": "accountPool.strategyRoundRobin",
   "fill-first": "accountPool.strategyFillFirst",
 } as const;
 
 const STRATEGY_HINT_KEYS = {
+  "reset-first": "accountPool.strategyHintResetFirst",
   quota: "accountPool.strategyHintQuota",
   "round-robin": "accountPool.strategyHintRoundRobin",
   "fill-first": "accountPool.strategyHintFillFirst",
@@ -21,6 +23,8 @@ const STRATEGY_HINT_KEYS = {
 
 export interface AccountPoolStrategyControlsProps {
   strategy: AccountPoolStrategy;
+  codex?: boolean;
+  threshold?: number;
   stickyDraft: string;
   disabled?: boolean;
   strategySelectId?: string;
@@ -41,6 +45,8 @@ export interface AccountPoolStrategyControlsProps {
  */
 export default function AccountPoolStrategyControls({
   strategy,
+  codex = false,
+  threshold,
   stickyDraft,
   disabled = false,
   strategySelectId = "account-pool-strategy",
@@ -50,10 +56,27 @@ export default function AccountPoolStrategyControls({
   onStickyCommit,
 }: AccountPoolStrategyControlsProps) {
   const t = useT();
-  const strategyOptions = ACCOUNT_POOL_STRATEGIES.map((value) => ({
+  const strategyOptions = ACCOUNT_POOL_STRATEGIES.filter(value => codex || value !== "reset-first").map((value) => ({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
   }));
+
+  const thresholdSummary = (() => {
+    if (threshold === undefined) return null;
+    if (strategy === "round-robin") {
+      return t("accountPool.thresholdNotUsed");
+    }
+    if (threshold > 0) {
+      if (strategy === "fill-first") {
+        return t("accountPool.drainAtThreshold", { threshold: String(threshold) });
+      }
+      if (strategy === "reset-first") {
+        return t("accountPool.resetBelowThreshold", { threshold: String(threshold) });
+      }
+      return t("accountPool.switchAtThreshold", { threshold: String(threshold) });
+    }
+    return t("accountPool.proactiveSwitchingOff");
+  })();
 
   return (
     <div className="account-pool-strategy-controls">
@@ -82,6 +105,11 @@ export default function AccountPoolStrategyControls({
             label={t("accountPool.strategy")}
             onChange={(next) => onStrategyChange(next as AccountPoolStrategy)}
           />
+          {thresholdSummary && (
+            <span className="badge badge-muted account-pool-threshold-badge" data-testid="account-pool-threshold-summary">
+              {thresholdSummary}
+            </span>
+          )}
         </div>
       </div>
       {strategy === "round-robin" && (

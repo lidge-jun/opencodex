@@ -27,7 +27,8 @@ export function printUsage(): void {
 
 Usage:
   ocx setup                   Interactive setup (alias: init)
-  ocx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
+  ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]
+                              Start the proxy; SOCKS5 defaults to 127.0.0.1:10808
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
@@ -41,21 +42,25 @@ Usage:
   ocx tray <sub>              Windows status tray (install|start|stop|status|uninstall)
   ocx ensure                  Ensure the proxy is running and Codex config/cache are current
   ocx connect <url>           Connect this machine to a remote OpenCodex hub (credential via stdin)
+  ocx remote-workspace <sub>  Pair/run an OCX-only remote execution computer
   ocx disconnect              Restore local state and clear the hub connection
   ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
-  ocx status                  Check proxy server status
+  ocx catalog pull <https-url> Install a validated remote catalog and refresh the Codex cache
+  ocx status                  Check proxy server status (on a hub: one block with its ports and token source)
   ocx doctor                  Diagnose environment/network issues (WSL, proxy, ChatGPT reachability)
   ocx doctor --reclaim-response-temps
                               Reclaim abandoned response-state temp files (works without a running proxy)
   ocx doctor --recover-zero-byte-coordinator --yes
                               Back up a proven zero-byte Codex coordinator after stopping the proxy
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
-  ocx login <provider>        OAuth or API-key provider login
+  ocx login <provider>        OAuth or API-key provider login (ocx login codex for Codex/ChatGPT)
   ocx logout <provider>       Remove a stored OAuth login
   ocx gui [pair --origin <browser-origin> [--json]]
                               Open the dashboard or create a single-use remote pairing grant
+  ocx hub invite [--json]     Print a ready-to-run \`ocx connect\` line for one more machine
+                              (hub only; see \`ocx help hub\` for the one-port topology)
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
@@ -79,7 +84,7 @@ Usage:
   ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
-  ocx export --client <id>    Print a client config wired to the running proxy (13 clients)
+  ocx export --client <id>    Print a client config wired to the running proxy (15 clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
@@ -98,7 +103,10 @@ Examples:
   ocx init                    Set up provider and inject into Codex
   ocx start                   Start on default port (10100)
   ocx start --port 8080       Start on custom port
+  ocx start --socks5          Outbound via SOCKS5 at 127.0.0.1:10808 (saved)
+  ocx start --socks5-off      Clear a saved SOCKS5 outbound proxy
   ocx help service            Show service command help
+  ocx help hub                Explain the hub topology, token file, and invites
   ocx sync                    Sync available models to Codex`);
 }
 

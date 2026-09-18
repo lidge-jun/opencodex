@@ -336,8 +336,9 @@ S'il manque un modèle dans Codex, ou si l'ordre ou la visibilité du catalogue 
 6. **Processus Codex `app-server` actif** — réécrire le catalogue sur disque ne suffit pas tant qu'un processus
    Codex `app-server` de longue durée — Codex Desktop ou hôte d'arrière-plan de la CLI — conserve l'ancienne
    liste en mémoire. `ocx sync` et `ocx sync-cache` émettent un avertissement lorsqu'ils détectent ces processus.
-   Redémarrez-les avec `ocx sync --restart-codex`, ou arrêtez vous-même les processus `app-server` concernés,
-   puis laissez Codex les recréer afin que la nouvelle liste apparaisse.
+   `ocx sync --restart-codex` les redémarre et quitte puis relance entièrement l'application Codex Desktop sous
+   macOS, Linux et Windows, afin que le sélecteur relise le catalogue. Pour laisser l'application Desktop ouverte,
+   passez `--restart-app-server-only` ou arrêtez vous-même les processus `app-server` concernés.
 
 :::caution[Autres processus d'écriture locaux]
 Les écritures du catalogue (`opencodex-catalog.json`, `config.toml`) sont atomiques **au sein** d'opencodex.
@@ -375,7 +376,7 @@ délégation v1/base/v2 et de ses mécanismes de repli.
 
 ## Préchauffage des comptes Codex
 
-L’ajout ou la réauthentification vérifie normalement le compte avant son enregistrement par une petite requête attendant `response.completed`. Le modèle par défaut est `gpt-5.4-mini`, avec un essai sur `gpt-5.5` en cas de HTTP 400. Les erreurs publiques contiennent des catégories fixes, sans corps de réponse brut.
+L’ajout ou la réauthentification vérifie normalement le compte avant son enregistrement par une petite requête attendant `response.completed`. Le modèle par défaut est `gpt-5.6-luna`, avec un essai sur `gpt-5.5` en cas de HTTP 400 ou HTTP 404. Les erreurs publiques contiennent des catégories fixes, sans corps de réponse brut.
 
 Si la lecture authentifiée des quotas avec le nouveau jeton OAuth confirme un quota de 5 heures, hebdomadaire ou mensuel épuisé, le compte est enregistré sans appel au modèle et affiche **Validation en attente**. Il reste exclu du routage après un redémarrage ou un renouvellement du jeton. Après récupération du quota, actualisez les quotas : une lecture récente et complète avec de la capacité disponible permet une petite requête de validation. Seule sa réussite active le compte. Tout échec conserve la restriction. Les lectures passives ne déclenchent pas cette requête. Un quota inconnu à l’inscription conserve la vérification habituelle.
 
@@ -383,6 +384,23 @@ Si la lecture authentifiée des quotas avec le nouveau jeton OAuth confirme un q
 
 La revalidation en arrière-plan est distincte et désactivée par défaut. Elle nécessite Token Guardian, la politique `proactive` du fournisseur `openai` et `tokenGuardian.codexWarmupEnabled`, et ignore les comptes dont la validation d’inscription est en attente.
 
+### Pourquoi un compte a cessé de servir les requêtes
+
+Lorsqu'un compte quitte la sélection du pool, la raison accompagne la décision au lieu d'être recalculée pour l'affichage : une interface ne peut donc pas présenter un compte comme sain pendant que le routage l'écarte. `GET /api/codex-auth/accounts` expose `reauthReason` à côté de `needsReauth` pour chaque compte : `missing_credential` si aucun identifiant n'a été enregistré, `refresh_failed` si le renouvellement échoue de façon répétée, et `quota_unauthorized` si la lecture des quotas elle-même a été refusée.
+
+Un renouvellement du compte principal qui n'aboutit pas répond toujours `503` avec `Retry-After`, car une nouvelle tentative peut réussir. Le message précise désormais qu'un échec persistant signifie que le compte principal doit être réauthentifié, au lieu de demander seulement de réessayer.
+
+### Écarter de la rotation un compte rétrogradé
+
+`codexPool.excludedPlans` liste les clés de forfait que la sélection automatique du pool ignore, comparées sans tenir compte de la casse au forfait enregistré sur chaque compte. Absent par défaut : une installation existante effectue exactement la même rotation qu'avant.
+
+```bash
+ocx config set codexPool '{"excludedPlans":["free"]}'
+```
+
+C'est une politique de sélection, pas un blocage. Un compte écarté conserve ses identifiants, son historique de quota et son affinité de thread, reste visible dans la liste des comptes et demeure joignable par sélection explicite comme `work/gpt-5.5`. Seule la rotation automatique cesse de le choisir, y compris lorsqu'il est déjà le compte actif ou déjà lié à un thread — l'état exact que laisse un abonnement expiré.
+
+Le compte Codex principal reste exempt de l’exclusion par forfait : le routage en mode sélection seule ne lit pas ses identifiants natifs protégés. Si tous les comptes éligibles du pool sont exclus, la sélection automatique ne renvoie aucun compte. Les routes désignant explicitement un compte restent disponibles, avec les contrôles de pause, d’authentification et de droits du modèle. La carte et le CLI affichent le forfait exclu séparément de l’état des identifiants. Il n’existe pas de réglage `minimumPlan`, faute d’ordre total des forfaits.
 ## Restauration de Codex natif
 
 `ocx stop` arrête le proxy et le service d'arrière-plan installé, puis tente de restaurer Codex natif. OpenCodex retire les éléments de routage dont il peut vérifier la propriété et signale une restauration incomplète si les fichiers de configuration ne peuvent pas être récupérés en toute sécurité.
@@ -398,3 +416,15 @@ ocx restore back # point plain Codex at the running proxy again
 Lorsque opencodex s'exécute comme [service d'arrière-plan géré](/fr/reference/cli/lifecycle/#ocx-service-installrepairstartstopstatusuninstallremove), il définit
 `OCX_SERVICE=1` afin qu'un redémarrage déclenché par le service ne modifie **pas** sans cesse la configuration
 Codex. Seule l'exécution explicite de `ocx stop` ou `ocx service stop` restaure Codex natif.
+
+## Refus de sécurité pour l’historique paginé
+
+Une transition de fournisseur peut renvoyer `history_paginated_requires_native_writer` si le stockage concerné prend en charge la pagination, même pour ses lignes legacy. Cette raison ne refuse plus la configuration Codex, le profil de référence ni le catalogue de modèles. `ocx sync` et `ocx start` écrivent toujours ces fichiers et définissent `model_catalog_json`, afin que le sélecteur de modèles Codex continue d’afficher tous les modèles routés par OpenCodex. Seule cette raison interrompt le réétiquetage de l’historique des conversations, car Codex attribue les numéros d’historique paginé dans son propre processus d’écriture et aucune nouvelle tentative n’y change rien. Toute autre raison de contrôle préalable de l’historique — une base d’état illisible, un historique dont l’identité a changé, ou un contrôle préalable qui n’a pas pu s’exécuter — refuse encore toute la transition et l’annule, car ces cas peuvent réussir plus tard. Dans cet état, OpenCodex ne modifie jamais les fichiers d’historique paginé ni les lignes de conversation. Les conversations existantes conservent le fournisseur déjà associé et ne sont pas migrées ; les nouvelles conversations passent par le proxy. Lorsque le réétiquetage est interrompu, une table `[model_providers.opencodex]` déjà présente dans le répertoire d’accueil est conservée plutôt que retirée, y compris sous la forme root-override (loopback), afin que les conversations dont les lignes sont étiquetées `opencodex` gardent un identifiant de fournisseur qui existe encore. Le CLI affiche `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore` et la suppression de la configuration Codex refusent toujours sur `history_paginated_requires_native_writer`. Retirer la définition `[model_providers.opencodex]` alors que des lignes de conversation la référencent encore rendrait ces conversations irrésolubles, et le chemin de restauration n’a aucun moyen de conserver une table de fournisseur de compatibilité. Un répertoire d’accueil déjà paginé ne peut pas actuellement être désinstallé par le produit ; c’est un travail ouvert connu, et non le comportement voulu.
+
+Lors du retour au mode de remplacement de l’URL racine, OpenCodex conserve la définition `[model_providers.opencodex]` existante avant de valider la configuration, même si la vérification préalable de l’historique réussit. Les anciennes conversations `opencodex` peuvent ainsi toujours retrouver leur fournisseur si Codex migre l’historique après cette validation ou pendant le démarrage du traitement en arrière-plan. Les nouvelles conversations utilisent le fournisseur racine sélectionné ; la restauration explicite conserve ses contrôles de suppression distincts.
+
+Ne réécrivez pas un historique paginé actif ni une ligne de conversation pour forcer une migration. Fermez la conversation avant toute récupération et signalez l’erreur exacte et les versions sans publier de données privées. Une sauvegarde ou le succès d’un script ne prouve pas le rétablissement de l’affichage : vérifiez la conversation après réouverture de Codex.
+
+## Annulation de la réauthentification du compte principal
+
+Lors de l’annulation de la réauthentification du compte principal par code d’appareil, un échec temporaire de DELETE, une erreur réseau ou une réponse dont le statut est inconnu ou non terminal conserve le flux actif et l’indication d’échec de l’annulation afin de permettre une nouvelle tentative. L’interrogation périodique du statut continue normalement pour détecter une connexion qui aboutit entre-temps. Si un échec d’annulation permettant une nouvelle tentative coïncide avec une réponse GET de statut HTTP hors 2xx alors que le flux est `pending` ou `committing`, l’ordre d’arrivée des réponses ne change rien : l’annulation peut être retentée sur le même flux, avec le dernier code d’appareil, la dernière URL de vérification et la dernière phase fournis par le serveur. L’échec HTTP de GET arrête toujours l’interrogation périodique, mais l’annulation reste possible sans lancer un second POST de connexion. Une réponse terminale `failed` libère le flux et affiche la raison d’échec normalisée ; seul le statut `succeeded` signale une connexion réussie. Une réponse confirmant `cancelled` libère le flux et permet de lancer une nouvelle connexion par code d’appareil. Une réponse HTTP 404 définitive avec le code `unknown_flow` libère également l’identifiant du flux expiré pour permettre une nouvelle connexion par code d’appareil, sans signaler une connexion réussie ni une annulation confirmée. Les réponses POST, GET ou DELETE tardives d’un ancien flux ne peuvent ni modifier le nouveau flux ni signaler une connexion réussie pour celui-ci.

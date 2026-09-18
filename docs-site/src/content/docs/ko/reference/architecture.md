@@ -23,7 +23,8 @@ src/
 ├── vision/             # vision sidecar (describe + plan)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -34,23 +35,26 @@ src/
 └── index.ts            # public entry
 ```
 
-기존의 대형 진입 파일 세 개는 이제 호환성 facade입니다. `codex/catalog.ts`는 7개의
-`codex/catalog/*.ts` 모듈을, `server/management-api.ts`는 9개의 `server/management/*.ts`
-모듈을, `server/responses.ts`는 5개의 `server/responses/*.ts` 모듈을 연결합니다.
+기존의 대형 진입 파일들은 이제 호환성 facade입니다. `codex/catalog.ts`는
+`codex/catalog/*.ts` 모듈을, `server/management-api.ts`는 `server/management/*.ts`
+모듈을, `server/responses.ts`는 `server/responses/*.ts` 모듈을, `bridge.ts`는 `bridge/*.ts`
+모듈을 연결합니다. facade는 안정적인 import 경로일 뿐 구현이 아닙니다. 아래 각 단계는
+실제 코드를 소유한 모듈을 가리키며, Responses 표면의 전체 소유권 목록은
+`structure/transports/responses.md`에 있습니다.
 
 ## 요청 처리 흐름
 
-HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `server/responses.ts` facade와
+HTTP 경계는 `server/index/serve-options.ts`가 맡고, Responses 데이터 플레인은 `server/responses.ts` facade와
 `server/responses/*.ts` 모듈로 넘깁니다.
 
-1. `server/index.ts`에서 CORS와 API 인증을 확인하고, 종료 대기 중이면 새 요청을 거부한 뒤 요청 수명
+1. `server/index/serve-options.ts`에서 CORS와 API 인증을 확인하고, 종료 대기 중이면 새 요청을 거부한 뒤 요청 수명
    주기를 기록합니다. 여기서 `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (Codex 내장 `image_gen` 도구용 — `server/images.ts`가 OpenAI 계열 업스트림으로 중계),
    `POST /v1/live` / `POST /v1/realtime/calls`(ChatGPT / Codex App 음성 및 OpenAI Realtime
    호출 생성, `server/live.ts`가 중계)와 `/v1/live/{callId}` 사이드밴드 WebSocket,
    그리고 `/v1/responses`의 선택적 WebSocket 업그레이드를 제공합니다.
-2. `server/responses/core.ts`가 압축을 풀고 JSON을 읽습니다. 기억해 둔 `previous_response_id` 입력이 있으면
+2. `server/responses/request-prepare.ts`가 압축을 풀고 JSON을 읽습니다. 기억해 둔 `previous_response_id` 입력이 있으면
    펼친 다음 `responses/parser.ts`로 넘깁니다.
 3. `router.ts`가 일반 모델 id 또는 `provider/model` id를 해석합니다. 이어서 Codex 계정 affinity를
    결정하고, 필요하면 프로바이더 OAuth를 갱신해 선택된 자격 증명을 route에 적용합니다.
@@ -61,7 +65,7 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
    나머지 변환형 어댑터는 업스트림 요청을 build/fetch/parse합니다.
 6. 라우팅 모델이 호스티드 `web_search`를 요청하면 `web-search/`가 합성 함수를 노출합니다. 실제 검색은
    ChatGPT 사이드카로 실행하고 결과를 라우팅 모델에 다시 넣으며, 설정된 횟수 안에서 반복합니다.
-7. `bridge.ts`가 Responses SSE 또는 JSON을 만듭니다. `server/request-log.ts`와 `usage/`는 응답을
+7. `bridge/sse.ts` / `bridge/response-json.ts`가 Responses SSE 또는 JSON을 만듭니다. `server/request-log.ts`와 `usage/`는 응답을
    건드리지 않은 채 종료 상태, 지연 시간, 프로바이더/모델, 최선 추정 토큰 사용량을 기록합니다.
 
 ## 파서
@@ -83,7 +87,7 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
 
 ## 브리지
 
-`bridge.ts`는 어댑터의 내부 `AdapterEvent` 스트림을 Codex가 이해하는 Responses SSE로 다시
+`bridge/sse.ts`는 어댑터의 내부 `AdapterEvent` 스트림을 Codex가 이해하는 Responses SSE로 다시
 변환합니다:
 
 | AdapterEvent | Responses SSE emitted |
@@ -114,7 +118,7 @@ Responses 항목 타입으로 구분됩니다 — 따라서 MCP 네임스페이�
 
 ## 전송과 compaction
 
-`server/index.ts`는 기본적으로 `/v1/responses`를 HTTP/SSE로 제공합니다. `websockets`가 `false`인
+`server/index/serve-options.ts`는 기본적으로 `/v1/responses`를 HTTP/SSE로 제공합니다. `websockets`가 `false`인
 상태에서 Codex가 Responses WebSocket 업그레이드를 시도하면 opencodex는 `426 upgrade_required`를
 반환하고, Codex는 해당 세션에서 HTTP로 폴백합니다. `"websockets": true`가 설정되면 같은
 엔드포인트가 업그레이드를 받아들이고 WebSocket 브리지를 사용합니다.
@@ -127,9 +131,18 @@ envelope를 각각 4 MiB로 제한하고 8 MiB producer queue 상한이 있는 b
 relay를 거칩니다. queue overflow 시 업스트림을 닫고 downstream에는
 terminal `response.failed` 이벤트와 `[DONE]`을 내보냅니다.
 
+최종 전송 모델이 `gpt-5.3-codex-spark`이면 canonical ChatGPT forward 경로는 HTTP 헤더와
+네이티브 WS 프레임 메타데이터 모두에서 Responses Lite를 명시적으로 끕니다. 별칭으로 Spark를
+선택해도 동일합니다. 다만 이 비활성화는 전송 본문에 비어 있지 않은 `tools` 배열을 가진 `additional_tools` 항목이 없을 때만
+적용됩니다. 이 그룹 자체가 Lite의 도구 전달 형식이므로, 그것을 사용하는 Spark 본문은 호출자나
+설정 헤더가 무엇이든 Lite를 켠 상태로 유지합니다. Lite 식별값이 바뀌면 기존 소켓은 사용을 종료하며, 이후 같은 식별값으로
+재사용 조건을 충족하는 요청은 새 소켓을 재사용할 수 있습니다. 다른 모델과 게이트웨이는 기존
+Lite 정책을 유지합니다. 네이티브 메타데이터 형식이 잘못된 경우에는 본문을 바꾸지 않고
+기존처럼 HTTP로 폴백합니다.
+
 Codex 컨텍스트 compaction은 라우팅된 모델에서도 동작합니다. `server/responses/compact.ts`는
 `POST /v1/responses/compact`를 내부 라우팅 요약 턴으로 처리해 압축된 히스토리를 반환합니다.
-`responses/parser.ts`와 `bridge.ts`는 remote compaction v2의 `compaction_trigger` 턴을 처리해
+`responses/parser.ts`와 `bridge/sse.ts`는 remote compaction v2의 `compaction_trigger` 턴을 처리해
 합성 `compaction` 출력 항목을 정확히 하나 내보냅니다.
 
 ## 캐싱과 카탈로그

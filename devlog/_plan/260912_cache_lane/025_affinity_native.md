@@ -1,0 +1,17 @@
+# Final native affinity after preliminary Go route
+
+Previous D: prefix implemented; confirmed P2 on #4340 requires correction before integration. Source https://github.com/lidge-jun/opencodex/pull/4340#discussion_r3995130580. Class C3 transport identity; same authorized runtime/no-local-suites/no-merge scope. This extends the existing affinity PR, not a new independent feature.
+
+MODIFY src/server/claude-messages.ts: remove preliminary `if (nativeRoute && !opencodeGoRoute)` session_id synthesis. Retain validated metadata UUID privately as new HandleResponsesOptions.claudeNativeSessionId, alongside claudeGoAffinity. Do not derive from system fallback. Explicit session_id is forwarded as before and wins.
+
+MODIFY src/server/responses/core.ts: add optional `claudeNativeSessionId?: string` to internal options. Create a private `withClaudeNativeSession(headers, provider, sessionId)` helper that returns headers unchanged unless canonical OpenAI, private value present, and no explicit session_id/session-id/thread-id header. Then clone Headers and set only the cloned session_id. Apply to both finalAuth.headers and finalAuth.callerAuthHeaders after final auth resolution; alternate-account retries already consume callerAuthHeaders. Reapply to selectedForwardHeaders after a native credential refresh, whose replay result rebuilds from req. Never mutate req.headers. Policy/combo replay sees original headers and carries only the private option. Explicit underscore, hyphenated session and thread-only identity all prevent metadata synthesis. No public serialization: creation Claude handler -> recursive option spreads -> attempt-local auth/header copies -> canonical adapter.
+
+A audit corrections: reject request-header mutation because policy fallback reuses the same request. Reject caller JWT fixture because Claude drops caller auth. Use isolated stored main under an actual admitted turn; no ambient credentials.
+
+MODIFY tests/providers/opencode-go-session-header.test.ts: real handler random/failover Go preflight -> canonical ChatGPT fixture, valid metadata yields expected UUID, explicit native header wins, no metadata/shared-system cannot synthesize. Mock outbound fetch; isolate OPENCODEX_HOME and CODEX_HOME, store synthetic main JWT/account and use tryAdmitTurn lease with real handler logIds so existing claimed-main enrichment is reached. Add canonical failure then noncanonical policy fallback control with original request.headers unchanged; existing runPolicyFallbackHops fixture may be used to inspect header-copy boundary. Retain final non-Go no-header controls. Hosted CI only; local product checks NOT RUN. Assert actual session_id and prompt_cache_key at outbound boundary, not source text.
+
+MODIFY structure/data-planes/inbound-compat.md final affinity contract to describe private native lane at final canonical destination; mapped links already exist. Preserve source authors. C source audit + diff check, then exact final-tip hosted run tracked in verification cycle. D records missed earlier review scenario and repair head.
+
+Test placement amendment: NEW tests/claude-integration/claude-native-affinity.test.ts and both layout mappings instead of enlarging the existing 600-line Go suite. Same real-handler matrix plus policy wrapper with real core and controlled trace.
+
+C review correction: normalizeLogConversationId hashes its input, so native projection retains raw validated UUID separately; only metadataGoLane uses normalized hash. Preserve fixed historical UUID oracle, no cache-identity migration.

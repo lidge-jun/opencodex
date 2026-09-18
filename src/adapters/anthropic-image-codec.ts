@@ -105,6 +105,62 @@ let cacheMetadataBytes = 0;
 let cacheSentinelEntries = 0;
 let encodeCalls = 0;
 
+/**
+ * Last-EMITTED ladder position per image identity (#4532). The age-tier pyramid in
+ * anthropic-image-normalize derives an image's start position from its recency rank
+ * within the current request, so appending one newer image shifts every older image's
+ * rank by one and can push it across a tier boundary — re-encoding it to different
+ * bytes and busting Anthropic's prompt prefix cache for the whole history. Pinning the
+ * start position to the image's own identity keeps already-emitted bytes stable across
+ * appends. Keys are the encode cache's identity minus the position suffix
+ * (`${hash}:${mediaType}`, see processAt). Entry-count cap with LRU eviction: a
+ * value is one small number, so a count bound is a byte bound (~4096 * ~50B worst
+ * case, far under the app-owned memory budget's headroom).
+ */
+const POSITION_STORE_MAX_ENTRIES = 4_096;
+const emittedPositions = new Map<string, number>();
+
+function positionKey(b64: string, mediaType: string): string {
+  return `${Bun.hash(b64).toString(36)}:${mediaType}`;
+}
+
+/**
+ * The position this image was last emitted at, if it has been normalized before.
+ * Reads refresh recency (insertion-order LRU, same discipline as the encode cache).
+ */
+export function recordedEmittedPosition(b64: string, mediaType: string): number | undefined {
+  const key = positionKey(b64, mediaType);
+  const pos = emittedPositions.get(key);
+  if (pos !== undefined) {
+    emittedPositions.delete(key);
+    emittedPositions.set(key, pos);
+  }
+  return pos;
+}
+
+/**
+ * Record the position an image actually ended at. Positions only ever move DOWN the
+ * ladder (first-pass tier, aggregate demotion, tierBias) — nothing raises an image
+ * back up — so the stored value is monotonically non-decreasing and cannot flap.
+ * That monotonicity is what makes identity-pinning safe: a stale entry can only make
+ * an image smaller than its fresh tier would, never larger.
+ */
+export function recordEmittedPosition(b64: string, mediaType: string, pos: number): void {
+  const key = positionKey(b64, mediaType);
+  const existing = emittedPositions.get(key);
+  if (existing !== undefined) {
+    emittedPositions.delete(key);
+    pos = Math.max(existing, pos);
+  }
+  while (emittedPositions.size + 1 > POSITION_STORE_MAX_ENTRIES) {
+    const oldest = emittedPositions.keys().next().value;
+    if (oldest === undefined) break;
+    emittedPositions.delete(oldest);
+  }
+  emittedPositions.set(key, pos);
+  enforceAppOwnedMemoryBudget();
+}
+
 function cacheEntry(key: string, value: CacheValue): CacheEntry {
   const keyBytes = cacheEncoder.encode(key).byteLength;
   const valueBytes = typeof value === "string"
@@ -180,6 +236,7 @@ export function getNormalizeStatsForTests(): {
 }
 export function resetNormalizeStateForTests(): void {
   cache.clear();
+  emittedPositions.clear();
   cacheBytes = 0;
   cacheMetadataBytes = 0;
   cacheSentinelEntries = 0;

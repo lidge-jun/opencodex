@@ -5,6 +5,7 @@ import {
   hasCallerCodexBearer,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  releaseCodexAuthContextProbeLease,
   type CodexAccountSelectionAdmission,
   type CodexAuthContext,
   type CodexAuthPolicyConfig,
@@ -31,6 +32,8 @@ export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandid
   authContext: CodexAuthContext;
   headers: Headers;
   recordOutcome?: (outcome: CodexUpstreamOutcome) => void;
+  /** Hand back an acquired recovery probe when no sidecar request reached upstream. */
+  releaseProbeLease?: () => void;
 }
 
 /**
@@ -129,6 +132,7 @@ export async function resolveFirstUsableOpenAiSidecar(
     admission?: Pick<DataPlaneAdmission, "source">;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
+    signal?: AbortSignal;
   } = {},
 ): Promise<ResolvedOpenAiForwardSidecar | undefined> {
   const { exactAccount } = options;
@@ -151,12 +155,21 @@ export async function resolveFirstUsableOpenAiSidecar(
         modelId: exactAccount.modelId,
         admission: options.admission,
         beginCodexAccountSelection: options.beginCodexAccountSelection,
+        signal: options.signal,
       });
-      const selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, exactAccount.modelId, options.admission);
+      let selectedHeaders: Headers;
+      try {
+        options.signal?.throwIfAborted();
+        selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, exactAccount.modelId, options.admission);
+      } catch (error) {
+        releaseCodexAuthContextProbeLease(authContext);
+        throw error;
+      }
       if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
         || !isCodexAuthContextUsable(authContext, config)) {
         // Exact selection is fail-closed. A generation/runtime-state race must not fall through
         // to the caller-bearer error or let a later candidate select another account.
+        releaseCodexAuthContextProbeLease(authContext);
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
       return {
@@ -178,6 +191,7 @@ export async function resolveFirstUsableOpenAiSidecar(
             ...(authContext.kind === "pool" ? { credentialGeneration: authContext.generation } : {}),
           },
         ),
+        releaseProbeLease: () => releaseCodexAuthContextProbeLease(authContext),
       };
     }
     if (candidate.accountMode === "direct") {
@@ -194,9 +208,20 @@ export async function resolveFirstUsableOpenAiSidecar(
       codexAuthPolicy: policy,
       admission: options.admission,
       beginCodexAccountSelection: options.beginCodexAccountSelection,
+      signal: options.signal,
     });
-    const selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, undefined, options.admission);
-    if (!isCodexAuthContextUsable(authContext, config)) continue;
+    let selectedHeaders: Headers;
+    try {
+      options.signal?.throwIfAborted();
+      selectedHeaders = headersForCodexAuthContext(incomingHeaders, authContext, policy, undefined, options.admission);
+    } catch (error) {
+      releaseCodexAuthContextProbeLease(authContext);
+      throw error;
+    }
+    if (!isCodexAuthContextUsable(authContext, config)) {
+      releaseCodexAuthContextProbeLease(authContext);
+      continue;
+    }
     return {
       ...candidate,
       authContext,
@@ -215,6 +240,7 @@ export async function resolveFirstUsableOpenAiSidecar(
               ...(authContext.kind === "pool" ? { credentialGeneration: authContext.generation } : {}),
             },
           ),
+          releaseProbeLease: () => releaseCodexAuthContextProbeLease(authContext),
         }
         : {}),
     };

@@ -14,9 +14,11 @@ its configured reasoning effort.
 The helper model is not stable across client versions. Codex used `gpt-5.4-mini` up to 0.144.x and
 moved to `gpt-5.6-luna` in 0.145.0, which silently disabled a single-literal intercept
 ([#311](https://github.com/lidge-jun/opencodex/issues/311)). The intercept therefore matches a
-**set** of source-model prefixes — `gpt-5.4-mini` and `gpt-5.6-luna` by default — so a client bump
-does not quietly turn the feature off. Routed ids (`provider/model`) are never matched: a shadow
-call is always a bare native slug, and an explicit routed selection must not be hijacked.
+**set** of source-model prefixes — `gpt-5.6-luna` by default — so a client bump does not quietly
+turn the feature off. `gpt-5.4-mini` is retired upstream and is no longer a default prefix, but it
+remains a valid `sourceModels` entry for anyone still serving 0.144.x clients. Routed ids
+(`provider/model`) are never matched: a shadow call is always a bare native slug, and an explicit
+routed selection must not be hijacked.
 
 ## The problem
 

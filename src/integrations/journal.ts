@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { atomicWriteFile } from "../config";
-import { ensureDir, fingerprint, integrationsDir, type OwnershipRecord } from "./ownership";
+import { ensureDir, fingerprint, integrationsDir, isOwnershipRecord, type OwnershipRecord } from "./ownership";
 import { isIntegrationClientId, type IntegrationClientId } from "./registry";
 
 /**
@@ -229,6 +229,48 @@ export function listOperations(
 
 export function findOperation(opId: string, dir: string = integrationsDir()): JournalEntry | null {
   return listOperations(undefined, Number.MAX_SAFE_INTEGER, dir).find(row => row.opId === opId) ?? null;
+}
+
+export function isJournalEntry(value: unknown): value is JournalEntry {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const snapshot = entry.snapshot;
+  return typeof entry.opId === "string" && /^[a-zA-Z0-9-]+$/.test(entry.opId)
+    && typeof entry.clientId === "string" && isIntegrationClientId(entry.clientId)
+    && typeof entry.configPath === "string" && entry.configPath.length > 0
+    && typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
+    && typeof entry.kind === "string" && ["apply", "refresh", "disable", "restore", "overwrite"].includes(entry.kind)
+    && typeof entry.resultAbsent === "boolean"
+    && (entry.resultAbsent ? entry.resultFingerprint === "" : typeof entry.resultFingerprint === "string" && /^[a-f0-9]{16}$/.test(entry.resultFingerprint))
+    && (entry.priorRecord === null || isOwnershipRecord(entry.priorRecord))
+    && snapshot !== null && typeof snapshot === "object" && !Array.isArray(snapshot)
+    && ("kind" in snapshot && (snapshot.kind === "none" || snapshot.kind === "expired"
+      || (snapshot.kind === "stored" && "relPath" in snapshot && typeof snapshot.relPath === "string" && snapshot.relPath.length > 0)));
+}
+
+/** Commit evidence includes retired rows. Read/parse failures must never become "not committed". */
+export function findCommittedOperation(opId: string, dir: string = integrationsDir()): JournalEntry | null {
+  let raw: string;
+  try { raw = readFileSync(journalPath(dir), "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new Error("integration journal cannot be read for recovery");
+  }
+  let found: JournalEntry | null = null;
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let row: unknown;
+    try { row = JSON.parse(line); }
+    catch { throw new Error("integration journal is incomplete for recovery"); }
+    if (isTombstone(row)) {
+      if (!row.tombstone || typeof row.at !== "string" || !Number.isFinite(Date.parse(row.at))
+        || typeof row.by !== "string" || !row.by) throw new Error("integration journal contains invalid recovery metadata");
+      continue;
+    }
+    if (!isJournalEntry(row)) throw new Error("integration journal contains invalid recovery metadata");
+    if (row.opId === opId) found = row;
+  }
+  return found;
 }
 
 /** Resolves the tag against what is actually on disk now. */

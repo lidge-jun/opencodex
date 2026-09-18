@@ -1,0 +1,13 @@
+# Explicit Claude prefix stabilization
+
+Prerequisite roadmap; independent dev PR. Reimplement #4052 at 43def4039ba60039df9a2a91fb6352b91ba74d70; preserve Warexpor and Cursor Agent credit. Do not copy binary paper or unverified measurements.
+
+NEW src/claude/inbound-cache-stabilize.ts: adopt source helper's complete trailing exact total_tokens/two TaskCreate matchers and fenced-range parser, including unclosed fence through EOF. Source full text is in .tmp/cache-handoff/pr-4052.diff. MODIFY src/claude/inbound.ts: read `cc?.stabilizePromptCache === true` from the existing Claude config parameter, defaulting stabilization off, relocate only when true, append latest dynamic notice as user input, use stabilized instructions for opted-in Desktop cache key; preserve original systemParts hashing otherwise.
+
+MODIFY src/types/config.ts OcxClaudeCodeConfig: add `stabilizePromptCache?: boolean` with default false and role-change warning. Serialization/deserialization: existing config JSON save/load retains the boolean; no new wire option; malformed non-true values do not activate. KEEP src/server/claude-messages.ts existing three-argument translation call, which already passes config.claudeCode. Never use unconditional true or infer opt-in from metadata, endpoint or text. Configuration is operator-owned and opt-in applies to translated Messages traffic; native passthrough stays unchanged.
+
+NEW tests/claude-integration/claude-inbound-cache-stabilize.test.ts: adopt translator/helper controls; replace source-phrase assertion with real handler outbound capture proving default/unset/false retain exact suffix and original key, true relocates, fences preserve content, both TaskCreate shapes peel, metadata session key stays stable. MODIFY scripts/test-layout/layout.json and tests/fixtures/test-layout-expected.json to register new file. Add save/load and malformed-value control where existing config fixture permits.
+
+MODIFY docs-site/src/content/docs/guides/claude-code.md and applicable translated pages: document default-off claudeCode.stabilizePromptCache, changed message role/key scope and no hit-rate guarantee. MODIFY structure/data-planes/inbound-compat.md/config.md and other mapped source-owner docs with canonical contract references. No GUI control, new dependency, automatic user config edit or cache-key-to-session synthesis.
+
+C: textual diff/source review only locally; all product tests NOT RUN. Hosted tests must observe actual outbound instructions/input/key, not phrase presence. Independent reviewer must confirm that earlier #4052 HTTP activation blocker is resolved. D publishes exact implementation with remote evidence pending until verification phase.

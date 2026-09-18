@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` 会引导你完成：
 
-1. **选择 provider** — 从内置 registry 的 79 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
+1. **选择 provider** — 从内置 registry 的 94 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
 3. **默认模型** — 对于 key、本地和 custom provider，接受预设值或输入模型 id。
 4. **代理端口** — 默认为 `10100`。
@@ -65,7 +65,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 
 ## 选择 sub-agent 模型（可选）
 
-全新配置会在 Codex 的 sub-agent 选择器中提供五个原生模型：`gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` 和 `gpt-5.4-mini`。打开 `ocx gui`，可以替换或重新排序最多五个原生或已路由模型。仪表盘还可以设置一个首选 sub-agent 模型和 reasoning effort。参见 [Sub-agent Surface](/guides/sub-agent-surface/) 以选择 v1/base/v2，并了解何时适用 guidance、原生默认值和 fallback。
+全新配置会在 Codex 的 sub-agent 选择器中提供五个原生模型：`gpt-5.5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` 和 `gpt-6-astra`。打开 `ocx gui`，可以替换或重新排序最多五个原生或已路由模型。仪表盘还可以设置一个首选 sub-agent 模型和 reasoning effort。参见 [Sub-agent Surface](/guides/sub-agent-surface/) 以选择 v1/base/v2，并了解何时适用 guidance、原生默认值和 fallback。
 
 ## 登录而非粘贴 key
 

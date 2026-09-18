@@ -24,6 +24,7 @@
 @import "./styles-apikeys-workspace.css";
 @import "./styles-codex-set.css";
 @import "./styles-compatibility-matrix.css";
+@import "./styles-remote-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -1797,14 +1798,8 @@ dialog.modal-overlay::backdrop {
   z-index: 1;
 }
 
-/* The action cluster is four nowrap items on one line — feedback, the Spark switch,
-   and two labelled buttons. Narrow the window and that line wants ~577px inside a
-   437px column, and because `.page-head` is a plain nowrap flex row the surplus did
-   not wrap or scroll: the trailing "Refresh quotas" button rendered ~140px past its
-   own container and was sliced by the viewport edge. Both axes wrap now — the
-   cluster drops below the title first, then breaks internally if it still does not
-   fit — so every control stays reachable at any width. Wrapping is inert while the
-   line fits, so the wide layout is byte-identical. */
+/* Let feedback wrap below the standalone page title when a translated message is
+   wider than the available row. Account actions use their own wrapping row below. */
 .codex-auth-page-head { align-items: flex-start; flex-wrap: wrap; row-gap: 8px; }
 .codex-auth-page-head__actions {
   display: flex;
@@ -1817,19 +1812,6 @@ dialog.modal-overlay::backdrop {
 /* Once the cluster owns its own line the title no longer competes for width, so it
    takes the full row rather than wrapping "Codex Auth" onto two lines. */
 .codex-auth-page-head > .page-title { flex: 1 1 auto; }
-/* Spark visibility switch: a labelled toggle, not a bare knob. An unlabelled switch sitting
-   between two labelled buttons is a guessing game, and this one changes what every card in the
-   page renders. The label carries the meaning; the toggle carries the state. */
-.codex-auth-spark-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-}
-.codex-auth-spark-toggle__label {
-  font-size: 12px;
-  color: var(--muted);
-}
 /* The pause/refresh pair after it moved out of the page head. Right-aligned so it still
    reads as chrome for the account list below rather than a heading of its own, and it
    wraps because both labels grow substantially in several locales. */
@@ -2610,7 +2592,7 @@ button.prov-account-row.active { cursor: default; }
 .heatmap-cell-4 { background: var(--green); }
 .heatmap-legend { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-label); align-self: flex-end; position: sticky; right: 0; }
 .heatmap-legend .heatmap-cell { width: 10px; height: 10px; }
-.heatmap-tip { position: fixed; z-index: 10; transform: translate(-50%, -100%) translateY(-8px); pointer-events: none;
+.heatmap-tip { position: fixed; z-index: var(--z-popover); pointer-events: none;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px;
   box-shadow: var(--shadow-sm); white-space: nowrap; font-size: var(--text-label); }
 .heatmap-tip-date { font-weight: var(--weight-semibold); color: var(--text); margin-bottom: 2px; }
@@ -2621,7 +2603,7 @@ button.prov-account-row.active { cursor: default; }
 
 /* 7d view: per-day request bar chart (replaces the year heatmap on the 7d toggle). */
 .daybars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; align-items: end; height: 180px; padding-top: 8px; }
-.daybar { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+.daybar { appearance: none; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
 .daybar-track { width: 100%; max-width: 48px; flex: 1; display: flex; align-items: flex-end; background: var(--border); border-radius: var(--radius-xs); overflow: hidden; }
 /* Full-height stack scaled on Y — avoids layout thrash from animating height. */
 .daybar-stack {
@@ -2640,9 +2622,9 @@ button.prov-account-row.active { cursor: default; }
 .daybar-count { font-size: var(--text-label); font-weight: var(--weight-semibold); color: var(--text); }
 .daybar-label { font-size: var(--text-caption); white-space: nowrap; }
 .daybar:hover .daybar-track { outline: 1px solid var(--border); }
-.daybar-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
+.daybar-tip { position: fixed; z-index: var(--z-popover);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;
-  min-width: 160px; box-shadow: var(--shadow-sm); pointer-events: none; }
+  min-width: min(160px, calc(100vw - 16px)); box-shadow: var(--shadow-sm); pointer-events: none; }
 .daybar-tip-date { font-size: var(--text-label); font-weight: var(--weight-semibold); color: var(--text); margin-bottom: 6px; white-space: nowrap; }
 .daybar-tip-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-label); line-height: var(--leading-relaxed); }
 .daybar-tip-swatch { width: 10px; height: 10px; border-radius: var(--radius-2xs); flex-shrink: 0; }

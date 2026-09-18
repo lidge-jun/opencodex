@@ -12,6 +12,7 @@ import {
 import {
   clearAccountQuota,
   getAccountQuota,
+  getAccountQuotaHistory,
   setAccountQuotaFromParsed,
   type StoredAccountQuota,
 } from "../../src/codex/quota";
@@ -173,6 +174,8 @@ describe("Codex quota window auto refresh", () => {
     expect(getAccountQuota("pool-a")).toMatchObject({ shortPercent: 0, shortResetAt: RESET_SECONDS + 18_000 });
     resetCodexQuotaAutoRefreshForTests();
     await runCodexQuotaAutoRefresh(loadConfig(), NOW + 18_000_000, deps);
+    expect(getAccountQuotaHistory("pool-a").observations).toHaveLength(2);
+    expect(getAccountQuotaHistory("pool-a").observations.every(row => row.source === "response-header" && row.windows[0]?.usedPercent === 0)).toBe(true);
     expect(calls).toBe(2);
     expect(loadConfig().codexQuotaAutoRefresh?.["pool-a"]?.lastFiveHourResetAt).toBe(NOW + 18_000_000);
   });

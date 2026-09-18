@@ -67,9 +67,9 @@ opencodex ignore les candidats désactivés, non routables, en mauvais état, en
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.4-mini"]
+    "gpt-5.5": ["gpt-5.6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -118,5 +118,7 @@ Ce mécanisme de récupération s’applique aux enfants routés directement et 
 Les plafonds s’appliquent uniquement à la fonctionnalité de collaboration v2. Un tour principal est admissible lorsque ses outils exposent v2. Un tour enfant l’est lorsqu’il porte exactement le marqueur codex-rs `x-openai-subagent: collab_spawn` ou `"subagent_kind": "thread_spawn"` dans `x-codex-turn-metadata`, même si les outils terminaux n’exposent plus la collaboration. Les tours principaux v1, `multiAgentMode: "v1"`, ainsi que les tours de compactage, de révision et de consolidation de la mémoire ne sont pas plafonnés.
 
 Un plafond ne peut que réduire l’effort. Le niveau retenu est le niveau annoncé le plus élevé qui ne dépasse pas le plafond. Si le modèle ne propose aucun contrôle d’effort ou si aucun niveau pris en charge ne convient, opencodex supprime le paramètre d’effort et laisse le fournisseur appliquer sa valeur par défaut. `max` et `ultra` sont acceptés, tandis que le tableau de bord propose les niveaux de `low` à `xhigh`.
+
+Les plafonds configurés s’appliquent aussi aux tours Chat Completions natifs admissibles sans effort épinglé pour le modèle. La conversion vers la valeur du fournisseur intervient lorsqu’un épinglage est appliqué ou qu’un plafond modifie la valeur ; sinon, la valeur de l’appelant natif conserve sa forme d’origine.
 
 Pour une présentation destinée aux débutants des comportements v1, default et v2, consultez [Surfaces de sous-agents](/fr/guides/sub-agent-surface/).

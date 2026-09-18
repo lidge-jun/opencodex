@@ -5,7 +5,7 @@ Thanks for helping with opencodex.
 - Start with the canonical guide: [Contributing](https://opencodex.me/contributing/)
 - Pull-request quality contract: [Review readiness and author responsibility](https://opencodex.me/contributing/pr-quality/)
 - Public user docs live in [`docs-site/`](./docs-site)
-- Current maintainer invariants live in [`structure/`](./structure)
+- Current maintainer invariants live in [`structure/`](./structure); start at [`structure/INDEX.md`](./structure/INDEX.md)
 - Maintainer roles and merge policy live in [`MAINTAINERS.md`](./MAINTAINERS.md)
 - Attribution for work landed through a maintainer carry lives in [`CREDITS.md`](./CREDITS.md)
 - Historical investigations live in [`docs/`](./docs)

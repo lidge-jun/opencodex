@@ -1,5 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import type { RequestExecutionBudget } from "../lib/request-execution-budget";
+import type { AttemptRecoveryKind } from "../usage/log";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
@@ -15,10 +17,20 @@ export interface IncomingMeta {
   providerFetch?: typeof globalThis.fetch;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
-   * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Only the
-   * anthropic adapter consumes it; others ignore it.
+   * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by
+   * the anthropic and openai-chat adapters; others ignore it.
    */
   imageTierBias?: number;
+  /**
+   * The enclosing request's send budget, for adapters that own their upstream transport.
+   *
+   * A `runTurn` adapter never receives an `AdapterFetchContext`, so the budget that bounds every
+   * other leg could not reach it: Cursor re-sends a whole turn up to three times inside one
+   * adapter call, and the request cap counted that as one send. Optional, and absent means
+   * unlimited, because adapter unit tests build a meta with neither a budget nor a request
+   * behind it (#4546).
+   */
+  sendBudget?: RequestExecutionBudget;
 }
 
 export interface ProviderAdapter {
@@ -91,6 +103,12 @@ export interface AdapterRequest {
     convertedRoutedToolSearchNames?: ReadonlySet<string>;
     /** Upstream-only aliases for namespace tools flattened in this request. */
     convertedRoutedNamespaceToolAliases?: ReadonlyMap<string, { namespace: string; name: string; kind: "function" | "custom" }>;
+    /** Request-declared collaboration child names eligible for plaintext-v2 alias restoration. */
+    plaintextV2AgentMessageToolNames?: ReadonlySet<string>;
+    /** Collaboration message-tool names actually rewritten to fixed aliases in this request. */
+    plaintextV2AgentMessageAliasedToolNames?: ReadonlySet<string>;
+    /** Upstream-only <=64-char aliases for Meta Muse tool names rewritten in this request. */
+    convertedMuseToolNameAliases?: ReadonlyMap<string, string>;
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
@@ -133,6 +151,23 @@ export interface AdapterFetchContext {
   stream?: boolean;
   /** Custom fetch executor to use for physical upstream network requests (defaults to globalThis.fetch). */
   executor?: typeof globalThis.fetch;
+  /**
+   * The logical request's send budget (#4546). Optional and unlimited when absent, so an
+   * adapter unit test that calls a transport context-free keeps its own retry shape. An
+   * adapter that retries internally must admit EVERY physical send against it: counting one
+   * adapter entry as one send is how a nested 3x3 ladder stayed invisible to a request cap.
+   */
+  sendBudget?: RequestExecutionBudget;
+  /**
+   * Observes every physical upstream send this adapter makes, including its own inner retries.
+   *
+   * `ordinal` counts from 1 within this fetch call, so a caller that already recorded the entry
+   * send records only ordinals above 1 and an adapter that never retries internally logs exactly
+   * what it logs today. Kiro and Cursor were unpinnable without this: they report one send per
+   * adapter call however many requests they actually made, so their inner ladders were invisible
+   * to `sendCount` and no regression could assert a count for them (#4546).
+   */
+  onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
 }
 
 /**

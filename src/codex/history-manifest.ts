@@ -54,7 +54,32 @@ export type CodexHistoryManifestValidation =
       readonly scope: "manifest" | "entry-shape" | "entry-provenance";
     };
 
+/**
+ * Strip the Win32 extended-length prefix: `\\?\C:\...` becomes `C:\...` and
+ * `\\?\UNC\server\share\...` becomes `\\server\share\...` (forward-slash spellings
+ * included). Codex records some rollout paths with the prefix and others without, and
+ * both spellings name the same file — comparing them literally failed the history
+ * integrity check for intact sessions (#4442). Stripping happens before resolve() so
+ * the identity converges regardless of host path semantics.
+ */
+function withoutWindowsExtendedLengthPrefix(path: string): string {
+  const match = /^(?:[\\/]{2}\?[\\/])(unc[\\/])?/i.exec(path);
+  if (!match) return path;
+  return match[1] ? `\\\\${path.slice(match[0].length)}` : path.slice(match[0].length);
+}
+
 function codexHistoryPathIdentity(path: string): string {
+  if (process.platform !== "win32") return resolve(path);
+  return resolve(withoutWindowsExtendedLengthPrefix(path)).toLowerCase();
+}
+
+/**
+ * Identity as computed before the extended-length prefix was normalized (#4442). A
+ * state database path spelled `\\?\C:\...` hashed to a DIFFERENT backup filename
+ * before the fix; readers still check that name so an existing manifest keeps
+ * shadowing its database instead of reading as absent.
+ */
+function legacyCodexHistoryPathIdentity(path: string): string {
   const canonical = resolve(path);
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
@@ -72,6 +97,17 @@ export function codexHistoryStateDbIdentity(path: string): string {
 export function codexHistoryBackupId(stateDbPath: string): string {
   return createHash("sha256")
     .update(codexHistoryStateDbIdentity(stateDbPath))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/**
+ * Backup filename id under the pre-#4442 identity. Differs from codexHistoryBackupId
+ * only for extended-length-prefixed database paths; identical everywhere else.
+ */
+export function legacyCodexHistoryBackupId(stateDbPath: string): string {
+  return createHash("sha256")
+    .update(legacyCodexHistoryPathIdentity(stateDbPath))
     .digest("hex")
     .slice(0, 16);
 }

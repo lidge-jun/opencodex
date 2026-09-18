@@ -20,7 +20,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * so it has to match the resolver. Every runtime reader of `modelContextWindows`,
  * `modelInputModalities` and `modelReasoningEfforts` goes through `modelRecordValue`
  * (`src/reasoning-effort.ts:108`, `src/server/effort-policy.ts:122`,
- * `src/vision/index.ts:34`, `src/codex/catalog/provider-fetch.ts:612`), which accepts a
+ * `src/vision/index.ts:34`, `src/codex/catalog/model-hints.ts:165`), which accepts a
  * family entry for a tagged id. This file pins the evidence to that same rule.
  *
  * The window matters most: a bare lookup did not degrade to unknown there, it fell

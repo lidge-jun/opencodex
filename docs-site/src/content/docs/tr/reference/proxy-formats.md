@@ -281,6 +281,10 @@ Thinking yeniden gönderimi ve önbellek, ayrı [#3719](https://github.com/lidge
 
 ## `POST /v1/live` ve Realtime yan bandı
 
+Aşağıdaki hesap bağlantısı yerel Codex istemcileri içindir. Harici API anahtarıyla dikte ve GPT-Live kullanımı için [İngilizce ses API belirtimine](/reference/proxy-formats/#streaming-dictation) bakın.
+
+Connections > API keys altında Dikte ve Canlı Ses bölümleri bulunur. Veri anahtarı yalnızca form belleğinde tutulur. Dikte seçilen dosyayı gönderir; ses bağlantısı kontrolü mikrofon kullanmadan oturum onayını bekler. Yapılandırılmış olması bağlantının başarılı olduğu anlamına gelmez.
+
 `POST /v1/live`, ChatGPT/Codex App Frameless çağrı oluşturma yüzeyini kabul
 eder. `POST /v1/realtime/calls`, OpenAI Realtime çağrı oluşturma yüzeyini kabul
 eder. opencodex uygun bir OpenAI ailesi rotası seçer, yukarı akış kimlik
@@ -340,6 +344,8 @@ ve `x-api-key` anlamına gelir.
 Responses ailesi ve Chat istekleri, özel başlıkta veya Bearer alanında bir proxy anahtarını kabul eder. Yerel Codex rotalarında seçilen kayıtlı Codex kimlik bilgisi kabul bearer’ının yerini alır; diğer rotalarda bu bearer kaldırılır. Proxy anahtarı hiçbir zaman upstream kimlik bilgisi olarak kullanılmaz. Ayrı bir sağlayıcı bearer’ı da gönderiyorsanız proxy anahtarını özel başlığa koyun.
 
 Anahtarı olmayan ve OAuth kullanmayan bir Cursor rotası, çağıranın ayrı bearer’ını kullanabilir; proxy sırrını veya otomatik eklenen ChatGPT main kimlik bilgisini kullanamaz. Combo/policy seçimi ve gerçekleşen shadow/thread-spawn rota değişiklikleri, çağıranın ham kimlik bilgilerini yeni hedeflere aktarmaz. Kanonik OpenAI yönlendirmesi, dahili rota değişikliğinden sonra çağıranın proxy anahtarı olmayan tek bearer’ını yalnızca JWT’si bir ChatGPT hesap claim’i içeriyorsa ve açıkça belirtilmiş herhangi bir hesap başlığı bu claim ile eşleşiyorsa geri yükleyebilir. Çağıranın kimlik doğrulamasını isteğe bağlı OpenAI sidecar’larına iletmek için tek bir JWT ve onunla eşleşen, açıkça belirtilmiş bir `chatgpt-account-id` gerekir. Opaque bearer’lar, açıkça belirtilmiş bir hesap başlığı olsa bile rota değişikliklerinden sonra geri yüklenmez. Diğer durumlarda son hedefin kendi yapılandırılmış, OAuth veya kayıtlı kimlik bilgisi bulunmalıdır; aksi hâlde istek yerel olarak başarısız olur. Rota değişmeden yalnızca thread-spawn işaretinin bulunması kimlik bilgilerini kaldırmaz.
+
+Yapılandırılmış anahtarı olmayan Cursor'a gönderilen Chat isteğinde, kayıtlı main kimliğiyle isteğe bağlı tamamlama ancak bir OpenAI yardımcısı gerçekten planlandığında ve kanonik Direct adayı bulunduğunda yapılır. İlgisiz bir Cursor isteği bu yoldan native main üzerinde sahiplik almaz ve profil geçişini geciktirmez. Yardımcı kimlik bilgileri başlangıç ve profil geçişi korumalarına uyar ve Cursor bearer'ından ayrı tutulur. Pool ve belirli hesaba yönelen yardımcılar mevcut hesap seçimini korur.
 
 Claude replay, main kimlik bilgisini yalnızca ilgili turn tarafından sahipliği alınmış bir bellek snapshot’ında tutar ve yalnızca son hedef kanonik bir ChatGPT rotasıysa geri yükler.
 

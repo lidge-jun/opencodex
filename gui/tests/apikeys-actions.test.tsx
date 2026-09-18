@@ -237,7 +237,7 @@ test("a failed delete keeps the detail pane open", async () => {
 
 test("without a fresh key the protocol chips are disabled, not silently passing", async () => {
   const container = await mount({
-    filteredModels: [{ id: "gpt-5.4", displayName: "gpt-5.4", provider: "openai", native: true }],
+    filteredModels: [{ id: "gpt-5.5", displayName: "gpt-5.5", provider: "openai", native: true }],
     modelCount: 1,
     canTestModels: false,
   });
@@ -286,10 +286,10 @@ test("rotation start, one-time secret, commit, and abort stay explicit", async (
 
 test("a protocol result belongs to its own chip", async () => {
   const container = await mount({
-    filteredModels: [{ id: "gpt-5.4", displayName: "gpt-5.4", provider: "openai", native: true }],
+    filteredModels: [{ id: "gpt-5.5", displayName: "gpt-5.5", provider: "openai", native: true }],
     modelCount: 1,
     canTestModels: true,
-    modelTests: { "gpt-5.4": { chat: { state: "error", detail: "boom" } } },
+    modelTests: { "gpt-5.5": { chat: { state: "error", detail: "boom" } } },
   });
   const notes = [...container.querySelectorAll(".api-test-note")];
   // Exactly one result rendered, announced, and attached to the chat chip only.

@@ -868,7 +868,7 @@ describe("GET /api/usage", () => {
     }
   });
 
-  test("an oversized row fails closed instead of caching a partial aggregate", async () => {
+  test("an oversized row preserves normal usage with explicit incomplete cached and filtered results", async () => {
     const now = Date.now();
     const oversized = {
       requestId: "ocx-oversized",
@@ -896,11 +896,18 @@ describe("GET /api/usage", () => {
     writeFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify(oversized)}\n${JSON.stringify(valid)}\n`);
     const server = startServer(0);
     try {
-      const body = await fetch(new URL("/api/usage?range=all", server.url)).then(res => res.json());
-      expect(body.error).toBe("read_failed");
-      expect(body.summary.requests).toBe(0);
-      expect(body.historyTruncated).toBe(false);
-      expect(getUsageSummaryCacheEntry("all:all")).toBeUndefined();
+      for (const query of ["range=all", "range=all", "range=7d", "range=all&model=gpt-5.5"]) {
+        const response = await fetch(new URL(`/api/usage?${query}`, server.url));
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.error).toBeUndefined();
+        expect(body.summary.requests).toBe(1);
+        expect(body.summary.totalTokens).toBe(2);
+        expect(body).toMatchObject({
+          historyTruncated: false, usageIncomplete: true, usageIncompleteReason: "oversized_rows",
+        });
+      }
+      expect(getUsageSummaryCacheEntry("all:all")?.summary).toMatchObject({ usageIncomplete: true });
     } finally {
       await server.stop(true);
     }

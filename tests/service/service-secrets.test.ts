@@ -21,6 +21,7 @@ import {
   removeServiceApiTokenFileIfOwned,
   serviceApiTokenFilePath,
   serviceApiTokenFingerprint,
+  startupDataPlaneToken,
   writeServiceApiTokenFile,
   writeTokenBackup,
 } from "../../src/lib/service-secrets";
@@ -36,6 +37,42 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.OPENCODEX_HOME;
   if (home) removeTreeWithRetry(home);
+});
+
+/**
+ * #4236. A service boot always saw OPENCODEX_API_AUTH_TOKEN, because the launchd plist and the
+ * systemd unit cat the token file into the environment before exec. A foreground `ocx start` saw
+ * neither, so `assertServerAuthConfig` refused to bind a non-loopback hostname that the installed
+ * service on the same machine was serving happily. These pin the precedence that closes that.
+ */
+describe("startup data-plane token resolution", () => {
+  const TOKEN = "a".repeat(64);
+
+  test("the environment wins, and nothing is re-exported when it already holds a token", () => {
+    writeServiceApiTokenFile(TOKEN);
+    expect(startupDataPlaneToken({ OPENCODEX_API_AUTH_TOKEN: "already" }, { authRequired: true })).toBeNull();
+  });
+
+  test("OCX_API_TOKEN_FILE still wins over the installed path (WinSW native mode)", () => {
+    writeServiceApiTokenFile(TOKEN);
+    const named = join(home, "named-token");
+    writeFileSync(named, "from-the-named-file\n", "utf8");
+    expect(startupDataPlaneToken({ OCX_API_TOKEN_FILE: named }, { authRequired: true })).toBe("from-the-named-file");
+  });
+
+  test("the installed token is used when admission is required, and ignored when it is not", () => {
+    writeServiceApiTokenFile(TOKEN);
+    expect(startupDataPlaneToken({}, { authRequired: true })).toBe(TOKEN);
+    // A loopback bind needs no credential, and on a machine connected to a hub this same file
+    // holds that hub's issued CLIENT key -- which is not this proxy's admission secret.
+    expect(startupDataPlaneToken({}, { authRequired: false })).toBeNull();
+  });
+
+  test("an absent or unusable token file resolves to null rather than throwing at boot", () => {
+    expect(startupDataPlaneToken({}, { authRequired: true })).toBeNull();
+    writeFileSync(serviceApiTokenFilePath(), "\n", "utf8");
+    expect(startupDataPlaneToken({}, { authRequired: true })).toBeNull();
+  });
 });
 
 describe("service API token ownership", () => {

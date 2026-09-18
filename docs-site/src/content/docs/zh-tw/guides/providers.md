@@ -84,8 +84,9 @@ ChatGPT passthrough catalog 也會加入 GPT-5.6 Sol/Terra/Luna 的裸 slug：`g
 ## 2. 帳號登入（OAuth）
 
 有八個 provider preset 使用 OAuth 登入，另加透過實驗性非官方 device-flow bridge 的 GitHub Copilot。
-opencodex 會把 credential 存在 `~/.opencodex/auth.json` 並自動 refresh。登入 CLI 也接受 `chatgpt`；
-它會取得 ChatGPT credential，同時建立 `forward` 模式的 provider 條目。
+opencodex 會把 credential 存在 `~/.opencodex/auth.json` 並自動 refresh。登入 CLI 也接受 `ocx login codex`，
+但它不是上面的 provider：它會轉到 Codex 帳號池登入（與 `ocx account login codex` 相同的流程）。該帳號池
+有獨立的帳號 ledger，這條路徑需要 proxy 正在執行。`chatgpt` 與 `openai` 是同一條路徑的別名。
 
 ```bash
 ocx login xai          # xAI Grok
@@ -96,8 +97,9 @@ ocx login kiro         # 匯入 kiro-cli credential（或 token fallback）
 ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
+ocx login devin       # Cognition/Devin：優先匯入 Devin CLI 憑證，否則走 Auth0 瀏覽器登入
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
-ocx login chatgpt      # 獨立 ChatGPT OAuth 登入
+ocx login codex        # Codex 帳號池（別名：chatgpt、openai；需要 proxy 正在執行）
 ocx logout <provider>
 ```
 
@@ -110,6 +112,7 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
+| `devin` | `devin` | `https://server.codeium.com` | 實驗性的非官方 Cognition/Devin 橋接。登入會先匯入已安裝 Devin CLI 已持有的憑證（`devin auth login` 會把 `devin-session-token` 寫入它自己的 `credentials.toml`）；沒有則開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將貼上的權杖換成長期 API 金鑰。`ocx login devin-cli` 仍作為已棄用別名可用。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
 Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
@@ -166,8 +169,8 @@ opencodex 協調 token refresh 與 Codex pool 路由，避免並行請求競爭 
 **Cooldown（Codex pool）。** 上游 `429`／quota response 會依 `Retry-After`、quota `reset` header
 （有上限）或短預設 backoff 設定 hard cooldown。明確 `Retry-After` cooldown 中的帳號不會被提前 probe；
 reset 衍生 cooldown 可能取得節流後的 probe lease，在不淹沒 provider 的情況下偵測恢復。由 reset 衍生的
-native-model cooldown 也會保留已知獨立 quota group：`gpt-5.3-codex-spark` 不會阻止同一帳號嘗試共享的
-GPT-5.6 Terra/Luna quota，而共享群組內的模型仍會互相保護。明確 `Retry-After` 與預設 cooldown 始終為
+native-model cooldown 會將共享原生 quota（含 GPT-5.6 Terra/Luna）與 `gpt-reserve` 分開。
+共享群組內的模型仍會互相保護；一般請求成功不會清除 Reserve cooldown。明確 `Retry-After` 與預設 cooldown 始終為
 account-wide。
 
 **Session affinity。** Codex thread→account affinity 只存在目前 process 記憶體，不會跨 proxy restart
@@ -184,7 +187,8 @@ credential。caller 沒有送出時，opencodex **不會**捏造官方 client id
 **診斷與重新認證。** 一般 `ocx status` 會印出 OAuth health 區塊，只顯示遮蔽後 account id，不含 token。
 `ocx doctor` 會新增 OAuth reliability 區段，包含 writable-store／single-flight check，以及帶 recovery
 Action 的 WARN row。OAuth provider 帳號需要重新認證時，執行 `ocx login <provider>`，或在儀表板使用
-Reauthenticate。Codex pool 帳號不是 `ocx login` provider，請透過儀表板 Codex account pool 重新認證。
+Reauthenticate。Codex pool 帳號不是那些 provider 之一，但 `ocx login codex --reauth` 會轉到它們的帳號池
+重新認證，儀表板的 Codex account pool 也做同一件事。
 相關命令請參見 CLI 參考的 [`ocx status` / `ocx doctor`](/zh-tw/reference/cli/)。
 
 ### Kiro credential 匯入
@@ -221,7 +225,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 79 個 preset：67 個 key-based、8 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 94 個 preset：78 個 key-based、12 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -262,6 +266,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -311,6 +316,10 @@ provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）�
 原生 Responses endpoint，並保持上游 SSE streaming。若該模型完成所有 output item 卻省略最後的
 Responses event，opencodex 會套用 5 秒、model-scoped 的 grace repair；malformed 或 partial stream 會以
 incomplete 關閉，不會被誤報為成功。
+第一方 `deepseek-flash` 模型原生宣告支援 `text` 與 `image` 輸入，因此圖片請求預設會直接送往
+DeepSeek，不經過 vision sidecar。明確的 `noVisionModels` 或純文字宣告仍然優先。第一方
+`deepseek-chat`、`deepseek-reasoner` 與 `deepseek-v4-flash` 預設仍使用 sidecar；Zen 路由維持不變，
+本次更新未進行探測。
 
 > **三條 Volcengine 計費路徑：** `volcengine` 是 pay-as-you-go Ark API，
 > `volcengine-coding-plan` 消耗 Coding Plan quota，`volcengine-agent-plan` 消耗 Agent Plan quota。請使用
@@ -318,7 +327,7 @@ incomplete 關閉，不會被誤報為成功。
 > pay-as-you-go 費用。preset 使用 curated static model catalog，因為 Ark `/models` 也包含 embedding、
 > image、video 與 3D resource，Coding gateway 會回傳相同 broad catalog，而 Agent Plan gateway 沒有
 > `/models` resource。Pay-as-you-go 預設 `doubao-seed-2-1-pro-260628`，curated catalog 也包含目前的
-> DeepSeek 與 GLM text model。Coding Plan 預設 `ark-code-latest`；Agent Plan 預設 `deepseek-v4-pro`。
+> DeepSeek 與 GLM text model。Coding Plan 預設 `ark-code-latest`；Agent Plan 預設 `deepseek-v4-flash`。
 
 > **Volcengine Plan 使用限制：** Volcengine 文件指出 Coding Plan 與 Agent Plan quota 只能在受支援的
 > AI coding tool 內使用，並警告把 plan key 用於一般 API call 可能導致訂閱停權或帳號封鎖。透過
@@ -359,6 +368,11 @@ endpoint 取得。Chat request 使用設定的 Bearer key。可在
 
 **Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
 
+OrcaRouter 瀏覽器登入（`ocx login orcarouter-oauth`）的金鑰交換成功回應本文必須是不超過
+64 KiB 的有效 UTF-8 JSON。此交換請求原有的 30 秒時限涵蓋回應標頭與完整本文的接收；過大或
+格式錯誤的本文會在儲存金鑰前被拒絕。這些限制只適用於登入時的金鑰交換，不是推論請求酬載的
+限制。`scope` 驗證規則維持不變：允許省略，明確無效的值仍會被拒絕。
+
 **SambaNova Cloud 探索。** preset 從固定 API host 讀取 SambaNova Cloud 公開的 `/v1/models` 列表，保留
 provider-native id，並把 discovery 限制在 128 KiB／128 個 raw row。因 catalog 不需要認證，CLI login
 流程會把 key 回報為 unverifiable，而不會把公開 response 當成有效 key 的證明。Chat request 仍使用
@@ -369,6 +383,16 @@ endpoint 不在範圍內。可在 [SambaNova Cloud](https://cloud.sambanova.ai/a
 text 的 row，排除 embedding 與 image-generation model。它保留含 `/` 的原生 id，以及回報的 context／
 input-modality metadata，並把 discovery 限制在 512 KiB／512 個 raw row。Dedicated deployment host 不在
 範圍內。可在 [Nebius Token Factory](https://tokenfactory.nebius.com) 建立 key。
+
+**Crusoe 探索。** key-based preset 使用 `openai-chat` adapter，只把 Bearer key 傳到 Crusoe 固定的
+Serverless Inference host。`/v1/models` 會以 401 拒絕未驗證的請求，因此成功列出 model 即視為 key 驗證通過。
+discovery 會依 Crusoe 回傳的形式完整保留 `zai-org/GLM-5.3`、`moonshotai/Kimi-K2.6` 這類含 `/` 的原生 id，
+並限制在 256 KiB／256 個 raw row。只保留 `is_public: true` 且 `architecture.modality` 為 text 或 multimodal 的 row，因此帳戶私有部署以及 embedding、媒體類 row 會被排除。reasoning model 會透過 Chat Completions 的 `reasoning` 欄位回傳思考內容，
+adapter 會讀取該欄位。只有 `openai/gpt-oss-120b` 接受 `reasoning_effort` 等級（`low`、`medium`、`high`），
+其他 reasoning model 把該欄位當作開關，因此 preset 不宣告 provider-wide effort 等級，也不宣告
+provider-wide parallel tool call。rate limit 以 project 與 model 為單位（超過時回傳 429，共用 deployment
+擴容時回傳 503），新帳戶可獲得 $5 免費額度。可在 [Crusoe Cloud console](https://console.crusoecloud.com)
+的 Intelligence Foundry > Inference 建立 key。
 
 **DigitalOcean 探索。** preset 以 model access key 存取固定的 shared Serverless Inference host，並把經
 認證的 `/v1/models` response 與 DigitalOcean 文件支持的 Chat Completions allowlist 取交集。未知、
@@ -505,7 +529,7 @@ key 來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。openco
 REST API（`POST /api/chat`）連線，而非 OpenAI-compatible 介面，並向 provider 動態探索模型清單，
 因此新的 Ollama Cloud 模型不需改設定就會出現。opencodex 依 vision capability 分類其
 cloud lineup，讓 [vision sidecar](/zh-tw/guides/sidecars/) 只對純文字模型生效。純文字模型，例如
-`glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
+`glm-5.2`、`deepseek-v4-flash`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
 `noVisionModels`；原生 vision 模型，例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、
 `gemini-3-flash-preview`，不會列入。matching 可容忍 Ollama 的 `:size` tag，因此 `gpt-oss` 同時涵蓋
 `gpt-oss:120b` 與 `gpt-oss:20b`。

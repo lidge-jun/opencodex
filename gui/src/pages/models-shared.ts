@@ -39,6 +39,12 @@ export interface ModelRow {
   displayNameSource?: "operator" | "provider" | "fallback";
   manualPricing?: boolean;
   /**
+   * Listed but currently unable to serve, because every usable target is quota-exhausted
+   * (#1711). Distinct from `disabled`, which is the operator's own choice, and from visibility:
+   * the row is still offered.
+   */
+  quotaInactiveReason?: "no_credit";
+  /**
    * Provider-published cost class from model discovery (#3666). Absent means unknown — either
    * the provider publishes no per-token rates, or the row was cached by a build that predates
    * the field. Absent is never treated as free.
@@ -135,6 +141,8 @@ export interface V2Status {
   maxConcurrentThreadsPerSession?: number | null;
   multiAgentMode?: "v1" | "default" | "v2";
   keepNativeChatGptOnV1?: boolean;
+  /** Response-only; absent on a runtime older than the v1-default advisory. */
+  multiAgentSurfaceAdvisory?: unknown;
 }
 
 export interface ShadowCallData {

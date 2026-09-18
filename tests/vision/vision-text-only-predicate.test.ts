@@ -42,3 +42,14 @@ describe("isModelTextOnly (#1024)", () => {
     expect(isModelTextOnly(provider({ modelInputModalities: { "base-model": ["text"] } }), "base-model:extended")).toBe(true);
   });
 });
+
+
+test("explicit capability keys are exact and take precedence over legacy declarations", () => {
+  const config = provider({ noVisionModels: ["ModelA"], modelCapabilities: { ModelA: { inputModalities: ["text", "image"] }, model: { inputModalities: ["text"] } } });
+  expect(isModelTextOnly(config, "ModelA")).toBe(false);
+  expect(isModelTextOnly(config, "model")).toBe(true);
+  expect(isModelTextOnly(config, "MODEL")).toBe(false);
+  expect(isModelTextOnly(config, "model:variant")).toBe(false);
+  delete config.modelCapabilities!.ModelA;
+  expect(isModelTextOnly(config, "ModelA")).toBe(true);
+});

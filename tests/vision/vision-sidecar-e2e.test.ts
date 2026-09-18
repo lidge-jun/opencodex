@@ -150,7 +150,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     expect(JSON.stringify(parsed._rawBody)).toContain("[image omitted:");
   });
 
-  test("noVisionModels request fires the sidecar and forwards the caption instead of the image", async () => {
+  test.each(["legacy", "capabilities", "developer"] as const)("noVisionModels request fires the sidecar and forwards the caption instead of the image (%s)", async declaration => {
     let upstreamBody = "";
     let sidecarBody = "";
     let sidecarAuth: string | null = null;
@@ -183,7 +183,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
-          noVisionModels: ["blind-model"],
+          ...(declaration === "legacy" ? { noVisionModels: ["blind-model"] } : { modelCapabilities: { "blind-model": { inputModalities: ["text"] } } }),
         },
         openai: {
           adapter: "openai-responses",
@@ -204,7 +204,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           authorization: `Bearer ${token}`,
           "chatgpt-account-id": "acct-vision-sidecar",
         },
-        body: JSON.stringify(baseRequest("textonly/blind-model")),
+        body: JSON.stringify({ ...baseRequest("textonly/blind-model"), input: baseRequest("textonly/blind-model").input.map(item => ({ ...item, role: declaration === "developer" ? "developer" : "user" })) }),
       });
       expect(res.status).toBe(200);
 
@@ -225,7 +225,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("Responses passthrough removes every raw image when fewer captions than images are produced", async () => {
+  test.each(["legacy", "capabilities"] as const)("Responses passthrough removes every raw image when fewer captions than images are produced (%s)", async declaration => {
     let upstreamBody = "";
     let sidecarHits = 0;
     upstream = serveResponsesUpstream(b => { upstreamBody = b; });
@@ -250,7 +250,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           responsesPath: "/responses",
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
-          noVisionModels: ["blind-model"],
+          ...(declaration === "legacy" ? { noVisionModels: ["blind-model"] } : { modelCapabilities: { "blind-model": { inputModalities: ["text"] } } }),
         },
         openai: {
           adapter: "openai-responses",
@@ -285,7 +285,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("Responses passthrough replaces an image returned by a client tool", async () => {
+  test.each(["legacy", "capabilities"] as const)("Responses passthrough replaces an image returned by a client tool (%s)", async declaration => {
     let upstreamBody = "";
     let sidecarHits = 0;
     upstream = serveResponsesUpstream(b => { upstreamBody = b; });
@@ -310,7 +310,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           responsesPath: "/responses",
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
-          noVisionModels: ["blind-model"],
+          ...(declaration === "legacy" ? { noVisionModels: ["blind-model"] } : { modelCapabilities: { "blind-model": { inputModalities: ["text"] } } }),
         },
         openai: {
           adapter: "openai-responses",
@@ -343,7 +343,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("Responses passthrough strips images when no vision sidecar is available", async () => {
+  test.each(["legacy", "capabilities"] as const)("Responses passthrough strips images when no vision sidecar is available (%s)", async declaration => {
     let upstreamBody = "";
     upstream = serveResponsesUpstream(b => { upstreamBody = b; });
     const config: OcxConfig = {
@@ -356,7 +356,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           responsesPath: "/responses",
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
-          noVisionModels: ["blind-model"],
+          ...(declaration === "legacy" ? { noVisionModels: ["blind-model"] } : { modelCapabilities: { "blind-model": { inputModalities: ["text"] } } }),
         },
       },
     } as OcxConfig;
@@ -377,7 +377,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("models outside noVisionModels keep their image untouched (no sidecar call)", async () => {
+  test("positively vision-capable models keep their image untouched (no sidecar call)", async () => {
     let upstreamBody = "";
     let sidecarHits = 0;
     upstream = serveUpstream(b => { upstreamBody = b; });
@@ -392,6 +392,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
           noVisionModels: ["blind-model"],
+          modelInputModalities: { "vision-model": ["text", "image"] },
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },
@@ -408,6 +409,52 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(sidecarHits).toBe(0);
       expect(upstreamBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain(CAPTION);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each(["openai-chat", "openai-responses"] as const)("DeepSeek Flash preserves native images on the %s wire without a sidecar call (#4436)", async adapter => {
+    let upstreamBody = "";
+    let sidecarHits = 0;
+    upstream = adapter === "openai-chat"
+      ? serveUpstream(b => { upstreamBody = b; })
+      : serveResponsesUpstream(b => { upstreamBody = b; });
+    sidecar = serveResponsesUpstream(() => { sidecarHits += 1; });
+    const deepseek = PROVIDER_REGISTRY.find(entry => entry.id === "deepseek")!;
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "deepseeklike",
+      providers: {
+        // Carry the real registry classification to a loopback fixture on each wire.
+        deepseeklike: {
+          adapter, authMode: "key", baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          allowPrivateNetwork: true, apiKey: "key-alpha-000111222333",
+          noVisionModels: deepseek.noVisionModels,
+          modelInputModalities: deepseek.modelInputModalities,
+        },
+        helper: {
+          adapter: "openai-responses", authMode: "key", baseUrl: sidecar.url.toString().replace(/\/$/, ""),
+          allowPrivateNetwork: true, apiKey: "key-alpha-000111222333",
+          modelInputModalities: { "vision-model": ["text", "image"] },
+        },
+      },
+      visionSidecar: { enabled: true, backend: "routed", model: "helper/vision-model" },
+    };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(baseRequest("deepseeklike/deepseek-flash")),
+      });
+      expect(res.status).toBe(200);
+      expect(sidecarHits).toBe(0);
+      const body = JSON.parse(upstreamBody);
+      const content = adapter === "openai-chat" ? body.messages[0].content : body.input[0].content;
+      expect(content).toContainEqual(adapter === "openai-chat"
+        ? expect.objectContaining({ type: "image_url", image_url: expect.objectContaining({ url: PNG_DATA_URL }) })
+        : expect.objectContaining({ type: "input_image", image_url: PNG_DATA_URL }));
+      expect(upstreamBody).not.toContain("[image omitted");
     } finally {
       await server.stop(true);
     }
@@ -481,6 +528,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           allowPrivateNetwork: true,
           apiKey: "key-alpha-000111222333",
           noVisionModels: zen?.noVisionModels,
+          modelInputModalities: zen?.modelInputModalities,
         },
         openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
       },

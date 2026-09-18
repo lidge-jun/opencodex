@@ -1,0 +1,7 @@
+# Quota history identity foundation
+
+Adds a private random publication UUID to pool credential records. Explicit saves rotate it, refresh CAS preserves it for the same upstream account, and aliases retain distinct identities. Captured writer proofs require exact dispatched credential generation and access/account pairing; legacy identity initialization occurs under the existing lock without changing the credential generation or mutation epoch. Read/lock/write failure yields no optional proof. Metadata never enters credential-only projection.
+
+Regression sources cover refresh versus same-time replacement, aliases, deletion/recreation, legacy stable initialization, stale capture, malformed metadata, secret-free proof and identity-changing CAS. The latter rotates owner history and does not propagate the new identity into old aliases. No new test file/dependency. Local suites/build/typecheck/install NOT RUN. Source checks are not runtime proof; hosted final cumulative history/capacity tip remains required.
+
+Structural decision: proof type stays in quota-types.ts (type-only), credential record/lock/persistence stay in account-store.ts, future pure history leaf consumes plain evidence. Rejected generation-only retention because ordinary refresh increments it; rejected timestamp identity because publication can share a millisecond. The small foundation is the first ordinary manual-chain PR, then history, then capacity. No merge.

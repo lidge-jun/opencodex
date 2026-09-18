@@ -167,6 +167,57 @@ describe("ocx account main", () => {
     expect([...output, ...errors].join("\n")).not.toContain(clientHome);
   });
 
+  test("main reauth drives the dedicated native device namespace (#3898)", async () => {
+    const requests: Array<{ method?: string; path: string }> = [];
+    const output: string[] = [];
+    const errors: string[] = [];
+    console.log = (...values: unknown[]) => output.push(values.join(" "));
+    console.error = (...values: unknown[]) => errors.push(values.join(" "));
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({ method: init?.method, path: url.pathname + url.search });
+      if (url.pathname.endsWith("/main/reauth-device") && init?.method === "POST") {
+        return Response.json({ flowId: "flow-1", status: "pending", verificationUrl: "https://auth.openai.com/codex/device", deviceCode: "ABCD-1234" });
+      }
+      if (url.pathname.endsWith("/main/reauth-device") && init?.method === "GET") {
+        return Response.json({ flowId: "flow-1", status: "succeeded", credentialUpdated: true });
+      }
+      if (url.pathname.endsWith("/main/reauth-device") && init?.method === "DELETE") {
+        return Response.json({ flowId: "flow-1", status: "cancelled" });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    };
+    const deps = { baseUrl: "http://127.0.0.1:10100", fetchImpl };
+
+    expect(await cmdAccount(["main", "reauth", "--device", "--no-wait"], deps)).toBe(0);
+    expect(requests[0]).toEqual({ method: "POST", path: "/api/codex-auth/main/reauth-device" });
+    expect(output.join(" ")).toContain("ABCD-1234");
+    expect(output.join(" ")).toContain("auth.openai.com/codex/device");
+    expect(output.join(" ")).toContain("--flow flow-1");
+
+    output.length = 0;
+    expect(await cmdAccount(["main", "reauth", "--device", "--no-wait", "--json"], deps)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual({
+      flowId: "flow-1",
+      status: "pending",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      deviceCode: "ABCD-1234",
+    });
+
+    expect(await cmdAccount(["main", "reauth", "status", "--flow", "flow-1"], deps)).toBe(0);
+    expect(requests.at(-1)).toEqual({ method: "GET", path: "/api/codex-auth/main/reauth-device?flowId=flow-1" });
+    expect(output.join(" ")).toContain("succeeded");
+
+    expect(await cmdAccount(["main", "reauth", "cancel", "--flow", "flow-1"], deps)).toBe(0);
+    expect(requests.at(-1)).toEqual({ method: "DELETE", path: "/api/codex-auth/main/reauth-device?flowId=flow-1" });
+    expect(output.join(" ")).toContain("cancelled");
+
+    expect(await cmdAccount(["main", "reauth", "--device", "extra"], deps)).toBe(1);
+    expect(await cmdAccount(["main", "reauth"], deps)).toBe(1);
+    // The pool login route is never touched for __main__.
+    expect(JSON.stringify(requests)).not.toContain("/api/codex-auth/login");
+    expect(errors.join(" ")).not.toContain("access_token");
+  });
   test("JSON mutating output preserves the server's canonical effective home", async () => {
     const effectiveHome = join(tmpdir(), "ocx-native-profile-json-effective-home");
     process.env.CODEX_HOME = join(tmpdir(), "ocx-native-profile-json-client-home");

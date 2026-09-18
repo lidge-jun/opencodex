@@ -10,7 +10,6 @@ import type { OrcaCodexHomeDiagnostic } from "../../src/codex/home";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
-import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -18,13 +17,28 @@ const TEST_OCX_HOME = join(TEST_DIR, "ocx");
 const TEST_HOME = join(TEST_DIR, "home");
 const repoRoot = resolveRepoRoot();
 const COMPETING_OFF_REAP_MS = 5_000;
-const COMPETING_OFF_BOOT_MS = SPAWN_BUDGET_MS - COMPETING_OFF_REAP_MS;
-// Windows preparation performs real identity/admission preflight before discovery.
-// Reserve that work separately: CI observed 52.7s before the flip could even start.
-// The second process still keeps its original boot and reap limits.
-const COMPETING_OFF_PREPARATION_MS = process.platform === "win32"
-  ? 2 * COMPETING_OFF_BOOT_MS
-  : COMPETING_OFF_BOOT_MS;
+/**
+ * This case owns its numbers instead of deriving them from `SPAWN_BUDGET_MS`.
+ *
+ * It used to derive them, and three derivations multiplied a single edit: when that shared
+ * constant moved 45s -> 90s the outer bound here went 130s -> 265s, which nobody chose and no
+ * measurement asked for. A 265s case on a Windows shard that already runs about 25 minutes
+ * leaves an unsafe margin against the 30-minute job timeout, so one hang would have been
+ * reported as a cancelled job rather than as a named Bun timeout.
+ *
+ * The Windows reserve existed for a preflight nobody had measured — "CI observed 52.7s before
+ * the flip could even start" — so the child now reports its own preparation window on every
+ * green run. Run 35141541461 measured it at 2740ms on Windows and 423-575ms on Linux and
+ * macOS, with the whole case at 3675ms and 660-780ms; five earlier Windows shard logs put the
+ * case at 3.7s to 9.4s.
+ *
+ * These are still headroom rather than durations, sized so that even the 52.7s outlier the
+ * reserve was written for would fit: 52.7s of preparation still leaves the flip its full boot
+ * budget and its reap inside `COMPETING_OFF_CHILD_MS`. What they no longer do is track an
+ * unrelated shared constant.
+ */
+const COMPETING_OFF_BOOT_MS = 30_000;
+const COMPETING_OFF_PREPARATION_MS = process.platform === "win32" ? 55_000 : COMPETING_OFF_BOOT_MS;
 const COMPETING_OFF_CHILD_MS = COMPETING_OFF_PREPARATION_MS + COMPETING_OFF_BOOT_MS + COMPETING_OFF_REAP_MS;
 const COMPETING_OFF_TEST_MS = COMPETING_OFF_CHILD_MS + COMPETING_OFF_REAP_MS;
 let prevCodexHome: string | undefined;
@@ -188,6 +202,112 @@ describe("GUI/CLI Codex sync backend", () => {
       message: refusal,
     });
     expect(logs).toEqual(["   Target Codex home: C:\\Users\\[USER]\\.codex"]);
+    expect(errors).toEqual([refusal]);
+  });
+
+  test("a stood-down relabel unit still injects the config and is reported as a warning", async () => {
+    let refreshCalls = 0;
+    const errors: string[] = [];
+
+    const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshCalls++;
+        return {
+          added: 2,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          comboOmissions: [],
+          refreshOutcome: "committed" as const,
+        };
+      },
+      injectCodexConfig: async () => ({
+        success: true,
+        historyPreflightFailureReason: "history_paginated_requires_native_writer",
+        message: "Pointed Codex's built-in openai provider at the opencodex proxy.",
+      }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    }, { catalogEvenWhenNotInjected: true });
+
+    // Paginated history retires the relabel unit only. Reporting this as a `catalog-only`
+    // success while config.toml kept no catalog path is what hid the model-picker
+    // regression: Codex offered its six native models and the sync still said synchronized.
+    expect(refreshCalls).toBe(1);
+    expect(result.status).toBe("applied");
+    expect(result.ok).toBe(true);
+    expect(result.added).toBe(2);
+    expect(result.catalogWritten).toBe(true);
+    expect(result.warning).toContain("history_paginated_requires_native_writer");
+    expect(result.warning).toContain("native writer");
+    expect(errors).toEqual([]);
+  });
+
+  test("an explicit sync no longer downgrades a surviving injector refusal to catalog-only", async () => {
+    let refreshCalls = 0;
+    const refusal = "Codex config injection refused: history_paginated_requires_native_writer.";
+
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshCalls++;
+        return {
+          added: 0,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: false,
+          cacheSynced: false,
+          comboOmissions: [],
+          refreshOutcome: "refused" as const,
+        };
+      },
+      injectCodexConfig: async () => ({
+        success: false,
+        historyPreflightFailureReason: "history_paginated_requires_native_writer",
+        message: refusal,
+      }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    }, { catalogEvenWhenNotInjected: true });
+
+    // The injector no longer refuses for this reason, so a refusal that does arrive is a
+    // real config/integrity failure and must not be dressed up as a catalog success.
+    expect(refreshCalls).toBe(0);
+    expect(result.status).toBe("applied");
+    expect(result.ok).toBe(false);
+    expect(result.catalogWritten).toBe(false);
+    expect(result.message).toBe(refusal);
+  });
+
+  // The reason matters: a paginated store no longer refuses the injection at all, so stubbing
+  // that one here would guard a shape the injector cannot produce. An operational reason still
+  // refuses, and an unattended sync must not soften it or gather a catalog first.
+  test("an unattended sync keeps the hard failure on a non-terminal history refusal", async () => {
+    let refreshCalls = 0;
+    const errors: string[] = [];
+    const refusal = "Codex config injection refused: history_injection_preflight_unavailable.";
+
+    const result = await syncModelsToCodex(12345, config, { log: () => {}, error: line => errors.push(String(line)) }, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => {
+        refreshCalls++;
+        throw new Error("catalog refresh must not run for an unattended sync");
+      },
+      injectCodexConfig: async () => ({
+        success: false,
+        historyPreflightFailureReason: "history_injection_preflight_unavailable",
+        message: refusal,
+      }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+
+    expect(refreshCalls).toBe(0);
+    expect(result.ok).toBe(false);
+    expect(result.catalogWritten).toBe(false);
+    expect(result.message).toBe(refusal);
     expect(errors).toEqual([refusal]);
   });
 
@@ -364,6 +484,7 @@ describe("GUI/CLI Codex sync backend", () => {
         '      const flipEnv = { ...process.env }; delete flipEnv.OCX_TEST_SERVICE_HOME_PROBE;',
         `      const flipBudgetMs = ${COMPETING_OFF_BOOT_MS};`,
         '      const remainingMs = Number(process.env.OCX_TEST_COMPETING_OFF_DEADLINE) - Date.now();',
+        `      console.log("[sync-race] preparation elapsedMs=" + (${COMPETING_OFF_CHILD_MS} - remainingMs));`,
         `      if (!Number.isFinite(remainingMs) || remainingMs < flipBudgetMs + ${COMPETING_OFF_REAP_MS}) {`,
         '        flipFailure = new Error("competing OFF flip not started: insufficient remaining budget " + remainingMs);',
         '        throw flipFailure;',
@@ -406,6 +527,10 @@ describe("GUI/CLI Codex sync backend", () => {
       }
       const line = child.stdout.trim().split("\n").filter(Boolean).pop() ?? "{}";
       expect(JSON.parse(line)).toMatchObject({ status: "skipped", skippedReason: "desired_disabled", ok: true });
+      // Surface the measured preparation window on green runs too: the Windows reserve above is
+      // sized on one 52.7s observation, and this is what makes the next sizing an observation.
+      const prepared = child.stdout.split("\n").find(entry => entry.includes("[sync-race] preparation"));
+      if (prepared) console.info(prepared.trim());
       // The stale ON snapshot wrote nothing: the fixture config is untouched.
       expect(readFileSync(join(raceCodexHome, "config.toml"), "utf8")).toBe(before);
     } finally {

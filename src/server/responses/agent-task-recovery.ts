@@ -3,7 +3,7 @@ import { decodeJwtPayload, extractAccountId } from "../../oauth/chatgpt";
 import type { OcxConfig } from "../../types";
 import { boundedBodyDecodeFailure, readBoundedResponseBody } from "../../lib/bounded-body";
 import { isApiAuthRequired, isProxyAdmissionSecret } from "../auth-cors";
-import { structurallyValidFernetTokens } from "./encrypted-payload";
+import { MAX_AGENT_TASK_CIPHERTEXT_BYTES, MAX_AGENT_TASK_ENCRYPTED_PARTS, structurallyValidFernetTokens } from "./encrypted-payload";
 import {
   cachedAgentTaskRecovery,
   discardCachedAgentTaskRecovery,
@@ -31,7 +31,6 @@ const CODEX_ORIGINATORS = new Set([
 const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_TOKEN_ISSUERS = new Set(["https://auth.openai.com", "https://auth.openai.com/"]);
 const OPENAI_TOKEN_AUDIENCE = "https://api.openai.com/v1";
-const MAX_CIPHERTEXT_BYTES = 2 * 1024 * 1024;
 const MAX_ASSIGNMENT_BYTES = 2 * 1024 * 1024;
 const MAX_RECOVERY_RESPONSE_BYTES = 4 * 1024 * 1024;
 const CACHE_SCOPE_KEY = randomBytes(32);
@@ -73,12 +72,13 @@ export function agentTaskRecoveryConfig(config: OcxConfig): AgentTaskRecoveryOpt
 
 interface AgentEnvelope {
   itemIndex: number;
-  encryptedIndex: number;
+  encryptedStartIndex: number;
+  inputSnapshot: string;
   headerText: string;
   messageType: "NEW_TASK" | "MESSAGE";
   taskName: string;
   sender: string;
-  ciphertext: string;
+  ciphertexts: readonly string[];
   author: string;
   recipient: string;
 }
@@ -107,10 +107,9 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
   let messageType: "NEW_TASK" | "MESSAGE" | null = null;
   let taskName: string | null = null;
   let sender: string | null = null;
-  let encryptedIndex = -1;
-  let ciphertext = "";
-  let encryptedPartCount = 0;
-  let ciphertextCount = 0;
+  let encryptedStartIndex = -1;
+  const ciphertexts: string[] = [];
+  let ciphertextBytes = 0;
 
   for (let index = 0; index < content.length; index += 1) {
     const part = content[index] as { type?: unknown; text?: unknown; encrypted_content?: unknown } | null;
@@ -132,13 +131,15 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
         sender = match[3]!;
       }
     }
-    if (part.type !== "encrypted_content" || typeof part.encrypted_content !== "string") continue;
-    encryptedPartCount += 1;
-    for (const token of structurallyValidFernetTokens(part.encrypted_content)) {
-      ciphertextCount += 1;
-      encryptedIndex = index;
-      ciphertext = token;
-    }
+    if (part.type !== "encrypted_content") continue;
+    if (typeof part.encrypted_content !== "string") return null;
+    ciphertextBytes += Buffer.byteLength(part.encrypted_content);
+    if (ciphertexts.length >= MAX_AGENT_TASK_ENCRYPTED_PARTS || ciphertextBytes > MAX_AGENT_TASK_CIPHERTEXT_BYTES) return null;
+    const tokens = structurallyValidFernetTokens(part.encrypted_content);
+    if (tokens.length !== 1 || tokens[0] !== part.encrypted_content) return null;
+    if (encryptedStartIndex < 0) encryptedStartIndex = index;
+    if (index !== encryptedStartIndex + ciphertexts.length) return null;
+    ciphertexts.push(part.encrypted_content);
   }
 
   if (
@@ -146,11 +147,8 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
     || !messageType
     || !taskName
     || !sender
-    || encryptedIndex < 0
-    || encryptedPartCount !== 1
-    || ciphertextCount !== 1
-    || (content[encryptedIndex] as { encrypted_content?: unknown }).encrypted_content !== ciphertext
-    || Buffer.byteLength(ciphertext) > MAX_CIPHERTEXT_BYTES
+    || encryptedStartIndex < 0
+    || ciphertexts.length === 0
   ) return null;
 
   const itemRecord = item as { author?: unknown; recipient?: unknown };
@@ -159,12 +157,13 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
 
   return {
     itemIndex,
-    encryptedIndex,
+    encryptedStartIndex,
+    inputSnapshot: JSON.stringify(item),
     headerText,
     messageType,
     taskName,
     sender,
-    ciphertext,
+    ciphertexts,
     author: itemRecord.author,
     recipient: itemRecord.recipient,
   };
@@ -197,14 +196,8 @@ function injectAssignment(input: unknown, envelope: AgentEnvelope, assignment: s
   if (!item || typeof item !== "object") return false;
   const content = (item as { content?: unknown }).content;
   if (!Array.isArray(content)) return false;
-  const part = content[envelope.encryptedIndex] as { type?: unknown; encrypted_content?: unknown } | undefined;
-  if (
-    !part
-    || part.type !== "encrypted_content"
-    || part.encrypted_content !== envelope.ciphertext
-  ) return false;
-
-  content[envelope.encryptedIndex] = { type: "input_text", text: assignment };
+  if (JSON.stringify(item) !== envelope.inputSnapshot) return false;
+  content.splice(envelope.encryptedStartIndex, envelope.ciphertexts.length, { type: "input_text", text: assignment });
   const message = item as Record<string, unknown>;
   message.type = "message";
   message.role = "user";
@@ -313,7 +306,7 @@ function admittedRecovery(
     .update("\0")
     .update(envelope.sender)
     .update("\0")
-    .update(envelope.ciphertext)
+    .update(JSON.stringify(envelope.ciphertexts))
     .digest("hex");
   return { admitted: true, recovery: { envelope, admission, cacheKey } };
 }
@@ -343,7 +336,7 @@ function recoveryPayload(envelope: AgentEnvelope, model: string): string {
       recipient: envelope.recipient,
       content: [
         { type: "input_text", text: envelope.headerText },
-        { type: "encrypted_content", encrypted_content: envelope.ciphertext },
+        ...envelope.ciphertexts.map(encrypted_content => ({ type: "encrypted_content", encrypted_content })),
       ],
     }],
   });

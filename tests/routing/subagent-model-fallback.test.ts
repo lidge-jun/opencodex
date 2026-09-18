@@ -15,6 +15,7 @@ import {
   resolveAgentModelFallbackForPrimary,
   resolveConfiguredModelFallbackForPrimary,
   scanCodexAgentRolesWithTomlModelFallback,
+  scanOpencodexDerivedCodexAgentRolesWithoutModelPin,
   selectAvailableSubagentModel,
   setSubagentQuotaPrimeForTests,
   subagentFallbackGuidanceText,
@@ -421,7 +422,7 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     });
     recordCodexUpstreamOutcome(config, "account-a", 429, {
       fixedAccount: true,
-      modelId: "gpt-5.3-codex-spark",
+      modelId: "gpt-reserve",
       now,
       resetAt: Math.floor((now + 60 * 60_000) / 1_000),
     });
@@ -474,7 +475,7 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     updateAccountQuota("pool-a", 10, undefined, 20);
     const config = cfg({ subagentModelFallback: ["kimi/k3"] });
     recordCodexUpstreamOutcome(config, "pool-a", 429, {
-      modelId: "gpt-5.3-codex-spark",
+      modelId: "gpt-reserve",
       now,
       resetAt: Math.floor((now + 60 * 60_000) / 1_000),
     });
@@ -1356,6 +1357,70 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     ]);
     expect(readCodexAgentModelFallback("quoted_key", dir)).toEqual(["kimi/k3"]);
     expect(readCodexAgentModelFallback("literal_key", dir)).toEqual([]);
+  });
+
+  test("scanOpencodexDerivedCodexAgentRolesWithoutModelPin reports derived roles that inherit the parent model", () => {
+    const dir = codexHomeFixture();
+    const write = (name: string, lines: string[]) =>
+      writeFileSync(join(dir, "agents", name), lines.join("\n") + "\n", "utf8");
+
+    // The reported shape: the desktop import kept the instructions and dropped the model pin.
+    write("ocx-gpt-5-5.toml", [
+      "developer_instructions = \"\"\"",
+      "You are Codex-ocx-native--gpt-5.5.",
+      "<!-- ocx-route: claude-ocx-native--gpt-5.5 -->",
+      "\"\"\"",
+    ]);
+    // Derived by body marker rather than by name.
+    write("imported-helper.toml", [
+      "developer_instructions = \"generated-by: opencodex\"",
+    ]);
+    // Derived, but pinned: nothing to warn about.
+    write("ocx-gpt-5-6-terra.toml", [
+      "model = \"gpt-5.6-terra\"",
+      "developer_instructions = \"<!-- ocx-route: claude-ocx-native--gpt-5.6-terra -->\"",
+    ]);
+    // Not derived at all: a user's own role must never be named here.
+    write("my-reviewer.toml", [
+      "developer_instructions = \"Review carefully.\"",
+    ]);
+
+    expect(scanOpencodexDerivedCodexAgentRolesWithoutModelPin(dir))
+      .toEqual(["imported-helper", "ocx-gpt-5-5"]);
+  });
+
+  test("the model-pin scan reads TOML rather than lines, in both directions", () => {
+    const dir = codexHomeFixture();
+    const write = (name: string, lines: string[]) =>
+      writeFileSync(join(dir, "agents", name), lines.join("\n") + "\n", "utf8");
+
+    // Valid TOML that Codex honours and a strict line matcher would miss. Reporting any of
+    // these would tell an operator to fix a file that is already correct.
+    write("ocx-literal.toml", ["model = 'gpt-5.6-sol'"]);
+    write("ocx-indented.toml", ["  model = \"gpt-5.6-sol\""]);
+    write("ocx-commented.toml", ["model = \"gpt-5.6-sol\" # pinned"]);
+    write("ocx-quoted-key.toml", ["\"model\" = \"gpt-5.6-sol\""]);
+    expect(scanOpencodexDerivedCodexAgentRolesWithoutModelPin(dir)).toEqual([]);
+
+    const prose = codexHomeFixture();
+    const writeProse = (name: string, lines: string[]) =>
+      writeFileSync(join(prose, "agents", name), lines.join("\n") + "\n", "utf8");
+    // STILL REPORTED: a pin quoted inside the instructions is prose, not a key. This is the
+    // case a line matcher gets wrong in the dangerous direction, staying silent about a role
+    // that really does inherit the parent model.
+    writeProse("ocx-prose.toml", [
+      "developer_instructions = \"\"\"",
+      "Set model = \"gpt-5.6-sol\" if you want to pin it.",
+      "<!-- ocx-route: claude-ocx-native--gpt-5.5 -->",
+      "\"\"\"",
+    ]);
+    // STILL REPORTED: an empty pin is not a pin, and neither is a non-string value.
+    writeProse("ocx-empty.toml", ["model = \"\"", "developer_instructions = \"ocx-route: x\""]);
+    writeProse("ocx-nonstring.toml", ["model = 5", "developer_instructions = \"ocx-route: x\""]);
+    // A sibling key that merely starts with the same letters is not the pin either.
+    writeProse("ocx-sibling.toml", ["model_reasoning_effort = \"high\""]);
+    expect(scanOpencodexDerivedCodexAgentRolesWithoutModelPin(prose))
+      .toEqual(["ocx-empty", "ocx-nonstring", "ocx-prose", "ocx-sibling"]);
   });
 
   test("scanCodexAgentRolesWithTomlModelFallback ignores model_fallback text inside strings", () => {

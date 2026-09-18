@@ -1,3 +1,4 @@
+import type { NativeResponseControl } from "./responses/native-response-control";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -8,6 +9,7 @@ import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 import { safeResponseHeaders } from "./safe-response-headers";
+import type { AudioSocketTarget } from "./audio-dictation";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -16,6 +18,9 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
+  nativeControl?: NativeResponseControl;
+  /** Content-free per-turn explanation; never a model capability assertion. */
+  nativeSteeringUnavailable?: string;
   headers?: Headers; // base inbound forward headers only; per-turn auth refresh injects current pool tokens
   /**
    * Resolved once at the handshake. Auth is handshake-time only on this path, so
@@ -31,14 +36,28 @@ export interface WsData {
   /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
   sessionLaneId?: string;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
-  kind?: "responses" | "live-sideband";
+  kind?: "responses" | "live-sideband" | "remote-workspace-agent";
+  remoteWorkspaceConnection?: { receive(raw: string | Uint8Array): void };
+  remoteWorkspaceOpen?: (socket: ServerWebSocket<WsData>) => { receive(raw: string | Uint8Array): void };
+  remoteWorkspaceClose?: () => void;
   liveUpstream?: WebSocket;
   liveUpstreamUrl?: string;
   liveUpstreamHeaders?: Record<string, string>;
+  liveUpstreamProtocols?: string[];
+  liveValidateFrame?: AudioSocketTarget["validateFrame"];
+  liveFinish?: AudioSocketTarget["finish"];
+  liveOutcome?: number | "timeout" | "connect_error";
+  liveMaxSessionMs?: number;
+  liveConnectTimer?: ReturnType<typeof setTimeout>;
+  liveSessionTimer?: ReturnType<typeof setTimeout>;
+  liveAbortSignal?: AbortSignal;
+  liveAbortListener?: () => void;
   livePending?: Array<string | Buffer>;
   /** Total encoded bytes retained in livePending while the upstream connects. */
   livePendingBytes?: number;
   liveOpened?: boolean;
+  /** Owns captured frames and terminal state until the downstream relay attaches. */
+  liveUpstreamHandoff?: LiveSidebandUpstreamHandoff;
   /** Once teardown starts, ignore new client frames until the upstream closes. */
   liveClosing?: boolean;
   /** Schedules one bounded close retry without surrendering native-main ownership. */
@@ -46,6 +65,25 @@ export interface WsData {
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>;
+}
+
+export interface LiveSidebandUpstreamFailure {
+  status: number;
+  code: string;
+  message: string;
+  closeCode?: number;
+  closeReason?: string;
+}
+
+export type LiveSidebandUpstreamTakeover =
+  | { ok: true; frames: Array<string | Buffer> }
+  | { ok: false; failure: LiveSidebandUpstreamFailure };
+
+export interface LiveSidebandUpstreamHandoff {
+  /** Observe failure before the downstream upgrade without ending capture. */
+  failure(): LiveSidebandUpstreamFailure | undefined;
+  /** Atomically ends capture and transfers buffered frames or terminal state. */
+  take(): LiveSidebandUpstreamTakeover;
 }
 
 /**
@@ -195,6 +233,7 @@ export async function pumpResponsesSseToWebSocket(
   sseStream: ReadableStream<Uint8Array>,
   options: {
     isCurrent?: () => boolean;
+    untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
   } = {},
@@ -217,6 +256,7 @@ export async function pumpResponsesSseToWebSocket(
   const decoder = new TextDecoder();
   const framer = new BoundedSseFrameBuffer();
   let terminalSeen = false;
+  let lastTerminal: ResponsesTerminalStatus | undefined;
 
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
@@ -236,8 +276,10 @@ export async function pumpResponsesSseToWebSocket(
     }
     if (terminalSeen) return true;
     sendTextFrame(ws, payload);
-    const terminalStatus = terminalStatusFromType(type);
+    if (options.untilEof && type === "response.created") lastTerminal = undefined;
+    const terminalStatus = type === "error" && options.untilEof ? "failed" : terminalStatusFromType(type);
     if (terminalStatus) {
+      if (options.untilEof) { lastTerminal = terminalStatus; return false; }
       reportTerminal(terminalStatus);
       terminalSeen = true;
       void reader.cancel().catch(() => {});
@@ -259,6 +301,10 @@ export async function pumpResponsesSseToWebSocket(
     if (!terminalSeen && tail.byteLength > 0) {
       const payload = parseSseBlock(decoder.decode(tail));
       if (payload) handlePayload(payload);
+    }
+    if (options.untilEof && lastTerminal && isCurrent() && !clientCancelled) {
+      reportTerminal(lastTerminal);
+      terminalSeen = true;
     }
     if (!terminalSeen && isCurrent() && !clientCancelled) {
       reportTerminal("incomplete");
@@ -334,6 +380,7 @@ export async function sendResponseToWebSocket(
   response: Response,
   isCurrent: () => boolean,
   options: {
+    untilEof?: boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
   } = {},
@@ -364,6 +411,7 @@ export async function sendResponseToWebSocket(
   if (contentType.includes("text/event-stream")) {
     await pumpResponsesSseToWebSocket(ws, response.body, {
       isCurrent,
+      untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
     });
@@ -386,6 +434,7 @@ export async function sendResponseToWebSocket(
   if (looksLikeSse(prefix)) {
     await pumpResponsesSseToWebSocket(ws, stream, {
       isCurrent,
+      untilEof: options.untilEof,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
     });

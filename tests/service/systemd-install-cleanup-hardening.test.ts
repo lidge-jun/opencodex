@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 
-const source = readFileSync(repoPath("src/service.ts"), "utf8");
+const source = readFileSync(repoPath("src/service/systemd.ts"), "utf8");
 
 describe("systemd install cleanup status hardening", () => {
   test("only treats literal not-found as confirmed unit absence", () => {

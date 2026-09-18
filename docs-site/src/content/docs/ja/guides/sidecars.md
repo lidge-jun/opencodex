@@ -76,7 +76,7 @@ stall は全体生成 timeout ではありません。SSE 開始前の失敗は 
 サイドカー対象の各モデルに画像入力を広告します。コンボは、すべてのメンバーがネイティブまたはサイドカーを
 通じて画像を受け入れ、かつコンボの `imageInput` 設定が無効でない場合にのみ画像入力を広告します。これにより
 Codex アプリなどのクライアントは、サイドカー実行前に添付をブロックせず許可できます。`visionSidecar.model` が未設定または空の場合、
-OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.4-mini` をフォールバックとして使います。起動時には
+OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.6-luna` をフォールバックとして使います。起動時には
 明示的に保存された旧 `gpt-5.4-mini` 値を引き続き `gpt-5.6-luna` にマイグレーションしますが、この
 マイグレーションは保存済みの値だけが対象で、モデルフィールドがない場合には適用されません。
 
@@ -125,7 +125,7 @@ OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.4-mini` を�
   "providers": {
     "ollama-cloud": {
       "baseUrl": "https://ollama.com/v1",
-      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
+      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-flash"]
     }
   }
 }

@@ -43,9 +43,10 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
 
 describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
   test("native passthrough SSE keeps the real platform gate and pure native relay invariants", async () => {
-    const coreSource = await readSource("src/server/responses/core.ts");
+    const coreSource = await readSource("src/server/responses/passthrough-delivery.ts");
     const relaySource = await readSource("src/server/relay.ts");
     const capsSource = await readSource("src/lib/bun-stream-caps.ts");
+    const inspectionTeeSource = await readSource("src/server/inspection-tee.ts");
     const sseBranch = coreSource.slice(
       coreSource.indexOf("if (isEventStream && upstreamResponse.body)"),
       coreSource.indexOf("const body = relayWithAbort(upstreamResponse.body, upstream);"),
@@ -61,7 +62,11 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("const terminalRepairPolicy = providerModelResponsesTerminalRepair(");
     expect(sseBranch).toContain("const passthroughSseBody = terminalRepairPolicy");
     expect(sseBranch).toContain(": upstreamResponse.body;");
-    expect(sseBranch).toContain("passthroughSseBody.tee()");
+    // Native tee stays inside the bounded observer. The production owner passes
+    // the raw stream and disconnect signal before any client-side rewrite.
+    expect(sseBranch).toMatch(/const \[nativeBody, inspectBody\] = teeWithBoundedInspection\(passthroughSseBody, \{ clientGoneSignal \}\)/);
+    expect(inspectionTeeSource).toContain("const [client, inspection] = source.tee();");
+    expect(sseBranch.indexOf("teeWithBoundedInspection(")).toBeLessThan(sseBranch.indexOf("const rewrittenBody ="));
     // Rewrite traffic is derived from the finalized block chain so every
     // provider-specific transform participates in the platform gate.
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
@@ -79,11 +84,11 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("rewriteBlocks: clientBlockRewrite");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
     expect(sseBranch).toMatch(
-      /relaySseWithFailedTail\(\s*rewrittenBody,\s*upstream,\s*reason\s*=>\s*\{\s*responseCompletionCancelled\s*=\s*true;\s*clientGone\.abort\(reason\);\s*\},\s*\{\s*upstreamError:\s*logCtx\.upstreamError\s*\},\s*\)/,
+      /relaySseWithFailedTail\(\s*rewrittenBody,\s*upstream,\s*reason\s*=>\s*\{\s*responseEffects\.responseCompletionCancelled\s*=\s*true;\s*clientGone\.abort\(reason\);\s*\},\s*\{\s*upstreamError:\s*logCtx\.upstreamError,\s*terminalBoundary:\s*codexSafetyBufferingOptions\s*\},\s*\)/,
     );
     expect(sseBranch).toContain("new Response(clientBody");
     expect(sseBranch).toContain("markNativePassthroughSseResponse");
-    // #314/phase 100 two-platform contract: the real core gate delegates to the
+    // #314/phase 100 two-platform contract: the delivery owner delegates to the
     // selector, whose darwin branch admits only explicit config-eager decisions.
     expect(sseBranch).toContain("const eagerPath = selectEagerPath(");
     expect(sseBranch).toContain("config.streamMode ?? \"auto\",");

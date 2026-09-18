@@ -100,3 +100,19 @@ test("unsupported, passive unobserved, explicit loading and failed last-good are
   expect(failed).toContain("12% used");
   expect(failed).toContain("Quota updated");
 });
+
+
+test("safe account failure categories reach both current and all-account quota views", () => {
+  const quota = { weeklyPercent: 12, updatedAt: observedAt };
+  const reading = { quotaMode: "probe" as const, quota, quotaUnavailable: true, quotaFailure: "dns_failed" as const };
+  for (const view of [<ProviderAccountQuota {...reading} />, <ProviderCurrentQuota reading={reading} />]) {
+    const markup = render(view);
+    expect(markup).toContain("The quota hostname could not be resolved.");
+    expect(markup).toContain("12% used");
+  }
+  const unknown = render(<ProviderAccountQuota {...reading} quotaFailure={"private-error" as never} />);
+  expect(unknown).not.toContain("private-error");
+  expect(unknown).not.toContain("hostname");
+  const recovered = render(<ProviderAccountQuota {...reading} quotaUnavailable={false} />);
+  expect(recovered).not.toContain("hostname");
+});

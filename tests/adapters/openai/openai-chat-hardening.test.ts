@@ -140,6 +140,23 @@ describe("AgentRouter openai-chat compatibility", () => {
     expect(body.messages[0]?.content.map(part => part.text)).toEqual([preamble, "responda somente: OK"]);
     expect(rawBody.messages[0]?.content).toBe("responda somente: OK");
   });
+
+  test("passthrough chat drops reasoning_effort for an explicitly empty capability ladder", () => {
+    const rawBody = {
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "xhigh",
+    };
+    const request = buildOpenAIChatPassthroughRequest(
+      provider({ reasoningEfforts: [] }),
+      rawBody,
+      "test-model",
+      false,
+    );
+    const body = JSON.parse(request.body as string) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(rawBody.reasoning_effort).toBe("xhigh");
+  });
 });
 
 function parsed(): OcxParsedRequest {
@@ -306,6 +323,36 @@ describe("unicode property-escape pattern stripping", () => {
     expect(stripped.properties.field.description).toBe("keep me");
     expect(stripped.properties.collection.pattern).toBe("^(?!\\.\\.?(?:/|$))[A-Za-z0-9_\\-.~:@+]{1,200}$");
     expect(stripped.properties.plain.pattern).toBe("^[a-z0-9_-]{1,64}$");
+  });
+
+  test("clones only affected paths across a broad schema", () => {
+    const properties: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < 25_000; i++) properties[`field_${i}`] = { type: "string" };
+    properties.affected = { type: "string", pattern: artifactFieldPattern };
+    const before = { type: "object", properties };
+    const stripped = stripUnicodePropertyPatterns(before) as typeof before;
+
+    expect(stripped).not.toBe(before);
+    expect(stripped.properties).not.toBe(properties);
+    expect(stripped.properties.affected.pattern).toBeUndefined();
+    expect(properties.affected.pattern).toBe(artifactFieldPattern);
+    expect(stripped.properties.field_0).toBe(properties.field_0);
+    expect(stripped.properties.field_24999).toBe(properties.field_24999);
+  });
+
+  test("copies changed array paths while preserving literal and untouched siblings", () => {
+    const literal = { pattern: artifactFieldPattern };
+    const untouched = { type: "string", pattern: "^[a-z]+$" };
+    const changed = { type: "string", pattern: artifactFieldPattern, const: literal };
+    const before = { allOf: [changed, untouched, { properties: { pattern: changed } }] };
+    const stripped = stripUnicodePropertyPatterns(before) as typeof before;
+
+    expect(stripped.allOf).not.toBe(before.allOf);
+    expect(stripped.allOf[0]).toEqual({ type: "string", const: literal });
+    expect(stripped.allOf[0]!.const).toBe(literal);
+    expect(stripped.allOf[1]).toBe(untouched);
+    expect(stripped.allOf[2]!.properties!.pattern.pattern).toBeUndefined();
+    expect(changed.pattern).toBe(artifactFieldPattern);
   });
 
   test("an escaped backslash before `p{` is a literal, not a property escape", () => {
@@ -1377,6 +1424,55 @@ describe("openai-chat response_format emission", () => {
     });
   });
 
+  // Narrower neighbour of the kill switch: the upstream rejects the json_schema TYPE, so the
+  // request is downgraded to json_object rather than stripped. Both wires must agree.
+  describe("json_schema downgrade for noJsonSchemaModels", () => {
+    const schemaFormat = {
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    };
+    const passthrough = (
+      modelId: string,
+      providerOverrides: Partial<OcxProviderConfig>,
+      responseFormat: unknown = schemaFormat,
+    ) => JSON.parse(buildOpenAIChatPassthroughRequest(
+      provider(providerOverrides),
+      { messages: [{ role: "user", content: "hi" }], response_format: responseFormat },
+      modelId,
+      false,
+    ).body as string) as Record<string, unknown>;
+
+    test("downgrades json_schema to json_object on the native wire", () => {
+      expect(passthrough("test-model", { noJsonSchemaModels: ["test-model"] }).response_format)
+        .toEqual({ type: "json_object" });
+    });
+
+    test("leaves a json_object request untouched", () => {
+      expect(passthrough("test-model", { noJsonSchemaModels: ["test-model"] }, { type: "json_object" }).response_format)
+        .toEqual({ type: "json_object" });
+    });
+
+    test("keeps the schema for a :tag sibling the operator never listed", () => {
+      expect(passthrough("test-model:structured", { noJsonSchemaModels: ["test-model"] }).response_format)
+        .toEqual(schemaFormat);
+    });
+
+    test("the full kill switch still wins when a model is on both lists", () => {
+      expect(passthrough("test-model", {
+        noJsonSchemaModels: ["test-model"],
+        noStructuredOutputModels: ["test-model"],
+      }).response_format).toBeUndefined();
+    });
+
+    test("the translated wire downgrades the same request", () => {
+      const built = createOpenAIChatAdapter(provider({ noJsonSchemaModels: ["test-model"] })).buildRequest({
+        ...parsed(),
+        options: { textFormat: { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true } },
+      });
+      expect(bodyOf(built).response_format).toEqual({ type: "json_object" });
+    });
+  });
+
 // Tool-call deltas are BUFFERED until a terminal signal, so this adapter can consume upstream
 // frames for a long time while yielding nothing downstream. The Responses bridge arms its
 // stall watchdog on ADAPTER activity, not socket activity, so a model streaming a large
@@ -1405,4 +1501,26 @@ test("tool-call deltas emit heartbeats so a long buffering phase is not read as 
   expect(visible).toContainEqual({ type: "tool_call_start", id: "call_a", name: "shell" });
   expect(visible.at(-1)).toMatchObject({ type: "done" });
 });
+});
+
+
+describe("native Chat raw reasoning declarations", () => {
+  const raw = { messages: [{ role: "user", content: "hello" }], reasoning_effort: "enabled" };
+  function wire(overrides: Partial<OcxProviderConfig>) {
+    const request = buildOpenAIChatPassthroughRequest({
+      adapter: "openai-chat", baseUrl: "https://example.test/v1", ...overrides,
+    }, raw, "target", false);
+    return JSON.parse(request.body as string) as Record<string, unknown>;
+  }
+  test("preserves a nonempty wire-only ladder as unknown", () => {
+    expect(wire({ reasoningEfforts: ["enabled"] }).reasoning_effort).toBe("enabled");
+    expect(wire({ reasoningEfforts: [], modelReasoningEfforts: { target: ["enabled"] } }).reasoning_effort).toBe("enabled");
+  });
+  test("honors explicit empty model overrides over a provider ladder", () => {
+    expect(wire({ reasoningEfforts: ["high"], modelReasoningEfforts: { target: [] } }).reasoning_effort).toBeUndefined();
+  });
+  test("honors noReasoningModels over a nonempty model ladder without mutating input", () => {
+    expect(wire({ noReasoningModels: ["target"], modelReasoningEfforts: { target: ["high"] } }).reasoning_effort).toBeUndefined();
+    expect(raw.reasoning_effort).toBe("enabled");
+  });
 });

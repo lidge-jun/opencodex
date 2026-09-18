@@ -14,7 +14,7 @@ ocx init
 
 `ocx init` adım adım size rehberlik eder:
 
-1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 79 önayardan birini
+1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 94 önayardan birini
    veya bir temel URL ile adaptör yazmak için `custom` seçeneğini belirleyin.
 2. **API anahtarı** — bir anahtar yapıştırın veya `${ANTHROPIC_API_KEY}` gibi
    bir ortam değişkenine başvurun.
@@ -84,7 +84,7 @@ codex -m "ollama-cloud/glm-5.2"      "Bir SQL geçişi yaz"
 ## Alt ajan modellerini seçin (isteğe bağlı)
 
 Yeni bir yapılandırma, Codex'in alt ajan seçicisinde beş yerel model sunar:
-`gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` ve `gpt-5.4-mini`. En
+`gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` ve `gpt-6-astra`. En
 fazla beş yerel veya yönlendirilmiş modeli değiştirmek veya yeniden sıralamak
 için `ocx gui`'yi açın. Kontrol paneli ayrıca tercih edilen bir alt ajan
 modelini ve akıl yürütme çabasını ayarlayabilir. v1/base/v2 seçmek ve rehberlik,
@@ -117,5 +117,4 @@ ocx restore back  # Codex'i hala çalışan proxy üzerinden tekrar yönlendirin
 - [Nasıl Çalışır](/tr/getting-started/how-it-works/) — her isteğe ne olur?
 - [Sağlayıcılar](/tr/guides/providers/) — kimlik doğrulamanın her yolu.
 - [Yapılandırma](/tr/reference/configuration/) — tam `config.json` referansı.
-
 

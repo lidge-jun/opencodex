@@ -13,6 +13,15 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   commandcode: "commandcode-color.svg",
   cursor: "cursor-color.svg",
   deepseek: "deepseek-color.svg",
+  /*
+   * One mark for the merged Devin provider. `devin` is Cognition's cloud; the
+   * former `devin-cli` row was folded into it (CLI-credential import is now
+   * devin's first login step), and `devin-cli` survives only as a deprecated
+   * alias that startup migration rewrites before the GUI ever sees it.
+   * Windsurf still publishes its own `W` app icon, but showing it next to a
+   * row labelled Cognition would name the retired brand.
+   */
+  devin: "devin.svg",
   firepass: "firepass-color.svg",
   fireworks: "fireworks-color.svg",
   github: "github-copilot-color.svg",
@@ -57,6 +66,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   baseten: "baseten.svg",
   bizrouter: "bizrouter.svg",
   cerebras: "cerebras.svg",
+  crusoe: "crusoe.svg",
   deepinfra: "deepinfra.svg",
   digitalocean: "digitalocean.svg",
   featherless: "featherless.svg",
@@ -124,6 +134,12 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   xiaomi: "Xiaomi",
   cursor: "Cursor",
   deepseek: "DeepSeek",
+  // "Devin", not the registry's "Cognition (Devin/Windsurf)". This label sits in
+  // a narrow provider rail beside one-word names like Cursor and Kimi, and the
+  // long form is the registry's disambiguation for an add-provider list, not a
+  // name to read at a glance. No "devin-cli" entry: it is a deprecated alias
+  // that startup migration rewrites to "devin" before the GUI reads config.
+  devin: "Devin",
   github: "GitHub",
   "github-copilot": "GitHub Copilot",
   "gitlab-duo": "GitLab Duo",

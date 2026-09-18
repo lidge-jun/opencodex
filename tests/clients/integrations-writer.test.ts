@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
-import { fileIO, type IntegrationIO } from "../../src/integrations/config-io";
+import { assertIntegrationWriteOwnership, fileIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { canonicalContribution, fingerprint } from "../../src/integrations/ownership";
 import { protectedContributionFingerprint } from "../../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
@@ -549,6 +549,29 @@ describe("apply", () => {
     if (!result.ok) expect(result.reason).toBe("conflict");
   });
 
+  test("a hand-edited ZCode provider kind stays a hard conflict (#4295)", () => {
+    // The export moved from `openai-compatible` to `openai` so ZCode dials the proxy's
+    // native Responses route. `kind` is not a refreshable path, so a user who sets it
+    // back by hand must keep owning that decision instead of having it silently
+    // rewritten — the same protection `options` already has above.
+    const configPath = installZcode();
+    const request = input({ clientId: "zcode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { kind: string }>;
+    };
+    expect(document.provider.opencodex!.kind).toBe("openai");
+    document.provider.opencodex!.kind = "openai-compatible";
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const status = readIntegrationState(request);
+    expect(status).toMatchObject({ state: "conflict", reason: "foreign-edit" });
+    const result = applyIntegration(request);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("conflict");
+  });
+
   test("a malformed recorded ZCode policy cannot widen refreshable drift (#2389)", () => {
     const configPath = installZcode();
     const request = input({ clientId: "zcode" });
@@ -688,6 +711,26 @@ describe("apply", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("unsafe");
     expect(readFileSync(configPath, "utf8")).toContain("1e999");
+  });
+
+  test("Gajae refresh preserves loopback auth and incorporates catalog additions", () => {
+    const configPath = installGajae();
+    expect(applyIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    const initial = readFileSync(configPath, "utf8");
+    expect(initial).toContain("apiKey:");
+    expect(initial).not.toContain("apiKeyEnv:");
+
+    const refreshed = applyIntegration({ ...input({ clientId: "gajae" }), models: [
+      ...MODELS,
+      { namespaced: "gpt-5.6-terra", provider: "openai", id: "gpt-5.6-terra", contextWindow: 372_000 },
+    ] });
+    expect(refreshed.ok).toBe(true);
+    const after = readFileSync(configPath, "utf8");
+    expect(after).toContain("gpt-5.6-terra");
+    expect(after).toContain("apiKey:");
+    expect(after).not.toContain("apiKeyEnv:");
+    expect(disableIntegration(input({ clientId: "gajae" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).not.toContain("opencodex:");
   });
 
   test("yaml clients still refuse a sibling edit rather than risk user comments", () => {
@@ -1406,5 +1449,50 @@ describe("overwriting a conflict on purpose", () => {
     expect(after.providers["opencodex-legacy"]).toBeUndefined();
     expect(after.providers.opencodex).toBeDefined();
     expect(store.readRecords().opencode!.fragmentPaths).not.toContainEqual(["providers", "opencodex-legacy"]);
+  });
+});
+
+describe("integration write ownership guard (#4197)", () => {
+  const target = "/srv/dsh-data/settings.yaml";
+
+  test("refuses to replace a file owned by another uid", () => {
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => 1000,
+      ownerUid: () => 987,
+    })).toThrow(/belongs to uid 987 while opencodex runs as uid 1000/);
+  });
+
+  test("names the path and both uids so the operator can act on it", () => {
+    let message = "";
+    try {
+      assertIntegrationWriteOwnership(target, { effectiveUid: () => 1000, ownerUid: () => 987 });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain(target);
+    expect(message).toContain("transfer ownership");
+  });
+
+  test("allows a file this process already owns", () => {
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => 1000,
+      ownerUid: () => 1000,
+    })).not.toThrow();
+  });
+
+  test("allows an absent target, which has no owner to dispossess", () => {
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => 1000,
+      ownerUid: () => undefined,
+    })).not.toThrow();
+  });
+
+  test("skips the check where the runtime exposes no effective uid", () => {
+    // Windows reaches the write through hardenSecretPath instead; a uid comparison there would be
+    // a guess, and a guess that refuses is worse than no guard.
+    expect(() => assertIntegrationWriteOwnership(target, {
+      effectiveUid: () => undefined,
+      ownerUid: () => 987,
+    })).not.toThrow();
   });
 });

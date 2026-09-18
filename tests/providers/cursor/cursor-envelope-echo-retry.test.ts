@@ -2,11 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { createCursorAdapter as createCursorAdapterProduction } from "../../../src/adapters/cursor";
 import {
   CURSOR_ECHO_RETRY_CONTINUATION_TEXT,
+  CURSOR_ROUTING_COMMENTARY_RETRY_TEXT,
   CursorEnvelopeEchoSniffer,
   CursorMidstreamEchoObserver,
   CursorRoutingCommentarySniffer,
   MAX_MIDSTREAM_SCAN_LENGTH,
+  stripAssistantEchoedToolEnvelope,
 } from "../../../src/adapters/cursor/envelope-echo";
+import {
+  CURSOR_ENVELOPE_ECHO_REMINT_MAX,
+  clearCursorEnvelopeEchoRemintForTests,
+  clearCursorIncompleteToolRemintForTests,
+  clearCursorThreadContinuityForTests,
+  cursorEnvelopeEchoRemintScopeKey,
+  lookupCursorThreadConversation,
+  recordCursorEnvelopeEchoRemint,
+  recordCursorIncompleteToolRemint,
+} from "../../../src/adapters/cursor/thread-continuity";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
@@ -210,6 +222,42 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(contextFree.finish().kind).toBe("flush");
   });
 
+  test.each(["네이티브 셸", "네이티브 쉘", "네이티브셸", "네이티브\t쉘", "“네이티브 셸”", "(네이티브쉘)"])(
+    "localized shell requires a redirect or a second distinct tool (%s)", nativeShell => {
+      const redirect = new CursorRoutingCommentarySniffer();
+      expect(redirect.feed(`${nativeShell}이 차단되어 exec_command로 전환합니다.`).kind).toBe("hallucination");
+      const distinct = new CursorRoutingCommentarySniffer();
+      expect(distinct.feed(`${nativeShell}과 Read가 모두 unavailable 상태입니다.`).kind).toBe("hallucination");
+    },
+  );
+
+  test.each(["비네이티브 셸", "비네이티브쉘", "x네이티브 셸", "_네이티브쉘", "1네이티브 셸", "a\u0301네이티브 셸"])(
+    "embedded Korean shell wording does not fabricate a second tool (%s)", nativeShell => {
+      const sniffer = new CursorRoutingCommentarySniffer();
+      expect(sniffer.feed(`${nativeShell} 관련 Read가 unavailable 상태입니다.`).kind).toBe("hold");
+      expect(sniffer.finish().kind).toBe("flush");
+    },
+  );
+
+  test("localized shell detection spans native-name and redirect delta boundaries", () => {
+    const sniffer = new CursorRoutingCommentarySniffer();
+    for (const fragment of ["네이", "티브 ", "쉘이 차단되어 ", "exec_"]) {
+      expect(sniffer.feed(fragment).kind).toBe("hold");
+    }
+    expect(sniffer.feed("command로 전환합니다.").kind).toBe("hallucination");
+  });
+
+  test.each([
+    "네이티브 셸이 unavailable 상태입니다.",
+    "네이티브 셸과 네이티브 쉘이 모두 blocked 상태입니다.",
+    "Shell과 네이티브 셸이 모두 blocked 상태입니다.",
+    "SHELL과 네이티브쉘, 네이티브 셸이 모두 unavailable 상태입니다.",
+  ])("shell aliases alone do not fabricate two distinct tools (%s)", text => {
+    const sniffer = new CursorRoutingCommentarySniffer();
+    expect(sniffer.feed(text).kind).toBe("hold");
+    expect(sniffer.finish().kind).toBe("flush");
+  });
+
   test("external tool-result echo retries once with the corrective action text and no leaked envelope", async () => {
     const { factory, runRequests, attempts } = echoingThenHealthyTransportFactory();
     const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
@@ -318,7 +366,11 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(runRequests[1]?.echoRetryContinuationText).toBeDefined();
   });
 
-  test("code-mode routing commentary that invents a blocked native Shell is quarantined and retried", async () => {
+  test.each([
+    { fragments: ["`Shell` 경로는 차단됐으니 exec_command 경로로 읽겠습니다."] },
+    { fragments: ["네이", "티브 셸은 차단됐으니 ", "exec_command 경로로 읽겠습니다."] },
+    { fragments: ["네이티브", "쉘은 차단됐으니 ", "exec_command 경로로 읽겠습니다."] },
+  ])("code-mode routing commentary is quarantined and retried once (%j)", async ({ fragments }) => {
     let attempt = 0;
     const runRequests: CursorRunRequest[] = [];
     const factory = () => ({
@@ -326,10 +378,9 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
         runRequests.push(request);
         attempt += 1;
         if (attempt === 1) {
-          yield {
-            type: "text",
-            text: "`Shell` 경로는 또 같은 문구로 차단됐으니, 통과가 확인된 `exec_command` 경로로 읽겠습니다.",
-          } satisfies CursorServerMessage;
+          for (const text of fragments) {
+            yield { type: "text", text } satisfies CursorServerMessage;
+          }
         } else {
           yield { type: "text", text: "READ_OK" } satisfies CursorServerMessage;
         }
@@ -359,7 +410,105 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
     expect(attempt).toBe(2);
     expect(text).toBe("READ_OK");
-    expect(text).not.toContain("Shell");
-    expect(runRequests[1]?.echoRetryContinuationText).toBeDefined();
+    expect(text).not.toContain(fragments.join(""));
+    expect(runRequests).toHaveLength(2);
+    expect(runRequests[1]?.echoRetryContinuationText).toBe(CURSOR_ROUTING_COMMENTARY_RETRY_TEXT);
   });
 });
+
+describe("stripAssistantEchoedToolEnvelope", () => {
+  test("keeps leading commentary and drops the envelope that follows it", () => {
+    expect(stripAssistantEchoedToolEnvelope(
+      "20-24 pages are on the board.\n[Tool Result]\n[tool_result]\nname: Write\noutput:\nwrote it\n",
+    )).toBe("20-24 pages are on the board.");
+  });
+
+  test("keeps a real answer written after the echo", () => {
+    // The whole point of bounding the strip at the blank line: truncating to the end of the
+    // message would have discarded this answer from every later replay.
+    expect(stripAssistantEchoedToolEnvelope(
+      "Checking now.\n[Tool Result]\nname: Read\noutput: 41 rows\n\nThe table has 41 rows.",
+    )).toBe("Checking now.\n\nThe table has 41 rows.");
+  });
+
+  test("does not strip an inline mention of the marker", () => {
+    const source = "The string [Tool Result] appeared in the transcript I reviewed.";
+    expect(stripAssistantEchoedToolEnvelope(source)).toBe(source);
+  });
+
+  test("drops a prefix-only envelope to empty text", () => {
+    expect(stripAssistantEchoedToolEnvelope("[Tool Result]\n[tool_result]\ncall_id: 1\n")).toBe("");
+  });
+});
+
+describe("Cursor midstream envelope-echo remint", () => {
+  test("rotates the conversation after grok-4.6 copies the envelope mid-message", async () => {
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+    const seen: string[] = [];
+    let attempts = 0;
+    const factory = () => ({
+      async *run(request: CursorRunRequest) {
+        seen.push(request.conversationId);
+        attempts += 1;
+        if (attempts === 1) {
+          yield { type: "text", text: "I'll write the import script now.\n" } satisfies CursorServerMessage;
+          yield { type: "text", text: "[Tool Result]\nname: Write\noutput: ok\n" } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+          return;
+        }
+        yield { type: "text", text: "NEXT" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+
+    const threadId = "midstream-echo-remint-thread";
+    const body = {
+      ...toolResultBody("cursor/grok-4.6"),
+      _clientThreadId: threadId,
+      _cursorIdentityScope: "acct-midstream-echo",
+      _cursorConversationId: undefined,
+    } as OcxParsedRequest;
+
+    const first: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => first.push(event));
+    // The echo already reached the client: it is not withheld, only recovered from.
+    expect(first.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join(""))
+      .toContain("[Tool Result]");
+    expect(body._cursorConversationId).toBeDefined();
+    expect(body._cursorConversationId).not.toBe(seen[0]);
+    expect(lookupCursorThreadConversation(threadId, "acct-midstream-echo")).toBe(body._cursorConversationId);
+
+    const second: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => second.push(event));
+    expect(attempts).toBe(2);
+    expect(seen[1]).toBe(body._cursorConversationId);
+    expect(second.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("NEXT");
+
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+  });
+
+  test("the echo allowance is bounded and independent of the incomplete-tool allowance", () => {
+    clearCursorEnvelopeEchoRemintForTests();
+    clearCursorIncompleteToolRemintForTests();
+    const scopeKey = cursorEnvelopeEchoRemintScopeKey("thread-echo-budget", "acct-echo-budget");
+    expect(scopeKey).not.toBeNull();
+
+    // Bounded: an endlessly echoing model must not rotate the conversation on every turn.
+    for (let attempt = 0; attempt < CURSOR_ENVELOPE_ECHO_REMINT_MAX; attempt++) {
+      expect(recordCursorEnvelopeEchoRemint(scopeKey!)).toBe(true);
+    }
+    expect(recordCursorEnvelopeEchoRemint(scopeKey!)).toBe(false);
+
+    // Independent: spending the echo budget leaves incomplete-tool recovery its full allowance,
+    // so a cheap repeated failure cannot starve the rarer structural one.
+    expect(recordCursorIncompleteToolRemint(scopeKey!)).toBe(true);
+
+    clearCursorEnvelopeEchoRemintForTests();
+    clearCursorIncompleteToolRemintForTests();
+  });
+});
+

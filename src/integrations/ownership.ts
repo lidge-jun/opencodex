@@ -101,6 +101,42 @@ export interface OwnershipRecord {
   opId: string;
 }
 
+/** Recovery needs proven metadata, unlike the tolerant status-reader fallback. */
+export function isOwnershipRecord(value: unknown): value is OwnershipRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const hash = (item: unknown) => typeof item === "string" && /^[a-f0-9]{16}$/.test(item);
+  const paths = (item: unknown) => Array.isArray(item) && item.every(path =>
+    Array.isArray(path) && path.length > 0 && path.every(key => typeof key === "string" && key.length > 0));
+  return typeof record.clientId === "string" && record.clientId.length > 0
+    && typeof record.configPath === "string" && record.configPath.length > 0
+    && typeof record.opId === "string" && record.opId.length > 0
+    && typeof record.appliedAt === "string" && Number.isFinite(Date.parse(record.appliedAt))
+    && hash(record.fileFingerprint) && hash(record.blockFingerprint)
+    && paths(record.fragmentPaths) && (record.fragmentPaths as unknown[]).length > 0
+    && ["semanticBlockFingerprint", "protectedBlockFingerprint", "semanticProtectedBlockFingerprint"]
+      .every(key => record[key] === undefined || hash(record[key]))
+    && (record.refreshablePaths === undefined || paths(record.refreshablePaths))
+    && (record.createdContainers === undefined || (Array.isArray(record.createdContainers)
+      && record.createdContainers.every(path => typeof path === "string")));
+}
+
+/** Missing is empty; corrupt/unreadable ownership is uncertainty and must abort recovery. */
+export function readRecordsStrict(dir: string = integrationsDir()): Partial<Record<IntegrationClientId, OwnershipRecord>> {
+  let text: string;
+  try { text = readFileSync(recordsPath(dir), "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error("integration ownership cannot be read for recovery");
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || !Object.entries(parsed).every(([key, value]) => isOwnershipRecord(value) && value.clientId === key)) throw new Error();
+    return parsed as Partial<Record<IntegrationClientId, OwnershipRecord>>;
+  } catch { throw new Error("integration ownership is invalid for recovery"); }
+}
+
 /**
  * The integrations directory itself. Every primitive takes THIS path, never a
  * config root, so a caller cannot accidentally produce

@@ -409,7 +409,24 @@ export function buildConversationInput(parsed: OcxParsedRequest): string[] {
   const historyMessages = nonDev.slice(0, -1);
   const currentMessage = nonDev[nonDev.length - 1]!;
 
-  const imageBlocks: WireContentPart[] = [];
+  // History images are collected BEFORE the current message's so the attached blocks
+  // follow conversation order. The projected prose says "Prior conversation context"
+  // then "Current user request", so emitting current-turn images first contradicted
+  // the text the model reads alongside them.
+  const historyImageBlocks: WireContentPart[] = [];
+  for (const msg of historyMessages) {
+    if (!Array.isArray(msg.content)) continue;
+    // Tool results carry images too — a screenshot returned by a tool was previously
+    // flattened to the literal text "[image]" and the carrier discarded.
+    if (msg.role !== "user" && msg.role !== "toolResult") continue;
+    for (const part of msg.content) {
+      if (part.type !== "image") continue;
+      const img = imagePart(part.imageUrl);
+      if (img) historyImageBlocks.push(img);
+    }
+  }
+
+  const currentImageBlocks: WireContentPart[] = [];
   let currentRequestText = "";
 
   if (currentMessage.role === "user") {
@@ -421,7 +438,8 @@ export function buildConversationInput(parsed: OcxParsedRequest): string[] {
         if (part.type === "text") textParts.push(part.text);
         else if (part.type === "image") {
           const image = imagePart(part.imageUrl);
-          if (image) imageBlocks.push(image);
+          if (image) currentImageBlocks.push(image);
+          else textParts.push("[image omitted: unsupported reference]");
         } else {
           textParts.push("[video]");
         }
@@ -429,26 +447,33 @@ export function buildConversationInput(parsed: OcxParsedRequest): string[] {
       currentRequestText = textParts.join("\n");
     }
   } else if (currentMessage.role === "toolResult") {
-    const text = typeof currentMessage.content === "string"
-      ? currentMessage.content
-      : currentMessage.content.map(p => (p.type === "text" ? p.text : "[image]")).join("");
+    let text: string;
+    if (typeof currentMessage.content === "string") {
+      text = currentMessage.content;
+    } else {
+      const segments: string[] = [];
+      for (const part of currentMessage.content) {
+        if (part.type === "text") { segments.push(part.text); continue; }
+        if (part.type === "image") {
+          // Carry the real image instead of flattening it to a marker. The provenance
+          // note stays so the prose still reads coherently and the model can tell which
+          // attachment the tool produced; the bytes travel as an image block, never as text.
+          const image = imagePart(part.imageUrl);
+          if (image) { currentImageBlocks.push(image); segments.push("[image attached below]"); }
+          else segments.push("[image omitted: unsupported reference]");
+          continue;
+        }
+        segments.push("[video]");
+      }
+      text = segments.join("");
+    }
     const status = currentMessage.isError ? " (error)" : "";
     currentRequestText = `TOOL RESULT (call_id: ${currentMessage.toolCallId})${status}:\n${text}\n\nPlease proceed based on the above tool result.`;
   } else {
     currentRequestText = formatMessageForHistory(currentMessage);
   }
 
-  // Also collect any images from history messages so multimodal attachments are never dropped:
-  for (const msg of historyMessages) {
-    if (msg.role === "user" && Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if (part.type === "image") {
-          const img = imagePart(part.imageUrl);
-          if (img) imageBlocks.push(img);
-        }
-      }
-    }
-  }
+  const imageBlocks: WireContentPart[] = [...historyImageBlocks, ...currentImageBlocks];
 
   let historyText = historyMessages.map(formatMessageForHistory).filter(Boolean).join("\n\n");
   if (historyText.length > MAX_PROJECTED_HISTORY_CHARS) {

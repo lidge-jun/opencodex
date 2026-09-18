@@ -1,7 +1,9 @@
+// Holds INV-TOML-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { describe, expect, test } from "bun:test";
 import {
   applyEol,
   buildOpenaiBaseUrlLine,
+  buildRealtimeWsBaseUrlLine,
   buildProfileFile,
   buildProviderTableBlock,
   chooseCatalogPathForInjection,
@@ -13,13 +15,92 @@ import {
   stripRootContextWindowOverrides,
   standaloneCodexRoutingTarget,
 } from "../../src/codex/inject";
-import { stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
+import {
+  DEFAULT_CODEX_PROVIDER_DISPLAY_NAME,
+  buildProfileFileForTarget,
+  buildProviderTableBlockForTarget,
+  resolveCodexProviderDisplayName,
+} from "../../src/codex/inject/config-toml";
+import { extractOcxProviderTableBlock } from "../../src/codex/inject/remove";
+import { OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../../src/codex/subagent-defaults";
 
 describe("Codex config injection", () => {
+  describe("provider display name (#4810)", () => {
+    const target = standaloneCodexRoutingTarget(10100, {});
+    // The reference profile only carries a provider table when the target uses one; plain
+    // loopback is Design B and emits the root override instead.
+    const tableTarget = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+
+    test("an unset name keeps the previous bytes exactly", () => {
+      expect(DEFAULT_CODEX_PROVIDER_DISPLAY_NAME).toBe("OpenCodex Proxy");
+      expect(buildProviderTableBlockForTarget(target)).toContain('name = "OpenCodex Proxy"');
+      // Passing the unset value explicitly must be indistinguishable from omitting it, so an
+      // operator who never touches the setting sees no diff in config.toml.
+      expect(buildProviderTableBlockForTarget(target, false, undefined))
+        .toBe(buildProviderTableBlockForTarget(target));
+      expect(buildProfileFileForTarget(tableTarget, null, false, undefined, undefined))
+        .toBe(buildProfileFileForTarget(tableTarget, null));
+      expect(buildProfileFileForTarget(tableTarget, null)).toContain('name = "OpenCodex Proxy"');
+    });
+
+    test("a chosen name reaches both the provider table and the reference profile", () => {
+      const block = buildProviderTableBlockForTarget(target, false, "My Gateway");
+      expect(block).toContain('name = "My Gateway"');
+      expect(block).not.toContain("OpenCodex Proxy");
+      const profile = buildProfileFileForTarget(tableTarget, "/tmp/opencodex-catalog.json", false, undefined, "My Gateway");
+      expect(profile).toContain('name = "My Gateway"');
+      expect(profile).not.toContain("OpenCodex Proxy");
+    });
+
+    test("renaming the label never moves the identifier routing resolves through", () => {
+      // The whole point of the setting: presentation is separate from identity. A row already
+      // tagged `opencodex` must still find a provider with that id after a rename.
+      const block = buildProviderTableBlockForTarget(target, false, "My Gateway");
+      expect(block).toContain("[model_providers.opencodex]");
+      expect(block).toContain('base_url = "http://127.0.0.1:10100/v1"');
+      expect(block).toContain('wire_api = "responses"');
+      expect(buildProfileFileForTarget(tableTarget, null, false, undefined, "My Gateway"))
+        .toContain('model_provider = "opencodex"');
+    });
+
+    test("a name with TOML metacharacters is escaped rather than breaking the file", () => {
+      expect(buildProviderTableBlockForTarget(target, false, 'He said "hi" \\ bye'))
+        .toContain('name = "He said \\"hi\\" \\\\ bye"');
+    });
+
+    test("the admission and authless contracts are unchanged by a rename", () => {
+      const authless = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+      const authlessBlock = buildProviderTableBlockForTarget(authless, false, "My Gateway");
+      expect(authlessBlock).toContain("requires_openai_auth = false");
+      expect(authlessBlock).not.toContain("env_key");
+      const remote = standaloneCodexRoutingTarget(10100, { hostname: "192.168.1.20" });
+      const remoteBlock = buildProviderTableBlockForTarget(remote, false, "My Gateway");
+      expect(remoteBlock).toContain("requires_openai_auth = true");
+      expect(remoteBlock).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    });
+
+    test("STILL REFUSED: no value can make the emitted provider nameless", () => {
+      // Codex rejects a provider whose name is empty, and it rejects the whole config rather
+      // than one thread — see "no nameless provider survives" below. So suppressing the
+      // branding means choosing another label; every unusable value falls back to the default
+      // instead of writing a file Codex would refuse to load.
+      for (const rejected of ["", "   ", "\t\n", "x".repeat(129), "bad\u0000name", "line\nbreak"]) {
+        expect(resolveCodexProviderDisplayName(rejected)).toBe(DEFAULT_CODEX_PROVIDER_DISPLAY_NAME);
+        expect(buildProviderTableBlockForTarget(target, false, rejected))
+          .toContain('name = "OpenCodex Proxy"');
+      }
+      expect(resolveCodexProviderDisplayName(undefined)).toBe(DEFAULT_CODEX_PROVIDER_DISPLAY_NAME);
+      // A usable label is taken verbatim apart from surrounding whitespace, and the boundary
+      // length is accepted rather than silently dropped.
+      expect(resolveCodexProviderDisplayName("  My Gateway  ")).toBe("My Gateway");
+      expect(resolveCodexProviderDisplayName("y".repeat(128))).toBe("y".repeat(128));
+    });
+  });
+
   test("standalone routing-target wrappers remain byte-compatible", () => {
     const target = standaloneCodexRoutingTarget(10100, { hostname: "192.168.1.20" });
     expect(buildProviderTableBlock(target, true)).toBe(
@@ -595,6 +676,39 @@ describe("Design B openai_base_url injection", () => {
     expect(stripped).toContain('model = "gpt-5.5"');
   });
 
+  test("provider-table capture ignores the identical marker on the root base-url override", () => {
+    const content = [
+      "# Auto-injected by opencodex",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      'model = "vendor/routed-model"',
+      "",
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+      "[agents]",
+      "max_concurrent_threads_per_session = 8",
+      "",
+    ].join("\n");
+
+    expect(extractOcxProviderTableBlock(content)).toBe([
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+      "",
+    ].join("\n"));
+  });
+
   test("legacy marker directly before the provider table survives the root strip order (removeOcxSection keeps its anchor)", () => {
     // No Design B form present — stripInjectedOpenaiBaseUrl must not eat the legacy EOF marker
     // in a way that leaves the [model_providers.opencodex] table behind.
@@ -736,4 +850,34 @@ describe("EOL boundary helpers (Windows CRLF configs)", () => {
     // Idempotent on already-normalized input.
     expect(applyEol(crlf, "\r\n")).toBe(crlf);
   });
+});
+
+test('managed injection is idempotent and retains every unrelated value',()=>{
+ const source=`model = "gpt-6-astra"\n${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\nservice_tier = "fast"\n[features]\ncontext_management.experimental_mode = true\n[features.multi_agent_v2]\nenabled = true\n`;
+ const target={baseUrl:'http://127.0.0.1:10100/v1',requiresAdmissionToken:false,tokenEnv:'OPENCODEX_API_AUTH_TOKEN' as const};
+ const result=setRootOpenaiBaseUrl(source,target);
+ expect(result.keptUserBaseUrl).toBe(false);
+ expect(result.content).toBe(source.replace('10100/v1','10100/backend-api/codex'));
+ expect(setRootOpenaiBaseUrl(result.content,target).content).toBe(result.content);
+ expect(buildRealtimeWsBaseUrlLine(target)).toContain('10100/v1');
+ expect(setRootOpenaiBaseUrl(source,10100).content).toBe(result.content);
+});
+test('feature disabled and user-owned routing remain intact',()=>{
+ const source='openai_base_url = "http://127.0.0.1:10100/v1"\n[features]\ncontext_management.experimental_mode = true\n';
+ expect(setRootOpenaiBaseUrl(source,10100)).toEqual({content:source,keptUserBaseUrl:true});
+ const managed=`${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\n[features]\ncontext_management.experimental_mode = false\n`;
+ expect(setRootOpenaiBaseUrl(managed,10100).content).toBe(managed);
+});
+
+
+test("malformed TOML preserves user routing and does not enable context injection", () => {
+  const target = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" as const };
+  for (const malformed of ['model = "unterminated', '[features]\ncontext_management.experimental_mode = true\nbroken = [']) {
+    const userOwned = `openai_base_url = "https://example.invalid/v1"\n${malformed}\n`;
+    const managed = `${OCX_SECTION_MARKER}\nopenai_base_url = "http://127.0.0.1:10100/v1"\n${malformed}\n`;
+    for (const inject of [(source: string) => setRootOpenaiBaseUrl(source, 10100), (source: string) => setRootOpenaiBaseUrl(source, target)]) {
+      expect(inject(userOwned)).toEqual({ content: userOwned, keptUserBaseUrl: true });
+      expect(inject(managed)).toEqual({ content: managed, keptUserBaseUrl: false });
+    }
+  }
 });

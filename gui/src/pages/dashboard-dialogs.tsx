@@ -6,6 +6,8 @@ import {
 } from "./dashboard-shared";
 import type { useDashboardData } from "./use-dashboard-data";
 import { shadowSourceModelLabel } from "./shadow-call-source";
+import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
+import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
 
 type Dash = ReturnType<typeof useDashboardData>;
 
@@ -19,6 +21,7 @@ export function DashboardDialogs(d: Dash) {
     effortCapHelpOpen, setEffortCapHelpOpen, effortCapHelpDialogRef,
     shadowCallHelpOpen, setShadowCallHelpOpen, shadowCallHelpDialogRef,
     shadowCall,
+    maAdvisory, maAdvisoryOpen, pendingMaMode, maBusy, keepMaMode, chooseMaV1, dismissMaSurfaceDialog,
   } = d;
 
   return (
@@ -208,6 +211,17 @@ export function DashboardDialogs(d: Dash) {
           </div>
         </div>
       </dialog>
+      {(pendingMaMode || maAdvisoryOpen) && (
+        <SubagentSurfaceWarningModal
+          reason={pendingMaMode ? "selection" : "advisory"}
+          mode={pendingMaMode ?? maAdvisory?.mode ?? "default"}
+          docsUrl={maAdvisory?.docsUrl ?? SUBAGENT_SURFACE_GUIDE_URL}
+          busy={maBusy}
+          onContinue={() => { void keepMaMode(); }}
+          onChooseV1={() => { void chooseMaV1(); }}
+          onDismiss={dismissMaSurfaceDialog}
+        />
+      )}
     </>
   );
 }

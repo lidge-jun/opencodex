@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` vous accompagne dans les étapes suivantes :
 
-1. **Choix d’un fournisseur** — sélectionnez l’un des 79 préréglages intégrés au registre, ou `custom` pour saisir une
+1. **Choix d’un fournisseur** — sélectionnez l’un des 94 préréglages intégrés au registre, ou `custom` pour saisir une
    URL de base et un adaptateur.
 2. **Clé API** — collez une clé ou référencez une variable d’environnement telle que `${ANTHROPIC_API_KEY}`.
 3. **Modèle par défaut** — pour les fournisseurs clés, locaux et personnalisés, acceptez le préréglage ou saisissez un identifiant de modèle.
@@ -74,7 +74,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ## Choisissez des modèles de sous-agents (facultatif)
 
 Une nouvelle configuration propose cinq modèles natifs dans le sélecteur de sous-agents de Codex : `gpt-5.5`,
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` et `gpt-5.4-mini`. Ouvrez `ocx gui` pour remplacer ou
+`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` et `gpt-6-astra`. Ouvrez `ocx gui` pour remplacer ou
 réorganiser jusqu’à cinq modèles natifs ou routés. Le tableau de bord peut également définir un modèle de sous-agent
 préféré et un effort de raisonnement. Consultez [Interface des sous-agents](/fr/guides/sub-agent-surface/)
 pour choisir v1, base ou v2 et comprendre quand s’appliquent les instructions, les valeurs natives par défaut et les replis.

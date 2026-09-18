@@ -13,7 +13,8 @@ import {
 } from "../../../src/providers/openai-virtual-models";
 import { PROVIDER_REGISTRY } from "../../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../../src/server/adapter-resolve";
-import { saveConfig } from "../../../src/config";
+import { loadConfig, saveConfig } from "../../../src/config";
+import { clearKeyCooldowns, rotateKeyOn429 } from "../../../src/providers/key-failover";
 import { startServer } from "../../../src/server";
 import { usageLogPath } from "../../../src/usage/log";
 
@@ -176,6 +177,64 @@ describe("validateOpenAiVirtualModelDefinition", () => {
 });
 
 describe("OpenAI API compact transport", () => {
+
+  test("a cooled committed key is replaced before the first native compact send", async () => {
+    const originalFetch = globalThis.fetch;
+    const home = mkdtempSync(join(tmpdir(), "ocx-openai-api-compact-pool-"));
+    process.env.OPENCODEX_HOME = home;
+    clearKeyCooldowns();
+    saveConfig({
+      port: 0,
+      defaultProvider: "openai-apikey",
+      openaiProviderTierVersion: 2,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "sk-platform",
+          apiKeyPoolStrategy: "round-robin",
+          apiKeyPool: [
+            { id: "first", key: "sk-platform" },
+            { id: "second", key: "sk-warm" },
+          ],
+        },
+      },
+    } as never);
+
+    // Cool the committed key the way a real 429 does, then point the stored selection back at
+    // it. Native compact never enters handleResponses, so nothing else would move it.
+    const live = loadConfig();
+    rotateKeyOn429(live, "openai-apikey", null, Date.now(), "sk-platform");
+    const restored = loadConfig();
+    restored.providers["openai-apikey"]!.apiKey = "sk-platform";
+    saveConfig(restored);
+
+    const seen: Array<string | null> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url !== "https://api.openai.com/v1/responses/compact") throw new Error(`unexpected upstream URL: ${url}`);
+      seen.push(new Headers(init?.headers).get("authorization"));
+      return new Response(JSON.stringify({ output: [] }), { headers: { "content-type": "application/json" } });
+    };
+
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses/compact", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-apikey/gpt-5.6-sol", input: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(seen).toEqual(["Bearer sk-warm"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await server.stop(true);
+      clearKeyCooldowns();
+      removeTreeWithRetry(home);
+    }
+  });
+
   test("maps every Pro id to base, strips reasoning, buffers failures, caps bodies, and logs exactly once", async () => {
     const originalFetch = globalThis.fetch;
     const home = mkdtempSync(join(tmpdir(), "ocx-openai-api-compact-"));

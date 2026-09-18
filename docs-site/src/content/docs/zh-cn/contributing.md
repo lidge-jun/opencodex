@@ -113,7 +113,7 @@ bun run release:watch               # 观察最新的 Release workflow run
 
 ## 向目录中添加 provider
 
-所有 provider picker 与 seed 都来自 canonical registry（`src/providers/registry.ts`）：
+所有 provider picker 与 seed 都来自 canonical registry（`src/providers/registry/entries-extended.ts`）：
 
 ```ts
 {

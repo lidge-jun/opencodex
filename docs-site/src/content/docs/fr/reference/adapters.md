@@ -131,7 +131,12 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 
 ### Effort de raisonnement
 
-`gpt-5.6-sol` et `claude-opus-5` prennent en charge nativement un niveau d’effort vérifié, mais chaque famille de modèles nomme différemment le champ de la requête. La valeur sélectionnée `low`, `medium`, `high`, `xhigh` ou `max` est envoyée dans `additionalModelRequestFields.reasoning.effort` pour `gpt-5.6-sol`, et dans `additionalModelRequestFields.output_config.effort` pour `claude-opus-5`. Les autres modèles Kiro utilisent actuellement un raisonnement émulé : opencodex convertit le niveau choisi en instructions de réflexion bornées dans le contenu utilisateur, car leur champ d’effort natif n’a pas été vérifié. La présence d’un contrôle d’effort annoncé sur ces modèles ne prouve donc pas la prise en charge native du raisonnement en amont.
+Les modèles GPT-5.6 utilisent `additionalModelRequestFields.reasoning.effort`, et `claude-opus-5`
+utilise `additionalModelRequestFields.output_config.effort`. Pour `gpt-5.6-luna` et `gpt-5.6-terra`,
+seuls `low`, `medium`, `high` et `max` empruntent le chemin natif vérifié. Leur niveau `xhigh`
+conserve les instructions de réflexion bornées existantes, car ce niveau natif n’a pas été vérifié.
+`gpt-5.6-sol` et `claude-opus-5` conservent leurs niveaux natifs existants : `low`, `medium`, `high`,
+`xhigh` et `max`. Les autres modèles Kiro utilisent une émulation ; un réglage d’effort ne prouve pas une prise en charge native.
 
 ## `cursor`
 
@@ -143,6 +148,17 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 - Expose Cursor Router sous `cursor/auto`, ainsi que les entrées explicites `cursor/auto-cost`, `cursor/auto-balance` et `cursor/auto-intelligence`. Les niveaux explicites sont encodés dans `requested_model.parameters`, tandis que l’ancienne entrée `cursor/auto` conserve la valeur par défaut du compte ou de l’équipe.
 - Envoie les niveaux ordinaires de `cursor/grok-4.5` avec les identifiants de protocole exacts issus de la découverte en direct de Cursor (`cursor-grok-4.5-low`, `-medium` ou `-high`). `cursor/grok-4.5-fast` reste sélectionnable, mais le modèle canonique `grok-4.5` est envoyé avec des paramètres distincts `effort` et `fast=true`.
 - L’exécution locale native de commandes sur le système de fichiers, le shell ou le réseau par Cursor est refusée par défaut. Les intégrations explicites `mcpServers` et `desktopExecutor` disposent d’activations distinctes ; `nativeLocalExec: "on"` active l’exécuteur intégré plus large et contourne la sémantique d’approbation et de bac à sable de Codex. L’ancien réglage `unsafeAllowNativeLocalExec: true` reste équivalent uniquement lorsque `nativeLocalExec` n’est pas défini.
+
+## `devin`
+
+**Cible :** `exa.api_server_pb.ApiServerService/GetChatMessage` de Cognition, en streaming Connect sur `server.codeium.com`.
+**Authentification :** clé d'API Devin/Cognition issue de `provider.apiKey` ou de l'en-tête authorization transmis. La connexion tente d'abord d'importer l'identifiant que le Devin CLI installé détient déjà : `devin auth login` achève la connexion PKCE propre au CLI et écrit un `devin-session-token` dans son `credentials.toml`, le même identifiant que `SeatManagementService.RegisterUser` délivre pour une connexion navigateur. Sans identifiant CLI exploitable, la connexion revient à l'authentification Auth0 dans le navigateur, puis échange le jeton collé via `RegisterUser` contre une clé durable. `devin-cli` ne subsiste que comme alias déprécié : `ocx login devin-cli` est toujours routé vers `devin`, et une configuration enregistrée sous l'ancien id est réécrite au démarrage.
+
+- Utilise `runTurn` plutôt que le chemin fetch/parse ordinaire. Les requêtes et les événements serveur passent par le cadrage protobuf manuel de `devin/cloud-direct/wire.ts`.
+- Les modèles sont découverts par compte avec `GetCascadeModelConfigs` ; ceux qui ne figurent pas dans l'offre disparaissent de la liste au lieu d'échouer au moment de la requête.
+- Cognition impose une limite de longueur sur les descriptions d'outils et une liste de phrases interdites. L'adaptateur réécrit les formulations connues et tronque les descriptions trop longues.
+- Les clés ne se renouvellent pas. Relancez `ocx login devin` lorsqu'une clé expire ou est révoquée.
+- Seul l'identifiant est local quand l'import CLI est utilisé ; le tour part vers Cognition dans les deux cas. Un ancien build livrait sous l'id `devin-cli` un second adaptateur qui exécutait le tour comme une session Agent Client Protocol contre un processus enfant local `devin acp`. Il a été retiré : une configuration qui nomme encore cet adaptateur est réécrite vers `devin` au démarrage, y compris une ligne au nom personnalisé comme `"devin-acp"`.
 
 ## `azure-openai` (alias : `azure`)
 

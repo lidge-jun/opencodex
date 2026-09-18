@@ -12,7 +12,13 @@ export const PREFLIGHT_HEARTBEAT_RETAIN_LIMIT = 16;
 export const COALESCE_MAX_CHUNK_LENGTH = 64 * 1024;
 
 export interface AdapterEventQueue {
-  push(event: AdapterEvent): void;
+  /**
+   * Returns true when the event was merged into the buffered tail instead of
+   * becoming its own retained item. A caller that charges a memory budget for
+   * what the queue holds needs that distinction: a merged delta costs only its
+   * appended payload, while a new item costs a whole serialized event.
+   */
+  push(event: AdapterEvent): boolean;
   close(): void;
   stream(): AsyncIterable<AdapterEvent>;
   collect(): Promise<AdapterEvent[]>;
@@ -98,21 +104,22 @@ export function createAdapterEventQueue(opts?: {
     return false;
   };
 
-  const push = (event: AdapterEvent): void => {
-    if (closed) return;
+  const push = (event: AdapterEvent): boolean => {
+    if (closed) return false;
     const reader = readers.shift();
     if (reader) {
       reader({ done: false, value: event });
-      return;
+      return false;
     }
-    if (coalesceIntoTail(event)) return;
+    if (coalesceIntoTail(event)) return true;
     if (queued.length >= maxBacklog) {
       opts?.onBacklogExceeded?.();
       queued.push({ type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" });
       close();
-      return;
+      return false;
     }
     queued.push(event);
+    return false;
   };
 
   const close = (): void => {

@@ -13,7 +13,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
+import { localAdmissionToken, localInferenceDestination } from "../lib/local-destinations";
 import type { OcxConfig } from "../types";
 
 export interface GatewayModelRow {
@@ -24,7 +24,12 @@ export interface GatewayModelRow {
 export interface GatewayModelCacheRefreshOptions {
   timeoutMs?: number;
   configDir?: string;
-  admissionConfig?: Pick<OcxConfig, "apiKeys">;
+  /**
+   * Admission credential source AND local destination source: the cache file's `baseUrl` must
+   * equal the `ANTHROPIC_BASE_URL` the CLI is launched with or Claude Code ignores the whole
+   * cache, so this has to resolve the same loopback listener `buildClaudeEnv` resolves (#4236).
+   */
+  admissionConfig?: Pick<OcxConfig, "apiKeys" | "hostname" | "unauthenticatedLoopbackListener">;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
 }
@@ -60,19 +65,6 @@ export function writeGatewayModelCache(baseUrl: string, models: readonly Gateway
   }
 }
 
-/**
- * Hardened service-token file, the same precedence `ocx opencode` uses. A service
- * install writes the admission token to disk rather than the interactive environment,
- * so an interactive `ocx claude` with neither env token nor configured key would
- * otherwise still get a 401 and keep a stale picker list.
- */
-function serviceFileToken(env: NodeJS.ProcessEnv): string | null {
-  const lookup = env.OCX_API_TOKEN_FILE?.trim()
-    ? env
-    : { ...env, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
-  return loadServiceTokenFromFile(lookup as Record<string, string | undefined>);
-}
-
 /** Fetch the anthropic-flavor /v1/models from the local proxy and write the cache. */
 export async function refreshGatewayModelCacheFromProxy(
   port: number,
@@ -92,17 +84,16 @@ export async function refreshGatewayModelCacheFromProxy(
     // request sent to its local 127.0.0.1 address. Reuse the same dedicated
     // credential domain as /v1/models admission; never place it in Authorization,
     // which can belong to an upstream provider on other data-plane surfaces.
-    const envToken = (options.env ?? process.env).OPENCODEX_API_AUTH_TOKEN?.trim();
-    const configuredToken = options.admissionConfig?.apiKeys
-      ?.find(entry => entry.key.trim().length > 0)
-      ?.key.trim();
+    // Env token, then the hardened service token file (a service install writes the admission
+    // token to disk rather than the interactive environment), then a configured key — one
+    // shared ladder, so this cannot drift from what `buildClaudeEnv` puts in the launch env.
     const admissionToken = typeof portOrTarget === "number"
-      ? envToken || serviceFileToken(options.env ?? process.env) || configuredToken
+      ? localAdmissionToken(options.admissionConfig, options.env ?? process.env)
       : portOrTarget.admissionToken;
     if (admissionToken) headers.set("x-opencodex-api-key", admissionToken);
 
     const baseUrl = typeof portOrTarget === "number"
-      ? `http://127.0.0.1:${portOrTarget}`
+      ? localInferenceDestination(options.admissionConfig, portOrTarget).origin
       : new URL(portOrTarget.baseUrl).origin;
 
     // ?ids=cli pins the readable claude-ocx id family deterministically (audit 051

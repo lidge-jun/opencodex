@@ -74,7 +74,7 @@ export default function ClientConfigPanel({
     }
   }, [t]);
 
-  const downloadJson = useCallback((_client: ExportClientId, envelope: ClientConfigEnvelope, json: string) => {
+  const downloadJson = useCallback((client: ExportClientId, envelope: ClientConfigEnvelope, json: string) => {
     // Mechanics per ClaudeDesktop.exportProfile: the anchor is an implementation
     // detail of a real <button>, and the filename comes from the envelope so it
     // matches the destination file's own name.
@@ -85,7 +85,7 @@ export default function ClientConfigPanel({
     anchor.click();
     URL.revokeObjectURL(url);
     // "Downloaded", never "applied": a file in ~/Downloads changed nothing yet.
-    setAnnouncement(t("api.clientConfig.downloadedAnnounce", {
+    setAnnouncement(t(client === "cline" ? "api.clientConfig.clineDownloaded" : "api.clientConfig.downloadedAnnounce", {
       filename: envelope.filename,
       destination: envelope.destination,
     }));

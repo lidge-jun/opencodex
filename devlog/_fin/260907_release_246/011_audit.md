@@ -1,0 +1,3 @@
+# Independent release audit
+
+Averroes: VERDICT: PASS. No verified source/security blocker. Checked 20 delivery PRs: zero unresolved review threads or CHANGES_REQUESTED. The prior successful CI 34074350604 (26 jobs) and lifecycle 34074351720 (3 jobs) tested 9470fdb1 whose tree equals runtime merge 5fdf9bbdd. RC 0d8b0cd1 differs only in closeout documents. New RC workflow 34079952328 is pending. Login-required default is preserved by codexDesktopAuthless === true; #3689 closed unmerged. Promotion repinning must retain frozen source RC. Final branch CI/lifecycle and artifact gates remain mandatory.

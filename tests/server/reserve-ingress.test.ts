@@ -175,18 +175,32 @@ describe("Reserve eligibility trusts receiving-listener admission", () => {
     } finally { await fixture.close(); }
   }, SERVER_BUDGET_MS);
 
-  test.each(["chat", "messages"] as const)("translated %s: public has no Reserve WHAM; local allowlist refuses", async transport => {
+  test.each(["chat", "messages"] as const)("translated %s: public has no Reserve WHAM; local listener does", async transport => {
+    // The invariant is the one this whole describe block is about: eligibility is decided by the
+    // RECEIVING listener's admission, not by the dial address. Both requests below leave from
+    // 127.0.0.1 with the same credential; only the socket differs.
+    //
+    // This case used to assert a local 404, because the unauthenticated loopback listener did not
+    // serve the translated wires at all — and said so: "this local 404 does NOT prove admission
+    // propagation inside the translated handler." It is served now (#4236, the hub's own local
+    // clients speak these two wires and nothing else answers them on a tailnet-bound hub), so the
+    // weaker assertion is replaced by the one the 404 was standing in for: the same 429-behind-a-
+    // WHAM-probe answer the Responses transport already gives on this listener.
     const fixture = await reserveIngressFixture();
     try {
       const before = snapshot(fixture.counters);
       const publicResult = await fixture.request("public", transport, "gpt-reserve", headers("dedicated"));
+      // Public admission is `dedicated`, so Reserve is not eligible and the caller's own
+      // forwarded credential reaches inference with no WHAM probe at all.
       expect(publicResult.status).toBe(200);
       expect(delta(fixture.counters, before)).toMatchObject({ wham: 0, inference: 1 });
       const localBefore = snapshot(fixture.counters);
       const localResult = await fixture.request("local", transport, "gpt-reserve", headers("dedicated"));
-      expect(localResult.status).toBe(404);
-      expect(delta(fixture.counters, localBefore)).toEqual({ wham: 0, credential: 0, tokenRead: 0, inference: 0 });
-      // This local 404 does NOT prove admission propagation inside the translated handler.
+      // Loopback admission IS eligible, so the handler probes Reserve availability and refuses
+      // the turn rather than spending the account — and no request reaches the upstream.
+      expect(localResult.status).toBe(429);
+      expect(localResult.text).toContain("Reserve");
+      expect(delta(fixture.counters, localBefore)).toMatchObject({ wham: 1, inference: 0 });
       fixture.assertConfigUnchanged();
     } finally { await fixture.close(); }
   }, SERVER_BUDGET_MS);
@@ -199,8 +213,8 @@ describe("terminal routed vision helpers cannot spend Reserve", () => {
     ["chat", "openai/gpt-reserve"], ["chat", "main/gpt-reserve"],
     ["responses", "openai/gpt-reserve"], ["responses", "main/gpt-reserve"],
   ] as const)("%s %s refuses before credential enrichment", async (transport, model) => {
-    // Chat is intentionally not served by the secondary listener; use an actual primary
-    // loopback bind so this tests the handler, not the secondary listener's 404 allowlist.
+    // A primary LOOPBACK bind, so the terminal refusal is proven inside the handler on a
+    // request the public listener admitted as loopback — not by any secondary-listener gate.
     const fixture = await reserveIngressFixture({ primaryLoopback: true });
     try {
       fixture.allow(); // A permission denial must not accidentally make this test green.

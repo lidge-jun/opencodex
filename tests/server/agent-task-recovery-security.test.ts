@@ -38,7 +38,7 @@ describe("agent task recovery security", () => {
     const header = { type: "input_text", text: ROUTING_ENVELOPE };
     const encrypted = { type: "encrypted_content", encrypted_content: FERNET_TASK };
     const inputs = [
-      agentMessage([header, encrypted, encrypted]),
+      agentMessage([header, encrypted, { type: "input_text", text: "" }, encrypted]),
       agentMessage([header, { ...encrypted, encrypted_content: FERNET_TASK.slice(0, 50) },
         { ...encrypted, encrypted_content: FERNET_TASK.slice(50) }]),
       agentMessage([{ ...header, text: ROUTING_ENVELOPE.replace("NEW_TASK", "new_task") }, encrypted]),
@@ -339,7 +339,7 @@ describe("agent task recovery security", () => {
       throw new Error("recovery must stay unreachable");
     }) as typeof fetch;
     const ambiguous = encryptedInput() as Array<{ content: Array<Record<string, unknown>> }>;
-    ambiguous[0]!.content.push({ type: "encrypted_content", encrypted_content: FERNET_TASK });
+    ambiguous[0]!.content.push({ type: "input_text", text: "" }, { type: "encrypted_content", encrypted_content: FERNET_TASK });
 
     const response = await post(
       routedConfig(),

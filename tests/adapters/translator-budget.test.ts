@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
 import { createGoogleAdapter } from "../../src/adapters/google";
@@ -9,6 +9,7 @@ import {
   createTranslatorBudget,
   releaseTranslatedEvent,
   retainTranslatedEvent,
+  retainTranslatedEventBatch,
   translatorObservedBufferSnapshot,
 } from "../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../src/types";
@@ -22,6 +23,81 @@ async function textWithin(stream: ReadableStream<Uint8Array>, timeoutMs = 2_000)
 }
 
 describe("translator budget", () => {
+  for (const kind of ["anthropic", "google", "openai-chat"] as const) {
+    test(`${kind} buffered response sizing avoids encoded measurement copies`, async () => {
+      const text = "中文😀\ud800".repeat(1024);
+      const provider = { adapter: kind, apiKey: "fixture", baseUrl: "https://example.test/v1" };
+      const adapter = kind === "anthropic" ? createAnthropicAdapter(provider)
+        : kind === "google" ? createGoogleAdapter(provider)
+        : createOpenAIChatAdapter(provider);
+      const payload = kind === "anthropic"
+        ? { content: [{ type: "text", text }], stop_reason: "end_turn" }
+        : kind === "google"
+          ? { candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }] }
+          : { choices: [{ message: { content: text }, finish_reason: "stop" }] };
+      const response = new Response(Buffer.from(JSON.stringify(payload)));
+      const budget = createTranslatorBudget();
+      const encode = spyOn(TextEncoder.prototype, "encode");
+      try {
+        const events = await adapter.parseResponse(response, budget);
+        expect(events).toContainEqual({ type: "text_delta", text });
+        expect(encode).not.toHaveBeenCalled();
+        for (const event of events) releaseTranslatedEvent(event, budget);
+        expect(budget.snapshot().currentBytes).toBe(0);
+      } finally {
+        encode.mockRestore();
+        budget.dispose();
+      }
+    });
+  }
+
+  test("batch retention counts each event once without constructing a serialized batch", () => {
+    const events = [
+      { type: "text_delta", text: "中文😀\ud800".repeat(1024) },
+      { type: "done", usage: { inputTokens: 1e20, outputTokens: -0 } },
+    ];
+    const eventBytes = events.map(event => Buffer.byteLength(JSON.stringify(event)));
+    const total = Buffer.byteLength(JSON.stringify(events));
+    const budget = createTranslatorBudget({ maxTurnBytes: total });
+    const count = spyOn(Buffer, "byteLength");
+    try {
+      retainTranslatedEventBatch(events, budget);
+      expect(count).toHaveBeenCalledTimes(events.length);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: total, highWaterBytes: total, overflows: 0 });
+      releaseTranslatedEvent(events[0]!, budget);
+      expect(budget.snapshot().currentBytes).toBe(eventBytes[1]! + 2);
+      releaseTranslatedEvent(events[1]!, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      count.mockRestore();
+      budget.dispose();
+    }
+  });
+
+  test("batch overflow and serialization failure acquire no partial event ownership", () => {
+    const events = [{ type: "text_delta", text: "first" }, { type: "done" }];
+    const bytes = Buffer.byteLength(JSON.stringify(events));
+    const budget = createTranslatorBudget({ maxTurnBytes: bytes - 1 });
+    try {
+      expect(() => retainTranslatedEventBatch(events, budget)).toThrow(/translator/);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      for (const event of events) releaseTranslatedEvent(event, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      retainTranslatedEvent(events[0]!, budget);
+      releaseTranslatedEvent(events[0]!, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+
+      const invalid = { toJSON() { throw new Error("invalid event"); } };
+      expect(() => retainTranslatedEventBatch([events[0]!, invalid], budget)).toThrow("invalid event");
+      expect(budget.snapshot().currentBytes).toBe(0);
+      retainTranslatedEvent(events[0]!, budget);
+      releaseTranslatedEvent(events[0]!, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
   test("incremental event retention transfers array-tail ownership during in-order release", () => {
     const budget = createTranslatorBudget({ maxTurnBytes: 4_096 });
     const first = { type: "text_delta", text: "first" };

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { ensureStrictCatalogFields } from "../../src/codex/catalog/parsing";
 import { catalogHintsFromModelsApiItem } from "../../src/codex/catalog/provider-fetch";
+import { buildCatalogEntries, gatherRoutedModels } from "../../src/codex/catalog";
 import type { OcxConfig } from "../../src/types";
 
 /**
@@ -12,6 +13,28 @@ import type { OcxConfig } from "../../src/types";
  * verbatim and the Codex app reported `unknown variant 'video'` while showing zero apps.
  */
 describe("catalog input_modalities stay inside the enum Codex accepts", () => {
+  test.each(["anthropic", "anthropic-apikey"])("%s registry image inputs reach the Codex catalog", async (provider) => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: provider,
+      providers: {
+        [provider]: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: provider === "anthropic" ? "oauth" : "key",
+          liveModels: false,
+        },
+      },
+    });
+    const routed = models.filter(model => model.provider === provider);
+    expect(routed.length).toBeGreaterThan(0);
+    const entries = buildCatalogEntries(null, [], routed);
+    expect(entries).toHaveLength(routed.length);
+    for (const entry of entries) {
+      expect(entry.input_modalities).toEqual(["text", "image"]);
+    }
+  });
+
   test("an out-of-enum modality is dropped rather than written through", () => {
     const entry = ensureStrictCatalogFields(
       { slug: "zenmux/meta-muse-spark-1.1", input_modalities: ["text", "image", "audio", "video"] },

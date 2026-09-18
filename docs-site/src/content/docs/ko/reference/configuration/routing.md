@@ -68,7 +68,8 @@ Codex Auth 페이지에서 이 picker 동작을 opt-in할 수 있습니다. 비�
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 순서가 있는 concrete route입니다. `weight`는 1–10000이며 기본값은 `1`입니다. |
 | `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 선택 전략입니다. 대상 순서는 `failover` 우선순위이고, 가중치는 `round-robin`과 `random` 추첨 비율을 결정하며, `least-used`는 기록된 성공 횟수를 따르고, `reset-window`는 가장 가까운 할당량 재설정을 따릅니다. |
 | `stickyLimit?` | `number` | `1` | 한 round-robin 배치에서 유지되는 성공 요청 수입니다. 범위는 1–100입니다. |
-| `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 호출자가 effort를 생략했고 선택된 대상이 요청한 rung를 광고할 때만 적용됩니다. |
+| `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | `defaultEffort`는 콤보 기본값이 null이 아니고, 선택한 대상의 지원 목록이 알려져 있으며 비어 있지 않을 때 생략된 `reasoning.effort`를 채웁니다. 설정값을 지원하면 그대로 사용합니다. 그렇지 않으면 설정값 이하의 가장 높은 지원 단계를 사용하고, 그런 단계가 없으면 가장 낮은 지원 단계를 사용합니다. 지원 목록이 없거나 비어 있으면 기본값을 생략합니다. |
+| `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"`는 빈 목록을 포함한 알려진 대상 지원 목록의 교집합을 사용하고, `"adaptive"`는 빈 목록을 제외합니다. 알 수 없는 목록은 두 모드 모두 교집합을 제한하지 않습니다. 전송 시 명시적 빈 목록은 두 모드에서 effort·thinking 제어를 제거하고, 알 수 없는 목록은 adaptive에서만 제거합니다. `reasoning.summary`는 보존됩니다. 알려진 비어 있지 않은 대상의 effort 결정과 대상 선택·순서는 그대로입니다. |
 | `alias?` | `string` | — | 정규화된 picker slug 대신 쓰는 선택적 공개 model id입니다. |
 | `nativeAlias?` | `boolean` | `false` | 현재 지원되는 bare native id가 해당 비수식 id에만 우선하도록 합니다. 계정 또는 프로바이더로 수식된 OpenAI route는 별도로 유지됩니다. |
 | `displayName?` | `string` | — | catalog 표시 전용 label이며 native alias에서는 비어 있지 않아야 합니다. |

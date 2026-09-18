@@ -22,6 +22,8 @@ import {
   type LiveProxy,
 } from "../server/proxy-liveness";
 import type { ProxyRestartRequestOutcome } from "./tray-proxy";
+import { packageVersion } from "./help";
+import { computeVersionSkew } from "./version-skew";
 
 export const SYSTEM_RESTART_REQUEST_TIMEOUT_MS = 5_000;
 export const SYSTEM_RESTART_ATTESTATION_TIMEOUT_MS = 4_000;
@@ -32,10 +34,21 @@ export interface BoundSystemRestartDeps {
   findLive?: typeof findLiveProxy;
   createChallenge?: () => string;
   now?: () => number;
+  /** Invoking CLI version for the skew guard; defaults to this bundle's package version. */
+  cliVersion?: string;
 }
 
 function rejected(code: string): ProxyRestartRequestOutcome {
   return { accepted: false, uncertain: false, error: new Error(code) };
+}
+
+/** Own-bundle version for the skew comparison; an unreadable bundle is "cannot compare", not a crash. */
+function ownCliVersion(): string {
+  try {
+    return packageVersion();
+  } catch {
+    return "unknown";
+  }
 }
 
 function uncertain(code: string): ProxyRestartRequestOutcome {
@@ -105,6 +118,18 @@ export async function requestBoundSystemRestart(
     // bind the operation to the attested PID. Refuse before POST rather than weakening
     // the exact-process contract or replaying a stop/start transaction.
     return rejected("restart_capability_unsupported");
+  }
+
+  // An in-place restart respawns the live process from its own installation
+  // (selfLaunchArgv in server/management/system-restart.ts), so a restart accepted
+  // from a different-version CLI would keep the OLD build serving while reporting
+  // success (#4522). Both sides already publish exactly the data doctor's skew
+  // diagnosis compares (packageVersion vs the /healthz version), so reuse that
+  // comparison and refuse before POST. Placeholder versions (unknown/0.0.0) are
+  // "cannot compare", not mismatch, and keep the existing behavior.
+  const proxyVersion = typeof body.version === "string" ? body.version : undefined;
+  if (computeVersionSkew(deps.cliVersion ?? ownCliVersion(), proxyVersion).skewed) {
+    return rejected("restart_version_skew");
   }
 
   let observed: LiveProxy | null;

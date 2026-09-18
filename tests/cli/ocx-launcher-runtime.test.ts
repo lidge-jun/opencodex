@@ -311,7 +311,7 @@ function isolatedLauncherEnv(root: string, override: string): NodeJS.ProcessEnv 
   };
 }
 
-describe.skipIf(!nodeAvailable)("ocx npm launcher relative Bun override", () => {
+describe.skipIf(!nodeAvailable)("ocx package launcher relative Bun override", () => {
   test("resolves a valid bare relative override before spawning", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-launcher-relative-"));
     try {
@@ -358,7 +358,7 @@ describe.skipIf(!nodeAvailable)("ocx npm launcher relative Bun override", () => 
   }, 60_000);
 });
 
-describe.skipIf(!runnable)("ocx npm launcher effective Bun runtime", () => {
+describe.skipIf(!runnable)("ocx package launcher effective Bun runtime", () => {
   test("uses a valid OPENCODEX_BUN_PATH for the actual proxy process", async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-launcher-runtime-copy-"));
     try {

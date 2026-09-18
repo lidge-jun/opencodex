@@ -30,7 +30,7 @@ import {
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
-import { dottedToolName, modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
+import { dottedToolName, modelInList, namespacedToolName, NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES, toolChoiceToolPredicate } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
@@ -83,7 +83,6 @@ import {
   catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
-  noteAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
   sealRequestAttemptIdentity,
@@ -152,6 +151,36 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
       dottedAliasOwners.set(t.name, null);
     }
   }
+  // Bare echo alias (`name` with no namespace spelling, #4679): some providers — observed
+  // on the muse family via Command Code — echo a namespaced tool by its bare name. The
+  // bare spelling is only a safe alias while it names ONE tool and cannot be read as
+  // another identity's canonical or dotted spelling.
+  // Code-mode helper spellings never gain a bare alias (#4679 review), whatever namespace
+  // declares them and whatever put the alias there. The list is owned by `src/types/tools.ts`,
+  // beside the names it protects, because the copy that used to live here drifted to a single
+  // namespace and had to be widened twice.
+  const bareAliasOwners = new Map<string, string | null>();
+  for (const t of authorizedTools) {
+    // Bare (no-namespace) declarations participate as owners too: a namespaced tool whose
+    // bare name equals a bare-declared function must not gain the bare alias, mirroring how
+    // the tool_choice bare path refuses ambiguous owners across the whole request catalog.
+    const identity = JSON.stringify([t.namespace ?? null, t.name]);
+    const owner = bareAliasOwners.get(t.name);
+    if (owner === undefined) bareAliasOwners.set(t.name, identity);
+    else if (owner !== identity) bareAliasOwners.set(t.name, null);
+  }
+  for (const t of authorizedTools) {
+    const canonical = namespacedToolName(t.namespace, t.name);
+    const owner = bareAliasOwners.get(canonical);
+    if (owner !== undefined && owner !== JSON.stringify([t.namespace, t.name])) {
+      bareAliasOwners.set(canonical, null);
+    }
+    const dotted = dottedToolName(t.namespace, t.name);
+    const dottedOwner = bareAliasOwners.get(dotted);
+    if (dottedOwner !== undefined && dottedOwner !== JSON.stringify([t.namespace, t.name])) {
+      bareAliasOwners.set(dotted, null);
+    }
+  }
   for (const t of authorizedTools) {
     // Upstream output is untrusted: only restore calls for tools the caller authorized.
     const wireName = namespacedToolName(t.namespace, t.name);
@@ -174,6 +203,30 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
         budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([dottedName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
         toolNsMap.set(dottedName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
         if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(dottedName, t.parameters);
+      }
+      // Bare echo alias (`name` with no namespace spelling, #4679): same tool identity as
+      // the flattened wire name, so a provider that drops the namespace prefix still
+      // restores against this entry. Ambiguous bare names were resolved to null above;
+      // skipping them falls back to the spellings every provider can still echo.
+      // Code-mode helper spellings never gain a bare alias, from ANY namespace (#4792 review).
+      // Scoping this to `collaboration` was too narrow to be a boundary: a declaration such as
+      // `mcp__remote.exec` donated bare `exec` to the declared set, and normalizeDeclaredToolName
+      // then rewrote an undeclared `apply_patch`, `exec_command` or `write_stdin` onto it
+      // (src/types/tools.ts). No namespace may turn helper normalization on for a catalog that
+      // never declared the code-mode shell.
+      //
+      // The namespaced tool stays usable AS ITSELF: `ns__name` is added unconditionally above
+      // and `ns.name` whenever it is unambiguous, so only the namespace-dropping echo fallback
+      // is withdrawn, and only for these six spellings.
+      if (
+        bareAliasOwners.get(t.name) === JSON.stringify([t.namespace, t.name])
+        && !NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES.has(t.name)
+      ) {
+        budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+        declaredToolNames.add(t.name);
+        budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([t.name, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+        toolNsMap.set(t.name, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+        if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(t.name, t.parameters);
       }
     }
     if (t.freeform) {
@@ -201,6 +254,20 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   // Some routed providers echo a bare tool_choice selector instead of the flattened catalog
   // name. Accept only selectors the client actually sent and only when the full request catalog
   // contains one tool with that logical name.
+  //
+  // A helper spelling selected this way is split rather than refused (#4819). The two things a
+  // bare alias does are separable, and passthrough already relies on that: identity RESTORATION
+  // runs before authorization there, rewriting the echoed bare name to the namespaced identity
+  // the caller declared, and the guard then authorizes `ns__name`. DECLARATION is the part that
+  // is unsafe, because a declared-name set carrying bare `exec` is what makes
+  // `normalizeDeclaredToolName` rewrite an undeclared `apply_patch`, `exec_command` or
+  // `write_stdin` onto the selected tool (src/types/tools.ts).
+  //
+  // So a helper spelling gets the `toolNsMap` entry and not the `declaredToolNames` entry. The
+  // caller nominated exactly one tool by name, `bareNameCounts` proves nothing else answers to
+  // it, and restoring it authorizes nothing the request did not already declare. The echo path
+  // above withholds both, because a bare echo is a guess rather than a nomination and #4679
+  // pinned that shape (`tests/responses/bare-echo-alias.test.ts`).
   const choice = parsed.options.toolChoice;
   const bareChoiceNames = new Set(
     choice && typeof choice === "object"
@@ -213,8 +280,11 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   }
   for (const t of authorizedTools) {
     if (!t.namespace || !bareChoiceNames.has(t.name) || bareNameCounts.get(t.name) !== 1 || declaredToolNames.has(t.name)) continue;
-    budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
-    declaredToolNames.add(t.name);
+    // Restore the identity; declare the name only when it is not a helper spelling.
+    if (!NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES.has(t.name)) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      declaredToolNames.add(t.name);
+    }
     budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([t.name, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
     toolNsMap.set(t.name, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
     if (t.parameters && typeof t.parameters === "object") {

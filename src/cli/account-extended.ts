@@ -44,7 +44,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|main> [--json]
   ocx account resume <provider> <id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <id|main> --yes [--json]
   ocx account clear-cooldown <provider> <id|main> [--json]
@@ -399,14 +399,22 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
     const storedThreshold = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored <= 100
       ? stored : null;
     const poolEnabled = typeof settings.enabled === "boolean" ? settings.enabled : null;
-    const inert = settings.inert === true ? true : null;
-    // This CLI understands only the current inert generic threshold contract.
-    const enabled = false;
+    // Three states, not two. `true` is stored-but-not-applied, `false` is applied by the
+    // shared kernel, and absent is a server that does not speak this field at all. Collapsing
+    // false into absent would render the live feature as an unknown capability.
+    const inert = typeof settings.inert === "boolean" ? settings.inert : null;
+    // A stored threshold only steers selection once the pool consumes it, which is exactly
+    // what `inert: false` reports.
+    const enabled = inert === false && storedThreshold !== null;
     if (wantsJson) {
       console.log(JSON.stringify({ provider: name, autoSwitchThreshold: storedThreshold, enabled, poolEnabled, inert }, null, 2));
     } else {
       const value = storedThreshold === null ? "unset" : `${storedThreshold}%`;
-      console.log(`auto-switch: ${inert === true ? "inactive" : "unavailable"} (stored threshold ${value}; ${inert === true ? "not applied by this pool" : "threshold support is unknown"})`);
+      const state = inert === false ? (enabled ? "on" : "off") : inert === true ? "inactive" : "unavailable";
+      const why = inert === false
+        ? (enabled ? "applied by this pool" : "no threshold stored")
+        : inert === true ? "not applied by this pool" : "threshold support is unknown";
+      console.log(`auto-switch: ${state} (stored threshold ${value}; ${why})`);
     }
     return 0;
   }
@@ -839,21 +847,15 @@ export async function cmdPauseExhausted(args: string[], deps: AccountDeps): Prom
 }
 
 /**
- * Two pools expose strategy and sticky, and they are NOT reached the same way:
+ * One transport, because there is now one contract.
  *
- * |  | Codex pool | Anthropic pool |
- * |---|---|---|
- * | read | `GET /api/codex-auth/active` | `GET /api/oauth/accounts/pool?provider=` |
- * | write | `PUT /api/codex-auth/pool-strategy` | `PUT /api/oauth/accounts/pool` |
- * | keys | `accountPoolStrategy`/`accountPoolStickyLimit` | `strategy`/`stickyLimit` |
- * | body | bare field | field **plus** a mandatory `provider` |
+ * This used to be a table of the differences between the Codex and Anthropic pools -- different
+ * read path, different write path, different response keys, and a `provider` field mandatory on
+ * one body and forbidden on the other. That table existed only because the two contracts
+ * disagreed; `/api/pool/settings` answers with the same keys for every kind, so the table
+ * collapses to a single shape and the asymmetry it encoded is gone rather than relocated.
  *
- * Omitting `provider` from the Anthropic write body earns a 400
- * (`oauth-account-routes.ts:344`), so the asymmetry has to be encoded somewhere. Encoding it
- * here keeps ONE verb pair working on both pools. The alternative the plan left open -- a second
- * `provider-strategy`/`provider-sticky` pair -- would double the surface an operator must learn
- * to express one idea, and a CLI that can steer one pool and not the other is exactly the trap
- * this unit exists to remove.
+ * The legacy paths still work and still have their own goldens. Nothing here reads them.
  */
 interface PoolTransport {
   readPath: string;
@@ -865,18 +867,10 @@ interface PoolTransport {
   writeBody: (field: "strategy" | "stickyLimit", value: unknown) => Record<string, unknown>;
 }
 
-const CODEX_POOL_TRANSPORT: PoolTransport = {
-  readPath: "/api/codex-auth/active",
-  writePath: "/api/codex-auth/pool-strategy",
-  strategyKey: "accountPoolStrategy",
-  stickyKey: "accountPoolStickyLimit",
-  writeBody: (field, value) => ({ [field]: value }),
-};
-
-function anthropicPoolTransport(provider: string): PoolTransport {
+function unifiedPoolTransport(provider: string): PoolTransport {
   return {
-    readPath: `/api/oauth/accounts/pool?provider=${encodeURIComponent(provider)}`,
-    writePath: "/api/oauth/accounts/pool",
+    readPath: `/api/pool/settings?provider=${encodeURIComponent(provider)}`,
+    writePath: "/api/pool/settings",
     strategyKey: "strategy",
     stickyKey: "stickyLimit",
     writeBody: (field, value) => ({ provider, [field]: value }),
@@ -892,8 +886,7 @@ function poolTransportFor(
   classified: { type: "codex" | "oauth" | "api-key" },
   name: string,
 ): PoolTransport | string {
-  if (classified.type === "codex") return CODEX_POOL_TRANSPORT;
-  if (classified.type === "oauth") return anthropicPoolTransport(name);
+  if (classified.type === "codex" || classified.type === "oauth") return unifiedPoolTransport(name);
   return `pool settings apply to OAuth account pools, not the API-key provider "${name}"`;
 }
 
@@ -932,12 +925,32 @@ async function poolSetting(
     if (response.status !== 200) return apiError(response.json, `failed to read ${label}`, response.status);
     const strategy = response.json[transport.strategyKey];
     const sticky = response.json[transport.stickyKey];
+    const autoSwitchThreshold = typeof response.json.autoSwitchThreshold === "number"
+      ? response.json.autoSwitchThreshold
+      : undefined;
     if (wantsJson) {
       // Pool-neutral key names: the two routes spell the same two settings differently, and a
       // `--json` consumer should not have to branch on which pool answered.
-      console.log(JSON.stringify({ ok: true, provider: name, strategy, stickyLimit: sticky }, null, 2));
+      const payload: Record<string, unknown> = { ok: true, provider: name, strategy, stickyLimit: sticky };
+      if (autoSwitchThreshold !== undefined) {
+        payload.autoSwitchThreshold = autoSwitchThreshold;
+      }
+      console.log(JSON.stringify(payload, null, 2));
     } else {
-      console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      if (field === "strategy" && autoSwitchThreshold !== undefined) {
+        const thresholdSummary = strategy === "round-robin"
+          ? "threshold not used"
+          : autoSwitchThreshold > 0
+          ? (strategy === "fill-first"
+              ? `drain at ${autoSwitchThreshold}%`
+              : strategy === "reset-first"
+              ? `nearest reset below ${autoSwitchThreshold}%`
+              : `switch at ${autoSwitchThreshold}%`)
+          : "proactive switching off";
+        console.log(`${name}: ${label} is ${String(strategy)} (${thresholdSummary})`);
+      } else {
+        console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      }
     }
     return 0;
   }

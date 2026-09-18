@@ -1,0 +1,66 @@
+# Design Methodology For New Surfaces
+
+When adding or redesigning a GUI page, CLI wizard, or user-facing flow in opencodex,
+follow the PABCD Catalog Discovery stage ordering (CATALOG-DESIGN-FIRST-01):
+
+1. **Design/UX decisions first** (Product-Personality-Selection): mood, density, lightness,
+   shape, typography, motion. Decide visual direction before functional layout.
+2. **Domain-specific config semantics** second: what entities does this surface manage
+   (providers, models, accounts, sidecars)?
+3. **Backend wiring derived last**: API endpoints, data structures, and state management
+   are consequences of the above, not independent decisions.
+
+This is a design-first rule for contributors, not a runtime feature: opencodex is infrastructure
+plumbing, not a product-creation tool, so surface coherence is enforced by review rather than by an
+interview engine. The rule stands on its own; it does not depend on an external document.
+
+Native-main device cancellation, polling and restart follow the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces), including status-gated error DTO handling.
+
+Visible dashboard copy follows the total catalog contract in
+[`gui-and-management-api.md`](gui-and-management-api.md#dashboard-surfaces); Vietnamese is a
+first-class locale across page copy and auxiliary label maps.
+
+## Existing surfaces and their design direction
+
+The surfaces below are examples chosen to show the design direction, not an inventory; the current
+surface list lives in `gui/src/app-routing.ts` and
+[`gui-and-management-api.md`](gui-and-management-api.md).
+
+Provider catalog additions reuse the existing mark system: provenance is recorded beside the
+self-hosted asset, and multicolor brand artwork keeps its own paint instead of entering the
+monochrome mask set. Crusoe follows this path with its four-stop gradient lozenge.
+
+| Surface | Current design | Notes |
+|---|---|---|
+| Dashboard | Data-dense, light, rounded, sans-serif | Default Bun/React template aesthetic |
+| `ocx init` CLI | Flat numbered menu, no personality | Could benefit from staged approach |
+| Add Provider modal | Functional form | Minimal styling |
+| Logs page | Dense table, monospace | Appropriate for log viewing |
+| Codex account pool | Existing dense account cards with scoped actions | Standalone title/feedback, pause/refresh next to cards; embedded actions inline. Retired Spark controls have no placeholder. |
+
+When next touching these surfaces, apply the Stage 1 design dials (mood, lightness,
+density, shape, typography, motion) before restructuring functional layout. For new
+surfaces, run through all 3 stages in order.
+
+## Reference
+
+- Design methodology: Product-Personality-Selection (dev-uiux-design §1)
+- 6 design dials: mood, lightness, density, shape, typography, motion
+- 7 axes total: design → domain → feature/data/security/ops/cost (derived)
+
+The Codex account card separates automatic plan-policy exclusion from credential health and suppresses an unavailable next-session action; see the [account selection contract](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+
+Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
+
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+The management quota DTO keeps Combo editing aligned with scoped inference evidence;
+see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+
+The pairing panel names the hub, offers an origin-specific command to run on that hub, and separates one-time codes from data/admin credentials. Copy outcomes and request failures use existing notice/button patterns. Failed authentication never masquerades as a stopped connected process.
+Cline uses the existing file-integration page, tabs, status badge and rollback dialogs. Its localized semantics identify both files and the required stop/restart boundary before users mutate them.
+
+Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+
+Native-main reauthentication separates polling lifetime from flow ownership: a non-2xx GET normally stops polling, while cancellation requested for the same owned flow preserves the pending/committing device state and existing polling cadence even before DELETE settles. A retryable DELETE failure preserves or restores Cancel retry without a second login POST, and later trusted terminal results remain observable and release ownership.

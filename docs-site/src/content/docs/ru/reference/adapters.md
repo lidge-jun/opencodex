@@ -189,10 +189,12 @@ incomplete. `TOOL_USE` без фактического вызова инстру
 
 ### Reasoning effort
 
-`gpt-5.6-sol` и `claude-opus-5` поддерживают нативный effort, но называют поле запроса по-разному.
-Значения `low` / `medium` / `high` / `xhigh` / `max` отправляются как
-`additionalModelRequestFields.reasoning.effort` и `output_config.effort` соответственно.
-
+Семейство GPT-5.6 использует `additionalModelRequestFields.reasoning.effort`, а `claude-opus-5` —
+`additionalModelRequestFields.output_config.effort`. Для `gpt-5.6-luna` и `gpt-5.6-terra` нативный
+путь проверен только для `low`, `medium`, `high` и `max`. Их `xhigh` сохраняет прежнюю эмуляцию
+через ограниченные инструкции thinking, поскольку нативный уровень не проверен.
+Существующие нативные уровни `gpt-5.6-sol` и `claude-opus-5` (`low`, `medium`, `high`, `xhigh`, `max`)
+не меняются. Остальные модели Kiro используют эмуляцию; наличие настройки effort не доказывает нативную поддержку.
 
 ## `cursor`
 
@@ -234,6 +236,17 @@ authorization.
   `nativeLocalExec: "on"` включает более широкий встроенный executor и обходит семантику
   одобрений/песочницы Codex; устаревший `unsafeAllowNativeLocalExec: true` эквивалентен только
   если `nativeLocalExec` не задан.
+
+## `devin`
+
+**Назначение:** `exa.api_server_pb.ApiServerService/GetChatMessage` в Cognition, потоковая передача Connect на `server.codeium.com`.
+**Аутентификация:** ключ API Devin/Cognition из `provider.apiKey` или переданного заголовка authorization. Вход сначала пытается импортировать учётные данные, которые уже хранит установленный Devin CLI: `devin auth login` выполняет собственный PKCE-вход CLI и записывает `devin-session-token` в его `credentials.toml` — тот же идентификатор, который `SeatManagementService.RegisterUser` выдаёт при входе через браузер. Если пригодных учётных данных CLI нет, вход возвращается к странице Auth0 в браузере и обменивает вставленный токен через `RegisterUser` на долгоживущий ключ. `devin-cli` остаётся только устаревшим алиасом: `ocx login devin-cli` по-прежнему направляется в `devin`, а сохранённая конфигурация со старым id переписывается при запуске.
+
+- Используется `runTurn`, а не обычный путь fetch/parse. Запросы и серверные события кодируются вручную в `devin/cloud-direct/wire.ts`.
+- Модели запрашиваются для каждой учётной записи через `GetCascadeModelConfigs`; отсутствующие в тарифе отсеиваются в списке, а не падают в момент запроса.
+- Cognition ограничивает длину описаний инструментов и блокирует точные фразы. Адаптер переписывает известные формулировки и обрезает слишком длинные описания.
+- Ключи не обновляются. После истечения или отзыва выполните `ocx login devin` заново.
+- При импорте из CLI локальны только учётные данные — сам запрос в любом случае уходит в Cognition. В более ранней сборке под id `devin-cli` существовал второй адаптер, который выполнял ход как сеанс Agent Client Protocol с локальным дочерним процессом `devin acp`. Он удалён: сохранённая конфигурация, которая всё ещё ссылается на тот адаптер, переписывается на `devin` при запуске, включая строку с произвольным именем вроде `"devin-acp"`.
 
 ## `azure-openai` (алиас: `azure`)
 

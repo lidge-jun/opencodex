@@ -308,6 +308,47 @@ function observeOwner(entry: StartupEntry, owner: NativeMainOwnerSnapshot): void
  * Retain process ownership for one live server. The first reference acquires the
  * canonical-home SQLite lease and owns recovery; later same-process references share it.
  */
+/**
+ * Releases nobody is awaiting.
+ *
+ * A release closes the native-main owner's SQLite lease and its stable lock file, both of which
+ * live under CODEX_HOME. The normal shutdown path awaits it: `server.stop` goes through
+ * `releaseNativeMainStartupLifecycle`, which awaits the flight. The FAILED-start path does not —
+ * `startServer` must stay synchronous, so its rollback can only fire `void lifecycle.release()`
+ * and rethrow. Nothing could then wait for those handles to close, and on Windows an open handle
+ * does not delay an unlink, it refuses it outright with EPERM.
+ *
+ * That is invisible in production, where a failed start is followed by exit rather than by
+ * deleting the home. It is not invisible to a test whose cleanup removes the home it just used:
+ * `tests/server/server-management-auth.test.ts` binds a management ingress on the fixed port
+ * 10101, which nine other test files also use, so a collision on the six-shard Windows leg turns
+ * a passing start into the rollback path. The failure followed that collision across shards 1, 2
+ * and 3 while staying on the same file and line, which is what a shard-independent trigger looks
+ * like.
+ *
+ * Tracking the flight here rather than at the call site keeps `startServer` synchronous and
+ * unchanged, and gives anyone who needs the handles closed something to await.
+ */
+const pendingStartupReleases = new Set<Promise<void>>();
+
+function trackStartupRelease(release: Promise<void>): Promise<void> {
+  const tracked = release.finally(() => { pendingStartupReleases.delete(tracked); });
+  pendingStartupReleases.add(tracked);
+  return tracked;
+}
+
+/**
+ * Settle every native-main startup release still in flight, including ones nobody awaited.
+ *
+ * Loops rather than awaiting a single snapshot: a release can retire an owner whose own teardown
+ * starts another, and draining only the first batch would return with handles still open.
+ */
+export async function flushNativeMainStartupReleases(): Promise<void> {
+  while (pendingStartupReleases.size > 0) {
+    await Promise.allSettled([...pendingStartupReleases]);
+  }
+}
+
 export function startNativeMainStartupLifecycle(
   deps: NativeMainStartupGateDeps = {},
 ): NativeMainStartupLifecycle {
@@ -352,29 +393,32 @@ export function startNativeMainStartupLifecycle(
   }
   entry.refs += 1;
   let released = false;
+  const performRelease = async (): Promise<void> => {
+    if (released) return;
+    released = true;
+    entry!.refs = Math.max(0, entry!.refs - 1);
+    if (entry!.refs !== 0) return;
+    entry!.epoch += 1;
+    entry!.sweepStopping = true;
+    if (entry!.sweepTimer) clearTimeout(entry!.sweepTimer);
+    entry!.sweepTimer = undefined;
+    entry!.unsubscribe();
+    startupEntries.delete(homeId);
+    entry!.resolveAcquisition?.(snapshot);
+    entry!.resolveAcquisition = undefined;
+    // Startup convergence can transition from the exclusive recovery claim
+    // into a stage sweep. Keep the owner registered until that entire chain
+    // settles so no cleanup transaction starts untracked after owner detach.
+    await Promise.allSettled([entry!.settled]);
+    if (entry!.sweepInFlight) await Promise.allSettled([entry!.sweepInFlight]);
+    await entry!.owner.release();
+  };
   return {
     homeId,
     get settled() { return entry!.settled; },
-    async release() {
-      if (released) return;
-      released = true;
-      entry!.refs = Math.max(0, entry!.refs - 1);
-      if (entry!.refs !== 0) return;
-      entry!.epoch += 1;
-      entry!.sweepStopping = true;
-      if (entry!.sweepTimer) clearTimeout(entry!.sweepTimer);
-      entry!.sweepTimer = undefined;
-      entry!.unsubscribe();
-      startupEntries.delete(homeId);
-      entry!.resolveAcquisition?.(snapshot);
-      entry!.resolveAcquisition = undefined;
-      // Startup convergence can transition from the exclusive recovery claim
-      // into a stage sweep. Keep the owner registered until that entire chain
-      // settles so no cleanup transaction starts untracked after owner detach.
-      await Promise.allSettled([entry!.settled]);
-      if (entry!.sweepInFlight) await Promise.allSettled([entry!.sweepInFlight]);
-      await entry!.owner.release();
-    },
+    // Tracked so a caller that cannot await -- the synchronous rollback in `startServer` -- still
+    // leaves the flight drainable through `flushNativeMainStartupReleases`.
+    release: () => trackStartupRelease(performRelease()),
   };
 }
 

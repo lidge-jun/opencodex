@@ -9,11 +9,26 @@ type InputBlock =
   | { type: "text"; text: string }
   | { type: "input_image"; image_url?: string; file_id?: string; detail?: string }
   | { type: "input_video"; video_url?: string }
+  // codex-rs protocol/src/models.rs sends audio as input_audio with an audio_url.
+  | { type: "input_audio"; audio_url?: string; format?: string }
   | { type: "input_file"; file_id?: string; filename?: string; file_data?: string };
 
 /** A usable reference string, or undefined. Empty strings and non-strings are not references. */
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * An audio format label safe to render into model-visible prose.
+ *
+ * `format` is caller-controlled and unbounded in the schema, so interpolating it
+ * verbatim would let a request park newlines, injected instructions, or a signed URL
+ * inside text the model reads as trusted proxy output. Only a short alphanumeric
+ * token is echoed; anything else degrades to the bare marker.
+ */
+function safeAudioFormat(value: unknown): string | undefined {
+  const raw = nonEmptyString(value);
+  return raw !== undefined && /^[a-z0-9]{1,12}$/i.test(raw) ? raw : undefined;
 }
 
 export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
@@ -47,6 +62,26 @@ export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
     } else if (block.type === "input_video") {
       const videoUrl = nonEmptyString(block.video_url);
       if (videoUrl) parts.push({ type: "video", videoUrl });
+    } else if (block.type === "input_audio") {
+      // Upstream Codex sends input_audio with an audio_url (codex-rs
+      // protocol/src/models.rs). The IR has no audio carrier and no adapter consumes
+      // one, so this part used to vanish with no trace at all.
+      //
+      // This records PRESENCE only and is NOT audio support: never the payload, which
+      // is large base64 and would explode the token count, and never the URL, which
+      // can carry a signed token. This parser must stay non-throwing — the native
+      // Responses passthrough also runs through parseRequest before the adapter
+      // forwards _rawBody, so refusing here would regress legitimate raw passthrough.
+      //
+      // No adapter refuses audio at its wire today: by this point the part is already a
+      // text marker, so downstream adapters see text and continue. A typed unsupported-
+      // modality carrier that survives to final adapter dispatch is a separate, recorded
+      // residual — do not describe this branch as a refusal.
+      const b = block as { audio_url?: string; format?: string };
+      const format = safeAudioFormat(b.format);
+      if (nonEmptyString(b.audio_url)) {
+        parts.push({ type: "text", text: format ? `[audio: ${format}]` : "[audio]" });
+      }
     } else if (block.type === "input_file") {
       const b = block as { file_id?: string; filename?: string; file_data?: string };
       const fileId = nonEmptyString(b.file_id);
@@ -110,6 +145,13 @@ export function outputToToolResultContent(output: string | unknown[] | undefined
         hasImage = true;
       } else if (fileId) {
         parts.push({ type: "text", text: `[image: ${fileId}]` });
+      }
+    } else if (raw.type === "input_audio") {
+      // Same presence-only contract as the user-content branch above: Codex returns
+      // audio in tool output too, and it previously disappeared without trace.
+      const format = safeAudioFormat(raw.format);
+      if (nonEmptyString(raw.audio_url)) {
+        parts.push({ type: "text", text: format ? `[audio: ${format}]` : "[audio]" });
       }
     } else if (raw.type === "encrypted_content") {
       // codex-rs FunctionCallOutputContentItem::EncryptedContent — opaque to routed models.

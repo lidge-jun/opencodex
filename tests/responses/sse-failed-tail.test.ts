@@ -422,3 +422,43 @@ describe("relaySseWithFailedTail", () => {
     expect(out).not.toContain("event: response.failed");
   });
 });
+
+
+describe("optional Codex hint filtering preserves relay semantics", () => {
+  for (const eager of [false, true]) {
+    const relay = (chunks: string[], upstreamError?: string) => eager
+      ? relaySseEagerBounded(sourceStream(chunks), new AbortController(), parityHooks,
+        { upstreamError, terminalBoundary: { dropCodexSafetyBuffering: true } })
+      : relaySseWithFailedTail(sourceStream(chunks), new AbortController(), undefined,
+        { upstreamError, terminalBoundary: { dropCodexSafetyBuffering: true } });
+    test(`policy failure plus hint is composed, eager=${eager}`, async () => {
+      const frame = `event: error\r\ndata: ${JSON.stringify({ type: "error", safety_buffering: { enabled: true },
+        error: { code: "cyber_policy", message: "blocked by upstream policy", type: "invalid_request_error" } })}\r\n\r\n`;
+      const text = await drain(relay([frame.slice(0, 19), frame.slice(19)]));
+      expect(text).not.toContain("safety_buffering");
+      expect(text).toContain('"type":"response.failed"');
+      expect(text).toContain('"code":"cyber_policy"');
+      expect(text).toContain('"retryable":false');
+      expect(text.match(/data: \[DONE\]/g)).toHaveLength(1);
+    });
+    test(`metadata removal retains other frames and one terminal, eager=${eager}`, async () => {
+      const metadata = 'data: {"type":"response.metadata","metadata":{"type":"safety_buffering"}}\n\n';
+      const other = 'data: {"type":"codex.response.metadata","headers":{"x-codex-safety-buffering-enabled":"true"}}\n\n';
+      const malformed = 'data: {malformed}\n\n';
+      const terminal = 'data: {"type":"response.completed","response":{"status":"completed"},"safety_buffering":true}\n\ndata: [DONE]\n\n';
+      const text = await drain(relay([metadata.slice(0, 7), metadata.slice(7), other, malformed, terminal]));
+      expect(text).not.toContain('"type":"safety_buffering"');
+      expect(text).not.toContain('"safety_buffering":true');
+      expect(text).toContain(other);
+      expect(text).toContain(malformed);
+      expect(text).toContain('"type":"response.completed"');
+      expect(text.match(/data: \[DONE\]/g)).toHaveLength(1);
+    });
+    test(`hint-only EOF preserves captured error fallback, eager=${eager}`, async () => {
+      const text = await drain(relay(['data: {"type":"response.metadata","metadata":{"type":"safety_buffering"}}\n\n'], "provider unavailable"));
+      expect(text).toContain("provider unavailable");
+      expect(text).not.toContain("adapter_eof");
+      expect(text).not.toContain("safety_buffering");
+    });
+  }
+});

@@ -70,6 +70,29 @@ const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWri
 const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 1.9 };
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
+/*
+ * Z.AI GLM list prices (USD / 1M tokens), verified 2026-09-13 against
+ * https://docs.z.ai/guides/overview/pricing. Neither z.ai nor bigmodel.cn
+ * publishes a cache-write rate — both list cache storage as limited-time free,
+ * an open-beta promotion the vendor may change or end — so cacheWrite is 0 as a
+ * 2026-09-13 snapshot, not a guaranteed rate; re-check the pricing page before
+ * relying on it long-term. glm-4.5-flash and glm-4.7-flash are officially
+ * "Free" and deliberately get no rows: a zero-cost overlay is inert in the
+ * resolver, which requires a nonzero tuple. glm-5-turbo / glm-5v-turbo are
+ * published only in CNY on bigmodel.cn and stay unregistered — the same hold
+ * the xiaomi CNY rows took in devlog/_fin/260720_toks_speed_price_columns/003.
+ * glm-4.5 (0.6/2.2/0.11), glm-4.5-air (0.2/1.1/0.03) and glm-4.5v (0.6/1.8/0.11)
+ * are verified on the same page but no registered provider exposes them, so
+ * they have no constants here.
+ */
+const GLM_46: Cost4 = { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 };
+const GLM_46V: Cost4 = { input: 0.3, output: 0.9, cacheRead: 0.05, cacheWrite: 0 };
+const GLM_47: Cost4 = { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 };
+const GLM_5: Cost4 = { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 };
+const GLM_51: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_53: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
+const GLM_53_FLASH: Cost4 = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 };
 const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -101,9 +124,26 @@ const META_MUSE_SPARK_13_CONTRIBUTOR: Cost4 = { input: 0.1, output: 0.2, cacheRe
 const META_SPARK_SOURCE = `Meta Model API published price ${META_MODEL_PRICING}`;
 const META_SPARK_CONTRIBUTOR_SOURCE = `Meta Model API published Contributor-tier price ${META_MODEL_PRICING}; data-sharing discount tier`;
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
+/*
+ * DeepSeek V4.1-Flash list prices (USD / 1M tokens), verified 2026-09-17 against
+ * https://api-docs.deepseek.com/quick_start/pricing. The page prices a peak window
+ * (09:30-24:00 Beijing) and an off-peak window; the tuple below is the peak-window
+ * list rate and the off-peak discount (0.15 / 0.60, cache-hit 0.003) is deliberately
+ * not baked in — the same rule as the Devin time-boxed promos. cacheWrite=0 follows
+ * the existing deepseek-chat / deepseek-reasoner rows: DeepSeek publishes no
+ * cache-write charge.
+ */
+const DEEPSEEK_V41_FLASH: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
 const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
+// Z.AI publishes one USD table for the international surface; the Coding Plan
+// subscription and the domestic bigmodel.cn endpoints bill differently
+// (subscription quota / CNY tiers), so every GLM row below is verified-derived:
+// the numbers are the verified z.ai list prices shown as estimates.
+const ZAI_PRICING = "https://docs.z.ai/guides/overview/pricing (official USD table, 2026-09-13; cacheWrite=0 — cache storage is limited-time free on both z.ai and bigmodel.cn)";
+const ZAI_CODING_PLAN_NOTE = "z.ai list price shown as estimate; GLM Coding Plan is subscription-billed";
+const BIGMODEL_NOTE = "z.ai international list price shown as estimate; domestic bigmodel.cn billing is CNY tiered (docs.bigmodel.cn/cn/guide/start/pricing)";
 // 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
 // is the exit condition the previous Routeway reseller overlay named. Two caveats are
 // deliberately in the source string rather than dropped: the figure comes from Qwen's own
@@ -112,6 +152,39 @@ const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cac
 // anywhere. Cache stays 0 rather than inheriting the reseller's 0.15 — a reseller number
 // under a vendor-price label would be a wrong value wearing a verified badge.
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
+// Qwen-published qwen3.8-flash rate ($0.16 in / $0.47 out per 1M tokens) via the
+// Qwen3.8 release announcement, corroborated by API-vendor price tables. No cache
+// rate is published anywhere, so cache stays 0 rather than borrowing a reseller's
+// number — the same hold QWEN38_MAX takes. The announcement marks API availability
+// as coming soon, but the id is already served (and logged) on OpenCode Go, so the
+// estimate applies to real usage rows now.
+const QWEN38_FLASH: Cost4 = { input: 0.16, output: 0.47, cacheRead: 0, cacheWrite: 0 };
+const QWEN38_FLASH_PRICING = "https://qwen.ai/blog?id=qwen3.8-2026 (Qwen release announcement; API marked coming soon at announcement; cache rates unpublished -> 0; input/output corroborated by https://docs.b.ai/guides/models/qwen/qwen3.8-flash)";
+
+/*
+ * Cognition/Devin list prices (USD / 1M tokens), verified 2026-09-13 against the
+ * official "AI Models" page — its embedded modelCostData table publishes
+ * input / cache-read / cache-write / output per model uid. Self-serve extra
+ * usage and enterprise ACU conversion both bill at these list rates, so the
+ * tuples are the vendor's own published numbers; every row still stays
+ * verified-derived because the surface itself is subscription/ACU, not a
+ * per-token API.
+ * Time-boxed promos are NOT baked in: SWE-2 shows $0 self-serve through
+ * 2026-10-08 and 75%-off enterprise through 2026-12-31, and the doc states the
+ * list rate is what applies afterward, so the list rate is the durable catalog
+ * value. swe-1-7 keeps its list rate for the same reason even though the
+ * self-serve column currently shows 0. gemini-3-8-flash is absent from the
+ * table entirely, so its row derives from Google's published rate instead.
+ */
+const DEVIN_SWE_2: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 };
+const DEVIN_SWE_17: Cost4 = { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
+const DEVIN_SWE_17_LIGHTNING: Cost4 = { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 };
+const DEVIN_SONNET_5: Cost4 = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
+const DEVIN_KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 };
+const DEVIN_KIMI_K27: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 };
+const DEVIN_GROK: Cost4 = { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 };
+const DEVIN_PRICING = "https://docs.devin.ai/desktop/models (official modelCostData table, 2026-09-13; list rates for self-serve overage / enterprise ACU conversion on a subscription surface)";
+const DEVIN_SWE2_NOTE = "list rate; $0 self-serve through 2026-10-08 and 75%-off enterprise through 2026-12-31 are time-boxed promos, not baked in";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
@@ -234,8 +307,90 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // for what that source does and does not cover.
   { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
   { provider: "alibaba-token-plan-intl", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
+  // OpenCode Go — five served ids with no jawcode bundle row and no vendor-level
+  // fallback (the fallback only searches jawcode metadata, never overlays), so the
+  // Usage estimated-cost column and the per-model breakdown rendered an em dash for
+  // every request through them. Each row reuses the vendor's own published list
+  // price as an estimate: Go itself is subscription-billed, hence verified-derived.
+  { provider: "opencode-go", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: `vendor list price applied to the OpenCode Go surface; ${QWEN38_MAX_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "qwen3.8-flash", cost4: QWEN38_FLASH, source: `vendor list price applied to the OpenCode Go surface; ${QWEN38_FLASH_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "deepseek-v4.1-flash", cost4: DEEPSEEK_V41_FLASH, source: `peak-window list rate applied to the OpenCode Go surface (off-peak 0.15/0.60 + cache-hit 0.003 not baked in); ${DEEPSEEK_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `z.ai list price applied to the OpenCode Go surface as an estimate; ${ZAI_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  { provider: "opencode-go", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: `Meta Model API Contributor-tier price applied to the OpenCode Go surface as an estimate; ${META_SPARK_CONTRIBUTOR_SOURCE}`, verifiedAt: "2026-09-17", status: "verified-derived" },
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
+  // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four
+  // provider surfaces below resolve overlays by exact provider id, so each one
+  // needs its own rows (same pattern as kimi/moonshot/kimi-code). All rows are
+  // verified-derived: the tuples are the verified z.ai USD list prices, while
+  // the Coding Plan rows are subscription products and zhipu-bigmodel is the
+  // domestic CNY-tiered PAYG — see ZAI_CODING_PLAN_NOTE / BIGMODEL_NOTE.
+  // zai (api.z.ai Coding Plan) exposes: glm-5.3, glm-5.3[1m], glm-5.3-flash,
+  // glm-5.2, glm-5.2[1m], glm-5.1, glm-5, glm-4.6.
+  { provider: "zai", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.3[1m]", cost4: GLM_53, source: `derived: glm-5.3 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.2", cost4: GLM_52, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `derived: glm-5.2 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5.1", cost4: GLM_51, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-5", cost4: GLM_5, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zai", modelId: "glm-4.6", cost4: GLM_46, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // zhipu-bigmodel (open.bigmodel.cn PAYG) exposes: glm-4.6, glm-4.7,
+  // glm-4.7-flash (officially free — no row), glm-5, glm-5.1, glm-5.2, glm-5.3,
+  // glm-4.6v.
+  { provider: "zhipu-bigmodel", modelId: "glm-4.6", cost4: GLM_46, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-4.6v", cost4: GLM_46V, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-4.7", cost4: GLM_47, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5", cost4: GLM_5, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5.1", cost4: GLM_51, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5.2", cost4: GLM_52, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel", modelId: "glm-5.3", cost4: GLM_53, source: `${BIGMODEL_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // zhipu-bigmodel-coding exposes the same roster as the zai Coding Plan row.
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3[1m]", cost4: GLM_53, source: `derived: glm-5.3 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2", cost4: GLM_52, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.2[1m]", cost4: GLM_52, source: `derived: glm-5.2 1M-context compat notation; ${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5.1", cost4: GLM_51, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-5", cost4: GLM_5, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-coding", modelId: "glm-4.6", cost4: GLM_46, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // zhipu-bigmodel-responses exposes glm-5.3, glm-5.3-flash, glm-5-turbo; the
+  // turbo id is CNY-only upstream and stays unregistered (see the GLM_* note).
+  { provider: "zhipu-bigmodel-responses", modelId: "glm-5.3", cost4: GLM_53, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "zhipu-bigmodel-responses", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `${ZAI_CODING_PLAN_NOTE}; ${ZAI_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  // Cognition/Devin — the two OAuth surfaces resolve by exact provider id, so
+  // each carries the roster its liveModels discovery can surface. swe-2 and
+  // swe-1-6 are listed on both even though each static seed names only one
+  // side: the live catalog is authoritative and drifts between them.
+  // gpt-5-6-sol uses the enterprise list column — the same table's self-serve
+  // column shows a discounted 1.2/6, and the doc calls the list rate the
+  // billing rate for overage. glm-5-2 likewise takes the nonzero list column.
+  { provider: "devin-cli", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "gpt-5-6-sol", cost4: GPT56_SOL, source: `enterprise list column (self-serve shows discounted 1.2/6); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "glm-5-3", cost4: GLM_53, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "kimi-k3", cost4: DEVIN_KIMI_K3, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "gemini-3-8-flash", cost4: GEMINI_38_FLASH, source: `derived: absent from Devin's modelCostData table; Google published promotional rate through 2026-12-31 shown as estimate ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin-cli", modelId: "grok-4-6", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-2", cost4: DEVIN_SWE_2, source: `${DEVIN_SWE2_NOTE}; ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-1-7", cost4: DEVIN_SWE_17, source: `list rate; self-serve column currently shows 0 (unannounced promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-1-7-lightning", cost4: DEVIN_SWE_17_LIGHTNING, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "swe-1-6", cost4: DEVIN_SWE_17, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "gpt-5-6-sol", cost4: GPT56_SOL, source: `enterprise list column (self-serve shows discounted 1.2/6); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "gpt-5-6-luna", cost4: GPT56_LUNA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "gpt-5-6-terra", cost4: GPT56_TERRA, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-opus-4-8", cost4: CLAUDE_OPUS_46, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "claude-sonnet-5", cost4: DEVIN_SONNET_5, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "glm-5-2", cost4: GLM_52, source: `enterprise list column (self-serve shows an unannounced 0 promo); ${DEVIN_PRICING}`, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "kimi-k2-7", cost4: DEVIN_KIMI_K27, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
+  { provider: "devin", modelId: "grok-4-5", cost4: DEVIN_GROK, source: DEVIN_PRICING, verifiedAt: "2026-09-13", status: "verified-derived" },
 ];
 
 /**

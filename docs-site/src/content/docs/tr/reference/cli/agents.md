@@ -111,6 +111,8 @@ verilerini inceleyin. Doğrudan takma adlar şunlardır:
 ocx observe usage --range 30d --json
 ```
 
+Bazı kullanım kayıtları dahil edilemiyorsa okunabilir çıktı, okunabilir satır olmadığında da uyarı gösterir. Gösterilen toplamlar yalnızca okunabilir kayıtları yansıtır. Filtreyle eşleşen okunabilir kayıt yoksa toplam satırları yerine uyarı ve yönlendirme gösterilir; atlanan kayıtlar eşleşme içerebilir. `--json`, yanıttaki `usageIncomplete` tanısını ve nedenini korur.
+
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
 
 Çalışan proxy'nin yönetim API'si aracılığıyla çalışma zamanı hata ayıklama
@@ -191,7 +193,7 @@ Grok Build model çitini yönetin ve uygulayın.
 
 ## İstemci yapılandırma dışa aktarma
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
 
 Çalışan proxy'ye bağlı bir istemci yapılandırmasını yazdırın. Komut, `opencodex`
 sağlayıcı bloğunu — temel URL, model listesi ve istemcinin kimlik bilgisi
@@ -203,7 +205,7 @@ yalnızca Codex'in şu anda görebildiği modelleri yayınlar.
 
 | Bayrak | Eylem |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast>` | Gerekli. İstemci yapılandırma lehçesini seçer. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Gerekli. İstemci yapılandırma lehçesini seçer. |
 | `--json` | Betikler için stdout üzerinde oluşturulan belgeyi JSON olarak yazdırın. Bu, seçilen istemcinin yerel formatı YAML, TOML veya JSON5 olsa bile JSON'dur. |
 | `--out <path>` | İstemcinin yerel yapılandırma formatını `<path>` konumuna yazın. Mevcut bir dosyanın üzerine yazmayı reddeder. |
 | `--force` | `--out`'un mevcut bir dosyanın üzerine yazmasına izin verin. |
@@ -228,12 +230,14 @@ için kendi varsayılanlarını uygular) gelir.
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | yok — geri döngü yer tutucusu |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | gizli olmayan geri döngü yer tutucusu |
 | `dsh` | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | `settings.yaml` | yok — gizli olmayan geri döngü bearer yer tutucusu |
 | `mcode` | `~/.minimax/config.yaml` (ayarlandığında `MINIMAX_DATA_DIR`, ardından eski `MAVIS_DATA_DIR` öncelikli; göreli değer reddedilir) | `mcode-config.yaml` | yok — geri döngü yer tutucusu |
 | `zcode` | `~/.zcode/v2/config.json` (ayarlandığında `ZCODE_DATA_DIR` öncelikli; göreli değer reddedilir) | `config.json` | yok — geri döngü yer tutucusu |
 | `prime` | `~/.prime/agent/models.json` (ayarlandığında `PRIME_AGENT_CODING_AGENT_DIR` öncelikli; göreli değer reddedilir) | `prime-models.json` | yok — geri döngü yer tutucusu |
+| `aside` | Aside'ın kendi `accounts.json` dosyasının güncel olarak gösterdiği hesap için `~/.aside/u/<account>/models.json`; okunamayan bir manifest, gelişigüzel bir hesaba düşmek yerine reddedilir | `aside-models.json` | yok — geri döngü yer tutucusu |
 | `raycast` | `~/.config/raycast/ai/providers.yaml`, macOS ve Windows'ta aynı (Raycast `XDG_CONFIG_HOME` değerini dikkate almaz) | `raycast-providers.yaml` | yok — yalnızca geri döngü, `api_keys` girdisi yazılmaz |
+| `omo` | `~/.omo/agent/models.json` (ayarlandığında sırasıyla `OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR` öncelikli; göreli değer reddedilir) | `omo-models.json` | yok — geri döngü yer tutucusu |
 
 Raycast dışa aktarımı, `providers` dizisinde tek bir `id: opencodex` öğesi içeren bağımsız
 bir `providers.yaml` belgesidir: `name: OpenCodex`, proxy'nin `/v1` temel URL'si ve
@@ -270,9 +274,7 @@ döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl
 görmek için [Uzaktan erişim](/tr/reference/configuration/#remote-access)
 bölümüne bakın. Yukarı akış sağlayıcılarının kendi anahtarları tamamen ayrı bir
 şeydir ve [Sağlayıcılar](/tr/guides/providers/) bölümüne göre yapılandırılır.
-Gajae istisnadır: `OPENCODEX_GAJAE_API_KEY` provider kimlik bilgisini ortamdan
-sağlar, ancak şeması uzaktan kabul başlığını gönderemediği için üretilen Gajae
-entegrasyonu yalnızca geri döngüde çalışır.
+Oluşturulan gjc entegrasyonu gizli olmayan bir loopback yer tutucusu kullanır; ortam değişkeni gerekmez. Yalnızca loopback desteklenir, uzak erişim kimlik bilgileri yapılandırılmaz.
 
 Aynı yük `GET /api/client-config` tarafından sunulur ve kontrol panelinin API
 sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.
@@ -284,6 +286,12 @@ sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.
 Başsız çalışma zamanı ayarlarını, başlatmayı, senkronizasyonu, tanılamayı ve
 güncellemeleri yönetin.
 
+`ocx system codex-restart --yes`, `ocx sync --restart-codex` ile aynı modül
+üzerinden Codex app-server'larını yeniden başlatır ve Codex masaüstü
+uygulamasını tamamen kapatıp yeniden başlatır. Proxy'nin kendisi Codex
+uygulamasının içinde çalışıyorsa, tamamlayamayacağı bir devri vaat etmek
+yerine eyleme geçirilebilir bir iletiyle reddeder.
+
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
@@ -294,7 +302,22 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` paket kayıt defterine istek göndermez ve yapılandırmada belirtilen kurulum adayına ilişkin provenance kanıtını, maskelenmiş yürütülebilir dosya konumu ve sahiplik kanıtı dâhil, sınırlı biçimde inceler. Yayımlanmış başlatıcıdan gelen güvenilir bağlam aday anlık görüntüsünü doğrular; Codex'in başarıyla çalıştırıldığını doğrulamaz. Bu tek seferlik komut Codex'i hiçbir zaman çalıştırmadığından, ortamdan ve kalıcı kayıtlardan gelen adaylar yalnızca raporlanır (`managed: false`, genellikle `selection_unattested`). JSON çıktısında `candidateAvailable`, `candidateVersion` ve `candidateSource` alanları bulunur; `selectionAttested` değeri ise `false` kalır. Yapılandırmada belirtilen kurulum adayını incelemek için yayımlanmış başlatıcıdan gelen güvenilir bağlam gerekir; Bun ile veya kaynak koddan doğrudan başlatıldığında bu kanıt bulunmadığından ortamdaki ve kalıcı kayıtlardaki aday durumu yok sayılır ve `candidate_unavailable` bildirilebilir. Windows'ta bu ilk parça, aday veya yapılandırma yollarında hiçbir dosya sistemi G/Ç işlemi yapmaz. Yalnızca güvenilir başlatıcının yakaladığı mutlak bir ortam adayı sözcüksel olarak uygulama paketi ya da sürüm yöneticisi etiketi alabilir; diğer tüm Windows adayları kapalı başarısızlıkla reddedilir. Bu parça kalıcı seçim durumunu hiç okumadığından, böyle bir ortam adayı bulunmayan Windows çalıştırmaları `candidate_unavailable` yerine `windows_inspection_deferred` bildirir: komut bir Codex CLI'nin kurulu olup olmadığını gözlemleyemez, bu yüzden aday bulunmadığını iddia etmek yerine incelemenin ertelendiğini bildirir. Komut Codex veya bir paket yöneticisi çalıştırmaz, shim'i onarmaz, yapılandırmaya ya da önbellek durumuna yazmaz, hiçbir süreci durdurmaz ve hiçbir şey kurmaz. Uygulamayla birlikte paketlenmiş adaylar, tanınan sürüm yöneticisi yollarında bulunan adaylar, doğrulanmamış bağımsız adaylar ve belirsiz shim durumları `unmanaged` veya `unknown` olarak raporlanır; hiçbir zaman `managed` olarak sınıflandırılmaz.
+`check` paket kayıt defterine istek göndermez ve yapılandırmada belirtilen kurulum adayına ilişkin provenance kanıtını, maskelenmiş yürütülebilir dosya konumu ve sahiplik kanıtı dâhil, sınırlı biçimde inceler. Yayımlanmış başlatıcıdan gelen güvenilir bağlam aday anlık görüntüsünü doğrular; Codex'in başarıyla çalıştırıldığını doğrulamaz. Bu tek seferlik komut Codex'i hiçbir zaman çalıştırmadığından, ortamdan ve kalıcı kayıtlardan gelen adaylar yalnızca raporlanır (`managed: false`, genellikle `selection_unattested`). JSON çıktısında `candidateAvailable`, `candidateVersion` ve `candidateSource` alanları bulunur; `selectionAttested` değeri ise `false` kalır. Yapılandırmada belirtilen kurulum adayını incelemek için yayımlanmış başlatıcıdan gelen güvenilir bağlam gerekir; Bun ile veya kaynak koddan doğrudan başlatıldığında bu kanıt bulunmadığından ortamdaki ve kalıcı kayıtlardaki aday durumu yok sayılır ve POSIX sistemlerinde `candidate_unavailable` bildirilebilir. Windows'ta bu ilk parça, aday veya yapılandırma yollarında hiçbir dosya sistemi G/Ç işlemi yapmaz. Yalnızca güvenilir başlatıcının yakaladığı mutlak bir ortam adayı sözcüksel olarak uygulama paketi ya da sürüm yöneticisi etiketi alabilir; diğer tüm Windows adayları kapalı başarısızlıkla reddedilir. Bu parça kalıcı seçim durumunu hiç okumadığından, ortam adayı yakalanmamış olan Windows çalıştırmaları `candidate_unavailable` yerine `windows_inspection_deferred` bildirir: komut bir Codex CLI'nin kurulu olup olmadığını gözlemleyemez, bu yüzden aday bulunmadığını iddia etmek yerine incelemenin ertelendiğini bildirir. Komut Codex veya bir paket yöneticisi çalıştırmaz, shim'i onarmaz, yapılandırmaya ya da önbellek durumuna yazmaz, hiçbir süreci durdurmaz ve hiçbir şey kurmaz. Uygulamayla birlikte paketlenmiş adaylar, tanınan sürüm yöneticisi yollarında bulunan adaylar, doğrulanmamış bağımsız adaylar ve belirsiz shim durumları `unmanaged` veya `unknown` olarak raporlanır; hiçbir zaman `managed` olarak sınıflandırılmaz.
+
+Windows üzerinde `CODEX_CLI_PATH=codex` gibi yalın bir komut, uzak yol veya aygıt yolu aday olarak yakalanırsa `candidate_path_unavailable` bildirilir. Aday yakalanmıştır; ancak yolu bu inceleme için uygun değildir.
+
+#### Windows x64 kurulumunu açıkça gözlemleme
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest`, seçili veya açıkça belirtilen bir Windows x64 npm kurulumunu yalnızca okuyan isteğe bağlı bir işlemdir. Seçenek verilmezse komut, güvenilir başlatıcı anlık görüntüsünün belirlediği seçili adayı (yapılandırılmış `CODEX_CLI_PATH` veya yakalanan PATH üzerindeki ilk `codex`) gözlemler; opencodex sarmalayıcısı, yeniden adlandırılmış `codex.opencodex-real.cmd` npm yedeğine çözümlenir. Dört mutlak yolun tümünü sağlamak keşfi geçersiz kılar; keşif yalnızca yol önerir ve tutulan tanıtıcı gözlemi nihai otoritedir. `--candidate`, standart npm `<prefix>/codex.cmd` veya `<prefix>/node_modules/@openai/codex/bin/codex.js` yoludur. `--npm-cli`, `node_modules/npm/bin/npm-cli.js` ile bitmeli; `--node` açık bir `node.exe` belirtmelidir. Uygulama paketleri, tanınan sürüm yöneticisi yerleşimleri, npm yedeği olmayan opencodex shim’leri ve özel sarmalayıcılar reddedilir.
+
+Sınırlı okuma boyunca yerel tanıtıcılar üst dizinleri ve dosyaları açık tutar. Desteklenmeyen platformlar, yeniden ayrıştırma noktaları/junction, çakışan yazıcılar, güvenli olmayan yollar ve aşırı büyük dosyalar reddedilir. Sabit rapor yol içermez: `status`, `observed` veya `refused` olur ve `installationIdentityObserved` sunulur. `selectionAttested`, `managed` ve `applyAllowed` daima `false` kalır. Raporlanan ret 0 çıkış kodu üretebildiğinden `status` alanını denetleyin.
+
+Kimlik veya özet yalnızca gözlem anındaki dosyaları tanımlar; kalıcı güncelleme izni değildir. Seçilen çalışma zamanını, geçmiş yükleyiciyi, etkin npm yapılandırmasını veya araçların gerçekliğini kanıtlamaz. Verilen Node yalnızca gözlemlenir; başlatıcının onu seçeceği kanıtlanmaz. Hiçbir hedef çalıştırılmaz; kayıt deposu isteği, kurulum, yapılandırma yazımı veya süreç denetimi yapılmaz. Mevcut Windows `check`, aday veya yapılandırma dosya sistemi G/Ç işlemlerini hâlâ yapmaz.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

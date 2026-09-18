@@ -52,7 +52,7 @@ import { getConfigPath, readConfigDiagnostics, saveConfig } from "../../src/conf
 import { routeModel } from "../../src/router";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses } from "../../src/server/responses";
-import type { OcxConfig } from "../../src/types";
+import type { OcxComboConfig, OcxComboDefaultEffort, OcxConfig } from "../../src/types";
 import { syncCatalogModels } from "../../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../../src/claude/agents-inject";
 import { reconcileComboRotationState } from "../../src/combos/resolve";
@@ -297,20 +297,91 @@ describe("combo request cloning", () => {
     expect(concrete.input).not.toBe(raw.input);
   });
 
-  test("combo default respects client-owned ignored reasoning values", () => {
+  test("combo target capability strips unsupported client reasoning controls", () => {
     expect(concreteComboRequestBody({ model: "combo/x", reasoning: null }, target, "high", []).reasoning).toBeNull();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "" } }, target, "high", [],
-    ).reasoning).toEqual({ effort: "" });
+    ).reasoning).toBeUndefined();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "banana" } }, target, "high", [],
-    ).reasoning).toEqual({ effort: "banana" });
+    ).reasoning).toBeUndefined();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: null } }, target, "high", [],
-    ).reasoning).toEqual({ effort: null });
+    ).reasoning).toBeUndefined();
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { summary: "concise" } }, target, "high", ["high"],
     ).reasoning).toEqual({ summary: "concise", effort: "high" });
+  });
+
+  test("adaptive normalization strips unsupported controls for an unknown target while preserving summary", () => {
+    const raw = {
+      model: "combo/x",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    };
+    const concrete = concreteComboRequestBody(raw, target, null, undefined, "adaptive");
+
+    expect(concrete).toEqual({
+      model: "a/m1",
+      input: "hi",
+      reasoning: { summary: "concise" },
+    });
+    expect(raw).toEqual({
+      model: "combo/x",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    });
+  });
+
+  test("strict normalization preserves reasoning controls for an unknown target", () => {
+    const raw = {
+      model: "combo/x",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    };
+    const concrete = concreteComboRequestBody(raw, target, null, undefined, "strict");
+
+    expect(concrete).toEqual({
+      model: "a/m1",
+      input: "hi",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    });
+  });
+
+  test("explicit empty ladder strips unsupported controls while preserving reasoning summary", () => {
+    const concrete = concreteComboRequestBody({
+      model: "combo/x",
+      reasoning: { effort: "xhigh", summary: "concise" },
+      reasoning_effort: "xhigh",
+      thinking_budget: 8192,
+      thinking: { type: "enabled" },
+    }, target, "high", []);
+
+    expect(concrete).toEqual({
+      model: "a/m1",
+      reasoning: { summary: "concise" },
+    });
+  });
+
+  test("adaptive normalization preserves xhigh for a known reasoning ladder", () => {
+    const concrete = concreteComboRequestBody({
+      model: "combo/x",
+      reasoning: { effort: "xhigh", summary: "concise" },
+    }, target, null, ["low", "medium", "high", "xhigh"], "adaptive");
+
+    expect(concrete.reasoning).toEqual({ effort: "xhigh", summary: "concise" });
   });
 
   test("omits combo defaults for unset, no-reasoning, and unknown target capabilities", () => {
@@ -319,6 +390,35 @@ describe("combo request cloning", () => {
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", []).reasoning).toBeUndefined();
     // An unknown ladder stays fail-closed: the picker treats it as a wildcard, runtime injection does not.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", undefined).reasoning).toBeUndefined();
+  });
+
+  test("force mode overrides only valid caller effort and resolves independently per target", () => {
+    const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" } };
+    expect(concreteComboRequestBody(raw, target, "max", ["low", "high", "max"], "strict", "force").reasoning)
+      .toEqual({ effort: "max", summary: "concise" });
+    expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], "strict", "force").reasoning)
+      .toEqual({ effort: "high", summary: "concise" });
+    expect(raw.reasoning).toEqual({ effort: "medium", summary: "concise" });
+  });
+
+  test("force mode rejects missing or invalid direct default efforts", () => {
+    const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" } };
+    for (const defaultEffort of [null, "turbo" as OcxComboDefaultEffort]) {
+      expect(() => concreteComboRequestBody(raw, target, defaultEffort, ["low", "high"], "strict", "force"))
+        .toThrow("force combo default effort requires a valid defaultEffort");
+    }
+  });
+
+  test("force mode fails closed for malformed and unknown capabilities and strips unsupported effort", () => {
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "banana" } }, target, "max", ["max"], "strict", "force",
+    ).reasoning).toEqual({ effort: "banana" });
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "medium" } }, target, "max", undefined, "strict", "force",
+    ).reasoning).toEqual({ effort: "medium" });
+    expect(concreteComboRequestBody(
+      { model: "combo/x" }, target, "max", [], "strict", "force",
+    ).reasoning).toBeUndefined();
   });
 
   /**
@@ -347,6 +447,22 @@ describe("combo request cloning", () => {
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { summary: "concise" } }, target, "max", ["low", "high"],
     ).reasoning).toEqual({ summary: "concise", effort: "high" });
+  });
+
+  test("forced default effort composes with existing strict and adaptive capability modes", () => {
+    const raw = { model: "combo/x", reasoning: { effort: "medium", summary: "concise" }, thinking_budget: 8192 };
+    for (const mode of ["strict", "adaptive"] as const) {
+      expect(concreteComboRequestBody(raw, target, "max", ["low", "high"], mode, "force").reasoning)
+        .toEqual({ effort: "high", summary: "concise" });
+      const unsupported = concreteComboRequestBody(raw, target, "max", [], mode, "force");
+      expect(unsupported.reasoning).toEqual({ summary: "concise" });
+      expect(unsupported.thinking_budget).toBeUndefined();
+    }
+    expect(concreteComboRequestBody(raw, target, "max", undefined, "adaptive", "force").reasoning)
+      .toEqual({ summary: "concise" });
+    expect(concreteComboRequestBody(raw, target, "max", undefined, "strict", "force").reasoning)
+      .toEqual({ effort: "medium", summary: "concise" });
+    expect(raw.reasoning).toEqual({ effort: "medium", summary: "concise" });
   });
 
   test("debug-warns once per unsupported or unknown combo default", () => {
@@ -784,7 +900,7 @@ describe("combo failure policy and advancement", () => {
     for (const status of [401, 403, 404, 408, 429, 500, 503]) {
       expect(comboFailureDecision(status, "provider failure")).toBe("hop");
     }
-    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("stop");
+    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("hop");
     expect(comboFailureDecision(403, '{"code":"origin_rejected"}')).toBe("stop");
     expect(comboFailureDecision(413, "request too large")).toBe("stop");
     expect(comboFailureDecision(409, "conflict")).toBe("stop");
@@ -803,9 +919,14 @@ describe("combo failure policy and advancement", () => {
     // verdict by echoing the token, so that shape must NOT hop.
     expect(comboFailureDecision(413, 'refused', { code: 'input_admission_refused' })).toBe('hop');
     expect(comboFailureDecision(400, 'upstream mentions input_admission_refused in prose')).toBe('stop');
-    // An UPSTREAM context verdict still stops: retrying that elsewhere is guesswork, and a
-    // generic 413 with no structured code keeps its existing conservative handling.
-    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("stop");
+    // An UPSTREAM context verdict is target-local in a heterogeneous combo: this model cannot
+    // hold the turn, but a later one may have a larger window. The whole message being the bare
+    // token is unambiguous evidence; a generic 413 with no context signal stays conservative.
+    expect(comboFailureDecision(400, "context_length_exceeded")).toBe("hop");
+    // Evidence has to come from the MESSAGE. A context code beside an unrelated refusal is a
+    // contradictory envelope, and a hard structured refusal outranks the context verdict.
+    expect(comboFailureDecision(400, "ordinary invalid request", { code: "context_length_exceeded" })).toBe("stop");
+    expect(comboFailureDecision(502, "context window exceeded", { code: "origin_rejected" })).toBe("stop");
     const providerHardCap = JSON.stringify({ error: {
       message: "Prompt 346030 > 262144 maximum context length",
       type: "invalid_request_prompt_too_long",
@@ -910,7 +1031,7 @@ describe("combo failure policy and advancement", () => {
     expect(sleeps).toEqual([1_000]);
   });
 
-  test("still filters exhausted quota on a noncanonical forward destination", () => {
+  test("does not infer provider-wide quota from a noncanonical forward row without a credential", () => {
     const now = 50_000;
     const config = baseConfig({
       providers: {
@@ -927,7 +1048,8 @@ describe("combo failure policy and advancement", () => {
 
     const pick = pickComboTarget(config, "free", { now });
 
-    expect(pick?.target.provider).toBe("b");
+    // This is quota selection, not proof that this custom forward route can authenticate.
+    expect(pick?.target.provider).toBe("a");
   });
 
   test("retains caller eligibility restrictions for native targets", () => {
@@ -1148,6 +1270,20 @@ describe("deterministic combo selection", () => {
     expect(routeModel(config, "combo/free").routeDecision?.selected).toMatchObject({
       tieBreak: "reset-window",
     });
+  });
+
+  test.each(["oauth", "header", "key-pool"])("reset-window does not rank an inapplicable snapshot: %s", kind => {
+    const now = Date.now();
+    const config = baseConfig({ combos: { free: { strategy: "reset-window", targets: [
+      { provider: "a", model: "m1" }, { provider: "b", model: "m2" },
+    ] } } });
+    setCachedProviderQuotaForTests("a", { updatedAt: now, weeklyResetAt: now + 2_000 });
+    setCachedProviderQuotaForTests("b", { updatedAt: now, weeklyResetAt: now + 1_000 });
+    expect(pickComboTarget(config, "free", { now })?.target.provider).toBe("b");
+    if (kind === "oauth") config.providers.b!.authMode = "oauth";
+    else if (kind === "header") config.providers.b!.headers = { Authorization: "Bearer different-key" };
+    else config.providers.b!.apiKeyPool = [{ id: "one", key: "one" }, { id: "two", key: "two" }];
+    expect(pickComboTarget(config, "free", { now })?.target.provider).toBe("a");
   });
 
   test("reset-window treats elapsed resets as unknown and falls back to configured order", () => {
@@ -1409,8 +1545,10 @@ describe("combo validation and normalization", () => {
     })).toEqual({
       strategy: "failover",
       stickyLimit: 1,
+      cooldownMs: undefined,
       waitForCooldownMs: 0,
       defaultEffort: "high",
+      defaultEffortMode: "fallback",
       reasoningEffortMode: "strict",
       imageInput: "auto",
       alias: null,
@@ -1442,6 +1580,20 @@ describe("combo validation and normalization", () => {
     const corrupt = baseConfig() as OcxConfig & { combos: Record<string, { defaultEffort: string; targets: [] }> };
     corrupt.combos.free!.defaultEffort = "turbo";
     expect(comboDefaultEffort(corrupt, "free")).toBeNull();
+  });
+
+  test("direct normalization rejects force mode without a valid default effort", () => {
+    const corruptConfigs = [
+      { defaultEffortMode: "force", targets: [{ provider: "a", model: "m1" }] },
+      { defaultEffort: null, defaultEffortMode: "force", targets: [{ provider: "a", model: "m1" }] },
+      { defaultEffort: "turbo", defaultEffortMode: "force", targets: [{ provider: "a", model: "m1" }] },
+    ] as unknown as OcxComboConfig[];
+    for (const corrupt of corruptConfigs) {
+      expect(normalizeComboConfig(corrupt)).toMatchObject({
+        defaultEffort: null,
+        defaultEffortMode: "fallback",
+      });
+    }
   });
 
   test("inherited combo names are unknown across getters, effort, and routing", () => {

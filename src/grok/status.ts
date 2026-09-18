@@ -111,11 +111,18 @@ export function readGrokStatus(opts: { grokHome?: string } = {}): GrokStatus {
  * `ocx status` is for.
  *
  * Returns null when there is nothing to say: no fence, an unparsable endpoint, or a
- * fence that already agrees with the live listener.
+ * fence that already agrees with a port we are actually listening on.
+ *
+ * "Listening on" is a SET, not one number (#4236). A hub with an unauthenticated loopback
+ * listener answers on the public port and on the listener's port; a fence pointing at the
+ * latter is exactly what `ocx sync` wrote, so reporting it as drift told the operator their
+ * working config was broken. `loopbackPort` is that second reachable port, already resolved
+ * through `effectiveLoopbackListenerPort`, or null when no such listener is configured.
  */
 export function grokFenceEndpointDrift(
   status: Pick<GrokStatus, "present" | "baseUrl">,
   livePort: number | undefined,
+  loopbackPort?: number | null,
 ): { fencePort: number; livePort: number } | null {
   if (!status.present || !status.baseUrl) return null;
   if (typeof livePort !== "number" || !Number.isFinite(livePort) || livePort <= 0) return null;
@@ -130,5 +137,6 @@ export function grokFenceEndpointDrift(
     return null;
   }
   if (!Number.isFinite(fencePort) || fencePort === livePort) return null;
+  if (typeof loopbackPort === "number" && fencePort === loopbackPort) return null;
   return { fencePort, livePort };
 }

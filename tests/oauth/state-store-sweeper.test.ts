@@ -43,6 +43,7 @@ import {
   clearResponseStateMemoryForTests,
   rememberResponseState,
   responseStateMetrics,
+  RESPONSE_TTL_MS,
 } from "../../src/responses/state";
 import {
   __resetAntigravityReplayCache,
@@ -214,6 +215,72 @@ describe("state-store sweeper", () => {
     }
   });
 
+  describe("bounded combo recall retention", () => {
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "a",
+      providers: { a: { adapter: "openai-chat", baseUrl: "https://a.example/v1" } },
+      combos: { first: { targets: [{ provider: "a", model: "m1" }] } },
+    };
+    const remember = (lane: string, responseModel: string) =>
+      rememberComboForLane(lane, "first", { provider: "a", model: "m1" }, responseModel, captureConfigGeneration());
+    /** A distinct model id of exactly 1 KiB, the largest this store will retain. */
+    const fullModel = (index: number) => `${index}-`.padEnd(1024, "m");
+
+    test("an unretainable model id declines the write instead of clearing the lane", () => {
+      remember("lane", "kept-model");
+      // A model id is provider-reported and arrives on the response, so its length is not
+      // bounded upstream of here. Refusing to retain it must not also destroy what is there:
+      // this callback carries a config generation, not a request order, so it cannot know its
+      // own result is newer than the entry it would be erasing.
+      remember("lane", "x".repeat(1025));
+      expect(recallComboForLane(config, "lane", "kept-model")).toBe("first");
+
+      // Measured in UTF-8 bytes, not code units: 600 three-byte characters is 1,800 bytes.
+      remember("lane", "가".repeat(600));
+      expect(recallComboForLane(config, "lane", "kept-model")).toBe("first");
+
+      // And an oversized id never establishes a lane of its own.
+      remember("fresh", "x".repeat(4096));
+      expect(recallComboForLane(config, "fresh", "x".repeat(4096))).toBeUndefined();
+    });
+
+    test("the aggregate byte budget evicts the least recently written lane", () => {
+      // 64 KiB holds exactly 64 maximum-size entries, well inside the 256-lane cap, so this
+      // isolates the byte budget from the lane count.
+      for (let i = 0; i < 64; i += 1) remember(`lane-${i}`, fullModel(i));
+      expect(recallComboForLane(config, "lane-0", fullModel(0))).toBe("first");
+
+      remember("lane-64", fullModel(64));
+      expect(recallComboForLane(config, "lane-0", fullModel(0))).toBeUndefined();
+      expect(recallComboForLane(config, "lane-1", fullModel(1))).toBe("first");
+      expect(recallComboForLane(config, "lane-64", fullModel(64))).toBe("first");
+    });
+
+    test("a rewritten lane is charged once, not once per write", () => {
+      // Replacing a lane must release the old entry's bytes. If it did not, 64 rewrites of one
+      // lane would exhaust the whole budget and start evicting unrelated lanes.
+      remember("stable", "stable-model");
+      for (let i = 0; i < 64; i += 1) remember("churn", fullModel(i));
+      expect(recallComboForLane(config, "stable", "stable-model")).toBe("first");
+      expect(recallComboForLane(config, "churn", fullModel(63))).toBe("first");
+    });
+
+    test("a periodic tick expires a lane that is never read again and releases its bytes", () => {
+      registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "combo-session-recall")!);
+      for (let i = 0; i < 64; i += 1) remember(`stale-${i}`, fullModel(i));
+
+      // Before this the TTL was only evaluated on read or on a generation change, so a lane
+      // nobody reads again held its entry for the life of the process.
+      expect(sweepExpired(Date.now() + 30 * 60 * 1_000)).toEqual({ storesVisited: 1, rowsRemoved: 64 });
+      expect(recallComboForLane(config, "stale-0", fullModel(0))).toBeUndefined();
+
+      // The budget is genuinely free again: a full refill keeps its own oldest lane, which
+      // could not happen if the swept entries had left their bytes behind.
+      for (let i = 0; i < 64; i += 1) remember(`fresh-${i}`, fullModel(i));
+      expect(recallComboForLane(config, "fresh-0", fullModel(0))).toBe("first");
+    });
+  });
+
   test("a sweeper tick expires continuation and Antigravity rows without store traffic", () => {
     rememberResponseState({ input: "old" }, { id: "resp_sweeper_ttl", output: [], status: "completed" });
     observeAntigravityReplay("gemini-3-pro", "session-old", [{
@@ -226,7 +293,9 @@ describe("state-store sweeper", () => {
     for (const name of ["responses-continuation", "antigravity-replay"]) {
       registerStateStore(STATE_STORE_REGISTRATIONS.find(registration => registration.name === name)!);
     }
-    const result = sweepExpired(Date.now() + 60 * 60 * 1_000 + 1);
+    // Past both retentions: the Antigravity replay cache expires after an hour, the responses
+    // continuation store after RESPONSE_TTL_MS. One tick has to clear both rows.
+    const result = sweepExpired(Date.now() + RESPONSE_TTL_MS + 60 * 60 * 1_000);
     expect(result.rowsRemoved).toBe(2);
     expect(responseStateMetrics().count).toBe(0);
     expect(antigravityReplayMetrics().sessions).toBe(0);

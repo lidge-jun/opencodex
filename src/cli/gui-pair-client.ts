@@ -17,6 +17,7 @@ import {
   GUI_PAIR_NONCE_HEADER,
   GUI_PAIR_PATH,
   canonicalGuiBrowserOrigin,
+  canonicalHttpOrigin,
   createGuiPairCapability,
 } from "../lib/gui-pair-capability";
 import { directLocalHttpFetch } from "../server/direct-local-http";
@@ -50,18 +51,6 @@ function sameRuntime(left: RuntimePortState, right: RuntimePortState | null): bo
     && right.hostname === left.hostname
     && leftSecret.length === rightSecret.length
     && timingSafeEqual(leftSecret, rightSecret);
-}
-
-function canonicalHttpOrigin(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
-    return parsed.origin;
-  } catch {
-    return null;
-  }
 }
 
 function parseCreatedResult(value: unknown, browserOrigin: string): GuiPairRequestResult | null {

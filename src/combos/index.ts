@@ -27,9 +27,11 @@ export {
   noteComboSuccess,
   pickComboTarget,
   pickComboTargetWithWait,
+  quotaInactiveReason,
   tryPickComboModel,
   UnknownComboError,
   type ComboPick,
+  type QuotaInactiveReason,
 } from "./resolve";
 export {
   clearComboTargetCooldowns,

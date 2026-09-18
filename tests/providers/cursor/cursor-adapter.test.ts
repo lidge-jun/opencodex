@@ -1,24 +1,48 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   createCursorAdapter as createCursorAdapterProduction,
   cursorExecDeniedMessage,
 } from "../../../src/adapters/cursor";
 import {
+  clearCursorIncompleteToolRemint,
+  clearCursorIncompleteToolRemintForTests,
+  clearCursorOverflowRemintForTests,
   clearCursorThreadContinuityForTests,
+  CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES,
+  cursorIncompleteToolRemintScopeKey,
+  cursorIncompleteToolRemintCountForTests,
+  cursorOverflowRemintScopeKey,
   lookupCursorThreadConversation,
+  markCursorOverflowSurfaced,
+  recordCursorIncompleteToolRemint,
+  recordCursorOverflowRemint,
+  rememberCursorThreadConversation,
+  shouldSkipCursorOverflowRemint,
 } from "../../../src/adapters/cursor/thread-continuity";
 import {
   clearCursorCheckpointsForTests,
   commitCursorCheckpoint,
   getCursorCheckpoint,
 } from "../../../src/adapters/cursor/checkpoint-store";
-import { create, toBinary } from "@bufbuild/protobuf";
-import { ConversationStateStructureSchema } from "../../../src/adapters/cursor/gen/agent_pb";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import {
+  AgentClientMessageSchema,
+  ConversationStateStructureSchema,
+  ConversationStepSchema,
+  ConversationTurnStructureSchema,
+  GetBlobArgsSchema,
+  KvServerMessageSchema,
+} from "../../../src/adapters/cursor/gen/agent_pb";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 import type { CursorTransportFactoryInput } from "../../../src/adapters/cursor/transport";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
-import { CursorRootEnvelopeLimitError } from "../../../src/adapters/cursor/cursor-errors";
+import { CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX, CursorRootEnvelopeLimitError } from "../../../src/adapters/cursor/cursor-errors";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests, setDebugSettings } from "../../../src/lib/debug-settings";
+import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../../../src/adapters/cursor/call-id";
+import { handleCursorNativeKv, resetCursorBlobStateForTests } from "../../../src/adapters/cursor/native-exec";
+import { CURSOR_MISSING_TOOL_RESULT, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
 
 const createCursorAdapter = (...args: Parameters<typeof createCursorAdapterProduction>) =>
   withTestTranslatorBudget(createCursorAdapterProduction(...args));
@@ -815,5 +839,723 @@ describe("Cursor adapter live transport", () => {
     const done = events.find(event => event.type === "done");
     expect(done && done.type === "done" ? done.providerState?.cursor?.checkpointRef : undefined).toBeUndefined();
     clearCursorCheckpointsForTests();
+  });
+});
+const LARGE_OVERFLOW_CONTENT = "word ".repeat(100_000);
+
+function bareOverflowError(): Error {
+  return Object.assign(
+    new Error("Cursor context limit exceeded: Cursor Connect error resource_exhausted: Error"),
+    { code: "resource_exhausted" },
+  );
+}
+
+function overflowTurnBody(threadId?: string): OcxParsedRequest {
+  return {
+    modelId: "cursor/auto",
+    context: { messages: [{ role: "user", content: LARGE_OVERFLOW_CONTENT, timestamp: 1 }] },
+    stream: false,
+    options: {},
+    _cursorIdentityScope: "acct-overflow-remint",
+    ...(threadId ? { _clientThreadId: threadId } : { _cursorConversationId: "cursor_overflow_base" }),
+  };
+}
+
+describe("Cursor overflow conversation remint", () => {
+  test("first bare overflow surfaces without reminting the conversation id", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-surface-first");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor context limit exceeded"),
+    });
+  });
+
+  test("second overflow remints and persists thread override", async () => {
+    clearCursorOverflowRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          if (attempts === 1) {
+            throw bareOverflowError();
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+
+    const threadId = "overflow-remint-thread";
+    const body = overflowTurnBody(threadId);
+
+    const surfaceEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => surfaceEvents.push(event));
+    expect(attempts).toBe(1);
+    expect(surfaceEvents.some(event => event.type === "error")).toBe(true);
+
+    seen.length = 0;
+    attempts = 0;
+    const remintEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => remintEvents.push(event));
+
+    expect(attempts).toBe(2);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(remintEvents.some(event => event.type === "done")).toBe(true);
+    expect(lookupCursorThreadConversation(threadId, "acct-overflow-remint")).toBe(seen[1]);
+    expect(body._cursorConversationId).toBe(seen[1]);
+  });
+
+  test("fourth overflow skips remint after surface-first and three remints", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-cap-skip");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    expect(attempts).toBe(1);
+
+    attempts = 0;
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(4);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor context limit exceeded"),
+    });
+  });
+
+  test("quota-cue resource_exhausted does not remint and surfaces as rate limit", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw Object.assign(
+            new Error("Cursor rate limit exceeded: resource_exhausted: too many requests"),
+            { code: "resource_exhausted" },
+          );
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-quota-cue");
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      message: expect.stringContaining("Cursor rate limit exceeded"),
+    });
+  });
+
+  test("does not overflow-remint on tool-result resumes", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body: OcxParsedRequest = {
+      modelId: "cursor/auto",
+      context: {
+        messages: [
+          { role: "user", content: LARGE_OVERFLOW_CONTENT, timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/auto",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", namespace: "mcp__fs", arguments: { path: "a.txt" } }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            toolNamespace: "mcp__fs",
+            content: "FILE CONTENTS HERE",
+            isError: false,
+            timestamp: 3,
+          },
+        ],
+      },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_overflow_tool",
+      _clientThreadId: "overflow-tool-result",
+      _cursorIdentityScope: "acct-overflow-remint",
+    };
+
+    await adapter.runTurn?.(overflowTurnBody("overflow-tool-result"), { headers: new Headers() }, () => {});
+    attempts = 0;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    expect(attempts).toBe(1);
+  });
+
+  test("does not overflow-remint compaction turns", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-compaction");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    attempts = 0;
+    seen.length = 0;
+    body._compactionRequest = true;
+    body._cursorIsolateConversation = true;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+    expect(attempts).toBe(1);
+    expect(seen).toHaveLength(1);
+  });
+
+  test("isolated non-compaction helpers preserve parent remint allowance and checkpoint", async () => {
+    clearCursorOverflowRemintForTests();
+    clearCursorThreadContinuityForTests();
+    clearCursorCheckpointsForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+    try {
+      const owner = "overflow-isolated-helper";
+      await adapter.runTurn?.(overflowTurnBody(owner), { headers: new Headers() }, () => {});
+      expect(attempts).toBe(1);
+      const parentRef = commitCursorCheckpoint({
+        conversationId: "cursor_parent_overflow",
+        identityScope: "acct-overflow-remint",
+        modelId: "default",
+        checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+          pendingToolCalls: ["overflow-isolation-fixture"],
+        })),
+        coveredMessageCount: 1,
+      });
+      expect(parentRef).toBeDefined();
+      const helper = overflowTurnBody(owner);
+      helper._cursorIsolateConversation = true;
+      helper._cursorConversationId = "cursor_parent_overflow";
+      helper._providerContinuation = {
+        cursor: { conversationId: "cursor_parent_overflow", checkpointUsable: true, checkpointRef: parentRef },
+      };
+      expect(helper._compactionRequest).toBeUndefined();
+      attempts = 0;
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(helper, { headers: new Headers() }, event => events.push(event));
+      expect(attempts).toBe(1);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", message: expect.stringContaining("Cursor context limit exceeded") });
+      expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+      expect(lookupCursorThreadConversation(owner, "acct-overflow-remint")).toBeUndefined();
+
+      attempts = 0;
+      await adapter.runTurn?.(overflowTurnBody(owner), { headers: new Headers() }, () => {});
+      expect(attempts).toBe(4);
+    } finally {
+      clearCursorOverflowRemintForTests();
+      clearCursorThreadContinuityForTests();
+      clearCursorCheckpointsForTests();
+    }
+  });
+
+  test("does not overflow-remint after non-heartbeat output was emitted", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    let emitPartial = false;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run() {
+          attempts += 1;
+          if (emitPartial) yield { type: "text", text: "partial" } satisfies CursorServerMessage;
+          throw bareOverflowError();
+        },
+        writeClient() {},
+      }),
+    });
+
+    const body = overflowTurnBody("overflow-after-output");
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    attempts = 0;
+    emitPartial = true;
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(events.some(event => event.type === "text_delta")).toBe(true);
+    expect(events.some(event => event.type === "error")).toBe(true);
+  });
+});
+
+
+describe("Cursor overflow accounting across requests", () => {
+  for (const ownerField of ["_clientThreadId", "_cursorClientThreadId"] as const) {
+    test(`${ownerField} retains the cap across successful remints`, async () => {
+      clearCursorOverflowRemintForTests();
+      clearCursorThreadContinuityForTests();
+      let attempts = 0;
+      let failNext = true;
+      const seen: string[] = [];
+      const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+        createTransport: () => ({
+          async *run(request) {
+            attempts++;
+            seen.push(request.conversationId);
+            if (failNext) { failNext = false; throw bareOverflowError(); }
+            yield { type: "done" } satisfies CursorServerMessage;
+          },
+          writeClient() {},
+        }),
+        rekeyContextUsage: () => {},
+      });
+      const body = () => {
+        const parsed = overflowTurnBody();
+        parsed._cursorConversationId = undefined;
+        parsed[ownerField] = `cross-request-${ownerField}`;
+        return parsed;
+      };
+      await adapter.runTurn?.(body(), { headers: new Headers() }, () => {});
+      expect(attempts).toBe(1);
+      for (let remint = 0; remint < 3; remint++) {
+        failNext = true;
+        const before = attempts;
+        const priorConversation = seen[seen.length - 1];
+        const events: AdapterEvent[] = [];
+        await adapter.runTurn?.(body(), { headers: new Headers() }, event => events.push(event));
+        expect(attempts - before).toBe(2);
+        expect(seen[seen.length - 2]).toBe(priorConversation);
+        expect(seen[seen.length - 1]).not.toBe(seen[seen.length - 2]);
+        expect(events.some(event => event.type === "done")).toBe(true);
+      }
+      failNext = true;
+      const before = attempts;
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(body(), { headers: new Headers() }, event => events.push(event));
+      expect(attempts - before).toBe(1);
+      expect(events.some(event => event.type === "error")).toBe(true);
+    });
+  }
+  test("conversation-only clients never gain an automatic remint allowance", async () => {
+    clearCursorOverflowRemintForTests();
+    let attempts = 0;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run() { attempts++; throw bareOverflowError(); },
+        writeClient() {},
+      }),
+    });
+    for (let turn = 0; turn < 3; turn++) {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(overflowTurnBody(), { headers: new Headers() }, event => events.push(event));
+      expect(attempts).toBe(turn + 1);
+      expect(events.some(event => event.type === "error")).toBe(true);
+    }
+  });
+});
+
+const INCOMPLETE_TOOL_ERROR =
+  `${CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX} call_abc. Arguments may be truncated; the call was not committed.`;
+
+describe("Cursor incomplete-tool conversation remint", () => {
+  test("native Composer unpaired tool calls replay with a missing-result placeholder", () => {
+    resetCursorBlobStateForTests();
+    resetCursorCallIdProvenanceForTests();
+    const blobData = (blobId: Uint8Array): Uint8Array => {
+      const reply = fromBinary(AgentClientMessageSchema, handleCursorNativeKv(create(KvServerMessageSchema, {
+        id: 1,
+        message: { case: "getBlobArgs", value: create(GetBlobArgsSchema, { blobId }) },
+      })));
+      if (reply.message.case !== "kvClientMessage") return new Uint8Array();
+      const kv = reply.message.value;
+      return kv.message.case === "getBlobResult" ? kv.message.value.blobData : new Uint8Array();
+    };
+    try {
+      const local = encodeCursorCallId("ocxc1e_");
+      const bytes = encodeCursorRunRequest({
+        modelId: "composer-2.5",
+        conversationId: "c1",
+        system: ["You are helpful."],
+        messages: [{ role: "user", content: "continue anyway" }],
+        rawMessages: [
+          { role: "user", content: "read a file", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/auto",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: local, name: "read_file", arguments: { path: "a.txt" } }],
+          },
+          { role: "user", content: "continue anyway", timestamp: 3 },
+        ],
+      });
+      const msg = fromBinary(AgentClientMessageSchema, bytes);
+      const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+      const turnIds = run?.conversationState?.turns ?? [];
+      expect(turnIds).toHaveLength(1);
+      const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnIds[0]!));
+      expect(turn.turn.case).toBe("agentConversationTurn");
+      const step = fromBinary(ConversationStepSchema, blobData(turn.turn.value.steps[0]!));
+      expect(step.message.case).toBe("toolCall");
+      const tool = step.message.value.tool;
+      expect(tool.case).toBe("mcpToolCall");
+      if (tool.case === "mcpToolCall" && tool.value.result?.result.case === "success") {
+        expect(tool.value.args?.toolCallId).toBe("ocxc1e_");
+        expect(tool.value.result.result.value.isError).toBe(true);
+        const content = tool.value.result.result.value.content[0]?.content;
+        expect(content?.case).toBe("text");
+        if (content?.case === "text") expect(content.value.text).toBe(CURSOR_MISSING_TOOL_RESULT);
+      }
+    } finally {
+      resetCursorBlobStateForTests();
+    }
+  });
+
+  test("remints after a streamed incomplete-tool error and persists the thread override", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let attempts = 0;
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          if (attempts === 1) {
+            yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+            return;
+          }
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+
+    const threadId = "incomplete-tool-remint-thread";
+    const body: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorIdentityScope: "acct-incomplete-tool-remint",
+      _clientThreadId: threadId,
+    };
+
+    const firstEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => firstEvents.push(event));
+
+    expect(attempts).toBe(1);
+    expect(firstEvents).toEqual([
+      { type: "error", message: INCOMPLETE_TOOL_ERROR },
+    ]);
+    expect(body._cursorConversationId).toBeDefined();
+    expect(body._cursorConversationId).not.toBe(seen[0]);
+    expect(lookupCursorThreadConversation(threadId, "acct-incomplete-tool-remint")).toBe(body._cursorConversationId);
+
+    const secondEvents: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => secondEvents.push(event));
+
+    expect(attempts).toBe(2);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(body._cursorConversationId);
+    expect(seen[1]).not.toBe(seen[0]);
+    expect(secondEvents.some(event => event.type === "done")).toBe(true);
+  });
+
+  test("compaction storage isolation preserves the stable thread override without relying on the isolate flag", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    const owner = "incomplete-tool-compaction";
+    const identityScope = "acct-incomplete-tool-remint";
+    const stableConversation = "cursor_parent_stable";
+    rememberCursorThreadConversation(owner, stableConversation, identityScope);
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+    const compaction: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "summarize", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _compactionRequest: true,
+      _cursorConversationId: "cursor_compaction_turn",
+      _cursorIdentityScope: identityScope,
+      _clientThreadId: owner,
+    };
+
+    await adapter.runTurn?.(compaction, { headers: new Headers() }, () => {});
+
+    expect(compaction._cursorIsolateConversation).toBeUndefined();
+    expect(seen).toEqual(["cursor_compaction_turn"]);
+    expect(compaction._cursorConversationId).toBe("cursor_compaction_turn");
+    expect(lookupCursorThreadConversation(owner, identityScope)).toBe(stableConversation);
+  });
+
+  test("the fourth incomplete-tool truncation keeps the conversation and records exhaustion", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    resetDebugLogBufferForTests();
+    setDebugSettings({ debug: true });
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+    const owner = "incomplete-tool-cap";
+    const body: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorIdentityScope: "acct-incomplete-tool-remint",
+      _clientThreadId: owner,
+    };
+
+    try {
+      for (let truncation = 0; truncation < 3; truncation++) {
+        await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+        expect(body._cursorConversationId).not.toBe(seen.at(-1));
+      }
+      const retainedConversation = body._cursorConversationId;
+      await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+      expect(seen).toHaveLength(4);
+      expect(seen.at(-1)).toBe(retainedConversation);
+      expect(body._cursorConversationId).toBe(retainedConversation);
+      expect(lookupCursorThreadConversation(owner, "acct-incomplete-tool-remint")).toBe(retainedConversation);
+      expect(getDebugLogEntries().some(entry => entry.line.includes("[ocx:cursor:incomplete-tool-remint-exhausted]"))).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+      resetDebugSettingsForTests();
+      resetDebugLogBufferForTests();
+      clearCursorIncompleteToolRemintForTests();
+      clearCursorThreadContinuityForTests();
+    }
+  });
+
+  test("a clean completed turn replenishes the incomplete-tool remint budget", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    let incomplete = true;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run() {
+          if (incomplete) {
+            yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+          } else {
+            yield { type: "done" } satisfies CursorServerMessage;
+          }
+        },
+        writeClient() {},
+      }),
+      rekeyContextUsage: () => {},
+    });
+    const body: OcxParsedRequest = {
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      stream: false,
+      options: {},
+      _cursorIdentityScope: "acct-incomplete-tool-remint",
+      _clientThreadId: "incomplete-tool-clean-reset",
+    };
+
+    for (let truncation = 0; truncation < 3; truncation++) {
+      await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    }
+    incomplete = false;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+    incomplete = true;
+    const beforeRecoveredTruncation = body._cursorConversationId;
+    await adapter.runTurn?.(body, { headers: new Headers() }, () => {});
+
+    expect(body._cursorConversationId).not.toBe(beforeRecoveredTruncation);
+  });
+
+  test("incomplete-tool and overflow remint budgets do not consume or replenish each other", () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorOverflowRemintForTests();
+    const incompleteScope = cursorIncompleteToolRemintScopeKey("independent-remint-budgets", "acct-remint-budget");
+    const overflowScope = cursorOverflowRemintScopeKey("independent-remint-budgets", "acct-remint-budget");
+    expect(incompleteScope).toBe(overflowScope);
+    if (!incompleteScope || !overflowScope) throw new Error("stable thread owner must produce remint scopes");
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(recordCursorIncompleteToolRemint(incompleteScope)).toBe(true);
+    }
+    expect(recordCursorIncompleteToolRemint(incompleteScope)).toBe(false);
+    expect(shouldSkipCursorOverflowRemint(overflowScope)).toBe(false);
+    markCursorOverflowSurfaced(overflowScope);
+    expect(recordCursorOverflowRemint(overflowScope)).toBe(true);
+
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorOverflowRemintForTests();
+    markCursorOverflowSurfaced(overflowScope);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(recordCursorOverflowRemint(overflowScope)).toBe(true);
+    }
+    expect(shouldSkipCursorOverflowRemint(overflowScope)).toBe(true);
+    expect(recordCursorIncompleteToolRemint(incompleteScope)).toBe(true);
+    clearCursorIncompleteToolRemint(incompleteScope);
+    expect(shouldSkipCursorOverflowRemint(overflowScope)).toBe(true);
+  });
+
+  test("bounds incomplete-tool remint state to the shared entry cap", () => {
+    clearCursorIncompleteToolRemintForTests();
+    for (let index = 0; index < CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES + 20; index++) {
+      const scope = cursorIncompleteToolRemintScopeKey(`incomplete-retention-${index}`, "acct-remint-budget");
+      if (!scope) throw new Error("stable thread owner must produce an incomplete-tool scope");
+      expect(recordCursorIncompleteToolRemint(scope)).toBe(true);
+    }
+    expect(cursorIncompleteToolRemintCountForTests()).toBe(CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES);
+    clearCursorIncompleteToolRemintForTests();
+  });
+
+  test("isolated helpers do not remint or park a throwaway id on the parent thread", async () => {
+    clearCursorIncompleteToolRemintForTests();
+    clearCursorThreadContinuityForTests();
+    clearCursorCheckpointsForTests();
+    const seen: string[] = [];
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: () => ({
+        async *run(request) {
+          seen.push(request.conversationId);
+          yield { type: "error", message: INCOMPLETE_TOOL_ERROR } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      }),
+    });
+
+    try {
+      const owner = "incomplete-tool-isolated-helper";
+      const parentRef = commitCursorCheckpoint({
+        conversationId: "cursor_parent_incomplete",
+        identityScope: "acct-incomplete-tool-remint",
+        modelId: "default",
+        checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+          pendingToolCalls: ["incomplete-isolation-fixture"],
+        })),
+        coveredMessageCount: 1,
+      });
+      expect(parentRef).toBeDefined();
+
+      const helper: OcxParsedRequest = {
+        modelId: "cursor/grok-4.6",
+        context: { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+        stream: false,
+        options: {},
+        _cursorIsolateConversation: true,
+        _cursorConversationId: "cursor_parent_incomplete",
+        _cursorIdentityScope: "acct-incomplete-tool-remint",
+        _clientThreadId: owner,
+        _providerContinuation: {
+          cursor: { conversationId: "cursor_parent_incomplete", checkpointUsable: true, checkpointRef: parentRef },
+        },
+      };
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn?.(helper, { headers: new Headers() }, event => events.push(event));
+
+      expect(seen).toHaveLength(1);
+      expect(events).toEqual([{ type: "error", message: INCOMPLETE_TOOL_ERROR }]);
+      expect(helper._cursorConversationId).toBe(seen[0]);
+      expect(getCursorCheckpoint(parentRef)?.ref).toBe(parentRef);
+      expect(lookupCursorThreadConversation(owner, "acct-incomplete-tool-remint")).toBeUndefined();
+    } finally {
+      clearCursorThreadContinuityForTests();
+      clearCursorCheckpointsForTests();
+    }
   });
 });

@@ -44,8 +44,13 @@ const COST_VENDOR_BUNDLES = [
   "zai", "mistral", "cerebras", "azure-openai", "amazon-bedrock", "xiaomi",
 ];
 
+// Capability-only bundles may describe a transport/backend that is not a public provider preset.
+// The canonical ChatGPT Codex forward route has modality differences from the public OpenAI API
+// (for example retired Spark is text-only there), so keep that evidence distinct.
+const CAPABILITY_ONLY_BUNDLES = ["openai-codex"];
+
 const allowedProviders = Array.from(
-  new Set([...Object.values(PROVIDER_ALIASES), ...COST_VENDOR_BUNDLES]),
+  new Set([...Object.values(PROVIDER_ALIASES), ...COST_VENDOR_BUNDLES, ...CAPABILITY_ONLY_BUNDLES]),
 ).sort();
 
 // Models the upstream catalogue lists but the provider rejects at request time. Issue #82:

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
   EXPORT_CLIENT_IDS,
-  GAJAE_API_KEY_ENV,
   HERMES_API_KEY_ENV_REF,
   LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
@@ -61,11 +60,11 @@ describe("no secret reaches a client config", () => {
     // Pi, Kimi, Gajae, Aside and Raycast cannot emit the dedicated admission
     // header -- Aside's observed provider block has four keys and none is
     // `headers`; Raycast's `api_keys` is read literally with no env
-    // interpolation. OMP and Prime can carry provider headers, but remote
+    // interpolation. OMP, Prime and omo can carry provider headers, but remote
     // credential wiring is deliberately deferred from those initial generated
-    // integrations.
+    // integrations -- omo reuses Pi's builder, which emits no headers at all.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -133,6 +132,29 @@ describe("hermes", () => {
 });
 
 describe("openclaw", () => {
+  test("declares image input only from catalog capabilities", () => {
+    const doc = buildClientConfig("openclaw", ctx()) as OpenclawGeneratedConfig;
+    const models = doc.models.providers[OPENCODE_PROVIDER_ID]!.models;
+    expect(models.find(model => model.id === "anthropic/claude-opus-4-8")).toHaveProperty("input", ["text", "image"]);
+    expect(models.find(model => model.id === "gpt-5.5")).toHaveProperty("input", ["text"]);
+    expect(models.find(model => model.id === "local/no-window")).not.toHaveProperty("input");
+  });
+
+  test("filters unsupported modalities without inventing image input", () => {
+    const doc = buildClientConfig("openclaw", {
+      ...ctx(),
+      models: [
+        { namespaced: "p/mixed", provider: "p", id: "mixed", inputModalities: ["text", "image", "image", "audio", "video", "pdf"] },
+        { namespaced: "p/unknown", provider: "p", id: "unknown", inputModalities: [] },
+        { namespaced: "p/foreign", provider: "p", id: "foreign", inputModalities: ["pdf"] },
+      ],
+    }) as OpenclawGeneratedConfig;
+    const models = doc.models.providers[OPENCODE_PROVIDER_ID]!.models;
+    expect(models.find(model => model.id === "p/mixed")?.input).toEqual(["text", "image", "audio", "video"]);
+    expect(models.find(model => model.id === "p/unknown")).not.toHaveProperty("input");
+    expect(models.find(model => model.id === "p/foreign")).not.toHaveProperty("input");
+  });
+
   test("merges with the bundled catalog and omits a window it cannot assert", () => {
     const doc = buildClientConfig("openclaw", ctx()) as OpenclawGeneratedConfig;
     expect(doc.models.mode).toBe("merge");
@@ -252,9 +274,15 @@ describe("kimi", () => {
     expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
-  test("never emits capabilities it cannot assert", () => {
-    const { text } = buildClientConfigText("kimi", ctx());
-    expect(text).not.toContain("capabilities");
+  test("declares image_in only for catalog-backed image models", () => {
+    const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;
+    expect(doc.models[`${OPENCODE_PROVIDER_ID}/anthropic/claude-opus-4-8`])
+      .toHaveProperty("capabilities", ["image_in"]);
+    expect(doc.models[`${OPENCODE_PROVIDER_ID}/gpt-5.5`]).not.toHaveProperty("capabilities");
+    const unknown = buildClientConfig("kimi", {
+      ...ctx(), models: [{ namespaced: "local/unknown", provider: "local", id: "unknown", contextWindow: 32_000 }],
+    }) as KimiGeneratedConfig;
+    expect(unknown.models[`${OPENCODE_PROVIDER_ID}/local/unknown`]).not.toHaveProperty("capabilities");
   });
 
   test("KIMI_CODE_HOME wins over the default", () => {
@@ -263,12 +291,12 @@ describe("kimi", () => {
 });
 
 describe("gajae", () => {
-  test("uses apiKeyEnv, never apiKey, and emits only schema-known fields", () => {
+  test("uses a non-secret loopback placeholder and emits only schema-known fields", () => {
     const doc = buildClientConfig("gajae", ctx()) as GajaeGeneratedConfig;
     const block = doc.providers[OPENCODE_PROVIDER_ID]!;
-    expect(block.apiKeyEnv).toBe(GAJAE_API_KEY_ENV);
-    expect(block).not.toHaveProperty("apiKey");
-    expect(Object.keys(block).sort()).toEqual(["api", "apiKeyEnv", "baseUrl", "models"]);
+    expect(block.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(block).not.toHaveProperty("apiKeyEnv");
+    expect(Object.keys(block).sort()).toEqual(["api", "apiKey", "baseUrl", "models"]);
     const allowed = new Set(["id", "name", "input", "contextWindow", "maxTokens"]);
     for (const model of block.models) {
       for (const key of Object.keys(model)) expect(allowed.has(key)).toBe(true);

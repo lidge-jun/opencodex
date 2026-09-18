@@ -135,11 +135,11 @@ test("an empty catalog says the catalog is empty, with no query in the sentence"
 test("a query matching nothing names the query, and does not claim the catalog is empty", async () => {
   const counter = { gets: 0 };
   installFetch(() => Response.json({
-    data: [{ id: "gpt-5.4", owned_by: "openai" }, { id: "claude/opus-4-6", owned_by: "anthropic" }],
+    data: [{ id: "gpt-5.5", owned_by: "openai" }, { id: "claude/opus-4-6", owned_by: "anthropic" }],
   }), counter);
   const { container, root } = await mountPage();
   try {
-    expect(container.textContent).toContain("gpt-5.4");
+    expect(container.textContent).toContain("gpt-5.5");
     await typeQuery(container, "nothing-matches-this");
     await tick();
 
@@ -158,7 +158,7 @@ test("a failed cold load offers a retry that really refetches, and no false empt
   installFetch(
     () => (fail
       ? new Response("upstream unavailable", { status: 503 })
-      : Response.json({ data: [{ id: "gpt-5.4", owned_by: "openai" }] })),
+      : Response.json({ data: [{ id: "gpt-5.5", owned_by: "openai" }] })),
     counter,
   );
   const { container, root } = await mountPage();
@@ -176,7 +176,7 @@ test("a failed cold load offers a retry that really refetches, and no false empt
     await tick();
 
     expect(counter.gets).toBe(2);
-    expect(container.textContent).toContain("gpt-5.4");
+    expect(container.textContent).toContain("gpt-5.5");
     expect(container.textContent).not.toContain("Could not load the external model catalog.");
   } finally {
     await act(async () => { root.unmount(); });

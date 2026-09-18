@@ -68,8 +68,8 @@ function nativeTemplate(): Record<string, unknown> {
 
 describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   test("disabledNativeSlugs picks bare ids only; routed namespaced ids are ignored", () => {
-    const set = disabledNativeSlugs({ disabledModels: ["gpt-5.4", "kiro/claude-opus-4.6", "gpt-5.6-luna"] });
-    expect([...set].sort()).toEqual(["gpt-5.4", "gpt-5.6-luna"]);
+    const set = disabledNativeSlugs({ disabledModels: ["gpt-5.5", "kiro/claude-opus-4.6", "gpt-5.6-luna"] });
+    expect([...set].sort()).toEqual(["gpt-5.5", "gpt-5.6-luna"]);
   });
 
   test("visibleNativeSlugs omits disabled natives from the bare availability list", () => {
@@ -230,8 +230,12 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   });
 
   test("the on-disk catalog preserves a lower retained native compaction threshold", () => {
+    // A retired slug is no longer a valid subject: nativeOpenAiAutoCompactTokenLimit
+    // requires a known native window, so a configured lowering would not apply to
+    // gpt-5.4-mini after its override and membership were removed. gpt-5.5 is the
+    // surviving old-ladder native whose 272k window matches this retained row.
     const retained = {
-      slug: "gpt-5.4-mini",
+      slug: "gpt-5.5",
       context_window: 272_000,
       max_context_window: 272_000,
       auto_compact_token_limit: 100_000,
@@ -240,7 +244,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(retained.auto_compact_token_limit).toBe(100_000);
 
     const configured = {
-      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.4-mini": 80_000 } } },
+      providers: { openai: { modelAutoCompactTokenLimits: { "gpt-5.5": 80_000 } } },
     } as never;
     const lowered = { ...retained };
     applyNativeOpenAiContextOverride(lowered as never, nativeContextLimits(configured));
@@ -296,7 +300,10 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     const over = nativeModelRows({ providerContextCaps: { openai: 2_000_000 } });
     expect(over.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(922_000);
     expect(raised.find(r => r.slug === "gpt-5.5")?.contextWindow).toBe(272_000);
-    expect(raised.find(r => r.slug === "gpt-5.4")?.contextWindow).toBe(922_000);
+    // gpt-5.4 was the only native with a 1M override. Retirement deleted that
+    // membership and the override; nothing else inherits a 1M window.
+    expect(raised.find(r => r.slug === "gpt-5.4")).toBeUndefined();
+    expect(raised.every(r => (r.contextWindow ?? 0) <= 922_000)).toBe(true);
   });
 
   test("nativeModelRows applies providerContextCaps.openai as a ceiling (#1430)", () => {
@@ -343,6 +350,39 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(desktopAllowlistSuppressedNativeSlugs(makeConfig({
       disabledModels: ["gpt-5.5"],
     }))).toEqual(new Set());
+  });
+
+  // #4646 asked for disabled native slugs to be omitted outright. They are retained as
+  // `visibility: "hide"` on purpose, and this pins the whole shape of that contract in one
+  // place, because it is what the operator-facing note in
+  // docs-site/.../codex-app-models.md and structure/catalog.md now describe: the row is gone
+  // from the availability list, still present in the catalog so a later re-enable restores real
+  // upstream metadata, and omitted outright only once a native-alias combo exists.
+  test("without a native alias a disabled native is hidden-but-retained; the alias is what omits it", () => {
+    const disabled = { disabledModels: ["gpt-5.6-terra"] };
+    // Not vacuous: terra is a candidate native on both the live-catalog and fallback paths
+    // (NATIVE_OPENAI_MODELS and DOCUMENTED_NATIVE_OPENAI_ADDITIONS both carry it).
+    expect(visibleNativeSlugs({ disabledModels: [] })).toContain("gpt-5.6-terra");
+    expect(visibleNativeSlugs(disabled)).not.toContain("gpt-5.6-terra");
+    expect(desktopAllowlistSuppressedNativeSlugs(disabled)).toEqual(new Set());
+
+    const entries = [{ slug: "gpt-5.6-terra", visibility: "list" }, { slug: "gpt-5.6-sol", visibility: "list" }];
+    applyNativeVisibility(entries, new Set(disabled.disabledModels));
+    // Retained rather than dropped: the row survives with its upstream metadata.
+    expect(entries.find(entry => entry.slug === "gpt-5.6-terra")?.visibility).toBe("hide");
+    expect(entries.find(entry => entry.slug === "gpt-5.6-sol")?.visibility).toBe("list");
+
+    expect(desktopAllowlistSuppressedNativeSlugs(makeConfig({
+      ...disabled,
+      combos: {
+        nova: {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - Sol",
+          targets: [{ provider: "nova", model: "codex/gpt-5.6-sol" }],
+        },
+      },
+    })).has("gpt-5.6-terra")).toBe(true);
   });
 
   test("configured public selectors replace bare picker rows with account-qualified native clones", () => {

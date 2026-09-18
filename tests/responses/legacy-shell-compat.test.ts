@@ -112,4 +112,138 @@ describe("code-mode helper compatibility", () => {
       expect(received).toEqual(input === "[]" ? [] : input);
     }
   });
+
+  test("view_image compiles to tools.view_image and forwards image_url to image()", async () => {
+    const source = compileCodeModeHelperInput(
+      JSON.stringify({ path: "/tmp/shot.png", detail: "high" }),
+      "default.view_image",
+    );
+    let received: unknown;
+    let surfaced: unknown;
+    const run = new AsyncFunction("tools", "text", "image", source);
+
+    await run(
+      {
+        view_image: async (args: unknown) => {
+          received = args;
+          return { image_url: "data:image/png;base64,AAAA" };
+        },
+      },
+      () => { throw new Error("image result leaked into text output"); },
+      (value: unknown) => { surfaced = value; },
+    );
+
+    expect(received).toEqual({ path: "/tmp/shot.png", detail: "high" });
+    expect(surfaced).toBe("data:image/png;base64,AAAA");
+  });
+
+  test("view_image maps file_path/file/image_path aliases onto path", async () => {
+    for (const alias of ["file_path", "file", "image_path"]) {
+      const source = compileCodeModeHelperInput(
+        JSON.stringify({ [alias]: "/tmp/alias.png" }),
+        "view_image",
+      );
+      let received: unknown;
+      const run = new AsyncFunction("tools", "text", "image", source);
+      await run(
+        {
+          view_image: async (args: unknown) => {
+            received = args;
+            return {};
+          },
+        },
+        () => {},
+        () => {},
+      );
+      expect(received).toEqual({ path: "/tmp/alias.png" });
+    }
+  });
+
+  test("view_image keeps explicit path precedence and removes provider aliases", async () => {
+    const source = compileCodeModeHelperInput(
+      JSON.stringify({ path: "/tmp/right.png", file_path: "/tmp/wrong.png", detail: "original" }),
+      "view_image",
+    );
+    let received: unknown;
+    const run = new AsyncFunction("tools", "text", "image", source);
+    await run(
+      {
+        view_image: async (args: unknown) => {
+          received = args;
+          return {};
+        },
+      },
+      () => {},
+      () => {},
+    );
+    expect(received).toEqual({ path: "/tmp/right.png", detail: "original" });
+  });
+
+  test("view_image aliases use deterministic precedence when providers send more than one", async () => {
+    const source = compileCodeModeHelperInput(
+      JSON.stringify({
+        file_path: "/tmp/file-path.png",
+        file: "/tmp/file.png",
+        image_path: "/tmp/image-path.png",
+      }),
+      "view_image",
+    );
+    let received: unknown;
+    const run = new AsyncFunction("tools", "text", "image", source);
+    await run(
+      {
+        view_image: async (args: unknown) => {
+          received = args;
+          return {};
+        },
+      },
+      () => {},
+      () => {},
+    );
+
+    expect(received).toEqual({ path: "/tmp/file-path.png" });
+  });
+
+  test("view_image without image_url still returns the host result", async () => {
+    const source = compileCodeModeHelperInput(
+      JSON.stringify({ path: "/tmp/missing.png" }),
+      "view_image",
+    );
+    let surfaced = false;
+    let output: unknown;
+    const run = new AsyncFunction("tools", "text", "image", source);
+    await run(
+      {
+        view_image: async () => ({ error: "not found" }),
+      },
+      (value: unknown) => { output = value; },
+      () => { surfaced = true; },
+    );
+    expect(surfaced).toBe(false);
+    expect(output).toEqual({ error: "not found" });
+  });
+
+  test("invalid view_image input remains data instead of becoming JavaScript", async () => {
+    const input = "{not-json`); throw new Error('escaped') //";
+    let received: unknown;
+    const run = new AsyncFunction(
+      "tools",
+      "text",
+      "image",
+      compileCodeModeHelperInput(input, "view_image"),
+    );
+
+    await run(
+      {
+        view_image: async (args: unknown) => {
+          received = args;
+          return { error: "invalid input" };
+        },
+      },
+      () => {},
+      () => {},
+    );
+
+    expect(received).toBe(input);
+  });
 });

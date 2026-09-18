@@ -73,7 +73,8 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 有序的具体路由。`weight` 范围为 1–10000，默认值为 `1`。 |
 | `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 选择策略。目标顺序表示 `failover` 优先级；`weight` 决定 `round-robin` 和 `random` 的抽取权重；`least-used` 根据记录的成功次数选择；`reset-window` 跟随最近的额度重置。 |
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
-| `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
+| `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 当 combo 配置了非 null 默认值且目标支持列表已知且非空时，`defaultEffort` 会填充省略的 `reasoning.effort`。目标支持配置值时保留该值，否则选择不高于配置值的最高支持档位；若不存在更低档位，则使用最低支持档位。未知或空列表不会注入默认值。 |
+| `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` 对所有已知目标档位列表取交集，包括空列表；`"adaptive"` 排除空列表。未知列表在两种模式下都不限制目录交集。发送时，显式空列表在两种模式下都会移除 effort/thinking 控制；未知列表仅在 adaptive 下移除。`reasoning.summary` 保持不变。已知非空目标的 effort 解析、目标选择和顺序不变。 |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias?` | `string` | — | 可选的公开 model id，用于替代规范化的选择器 slug。 |
 | `nativeAlias?` | `boolean` | `false` | 仅让当前受支持的裸原生 id 对该不带限定前缀的 id 优先；带账号或提供方限定的 OpenAI 路由仍是独立路由。 |

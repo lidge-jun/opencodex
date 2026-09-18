@@ -1741,7 +1741,7 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
   });
 
   test("native-effort models reject efforts Kiro does not accept", async () => {
-    for (const modelId of ["gpt-5.6-sol", "claude-opus-5"]) {
+    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5"]) {
       await expect(createKiroAdapter(provider).buildRequest({
         ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
         options: { reasoning: "minimal" },

@@ -365,3 +365,44 @@ describe("catalog gather discovery-policy authority", () => {
     }
   });
 });
+
+
+test("overlapping gathers with different explicit capability declarations stay isolated", async () => {
+  clearModelCache("together");
+  clearGatherRoutedModelsInflight();
+  const arrived = [deferred(), deferred()];
+  const release = deferred();
+  let count = 0;
+  globalThis.fetch = (async () => {
+    const index = count++;
+    arrived[index]?.resolve();
+    await release.promise;
+    return Response.json({ data: [{ id: `cap-model-${index}` }] });
+  }) as typeof fetch;
+  const a = togetherConfig();
+  const b = togetherConfig();
+  a.providers.together!.modelCapabilities = { model: { contextTier: "default" } };
+  b.providers.together!.modelCapabilities = { model: { contextTier: "long_context" } };
+  const first = gatherRoutedModels(a);
+  let second: ReturnType<typeof gatherRoutedModels> | undefined;
+  try {
+    await arrived[0]!.promise;
+    second = gatherRoutedModels(b);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([arrived[1]!.promise, new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("second capability gather joined the first flight")), 10_000);
+      })]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+    expect(count).toBe(2);
+    release.resolve();
+    const [firstRows, secondRows] = await Promise.all([first, second]);
+    expect(firstRows.some(row => row.id === "cap-model-0")).toBe(true);
+    expect(secondRows.some(row => row.id === "cap-model-1")).toBe(true);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([first, ...(second ? [second] : [])]);
+  }
+}, 20_000);

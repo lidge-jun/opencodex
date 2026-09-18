@@ -18,6 +18,19 @@ opencodex state.
 
 `ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`.
 
+### `ocx remote-workspace`
+
+`ocx remote-workspace pair <hub-url> --pairing-code-stdin --root <absolute-path>` enrolls the local
+computer as an OCX-only Executor. Repeat `--root` to approve more folders and use `--name` to
+override the hostname. Repeat `--toolchain-root <absolute-directory>` to expose a user-installed
+Node, Rust, Go, or other toolchain directory read-only inside the command sandbox. On macOS and
+Windows private-dogfood builds, `bun run build:remote-workspace-helper` creates the Rust helper that
+the pair command discovers automatically; `--executor-helper <absolute-file>` selects another
+explicitly reviewed build and pins its digest in local Executor state.
+`ocx remote-workspace agent` maintains the outbound encrypted connection;
+`ocx remote-workspace status [--json]` reports the Hub, device, roots, and advertised capabilities
+without printing its bearer or private key. See [Remote Workspace](/guides/remote-workspace/).
+
 - [Lifecycle](/reference/cli/lifecycle/) — setup, proxy and service lifecycle, health, diagnostics,
   catalog sync, the dashboard, and updates.
 - [Providers, accounts, and models](/reference/cli/providers-accounts/) — provider configuration,
@@ -43,10 +56,12 @@ remain report-only (`managed: false`, normally `selection_unattested`) and `sele
 The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
-`candidate_unavailable`. On Windows this first slice performs no candidate or configuration filesystem I/O:
+`candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. On Windows this first slice performs no candidate or configuration filesystem I/O:
 only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
 every other Windows candidate fails closed. The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
+
+For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
 List or status is the default where unambiguous. Use `--json` for structured snapshots and
 `ocx observe logs --follow --jsonl` for a streaming request-log feed. Theme, language, navigation,

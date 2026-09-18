@@ -62,6 +62,25 @@ test("re-points combo targets so the migrated config still validates", () => {
   expect(comboConfigError("fast", config.combos!.fast!, providers)).toBeNull();
 });
 
+test("re-points routingProfiles candidates, a bare provider id like combo targets", () => {
+  // candidates[].provider is validated against configured providers
+  // (src/routing/profile.ts), so a stale id is the same load-failing dangling
+  // reference a combo target is — this site was the gap the devin-cli merge
+  // migration needed covered.
+  const config = {
+    routingProfiles: {
+      policy: {
+        candidates: [
+          { provider: FROM, model: "qwen3.7-max" },
+          { provider: "anthropic", model: "claude-sonnet-5" },
+        ],
+      },
+    },
+  } as unknown as OcxConfig;
+  expect(rewriteProviderReferences(config, FROM, TO).changed).toBe(1);
+  expect(config.routingProfiles!.policy!.candidates.map(c => c.provider)).toEqual([TO, "anthropic"]);
+});
+
 test("re-points customModels[].provider", () => {
   const config = {
     customModels: [

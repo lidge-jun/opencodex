@@ -56,7 +56,8 @@ Codex Auth 頁面將此 picker 行為作為選擇加入功能暴露。停用它�
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | 必填 | 有序的具體路由。`weight` 為 1–10000，預設 `1`。 |
 | `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 選擇策略。目標順序為 `failover` 優先序；`weight` 塑造 `round-robin` 與 `random` 抽選；`least-used` 依循已記錄的成功次數；`reset-window` 依循最早的配額重設。 |
 | `stickyLimit?` | `number` | `1` | 在一個 round-robin 批次中保留的成功請求數。範圍 1–100。 |
-| `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | 未設定 | 僅在呼叫者省略 effort 且所選目標廣告請求的階層時套用。 |
+| `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | 未設定 | 當 combo 設定非 null 預設值且目標支援清單已知且非空時，`defaultEffort` 會補入省略的 `reasoning.effort`。目標支援設定值時保留該值，否則選擇不高於設定值的最高支援層級；若沒有更低層級，則使用最低支援層級。未知或空清單不會注入預設值。 |
+| `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` 對所有已知目標層級清單取交集，包括空清單；`"adaptive"` 排除空清單。未知清單在兩種模式下都不限制目錄交集。傳送時，明確空清單在兩種模式下都會移除 effort/thinking 控制；未知清單只在 adaptive 移除。`reasoning.summary` 保持不變。已知非空目標的 effort 解析、目標選擇及順序不變。 |
 | `alias?` | `string` | — | 可選的公開模型 id，取代標準 picker slug。 |
 | `nativeAlias?` | `boolean` | `false` | 讓目前支援的裸原生 id 僅對該未限定 id 取得優先。裸 `gpt-5.6-*` id 使用 Codex 池／Direct 憑證。帳號限定路由保持獨立。供應商限定路由（如 `openai-apikey/gpt-5.6-*`）使用其設定的 API-key 路由，且永不會落到原生別名。 |
 | `displayName?` | `string` | — | 僅顯示的目錄標籤，對原生別名為必填且非空。 |

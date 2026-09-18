@@ -197,6 +197,81 @@ describe("claude outbound SSE", () => {
     expect(unspacedBudget.snapshot().currentBytes).toBe(spacedBudget.snapshot().currentBytes);
   });
 
+  test("done-only function arguments reach Claude tool input", async () => {
+    const upstream = [
+      sse("response.created", { response: { id: "resp_done", status: "in_progress" } }),
+      sse("response.output_item.added", { output_index: 0, item: { type: "function_call", id: "fc_done", call_id: "toolu_done", name: "Bash", arguments: "", status: "in_progress" } }),
+      sse("response.function_call_arguments.done", { item_id: "fc_done", output_index: 0, arguments: "{\"command\":\"printf RHODIZ_TOOL_OK\"}" }),
+      sse("response.output_item.done", { output_index: 0, item: { type: "function_call", id: "fc_done", call_id: "toolu_done", name: "Bash", arguments: "{\"command\":\"printf RHODIZ_TOOL_OK\"}" } }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 10, output_tokens: 5 } } }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ocx-test"));
+    const argDeltas = events.filter(e => e.name === "content_block_delta" && e.data.delta?.type === "input_json_delta");
+    expect(argDeltas).toHaveLength(1);
+    expect(argDeltas[0].data.delta.partial_json).toBe("{\"command\":\"printf RHODIZ_TOOL_OK\"}");
+    expect(events.find(e => e.name === "content_block_start")?.data.content_block).toMatchObject({ type: "tool_use", name: "Bash", input: {} });
+  });
+
+  test("message_start uses confirmed pre-content usage without changing cumulative terminal usage", async () => {
+    const earlyUsage = {
+      input_tokens: 120,
+      output_tokens: 0,
+      input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
+    };
+    const terminalUsage = { ...earlyUsage, output_tokens: 30 };
+    const upstream = [
+      sse("response.created", { response: { id: "resp_early_usage", status: "in_progress", usage: null } }),
+      sse("response.in_progress", { response: { id: "resp_early_usage", status: "in_progress", usage: earlyUsage } }),
+      sse("response.output_text.delta", { delta: "ready" }),
+      sse("response.completed", { response: { status: "completed", usage: terminalUsage } }),
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ocx-test"));
+    expect(events.find(event => event.name === "message_start")!.data.message.usage).toEqual({
+      input_tokens: 15,
+      output_tokens: 0,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 5,
+    });
+    expect(events.find(event => event.name === "message_delta")!.data.usage).toEqual({
+      input_tokens: 15,
+      output_tokens: 30,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 5,
+    });
+  });
+
+  test("message_start documents unknown pre-content usage as zero while terminal usage stays authoritative", async () => {
+    const upstream = [
+      sse("response.created", { response: { id: "resp_terminal_usage", status: "in_progress", usage: null } }),
+      sse("response.output_text.delta", { delta: "ready" }),
+      sse("response.completed", {
+        response: {
+          status: "completed",
+          usage: {
+            input_tokens: 120,
+            output_tokens: 30,
+            input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
+          },
+        },
+      }),
+    ].join("");
+
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ocx-test"));
+    // Zero is the documented honest placeholder when no input measurement has arrived. Do not
+    // replace it with an estimate or delay the first content frame to await terminal usage.
+    expect(events.find(event => event.name === "message_start")!.data.message.usage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+    });
+    expect(events.find(event => event.name === "message_delta")!.data.usage).toEqual({
+      input_tokens: 15,
+      output_tokens: 30,
+      cache_read_input_tokens: 100,
+      cache_creation_input_tokens: 5,
+    });
+  });
+
   test("text + thinking + tool call + completed w/ usage -> exact Anthropic sequence", async () => {
     const upstream = [
       sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
@@ -253,6 +328,21 @@ describe("claude outbound SSE", () => {
     // monotonic block indexes
     const startIndexes = events.filter(e => e.name === "content_block_start").map(e => e.data.index);
     expect(startIndexes).toEqual([0, 1, 2]);
+  });
+
+  test("done-only function-call arguments reach Claude tool input", async () => {
+    const args = JSON.stringify({ command: "printf RHODIZ_TOOL_OK" });
+    const upstream = [
+      sse("response.created", { response: { id: "resp_done_args", status: "in_progress" } }),
+      sse("response.output_item.added", { output_index: 0, item: { type: "function_call", id: "fc_done", call_id: "toolu_done", name: "Bash", arguments: "", status: "in_progress" } }),
+      sse("response.function_call_arguments.done", { item_id: "fc_done", output_index: 0, arguments: args }),
+      sse("response.output_item.done", { output_index: 0, item: { type: "function_call", id: "fc_done", call_id: "toolu_done", name: "Bash", arguments: args, status: "completed" } }),
+      sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "claude-ocx-test"));
+    const deltas = events.filter(e => e.name === "content_block_delta" && e.data.delta?.type === "input_json_delta");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0].data.delta.partial_json).toBe(args);
   });
 
   test("multi-part reasoning summaries keep the JSON path's part separator", async () => {

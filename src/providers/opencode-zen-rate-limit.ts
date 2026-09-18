@@ -175,3 +175,61 @@ export function enrichOpenCodeZenUpstreamMessage(
 ): string {
   return enrichOpenCodeZenFreeTierMessage(enrichOpenCodeZenRateLimitMessage(message, opts), opts);
 }
+
+/** The effective HTTP endpoint, never the configured row name, identifies Console. */
+export function isConsoleGoDestination(outboundUrl: string | undefined): boolean {
+  if (!outboundUrl) return false;
+  try {
+    const url = new URL(outboundUrl);
+    return url.protocol === "https:" && url.hostname === "opencode.ai"
+      && url.port === "" && url.username === "" && url.password === ""
+      && url.search === "" && url.hash === ""
+      && /^\/zen\/(?:go\/)?v1\/(?:responses|chat\/completions|messages)$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The canonical refusal envelope, as served on both Console routes:
+ *   {"error":{"param":null,"type":"invalid_request_error","message":"Error from provider
+ *   (Console Go): Upstream request failed: [invalid_request_error] Invalid upload request."}}
+ *
+ * The gateway names itself Console on the Zen key route and Console Go on the Go route, so the
+ * anchor is the shared product name plus the refusal sentence. The message is matched whole: a
+ * bare string, a suffix, or any other envelope is a different refusal and must not be replayed.
+ * Being stricter than necessary is the safe direction: a missed match leaves the turn failing
+ * exactly as it does today, while a loose match spends an extra request on unrelated 400s.
+ */
+const CONSOLE_UPLOAD_REFUSALS = new Set([
+  "Error from provider (Console Go): Upstream request failed: [invalid_request_error] Invalid upload request.",
+  "Error from provider (Console): Upstream request failed: [invalid_request_error] Invalid upload request.",
+]);
+
+/**
+ * True only for the canonical Console upload refusal on a canonical Console destination.
+ * Route-gated on purpose: the message alone would let any other upstream that happens to answer
+ * with this English sentence trigger a second send from an unrelated provider.
+ */
+export function isTransientConsoleGoUploadRejection(opts: {
+  status: number;
+  errorBody: string | undefined;
+  outboundUrl?: string;
+}): boolean {
+  if (opts.status !== 400 || !opts.errorBody) return false;
+  if (!isConsoleGoDestination(opts.outboundUrl)) return false;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(opts.errorBody);
+  } catch {
+    return false;
+  }
+  const error = (payload as { error?: unknown } | null)?.error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  // The whole envelope, not just the sentence: Console always answers this refusal as
+  // invalid_request_error with a null param, so a partial envelope is a different error.
+  const envelope = error as { param?: unknown; type?: unknown; message?: unknown };
+  if (envelope.type !== "invalid_request_error" || envelope.param !== null) return false;
+  // Matched without trimming: padding means the gateway wrapped or appended something.
+  return typeof envelope.message === "string" && CONSOLE_UPLOAD_REFUSALS.has(envelope.message);
+}

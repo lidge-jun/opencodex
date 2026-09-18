@@ -1,7 +1,24 @@
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
+import {
+  markResponseNonReplayable,
+  UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
+  UPSTREAM_NO_RESPONSE_CODE,
+} from "../../lib/upstream-retry";
+import { readFileSync } from "node:fs";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
+// Liveness while the exchange waits for its first response event. The proxy cannot know
+// how long the origin legitimately needs before `response.created` (a multi-image replay
+// spends that time in prefill; #4083 measured 30 s), and it is not the party that owns
+// the slowness policy — the client holds its own deadline and the operator holds
+// `connectTimeoutMs`. What the proxy can decide is whether the peer is still there, and
+// WebSocket has a native answer: ping. While waiting, the exchange pings every
+// CODEX_WS_LIVENESS_PING_INTERVAL_MS on sockets that expose `ping()`; any inbound frame
+// or pong resets the silence clock, and only CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS of
+// nothing at all settles the exchange as an origin-silence 504. A peer that never pongs
+// keeps exactly the previous 90 s bound; a peer that does can never trip it while alive.
+export const CODEX_WS_LIVENESS_PING_INTERVAL_MS = 15_000;
 export const CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS = 90_000;
 // Keep the push-based WS transport inside the same memory envelope as the
 // bounded SSE relays that consume this response. Unlike fetch response bodies,
@@ -48,7 +65,166 @@ export function markCodexWsResponse(response: Response, observed: boolean): void
   if (observed) quotaObservedResponses.add(response);
 }
 
+/**
+ * The proxy's own version, stamped onto every stage record so a field report
+ * can be tied to the exact build that produced it (#4191). Computed locally
+ * with the same package.json IIFE management-api.ts / gui-static.ts use —
+ * importing management-api from the transport layer would invert the
+ * layering and pull the management surface into every WS exchange.
+ */
+const OCX_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version as string;
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+/**
+ * The durable form of the stage counters, carried out of the exchange on the
+ * resolved Response so the logging layer can persist it without the exchange
+ * ever seeing a RequestLogContext (#4191).
+ *
+ * Everything here is a size, a count, a duration, a boolean, or a semver
+ * string: no request body, no header, no account identifier, no conversation
+ * text, and no close-reason text can reach a record built by the exchange.
+ * `requestBytes` is null on a committed success because the happy path never
+ * pays the UTF-8 walk of a megabyte replay frame; it is measured on failure,
+ * where its size is the evidence.
+ */
+export type CodexWsStageRecord = Omit<CodexWsFailureStage, "requestBytes"> & {
+  /** UTF-8 size of the create frame; null on the committed-success record. */
+  requestBytes: number | null;
+  /** Numeric upstream close code when the socket closed; null otherwise. */
+  closeCode: number | null;
+  /** True when the exchange ran on a pooled, previously used session. */
+  reused: boolean;
+  /** OpenCodex version that produced this record. */
+  ocxVersion: string;
+  /** Bun runtime version the exchange gated on. */
+  bunVersion: string;
+};
+
+const codexWsStageByResponse = new WeakMap<Response, CodexWsStageRecord>();
+
+export function markCodexWsStage(response: Response, record: CodexWsStageRecord): void {
+  const current = codexWsStageByResponse.get(response);
+  if (current) {
+    Object.assign(current, record);
+    return;
+  }
+  codexWsStageByResponse.set(response, record);
+}
+
+export function readCodexWsStage(response: Response): CodexWsStageRecord | undefined {
+  return codexWsStageByResponse.get(response);
+}
+
+export function codexWsOcxVersion(): string {
+  return OCX_VERSION;
+}
+
+/**
+ * The honest settlement for an exchange that sent its create frame and never saw a
+ * response event.
+ *
+ * Before this existed the relay committed a 200 SSE Response and errored its body, on the
+ * reasoning that a 5xx could make the pre-stream retry wrapper resend the frame. That
+ * reasoning was right about the resend and wrong about the status: it turned "no response"
+ * into "a response that failed", removed the code a user agent uses for its own retry
+ * policy, and neutered the client's first-byte timeout with chunked headers. The client
+ * on the direct path receives a gateway status in this situation and retries under its own
+ * policy; this response restores that equivalence. The resend is forbidden by the
+ * non-replayable marker instead (see upstream-retry.ts), and the structured code lets the
+ * combo failover reach the same verdict after it re-parses the body.
+ *
+ * 504 is the origin's silence (nothing at all, or nothing but liveness, for the tolerated
+ * window); 502 is a transport that closed or misbehaved after the send. Both carry the
+ * content-free stage detail in the message and the metadata snapshot in the headers, the
+ * same way a refused create does, so quota captured during the prelude is not lost.
+ */
+export function codexWsPreResponseFailure(status: 502 | 504, message: string, prelude: Headers): Response {
+  const headers = new Headers(prelude);
+  headers.set("content-type", "application/json");
+  headers.set("cache-control", "no-store");
+  const code = status === 504 ? UPSTREAM_NO_RESPONSE_CODE : UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE;
+  const response = new Response(JSON.stringify({ error: { type: "upstream_error", code, message } }), { status, headers });
+  markResponseNonReplayable(response);
+  return response;
+}
+
 const CLOSED_BEFORE_TERMINAL = "codex websocket closed before a Responses terminal event";
+
+/**
+ * Content-free stage record for an exchange that ended without a Responses
+ * terminal event (#4191).
+ *
+ * The field report that drove this could not be told apart from a network
+ * outage, because every such failure reached the user as one of two bare
+ * sentences. Both are true of a socket that was never answered, a socket that
+ * carried only quota control frames, and a socket that died mid-response —
+ * three different upstream stories with three different owners. These counters
+ * are the smallest set that separates them, and every one of them is a size, a
+ * count, or a duration: no request body, no header, no account identifier, and
+ * no conversation text can reach a message built from this record.
+ */
+export type CodexWsFailureStage = {
+  /** UTF-8 size of the `response.create` frame this exchange dialled with. */
+  requestBytes: number;
+  /** True once `ws.send()` returned, so the turn may be executing upstream. */
+  sent: boolean;
+  /** Frames the socket delivered, of any kind, including ones that did not parse. */
+  upstreamFrames: number;
+  /** Frames the metadata channel claimed (quota, response metadata). */
+  controlFrames: number;
+  /** Responses events actually written to the downstream SSE body. */
+  relayedEvents: number;
+  /** Milliseconds from send to the first upstream frame; null when none arrived. */
+  firstFrameMs: number | null;
+  /** Milliseconds from send to this failure; null when the failure predates the send. */
+  elapsedMs: number | null;
+  /** Liveness pings the exchange sent while waiting for the first response event. */
+  pings: number;
+  /** Pongs the peer answered with; zero on a peer that never answers pings. */
+  pongs: number;
+};
+
+/**
+ * Which upstream story the counters tell. Ordered by how much the upstream had
+ * committed to, because that is what decides who owns the failure — and, for a
+ * future maintainer reading #4191, it is deliberately NOT a fallback-eligibility
+ * signal. `no-upstream-frame` does not mean the frame was not accepted; the
+ * no-replay-after-send contract in `codex-ws-exchange.ts` stands regardless of
+ * what this classifier says.
+ */
+export type CodexWsFailureCause =
+  | "before-send"
+  | "no-upstream-frame"
+  | "no-response-event"
+  | "after-response-started";
+
+export function classifyCodexWsFailure(stage: CodexWsFailureStage): CodexWsFailureCause {
+  if (!stage.sent) return "before-send";
+  if (stage.relayedEvents > 0) return "after-response-started";
+  if (stage.upstreamFrames === 0) return "no-upstream-frame";
+  return "no-response-event";
+}
+
+/**
+ * Render the stage as a suffix appended to an existing failure message.
+ *
+ * It is a suffix, not an interpolation, on purpose: the close-code tail these
+ * messages already carry is matched as a contiguous substring by the callers
+ * and tests that read it, so nothing may be inserted ahead of it.
+ */
+export function codexWsFailureDetail(stage: CodexWsFailureStage): string {
+  const duration = (value: number | null): string => (value === null ? "n/a" : `${value}ms`);
+  return ` [cause=${classifyCodexWsFailure(stage)} request=${stage.requestBytes}B`
+    + ` sent=${stage.sent ? "yes" : "no"} frames=${stage.upstreamFrames}`
+    + ` control=${stage.controlFrames} relayed=${stage.relayedEvents}`
+    + ` first-frame=${duration(stage.firstFrameMs)} elapsed=${duration(stage.elapsedMs)}`
+    + ` pings=${stage.pings} pongs=${stage.pongs}]`;
+}
 
 export type ResponsesWsRelayEvent = {
   type: string;
@@ -111,18 +287,23 @@ export function normalizeResponsesWsRelayEvent(text: string): ResponsesWsRelayEv
  * inspector, so `/api/logs` keeps neither this message nor a specific code —
  * only `streamAborted`. Machine-readable typing would mean changing the error
  * taxonomy, which is deliberately out of scope for this transport fix.
+ *
+ * When a stage is supplied its detail is appended last, after the close-code
+ * tail, so the code and reason stay one contiguous substring.
  */
-export function closedBeforeTerminalMessage(event: unknown): string {
+export function closedBeforeTerminalMessage(event: unknown, stage?: CodexWsFailureStage): string {
   const detail = event as { code?: unknown; reason?: unknown } | null | undefined;
   const code = typeof detail?.code === "number" ? detail.code : null;
   const reason = typeof detail?.reason === "string" ? detail.reason.trim() : "";
-  if (code === null) return CLOSED_BEFORE_TERMINAL;
+  const stageDetail = stage ? codexWsFailureDetail(stage) : "";
+  if (code === null) return `${CLOSED_BEFORE_TERMINAL}${stageDetail}`;
   const suffix = reason ? ` ${code} ${reason}` : ` ${code}`;
   if (code === WS_CLOSE_MESSAGE_TOO_BIG) {
     return `codex websocket rejected the request frame as too large (close${suffix});`
-      + ` requests at or above ${MAX_CODEX_WS_CREATE_FRAME_BYTES} bytes must use the HTTP SSE transport`;
+      + ` requests at or above ${MAX_CODEX_WS_CREATE_FRAME_BYTES} bytes must use the HTTP SSE transport`
+      + stageDetail;
   }
-  return `${CLOSED_BEFORE_TERMINAL} (close${suffix})`;
+  return `${CLOSED_BEFORE_TERMINAL} (close${suffix})${stageDetail}`;
 }
 
 /**

@@ -13,9 +13,22 @@ try {
     /* best-effort */
   }
 }
-import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
+import {
+  currentExternalCodexModelProvider,
+  restoreNativeCodex,
+  restoreNativeCodexAsync,
+  shouldInjectApiAuthHeader,
+} from "../codex/inject";
+// Straight from the owning modules rather than the facade: these are teardown-reporting
+// helpers, not part of the injection surface, and `inject.ts` sits under a size cap that
+// exists to stop it collecting exactly this kind of passthrough.
+import { readOcxProviderTableBlock } from "../codex/inject/remove";
+import {
+  describeRetainedCodexProviderTable,
+  type RetainedCodexProviderTable,
+} from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
+import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
 import {
   describeHistoryJobFailure,
   resolveCodexHistoryJobTarget,
@@ -30,6 +43,7 @@ import {
   saveConfig,
 } from "../config";
 import {
+  isLikelyOcxProcess,
   readPid,
   readPidFileValue,
   readRuntimePort,
@@ -46,11 +60,13 @@ import {
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
+  pendingTeardownsAreExactly,
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
-import { collectStatus, unusedProxyWarningLines } from "./status";
+import { collectStatus, hubStatusLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
+import { parseStartOptions, StartArgsError } from "./start-args";
 
 import {
   discoverStableProxyForRestart,
@@ -62,14 +78,16 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
-import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
+import { redactUrlForLog } from "../lib/redact";
+import { dispatchCommand, decideStartWithLiveOwner } from "./dispatch";
+import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
+import { isApiAuthRequired } from "../server/auth-cors";
 import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
-import { isProcessAlive, ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
-import { loadServiceTokenFromFile } from "../lib/service-secrets";
+import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
+import { startupDataPlaneToken } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -81,8 +99,11 @@ import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import {
+  HUB_GATED_SKIP_MESSAGE,
+  localClientSkipReason,
   shouldSyncGrokOnStart,
   syncCodexOnStartIfEnabled,
+  type LocalClientSkipReason,
 } from "../codex/desired-state";
 import {
   reconcileClientStartupBeforeReady,
@@ -112,6 +133,12 @@ function reportShellHookFailure(result: { state: "installed" | "absent" | "faile
   if (result.state !== "failed") return;
   console.warn(`   Claude shell hook not reconciled${result.reason ? `: ${result.reason}` : ""}`);
   console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
+}
+
+function reportRetainedCodexProviderTable(retained: RetainedCodexProviderTable): void {
+  console.log(`   ${describeRetainedCodexProviderTable(retained)}`);
+  console.log("   Retained config lines:");
+  for (const line of retained.lines) console.log(`      ${line}`);
 }
 
 async function refreshOwnedRaycastCatalog(
@@ -145,21 +172,13 @@ const head = await runCli(process.argv.slice(2));
 const args = head.args;
 const command = head.command;
 
-function parsePortOption(): number | undefined {
-  if (args.length === 1) return undefined;
-  if (args.length !== 3 || args[1] !== "--port") {
-    console.error("Usage: ocx start [--port <port>]");
+function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
+  try {
+    return parseStartOptions(args.slice(1));
+  } catch (error) {
+    console.error(error instanceof StartArgsError ? error.message : String(error));
     process.exit(1);
   }
-  const portIdx = args.indexOf("--port");
-  if (portIdx === -1) return undefined;
-  const value = args[portIdx + 1];
-  const port = value && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    console.error("Invalid port number");
-    process.exit(1);
-  }
-  return port;
 }
 
 async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
@@ -172,6 +191,19 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   return null;
+}
+
+/**
+ * The one startup line for "nothing was written to Codex".
+ *
+ * Two very different facts reached it: the user's own OFF switch, and a hub declining to
+ * rewrite its own local clients. Printing the toggle's wording for the gate is what made
+ * operators hunt for a switch they never set (#4236).
+ */
+function startupLeftCodexNativeLine(reason: LocalClientSkipReason): string {
+  return reason === "hub-gated"
+    ? `   ${HUB_GATED_SKIP_MESSAGE} Startup left Codex native.`
+    : "   Codex integration OFF; startup left Codex native.";
 }
 
 /** Argv for detached `start`, optionally hard-pinning the listen port. */
@@ -190,6 +222,10 @@ async function chooseListenPort(
   const config = loadConfig();
   const preferred = requestedPort ?? config.port ?? 10100;
   const hardPin = requestedPort !== undefined && requestedPort > 0;
+  // Only an EXPLICITLY ported listener reserves a port. The companion form (`{enabled:true}`
+  // with no port) deliberately shares the public port on 127.0.0.1, so treating it as a
+  // reservation — via `effectiveLoopbackListenerPort` — would refuse every start on a
+  // one-port hub and hop the public listener onto an ephemeral port (#4236).
   const reservedLoopbackPort = config.unauthenticatedLoopbackListener?.enabled
     ? config.unauthenticatedLoopbackListener.port
     : undefined;
@@ -271,17 +307,42 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
-  // Native (WinSW) service mode has no batch wrapper to read the service token file
-  // into the environment, so the app loads it here before the server binds. The server
+  // Native (WinSW) service mode has no batch wrapper to read the service token file into
+  // the environment, and a FOREGROUND `ocx start` has no wrapper at all — so the app loads
+  // the token here, before the server binds, with the same precedence the launchd plist and
+  // the systemd unit use when they cat the file into the environment. Without the second
+  // source, `ocx start` refused to bind a non-loopback hostname (assertServerAuthConfig)
+  // that the installed service on the same machine was serving happily (#4236). The server
   // auth path reads OPENCODEX_API_AUTH_TOKEN from the environment.
-  const serviceToken = loadServiceTokenFromFile(process.env);
+  const serviceToken = startupDataPlaneToken(process.env, {
+    authRequired: isApiAuthRequired(loadConfig()),
+  });
   if (serviceToken) process.env.OPENCODEX_API_AUTH_TOKEN = serviceToken;
   // The service wrapper (and WinSW via OCX_API_TOKEN_FILE) can still export a colliding
   // token that install now refuses to write. Refuse it here too, before bind, so an
   // already-broken file cannot fence /api/* closed at boot (#2696).
   const present = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (present) assertNotAdminToken(present);
-  const requestedPort = parsePortOption();
+  const startOpts = parseStartCliOptions();
+  if (startOpts.socks5 !== undefined || startOpts.socks5Off) {
+    const proxyConfig = loadConfig();
+    if (startOpts.socks5Off) {
+      if (proxyConfig.proxy && !/^socks5h?:\/\//i.test(proxyConfig.proxy.trim())) {
+        console.error("Cannot use --socks5-off: config.proxy is not a SOCKS5 URL; it was left unchanged.");
+        process.exit(1);
+      }
+      if (proxyConfig.proxy) {
+        delete proxyConfig.proxy;
+        saveConfig(proxyConfig);
+        console.log("Cleared config.proxy (outbound SOCKS5 proxy off).");
+      }
+    } else {
+      proxyConfig.proxy = startOpts.socks5!;
+      saveConfig(proxyConfig);
+      console.log(`Outbound SOCKS5: ${redactUrlForLog(startOpts.socks5!)} (saved to config.proxy)`);
+    }
+  }
+  const requestedPort = startOpts.port;
   // Always probe the configured port, even when both state files are absent. A
   // fallback-port sibling overwrites the pid/runtime records when it starts and
   // removes them on its own shutdown, so their absence proves nothing about the
@@ -364,7 +425,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       scheduleCatalogPrewarm();
       break;
     } catch (err) {
-      if (!isAddrInUse(err) || attempt >= 2) throw err;
+      if (err instanceof AuxiliaryListenerBindError || !isAddrInUse(err) || attempt >= 2) throw err;
       if (requestedPort !== undefined) {
         console.log(`⚠️  Port ${port} was taken while starting; waiting to retry the same port...`);
         const hostname = loadConfig().hostname ?? "127.0.0.1";
@@ -513,7 +574,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       }
     },
   );
-  if (!startupSync.ran) console.log("   Codex integration OFF; startup left Codex native.");
+  if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config)));
   await refreshOwnedRaycastCatalog(config, port);
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
@@ -579,7 +640,9 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
         console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
         return null;
       });
-      if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+      if (synced?.status === "skipped") {
+        console.log(startupLeftCodexNativeLine(synced.skippedReason ?? "desired_disabled"));
+      }
       // Do not refresh Raycast from saved config here: live bind/admission and
       // secondary-listener settings may differ. Explicit sync or server startup
       // owns catalog refresh; ensure must not overwrite a working destination.
@@ -626,7 +689,9 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     console.error(`⚠️  Model sync skipped: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   });
-  if (synced?.status === "skipped") console.log("   Codex integration OFF; startup left Codex native.");
+  if (synced?.status === "skipped") {
+    console.log(startupLeftCodexNativeLine(synced.skippedReason ?? "desired_disabled"));
+  }
   // The child performs Raycast refresh with its actual startup config. The
   // parent's pre-spawn snapshot is not authoritative for a client-file write.
   // The child opens /healthz before its best-effort roster reconcile. Await the same idempotent
@@ -701,6 +766,9 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
     if (code === "restart_capability_unsupported") {
       console.error("❌ The running proxy predates process-bound restart support; no unsafe fallback was attempted.");
       console.error("   After confirming this home owns the proxy, run `ocx stop` and then `ocx start` once.");
+    } else if (code === "restart_version_skew") {
+      console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
+      console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
     } else {
       console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
     }
@@ -751,20 +819,44 @@ async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
  *
  * The distinction exists because `ocx update` must proceed for the first and abort for the
  * second, and it can only see an exit code (#3008).
+ *
+ * `historyDeferred` is the third kind (#4718). The Codex history preflight refuses BEFORE
+ * the config half runs, so nothing was restored at all: config, catalog, history and
+ * provenance are untouched and the client is still routed at the proxy that just stopped.
+ * Like `historyOnly` the proxy is genuinely down, so an update may replace package files.
+ * Unlike `historyOnly` the obligation was not performed, so the receipt must survive.
  */
-async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boolean; other: boolean }> {
+async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boolean; historyDeferred: boolean; other: boolean }> {
   let historyOnly = false;
+  let historyDeferred = false;
   let other = false;
   try {
     const result = await restoreNativeCodexAsync();
-    if (result.success) console.log(`↩️  ${result.message}`);
+    if (result.success) {
+      console.log(`↩️  ${result.message}`);
+      if (result.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(result.retainedCodexProviderTable);
+      }
+    }
     else {
       // Codex history is the one restore whose failure leaves the runtime consistent: the
       // manifest is retained and the routed metadata is untouched. Config and catalog are
       // not — a client reads those, so their failure is a real teardown failure.
       const artifacts = result.artifacts;
       const configOrCatalogFailed = artifacts.config.state === "failed" || artifacts.catalog.state === "failed";
-      if (!configOrCatalogFailed && artifacts.history.state === "failed") historyOnly = true;
+      // A preflight refusal reports every artifact as `skipped` because none of them were
+      // attempted. Reading the states alone cannot tell that apart from an ownership
+      // refusal, so the structured reason carries it and the states are still required to
+      // agree — a refusal that somehow reports a failed artifact is not this case.
+      // A degraded restore has no refusal reason and reports config as partial, so it cannot
+      // enter this branch: its config obligation was discharged and the stop receipt must be
+      // released rather than preserved.
+      const preflightRefused = result.historyPreflightRefusal !== undefined
+        && artifacts.config.state === "skipped"
+        && artifacts.catalog.state === "skipped"
+        && artifacts.history.state === "skipped";
+      if (preflightRefused) historyDeferred = true;
+      else if (!configOrCatalogFailed && artifacts.history.state === "failed") historyOnly = true;
       else other = true;
       console.error(`⚠️  ${result.message}`);
     }
@@ -782,7 +874,7 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
     other = true;
     console.error(`⚠️  Grok config restore failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { historyOnly, other };
+  return { historyOnly, historyDeferred, other };
 }
 
 async function handleStop() {
@@ -826,6 +918,11 @@ async function handleStop() {
   };
   let stopFailed = false;
   let historyOnlyFailure = false;
+  /**
+   * Obligations this run deliberately kept because the Codex history preflight refused
+   * before restoring anything (#4718). Non-null selects the deferred exit code.
+   */
+  let historyDeferredNonces: string[] | null = null;
   // Only Task Scheduler respawns after a successful stop (#764), so only it earns the
   // restart-window wait; launchd, systemd and WinSW are down when they say so.
   let schedulerCanRespawn = false;
@@ -844,8 +941,24 @@ async function handleStop() {
   // `inheritedTeardowns` is the inverse case: PREVIOUS stops that left obligations
   // unfinished. Snapshot them BEFORE this run claims anything, so this run's own receipt
   // is never mistaken for one it inherited.
+  //
+  // Ownership is decided by IDENTITY, not by bare liveness. A receipt records a number, and
+  // the OS reuses numbers: once the owner exits, an unrelated process can be handed its PID,
+  // and `isProcessAlive` alone then answers "that stop is still running" for as long as the
+  // new process lives. The receipt is filtered out, so no run ever recovers it, quarantines
+  // it or even mentions it — while both updater gates keep seeing an outstanding obligation
+  // and refuse. That is the permanent fail-closed reported in #4897: no proxy running, a
+  // dead owner, and `ocx update` aborting on `teardown-outstanding` every time.
+  //
+  // Requiring the live PID to be an opencodex process is the narrowing that costs the safety
+  // intent nothing: a stop that really is in flight is still left strictly alone, because its
+  // process is one of ours. Recognizing the receipt as abandoned only admits it to the
+  // recovery loop below, which still has to prove the recorded endpoint is down before
+  // anything is restored.
+  const teardownOwnerStillRunning = (ownerPid: number): boolean =>
+    isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
   const inheritedTeardowns = listPendingTeardowns()
-    .filter(read => isPendingTeardownAbandoned(read, isProcessAlive));
+    .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce) return;
@@ -952,7 +1065,12 @@ async function handleStop() {
       if (detail) console.error(`   ${detail}`);
       if (err instanceof ProxyOwnershipRefusedError) {
         ownershipBlocked = true;
-        console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+        // Every refusal `POST /api/stop` produces is written for an API client, so it
+        // recommends `ocx stop` — the command printing it. Following that advice returns
+        // the operator to this exact message, which is the loop #4169 was filed for. The
+        // service manager was already asked to stop above, so name what is actually left.
+        console.error(`   ${refusalNextStep(err.code)}`);
+        console.error("   Skipping shared teardown (native Codex restore, Grok config): the refusing proxy is still running.");
       }
     }
   } else {
@@ -979,7 +1097,9 @@ async function handleStop() {
         if (detail) console.error(`   ${detail}`);
         if (err instanceof ProxyOwnershipRefusedError) {
           ownershipBlocked = true;
-          console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+          // Same loop as the tracked-pid path above: the refusal recommends this command.
+          console.error(`   ${refusalNextStep(err.code)}`);
+          console.error("   Skipping shared teardown (native Codex restore, Grok config): the refusing proxy is still running.");
         }
       }
     } else if (live) {
@@ -1097,6 +1217,7 @@ async function handleStop() {
     }
     const restore = await restoreSharedClientStateAfterStop();
     if (restore.other) stopFailed = true;
+    else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
     else if (restore.historyOnly) historyOnlyFailure = true;
     // The obligation is discharged whether or not history metadata finalized: config and
     // catalog are what a client reads, and `restore.other` already fails the stop.
@@ -1104,7 +1225,16 @@ async function handleStop() {
     // Each nonce names its own file, so a clear can only ever remove the obligation it
     // names — never one a concurrent stop wrote. Both this run's claim and every inherited
     // receipt it proved discharged are released together.
-    if (!restore.other) {
+    //
+    // A history-preflight refusal is the exception: it restored nothing, so there is
+    // nothing to discharge. Clearing here would drop a real obligation on the floor and
+    // leave the client config pointing at a proxy that is gone, with nothing on disk
+    // saying so — which is the whole failure the receipt exists to prevent (#4718).
+    if (restore.historyDeferred) {
+      console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
+      console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
+    }
+    if (!restore.other && !restore.historyDeferred) {
       const discharged = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
       for (const nonce of discharged) {
         // A receipt that survives its discharge re-triggers recovery forever, so a failed
@@ -1144,6 +1274,17 @@ async function handleStop() {
   // still wins: it is the stronger signal.
   if (stopFailed) process.exitCode = 1;
   else if (historyOnlyFailure) process.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;
+  // The deferred code says "the only obligations left are the ones I just decided to
+  // keep". It is read across a process boundary by an updater that will replace package
+  // files on the strength of it, so this run has to be able to prove the claim: if any
+  // other obligation is sitting in the home — quarantined, or a concurrent stop's — the
+  // claim is false and the ordinary failure code is the honest answer. That is also the
+  // behaviour before #4718, so the fallback loses nothing that used to work.
+  else if (historyDeferredNonces) {
+    process.exitCode = pendingTeardownsAreExactly(historyDeferredNonces)
+      ? STOP_HISTORY_DEFERRED_EXIT_CODE
+      : 1;
+  }
   return !stopFailed;
 }
 
@@ -1273,6 +1414,9 @@ async function handleUninstall() {
     await runStep("native Codex restored", async () => {
       const r = await restoreNativeCodexAsync();
       if (!r.success) throw new Error(r.message);
+      if (r.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(r.retainedCodexProviderTable);
+      }
     });
 
     await runStep("Grok Build config restored", () => {
@@ -1345,12 +1489,22 @@ async function handleStatus() {
     return;
   }
 
+  // First line of the report, above the proxy line, deliberately (#4236): on a connected client
+  // the provider/login/model lines describe the HUB, and the lines that describe this machine
+  // are tagged `(local)`. A reader who sees neither draws the wrong conclusion from a correct
+  // report — an agent read `xai ✗ not logged in` off a client and decided the hub could not
+  // serve grok.
+  const remoteHubBanner = remoteHubBannerLine(status.json.remoteHub);
+  if (remoteHubBanner) console.log(remoteHubBanner);
+  // `(local)` only while connected: on a standalone install every line is local, and tagging
+  // them all would be noise that trains the reader to skip the tag.
+  const local = status.json.remoteHub.connected ? " (local)" : "";
   if (status.json.proxy.pid || status.json.proxy.health.ok) {
-    console.log(`✅ Proxy: ${status.proxyLabel}`);
+    console.log(`✅ Proxy: ${status.proxyLabel}${local}`);
   } else {
-    console.log(`❌ Proxy: ${status.proxyLabel}`);
+    console.log(`❌ Proxy: ${status.proxyLabel}${local}`);
   }
-  console.log(`   Health: ${status.healthLabel}`);
+  console.log(`   Health: ${status.healthLabel}${local}`);
   if (status.json.claudeDesktop.desiredEnabled && !status.json.claudeDesktop.policy.ok) {
     console.log(`   ⚠️  Claude Desktop 3P health: ${status.json.claudeDesktop.policy.status}`);
     console.log(`      ${status.json.claudeDesktop.policy.message}`);
@@ -1390,25 +1544,43 @@ async function handleStatus() {
       ? "     Restart with 'ocx start', or refresh the installed service: 'ocx service repair'."
       : "     Restart with 'ocx start', or install the persistent service: 'ocx service install'.");
   }
-  console.log(`   Dashboard: ${status.json.dashboard.url}`);
-  console.log(`   Config: ${status.json.paths.config}`);
-  console.log(`   PID file: ${status.json.paths.pid}`);
-  console.log(`   Runtime: ${status.json.paths.runtime}`);
-  console.log(`   Runtime source: ${status.json.runtime.source}${status.json.runtime.overrideEnv ? ` (${status.json.runtime.overrideEnv})` : ""}`);
-  console.log(`   Default provider: ${status.json.defaultProvider}`);
+  console.log(`   Dashboard: ${status.json.dashboard.url}${local}`);
+  console.log(`   Config: ${status.json.paths.config}${local}`);
+  console.log(`   PID file: ${status.json.paths.pid}${local}`);
+  console.log(`   Runtime: ${status.json.paths.runtime}${local}`);
+  console.log(`   Runtime source: ${status.json.runtime.source}${status.json.runtime.overrideEnv ? ` (${status.json.runtime.overrideEnv})` : ""}${local}`);
+  // On a client this is the local default, which routing does not use — the hub applies its own.
+  console.log(`   Default provider: ${status.json.defaultProvider}${local}`);
+  // One block rather than six scattered lines, and only on a hub: `hubStatusLines` owns the
+  // sentences so they are testable without spawning the CLI. It prints no token value.
+  if (status.json.hub) {
+    for (const line of hubStatusLines(status.json.hub)) console.log(`   ${line}`);
+  }
   console.log(`   Remote hub: ${status.json.connection.state}${status.json.connection.serverUrl ? ` (${status.json.connection.serverUrl})` : ""}`);
   if (status.json.connection.state === "invalid" || status.json.connection.state === "mismatched") {
     console.log(`   ⚠️  ${status.json.connection.reason}`);
   }
-  console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}`);
-  console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}`);
-  console.log(`   ${formatStartupRoutingDetail(status.json.startup)}`);
-  console.log(`   Service: ${status.json.service.summary}`);
-  console.log(`   ${status.json.codexShim.summary}`);
-  console.log(`   Codex runtime: ${status.json.codexRuntime.path}`);
-  console.log(`   Codex version: ${status.json.codexRuntime.version ?? "unknown"}`);
-  console.log(`   Codex source: ${status.json.codexRuntime.source}`);
-  console.log(`   Codex home: ${status.json.codexHome.effectiveCodexHome}`);
+  console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}${local}`);
+  console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}${local}`);
+  console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
+  if (status.json.startup.routingKind === "native") {
+    let retainedProviderTable = false;
+    try {
+      retainedProviderTable = readOcxProviderTableBlock() !== null;
+    } catch {
+      // The routing snapshot owns unreadable-config reporting. A later read race must not
+      // turn this diagnostic command into a teardown failure.
+    }
+    if (retainedProviderTable) {
+      console.log(`   ⚠️  Codex provider table retained${local}: [model_providers.opencodex] remains while root routing is native. Remove with 'ocx restore --remove-codex-provider-table'; tagged conversations will stop opening.`);
+    }
+  }
+  console.log(`   Service: ${status.json.service.summary}${local}`);
+  console.log(`   ${status.json.codexShim.summary}${local}`);
+  console.log(`   Codex runtime: ${status.json.codexRuntime.path}${local}`);
+  console.log(`   Codex version: ${status.json.codexRuntime.version ?? "unknown"}${local}`);
+  console.log(`   Codex source: ${status.json.codexRuntime.source}${local}`);
+  console.log(`   Codex home: ${status.json.codexHome.effectiveCodexHome}${local}`);
   if (status.json.codexHome.warning) {
     console.log(`   ⚠️  ${status.json.codexHome.warning}`);
     console.log(`      Action: ${status.json.codexHome.action}`);
@@ -1430,7 +1602,17 @@ async function handleStatus() {
   const { collectOAuthHealthEntriesForCli, oauthLoginSummary } = await import("../oauth");
   const { emailMaskingEnabled } = await import("../lib/privacy");
   const { formatOAuthHealthForStatus } = await import("./status-oauth");
-  console.log(`   OAuth logins:`);
+  // On a connected client the HUB's providers and logins come first, because they are the ones
+  // that decide what a request can route to. The local block still prints — an operator debugging
+  // a half-migrated machine needs to see it — but under a heading that says it is not in use, and
+  // below the hub's, so the hub's is what a reader (or an agent) encounters first (#4236).
+  for (const line of remoteHubStatusLines(status.json.remoteHub)) console.log(`   ${line}`);
+  if (status.json.remoteHub.connected) {
+    console.log(status.json.remoteHub.stateSource === "unavailable"
+      ? "   Local-only credential state (this is NOT the hub's; the hub's state could not be read):"
+      : "   Local-only (not used for routing while connected):");
+  }
+  console.log(`   OAuth logins${local}:`);
   // The operator's own `privacy.maskEmails` decision applies to the CLI too: `ocx status` is not
   // the dashboard, but it reads the same stored addresses, and a flag that only moved one of the
   // two would leave the operator unable to tell which surface they had configured.

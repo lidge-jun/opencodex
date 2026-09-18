@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 500" width="980" height="500" role="img" aria-labelledby="t d" font-family="ui-sans-serif, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <title id="t">Why a v2 sub-agent task fails across providers</title>
+  <desc id="d">Two lanes compare the same delegation. On v1 a ChatGPT parent sends a plaintext task through OpenCodex, it crosses the provider boundary, and the routed child reads it. On v2 the parent sends encrypted_content minted by the ChatGPT backend; OpenCodex has no key, so the task stops at the provider boundary and the request fails with HTTP 400 unreadable_encrypted_agent_task, and the routed child never receives a readable task.</desc>
+  <defs>
+    <marker id="ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#0f766e"/>
+    </marker>
+    <marker id="bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#b42318"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="500" fill="#ffffff"/>
+
+  <line x1="628" y1="40" x2="628" y2="432" stroke="#c9c9d2" stroke-width="1.5" stroke-dasharray="6 6"/>
+  <text x="628" y="28" text-anchor="middle" font-size="17" fill="#6b6b76">provider boundary</text>
+
+  <text x="18" y="72" font-size="21" font-weight="600" fill="#1b1b1f">v1 &#8212; classic sub-agent surface</text>
+  <rect x="18" y="92" width="196" height="66" rx="7" fill="#ffffff" stroke="#1b1b1f" stroke-width="1.5"/>
+  <text x="116" y="119" text-anchor="middle" font-size="19" fill="#1b1b1f">ChatGPT model</text>
+  <text x="116" y="142" text-anchor="middle" font-size="17" fill="#6b6b76">parent</text>
+  <line x1="218" y1="125" x2="346" y2="125" stroke="#0f766e" stroke-width="2" marker-end="url(#ok)"/>
+  <text x="282" y="113" text-anchor="middle" font-size="17" fill="#0f766e">plaintext task</text>
+  <rect x="350" y="92" width="196" height="66" rx="7" fill="#ffffff" stroke="#1b1b1f" stroke-width="1.5"/>
+  <text x="448" y="119" text-anchor="middle" font-size="19" fill="#1b1b1f">OpenCodex</text>
+  <text x="448" y="142" text-anchor="middle" font-size="17" fill="#6b6b76">reads it, routes it</text>
+  <line x1="550" y1="125" x2="712" y2="125" stroke="#0f766e" stroke-width="2" marker-end="url(#ok)"/>
+  <text x="631" y="113" text-anchor="middle" font-size="17" fill="#0f766e">forwarded as text</text>
+  <rect x="716" y="92" width="246" height="66" rx="7" fill="#ffffff" stroke="#0f766e" stroke-width="1.8"/>
+  <text x="839" y="119" text-anchor="middle" font-size="19" fill="#1b1b1f">Grok, Claude, GLM</text>
+  <text x="839" y="142" text-anchor="middle" font-size="17" fill="#0f766e">child reads the task</text>
+  <text x="18" y="192" font-size="17" fill="#4a4a55">Delegation across providers works. Nothing in the path needs a key.</text>
+
+  <line x1="18" y1="222" x2="962" y2="222" stroke="#e6e6ec" stroke-width="1.5"/>
+
+  <text x="18" y="266" font-size="21" font-weight="600" fill="#1b1b1f">v2 &#8212; concurrent sub-agent surface</text>
+  <rect x="18" y="286" width="196" height="66" rx="7" fill="#ffffff" stroke="#1b1b1f" stroke-width="1.5"/>
+  <text x="116" y="313" text-anchor="middle" font-size="19" fill="#1b1b1f">ChatGPT model</text>
+  <text x="116" y="336" text-anchor="middle" font-size="17" fill="#6b6b76">parent</text>
+  <line x1="218" y1="319" x2="346" y2="319" stroke="#b42318" stroke-width="2" marker-end="url(#bad)"/>
+  <text x="282" y="307" text-anchor="middle" font-size="17" fill="#b42318">encrypted</text>
+  <text x="282" y="344" text-anchor="middle" font-size="16" fill="#6b6b76" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">gAAAA&#8230;</text>
+  <rect x="350" y="286" width="196" height="66" rx="7" fill="#ffffff" stroke="#1b1b1f" stroke-width="1.5"/>
+  <text x="448" y="313" text-anchor="middle" font-size="19" fill="#1b1b1f">OpenCodex</text>
+  <text x="448" y="336" text-anchor="middle" font-size="17" fill="#b42318">has no key</text>
+  <line x1="550" y1="319" x2="606" y2="319" stroke="#b42318" stroke-width="2"/>
+  <line x1="612" y1="292" x2="612" y2="346" stroke="#b42318" stroke-width="5"/>
+  <text x="612" y="372" text-anchor="middle" font-size="17" fill="#b42318">stops here</text>
+  <rect x="716" y="286" width="246" height="66" rx="7" fill="#fafafb" stroke="#c9c9d2" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="839" y="313" text-anchor="middle" font-size="19" fill="#6b6b76">Grok, Claude, GLM</text>
+  <text x="839" y="336" text-anchor="middle" font-size="17" fill="#6b6b76">never gets a readable task</text>
+  <text x="18" y="406" font-size="17" fill="#4a4a55">OpenCodex fails closed instead of forwarding ciphertext: HTTP 400 <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">unreadable_encrypted_agent_task</tspan>.</text>
+
+  <line x1="18" y1="432" x2="962" y2="432" stroke="#e6e6ec" stroke-width="1.5"/>
+  <text x="18" y="460" font-size="17" fill="#1b1b1f">The ChatGPT backend mints that key and keeps it.</text>
+  <text x="18" y="484" font-size="17" fill="#6b6b76">A proxy cannot decrypt what it was never given, so this is structural, not a misconfiguration.</text>
+</svg>

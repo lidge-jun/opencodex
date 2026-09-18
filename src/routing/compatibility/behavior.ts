@@ -14,6 +14,7 @@ export function upstreamProtocolForAdapter(adapter: string): string {
     case "openai-chat":
     case "command-code":
     case "cursor":
+    case "devin":
     case "azure":
     case "azure-openai":
     case "kiro":
@@ -147,6 +148,7 @@ export function resolveProductionBehaviorValues(
     "wire.adapter": behaviorRow("provider_config", adapter),
     "wire.upstreamProtocol": behaviorRow("provider_config", upstreamProtocol),
     "wire.responsesPath": behaviorRow("provider_config", effective.responsesPath ?? null),
+    "wire.chatCompletionsPath": behaviorRow("provider_config", effective.chatCompletionsPath ?? null),
     "wire.commandCodeVersion": behaviorRow("provider_config", effective.commandCodeVersion ?? null),
     "wire.modelSuffixMode": behaviorRow(
       "provider_config",

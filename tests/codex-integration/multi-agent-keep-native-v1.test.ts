@@ -11,6 +11,7 @@ import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "../../src/codex/catalog/kinds";
 import { buildCatalogEntriesFromObservedState } from "../../src/codex/catalog/sync";
 import { cmdV2 } from "../../src/cli/v2";
 import { loadConfig, saveConfig } from "../../src/config";
+import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, SUBAGENT_SURFACE_GUIDE_URL } from "../../src/config/multi-agent-surface";
 import { isMultiAgentV2Enabled } from "../../src/codex/features";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -441,5 +442,88 @@ describe("/api/v2 keepNativeChatGptOnV1", () => {
     );
     expect(bad?.status).toBe(400);
     expect(converges).toBe(3);
+  });
+});
+
+describe("/api/v2 sub-agent surface advisory", () => {
+  const url = () => new URL("http://localhost/api/v2");
+  const deps = () => ({
+    createManagementConvergeCodex: catalogConvergenceFactory(),
+    toggleCodexMultiAgentV2: () => {},
+  });
+  const liveConfig = (extra: Partial<OcxConfig> = {}): OcxConfig => ({
+    providers: {}, hostname: "127.0.0.1", port: 10100, defaultProvider: "openai", ...extra,
+  } as OcxConfig);
+
+  test("base raises it, and the recommended answer writes the mode and the acknowledgement together", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = false\n");
+    const config = liveConfig();
+    const d = deps();
+
+    const raised = await handleManagementAPI(getV2(), url(), config, d);
+    expect(await raised?.json()).toMatchObject({
+      multiAgentMode: "default",
+      multiAgentSurfaceAdvisory: {
+        required: true,
+        mode: "default",
+        recommended: "v1",
+        version: MULTI_AGENT_SURFACE_ADVISORY_VERSION,
+        docsUrl: SUBAGENT_SURFACE_GUIDE_URL,
+      },
+    });
+
+    const switched = await handleManagementAPI(
+      putV2({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryAcknowledged: true }),
+      url(), config, d,
+    );
+    expect(switched?.status).toBe(200);
+    expect(await switched?.json()).toMatchObject({
+      multiAgentMode: "v1",
+      multiAgentSurfaceAdvisory: { required: false, mode: "v1" },
+    });
+    expect(loadConfig().multiAgentMode).toBe("v1");
+    expect(loadConfig().multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+
+    const again = await handleManagementAPI(getV2(), url(), config, d);
+    expect(await again?.json()).toMatchObject({ multiAgentSurfaceAdvisory: { required: false } });
+  });
+
+  test("keeping v2 answers the advisory and leaves the mode alone", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config = liveConfig({ multiAgentMode: "v2" });
+    const d = deps();
+
+    const kept = await handleManagementAPI(putV2({ multiAgentSurfaceAdvisoryAcknowledged: true }), url(), config, d);
+    expect(kept?.status).toBe(200);
+    expect(await kept?.json()).toMatchObject({
+      multiAgentMode: "v2",
+      multiAgentSurfaceAdvisory: { required: false, mode: "v2" },
+    });
+    expect(loadConfig().multiAgentMode).toBe("v2");
+    expect(loadConfig().multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+  });
+
+  test("false is an explicit no-op, so a client that always sends the field cannot un-answer it", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = true\n");
+    const config = liveConfig({ multiAgentMode: "v2", multiAgentSurfaceAdvisoryVersion: MULTI_AGENT_SURFACE_ADVISORY_VERSION });
+    const d = deps();
+
+    const noop = await handleManagementAPI(putV2({ multiAgentSurfaceAdvisoryAcknowledged: false }), url(), config, d);
+    expect(noop?.status).toBe(200);
+    expect(await noop?.json()).toMatchObject({ multiAgentSurfaceAdvisory: { required: false } });
+    expect(config.multiAgentSurfaceAdvisoryVersion).toBe(MULTI_AGENT_SURFACE_ADVISORY_VERSION);
+  });
+
+  test("a non-boolean acknowledgement is rejected before anything is written", async () => {
+    isolateHomes();
+    writeFileSync(join(process.env.CODEX_HOME!, "config.toml"), "[features.multi_agent_v2]\nenabled = false\n");
+    const config = liveConfig();
+    const bad = await handleManagementAPI(putV2({ multiAgentSurfaceAdvisoryAcknowledged: 1 }), url(), config, deps());
+    expect(bad?.status).toBe(400);
+    expect(await bad?.json()).toEqual({ error: "body.multiAgentSurfaceAdvisoryAcknowledged must be a boolean" });
+    expect(config.multiAgentSurfaceAdvisoryVersion).toBeUndefined();
   });
 });

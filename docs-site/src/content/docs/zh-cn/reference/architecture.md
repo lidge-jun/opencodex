@@ -23,7 +23,8 @@ src/
 ├── vision/             # vision sidecar (describe + plan)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -34,24 +35,26 @@ src/
 └── index.ts            # public entry
 ```
 
-原先的三个大型入口文件现在是兼容性 facade：`codex/catalog.ts` 导出 7 个
-`codex/catalog/*.ts` 模块，`server/management-api.ts` 分派到 9 个
-`server/management/*.ts` 模块，而 `server/responses.ts` 导出 5 个
-`server/responses/*.ts` 模块。
+原先的大型入口文件现在是兼容性 facade：`codex/catalog.ts` 导出
+`codex/catalog/*.ts` 模块，`server/management-api.ts` 分派到
+`server/management/*.ts` 模块，`server/responses.ts` 导出 `server/responses/*.ts`
+模块，而 `bridge.ts` 重新导出 `bridge/*.ts` 模块。facade 只是稳定的导入路径，而不是实现：
+下面每一步都指向真正拥有代码的模块，Responses 面的完整归属清单见
+`structure/transports/responses.md`。
 
 ## 请求流程
 
-`server/index.ts` 负责 HTTP 边界，并把 Responses data plane 交给 `server/responses.ts` facade
+`server/index/serve-options.ts` 负责 HTTP 边界，并把 Responses data plane 交给 `server/responses.ts` facade
 及其 `server/responses/*.ts` 模块：
 
-1. `server/index.ts` 应用 CORS 和 API 认证，在 drain 期间拒绝新请求，并记录请求生命周期
+1. `server/index/serve-options.ts` 应用 CORS 和 API 认证，在 drain 期间拒绝新请求，并记录请求生命周期
    metadata。它提供 `GET /v1/models`、`POST /v1/responses`、
    `POST /v1/responses/compact`、`POST /v1/images/generations` / `POST /v1/images/edits`
    （供 Codex 内置 `image_gen` 工具使用——由 `server/images.ts` 中继到 OpenAI 系上游）、
    `POST /v1/live` / `POST /v1/realtime/calls`（ChatGPT / Codex App 语音与 OpenAI Realtime
    建连，由 `server/live.ts` 中继）、`/v1/live/{callId}` 旁路 WebSocket，
    以及 `/v1/responses` 上可选的 WebSocket upgrade。
-2. `server/responses/core.ts` 解压并解析 JSON；如果本地记住了对应输入，则展开
+2. `server/responses/request-prepare.ts` 解压并解析 JSON；如果本地记住了对应输入，则展开
    `previous_response_id`，随后调用 `responses/parser.ts`。
 3. `router.ts` 解析 bare id 或 `provider/model` id。server 随后确定 Codex account affinity，
    必要时刷新 provider OAuth，并把选中的 credential 应用到 route。
@@ -62,7 +65,7 @@ src/
    则构建、获取并解析上游请求。
 6. 路由模型请求托管的 `web_search` 工具时，`web-search/` 会暴露一个合成函数，经 ChatGPT
    sidecar 执行真实搜索，把结果送回路由模型，并在配置的循环上限内重复。
-7. `bridge.ts` 生成 Responses SSE 或 JSON。`server/request-log.ts` 与 `usage/` 在不改变响应的
+7. `bridge/sse.ts` / `bridge/response-json.ts` 生成 Responses SSE 或 JSON。`server/request-log.ts` 与 `usage/` 在不改变响应的
    前提下收集终止状态、延迟、provider/model 标签和尽力估算的 token usage。
 
 ## 解析器
@@ -85,7 +88,7 @@ src/
 
 ## 桥接器
 
-`bridge.ts` 把 adapter 的内部 `AdapterEvent` 流转换回 Codex 能理解的 Responses SSE：
+`bridge/sse.ts` 把 adapter 的内部 `AdapterEvent` 流转换回 Codex 能理解的 Responses SSE：
 
 | AdapterEvent | 发出的 Responses SSE |
 | --- | --- |
@@ -129,14 +132,21 @@ thread affinity 位于 `codex/` 下，不会出现在管理 API 响应中。请�
 
 ## 传输与 compaction
 
-`server/index.ts` 默认在 `/v1/responses` 上提供 HTTP/SSE。当 `websockets` 为 `false` 而 Codex
+`server/index/serve-options.ts` 默认在 `/v1/responses` 上提供 HTTP/SSE。当 `websockets` 为 `false` 而 Codex
 尝试 Responses WebSocket upgrade 时，opencodex 会返回 `426 upgrade_required`，Codex 随后在该
 session 中回退到 HTTP。设置 `"websockets": true` 后，同一 endpoint 会接受 upgrade 并使用
 WebSocket bridge。
 
+当最终发送的模型为 `gpt-5.3-codex-spark` 时，canonical ChatGPT 转发会在 HTTP 请求头和
+原生 WS 帧元数据中明确关闭 Responses Lite，通过别名选择 Spark 时也一样；但这仅适用于发送正文
+不含带有非空 `tools` 数组的 `additional_tools` 分组的情况。该分组本身就是 Lite 的工具投递形态，因此仍使用它的 Spark
+正文会保持 Lite 开启，无论调用方或配置的请求头如何。Lite 标识变化时，
+旧 socket 会退出使用；后续标识相同且满足复用条件的请求可以复用新 socket。其他模型和网关
+保留原有 Lite 策略。原生元数据格式不合法时，仍会回退到 HTTP，并保持请求正文不变。
+
 Codex context compaction 同样适用于路由模型。`server/responses/compact.ts` 处理
 `POST /v1/responses/compact`，运行一次内部路由 summarization turn 并返回压缩后的历史；
-`responses/parser.ts` 与 `bridge.ts` 则处理 remote compaction v2 的 `compaction_trigger` turn，
+`responses/parser.ts` 与 `bridge/sse.ts` 则处理 remote compaction v2 的 `compaction_trigger` turn，
 准确发出一个合成的 `compaction` 输出 item。
 
 ## 缓存与目录

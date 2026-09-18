@@ -16,6 +16,7 @@ import {
   asideJournalDeleteResponse, type AsideProfileRouteOptions,
 } from "./aside-profile-routes";
 import type { IntegrationIO } from "../../integrations/config-io";
+import { createClineIO } from "../../integrations/cline-io";
 import { matchesOperationResult } from "../../integrations/journal";
 import {
   INTEGRATION_CLIENT_IDS,
@@ -534,7 +535,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           undoable: (() => {
             if (snapshot === "expired") return false;
             if (newestByClient.get(operation.clientId) !== operation.opId) return false;
-            const current = currentConfigText(operation.configPath);
+            const current = operation.clientId === "cline" ? (() => {
+              const io = createClineIO(integrationMutationTestHooks?.io ?? store.io(), operation.configPath, store);
+              const read = io.readText(operation.configPath);
+              return read.kind === "text" ? read.text : read.kind === "missing" ? null : undefined;
+            })() : currentConfigText(operation.configPath);
             return current === undefined ? false : matchesOperationResult(operation, current);
           })(),
           /*

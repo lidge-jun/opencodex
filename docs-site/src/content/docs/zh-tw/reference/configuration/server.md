@@ -11,9 +11,9 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理監聽連接埠。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 綁定位址。非回送綁定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
-| `proxy?` | `string` | — | 對外 HTTP(S) 代理 URL 或 `${ENV_VAR}`。僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`；回送保留在 `NO_PROXY` 中。 |
+| `proxy?` | `string` | — | 對外 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`）或 `${ENV_VAR}`。HTTP URL 僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用內建的真實 SOCKS5 通道，也會套用至 `ALL_PROXY`（`ocx start --socks5`），並清除此行程繼承的 `HTTP(S)_PROXY`。回送保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 明確啟用：當 Responses 完成時沒有文字或工具呼叫，以相同請求重試一次。重試可能產生費用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不變更設定的情況下停用；combo 與 routed-compaction turn 不適用。 |
-| `stallTimeoutSec?` | `number` | `300` | 在 `response.incomplete` 前無上游資料的秒數。最小 1。 |
+| `stallTimeoutSec?` | `number` | `300` | 上游無有效進展的秒數，適用於 Responses 與原生 Chat；最小 1 秒。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次嘗試的 DNS/TCP/TLS/final-header 截止時間；它在 body 生成前結束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 在中止活躍回合前的優雅排空截止時間。 |
 | `websockets?` | `boolean` | `false` | 廣告並允許面向 client 的 Responses WebSocket 路徑。False 時 client 使用 HTTP/SSE；不會停用符合條件的 canonical ChatGPT upstream WS 最佳化。 |
@@ -31,6 +31,10 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 
 若較舊的開發組建在備份支援存在前變更了 resume-history 中繼資料，請執行 `ocx recover-history --legacy-openai --yes` 以強制原生供應商復原。
 此命令會重新標記所有含有使用者訊息的 `opencodex` row，其中也包含正常的專用 provider 歷史；執行前請查看 lifecycle reference 中的完整範圍警告。
+
+### 原生 Chat 的逾時與完成狀態
+
+原生 Chat 等待上游輸出時也使用 `stallTimeoutSec`。非空文字、推理、拒絕內容、工具更新及完成事件會重設等待額度；保活註解、僅角色事件及單獨的用量資訊不會。等待慢速用戶端讀取時暫停計時。逾時產生 `upstream_stall_timeout`：串流請求收到錯誤事件，非串流請求回傳 HTTP 502。終態結果到達前取消請求會回傳取消錯誤，不會將部分答案當成成功。非串流 Chat 支援 LF、CRLF 與多行 data 的 SSE 格式。
 
 ## 遠端存取
 
@@ -188,7 +192,7 @@ OpenAI backend 需要 ChatGPT 登入與啟用的 ChatGPT `forward` 供應商。C
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | 可用時開啟 | 主圖片描述開關。 |
 | `backend?` | `"openai" \| "anthropic"` | 自動 | 明確值優先；未設定時優先使用可用的已儲存 Anthropic OAuth 憑證，否則使用 `openai`。 |
-| `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.4-mini` 或 Anthropic 為 `claude-sonnet-5`。 |
+| `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.6-luna` 或 Anthropic 為 `claude-sonnet-5`。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每個主回合允許的新描述快取未命中。`0` 停用呼叫；無效值使用預設。 |
 | `timeoutMs?` | `number` | `45000` | Sidecar 擷取逾時。整數 1–2147483647。 |
 

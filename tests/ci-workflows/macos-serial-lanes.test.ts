@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Readable } from "node:stream";
@@ -19,6 +19,9 @@ const SERIAL_FILES = [
 const GENERAL_FILES = ["general/ordinary.test.ts", "general/falcon-extra.test.ts"];
 const ASSERTION_STATUS = 23;
 const CRASH_STATUS = 139;
+// A status the classifier cannot recognise on its own, so a crash carrying it is only detected
+// through the panic banner. 139 is a fatal signal and matches on the code alone.
+const SIGNATURE_ONLY_CRASH_STATUS = 3;
 const CRASH_SIGNATURES = [
   "oh no: Bun has crashed",
   "Internal assertion failure",
@@ -98,6 +101,13 @@ process.exit(0);
 function createFixture(directory: string, options: FixtureOptions): void {
   mkdirSync(join(directory, "bin"));
   mkdirSync(join(directory, "tmp"));
+  // The lane sources its crash classifier from the working directory, so the sandbox gets the
+  // REAL file rather than a stand-in. That is deliberate: the harness executes the actual run
+  // block, so a copy here would let the block and the classifier drift apart unnoticed, which is
+  // the exact failure mode that collapsing four inline signature lists into one file removed.
+  mkdirSync(join(directory, "scripts", "ci"), { recursive: true });
+  copyFileSync(repoPath("scripts", "ci", "bun-crash-signatures.sh"),
+    join(directory, "scripts", "ci", "bun-crash-signatures.sh"));
   for (const file of [...SERIAL_FILES, ...GENERAL_FILES]) {
     if (file === options.missing) continue;
     mkdirSync(dirname(join(directory, "tests", file)), { recursive: true });
@@ -303,37 +313,49 @@ describe.skipIf(process.platform === "win32")("macOS serial lane shell ownership
     }, SPAWN_BUDGET_MS);
 
     for (const [caseIndex, signature] of CRASH_SIGNATURES.entries()) {
-      test(`${target}: retries one runtime crash (case ${caseIndex + 1}), then finishes`, async () => {
-        const run = await runShard(1, { target, outcomes: ["crash"], crashSignature: signature });
-        expect(run.status, run.output).toBe(0);
+      test(`${target}: fails on the first runtime crash (case ${caseIndex + 1})`, async () => {
+        // Exit 3, not 139, so the SIGNATURE arm of the shared classifier is what is under test.
+        // With 139 the status arm matches first and this case would pass even if the signature
+        // list were empty -- which is how a lane can carry a broken list and look covered (#2152).
+        // Exit 3 is also the real Windows shape: Bun prints the panic banner and returns 3,
+        // and a bare 3 must NOT be treated as a crash, so the banner is doing the work here.
+        const run = await runShard(1, {
+          target, outcomes: ["crash"], crashSignature: signature, crashStatus: SIGNATURE_ONLY_CRASH_STATUS,
+        });
+        // This case returned 0 until 2026-09-17: the leg ran the identical command a second
+        // time and reported the crash as recovered. The classifier still runs -- it decides
+        // the message -- but it no longer decides the outcome.
+        expect(run.status, run.output).toBe(SIGNATURE_ONLY_CRASH_STATUS);
         const calls = testCalls(run);
         const attempts = calls.filter(call => targets(call, target));
-        expect(attempts).toHaveLength(2);
-        expect(attempts[0]!.argv).toEqual(attempts[1]!.argv);
+        expect(attempts).toHaveLength(1);
         expect(new Set(calls.map(call => call.pid)).size).toBe(calls.length);
-        expect(calls).toHaveLength(4); // Main plus two owned serial files plus one retry.
-        expect(targets(calls.at(-1)!, SERIAL_FILES[2]!)).toBe(true);
+        // The leg stops where it crashed: the main pool alone, or the main pool plus the
+        // first owned serial file. The second owned serial file never starts.
+        expect(calls).toHaveLength(target === "main" ? 1 : 2);
+        expect(calls.some(call => targets(call, SERIAL_FILES[2]!))).toBe(false);
+        expect(run.output).toContain("it fails this leg on the first occurrence");
       }, SPAWN_BUDGET_MS);
     }
 
-    test(`${target}: a repeated crash fails after exactly one retry`, async () => {
+    test(`${target}: a crash the classifier reads from the status alone is not retried either`, async () => {
+      // 139 takes the status arm rather than the signature arm. The fixture is armed to
+      // crash twice; a surviving retry would show up as a second attempt here.
       const run = await runShard(1, { target, outcomes: ["crash", "crash"] });
       expect(run.status, run.output).toBe(CRASH_STATUS);
       const calls = testCalls(run);
-      expect(calls).toHaveLength(target === "main" ? 2 : 3);
-      const attempts = calls.filter(call => targets(call, target));
-      expect(attempts).toHaveLength(2);
-      expect(attempts[0]!.argv).toEqual(attempts[1]!.argv);
+      expect(calls).toHaveLength(target === "main" ? 1 : 2);
+      expect(calls.filter(call => targets(call, target))).toHaveLength(1);
     }, SPAWN_BUDGET_MS);
 
-    test(`${target}: assertion on the crash retry retains its own exit status`, async () => {
-      const run = await runShard(1, { target, outcomes: ["crash", "assert"] });
+    test(`${target}: an assertion failure is still distinguished from a crash`, async () => {
+      // Both fail the leg now, so the only thing separating them is what the log says. A
+      // classifier that matched everything would report every assertion failure as a crash
+      // and send the next reader hunting an interpreter bug that is not there.
+      const run = await runShard(1, { target, outcomes: ["assert"] });
       expect(run.status, run.output).toBe(ASSERTION_STATUS);
-      const calls = testCalls(run);
-      expect(calls).toHaveLength(target === "main" ? 2 : 3);
-      expect(calls.filter(call => targets(call, target))).toHaveLength(2);
-      expect(run.output).toContain("assertion failures are not retried");
-      expect(run.output).not.toContain("crash repeated");
+      expect(run.output).toContain(`macOS suite failed (exit ${ASSERTION_STATUS})`);
+      expect(run.output).not.toContain("Bun runtime crash");
     }, SPAWN_BUDGET_MS);
   }
 

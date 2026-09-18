@@ -6,6 +6,8 @@ import * as configFacade from "../../src/config";
 import {
   getPidPath,
   getRuntimePortPath,
+  isOcxCommandLine,
+  isLikelyOcxProcess,
   isOcxStartCommandLine,
   ocxStartProcessCacheSizeForTests,
   parsePidFile,
@@ -74,6 +76,51 @@ describe("proxy process-state ownership", () => {
     expect(isOcxStartCommandLine("bun run src/cli.ts status")).toBe(false);
     expect(isOcxStartCommandLine("bun test C:/work/opencodex/tests/server/config.test.ts")).toBe(false);
     expect(isOcxStartCommandLine("notepad.exe")).toBe(false);
+  });
+
+  test("recognizes opencodex command lines that are not the proxy", () => {
+    // A pending-teardown receipt is owned by whichever invocation claimed it, and that is
+    // never an `ocx start`. Asking the start-shaped question about a stop or update worker
+    // called every real owner foreign, which is one half of the #4897 wedge.
+    expect(isOcxCommandLine("bun run src/cli.ts stop")).toBe(true);
+    expect(isOcxCommandLine("opencodex update --tag latest")).toBe(true);
+    expect(isOcxCommandLine("ocx stop")).toBe(true);
+    expect(isOcxCommandLine("node C:/npm/node_modules/@bitkyc08/opencodex/bin/ocx.mjs update")).toBe(true);
+    // And it must stay narrow enough to keep an unrelated process from impersonating one.
+    expect(isOcxCommandLine("notepad.exe")).toBe(false);
+    expect(isOcxCommandLine("bun test C:/work/opencodex/tests/server/config.test.ts")).toBe(false);
+    expect(isOcxCommandLine("/usr/sbin/cupsd -l")).toBe(false);
+    // The broader predicate is a superset of the start one, never a replacement for it.
+    expect(isOcxCommandLine("bun run src/cli.ts start")).toBe(true);
+    expect(isOcxStartCommandLine("bun run src/cli.ts stop")).toBe(false);
+    expect(isOcxStartCommandLine("opencodex update --tag latest")).toBe(false);
+  });
+
+  test("the ownership probe distinguishes a real owner from a reused PID", () => {
+    // The stop-side teardown recovery asks this about a PID recorded in a receipt. Bare
+    // liveness said "still running" for any process that inherited the number, so the
+    // obligation was never recovered while both updater gates kept refusing (#4897).
+    setProcessCommandLinePlatformForTests("darwin");
+
+    setProcessCommandLineExecForTests(() => "node /usr/local/lib/node_modules/@bitkyc08/opencodex/bin/ocx.mjs update\n");
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+
+    // The reported wedge: the owner exited and an unrelated process holds its number.
+    setProcessCommandLineExecForTests(() => "/usr/sbin/cupsd -l\n");
+    expect(isLikelyOcxProcess(4242)).toBe(false);
+
+    // A probe that cannot answer is not evidence that the owner is still running. Reporting
+    // "alive" there is what made the receipt permanently unrecoverable, so an unreadable
+    // command line resolves to "not ours" and lets the recovery loop — which still has to
+    // prove the endpoint is down — decide.
+    setProcessCommandLineExecForTests(() => { throw new Error("ps unavailable"); });
+    expect(isLikelyOcxProcess(4242)).toBe(false);
+
+    // Never cached: a later call must re-ask rather than reuse an answer about a PID that
+    // may since have been recycled again.
+    setProcessCommandLineExecForTests(() => "ocx stop\n");
+    expect(isLikelyOcxProcess(4242)).toBe(true);
+    expect(ocxStartProcessCacheSizeForTests()).toBe(0);
   });
 
   test("writes pid state through the shared atomic writer", () => {

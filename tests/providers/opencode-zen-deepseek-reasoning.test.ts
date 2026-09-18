@@ -53,7 +53,7 @@ function buildToolCallBody(modelId: string, reasoning?: string): {
 }
 
 describe("opencode-zen DeepSeek thinking mode", () => {
-  test.each(["deepseek-v4-flash-free", "deepseek-v4-flash", "deepseek-v4-pro"])(
+  test.each(["deepseek-v4-flash-free", "deepseek-v4-flash", "deepseek-v4.1-flash"])(
     "%s replays tool-call reasoning_content and maps Codex efforts (issue #950/#994)",
     modelId => {
       const body = buildToolCallBody(modelId, "xhigh");
@@ -81,7 +81,7 @@ describe("opencode-zen DeepSeek thinking mode", () => {
     expect(body.messages[1]).toHaveProperty("tool_calls");
   });
 
-  test.each(["deepseek-v4-flash-free", "deepseek-v4-flash", "deepseek-v4-pro"])(
+  test.each(["deepseek-v4-flash-free", "deepseek-v4-flash", "deepseek-v4.1-flash"])(
     "%s is listed in opencode-zen noVisionModels for the vision sidecar",
     modelId => {
       const route = routeModel(configFor(modelId), `opencode-zen/${modelId}`);

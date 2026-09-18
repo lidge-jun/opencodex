@@ -113,7 +113,7 @@ her üye görselleri yerel olarak veya bir sidecar üzerinden kabul ettiğinde v
 `imageInput` ayarı devre dışı olmadığında görsel girdisini bildirir; böylece Codex
 uygulaması gibi istemciler, sidecar çalışmadan önce ekleri engellemek yerine kabul eder.
 `visionSidecar.model` olmadığında veya boş
-olduğunda, OpenAI yürütme yolu, Kontrol Paneli ve yönetim API'si `gpt-5.4-mini`
+olduğunda, OpenAI yürütme yolu, Kontrol Paneli ve yönetim API'si `gpt-5.6-luna`
 geri dönüşünü kullanır. Başlangıç hala açıkça kalıcı hale getirilmiş eski bir
 `gpt-5.4-mini` değerini `gpt-5.6-luna`'ya geçirir; bu geçiş, bulunmayan bir
 model alanına değil, saklanan bir değere uygulanır.
@@ -178,7 +178,7 @@ Bir model, sağlayıcı başına salt metin olarak işaretlenir:
   "providers": {
     "ollama-cloud": {
       "baseUrl": "https://ollama.com/v1",
-      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
+      "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-flash"]
     }
   }
 }

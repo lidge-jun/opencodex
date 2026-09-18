@@ -107,8 +107,8 @@ The recognized Codex effort ladder is `low < medium < high < xhigh < max < ultra
   `prefer_websockets`/`supports_websockets` follow the central websocket gate. A future
   `gpt-5.6-*` slug the snapshot predates falls back to template synthesis plus
   `ensureGpt56ReasoningLevels` (appends `max`+`ultra`).
-- Snapshot scope is deliberately gpt-5.6-only: the bundled upstream entries for
-  `gpt-5.5`/`gpt-5.4` are staler than the installed catalog's live entries (e.g. snapshot
+- Snapshot scope is deliberately gpt-5.6-only: the bundled upstream entries for older natives
+  such as `gpt-5.5` are staler than the installed catalog's live entries (e.g. snapshot
   gpt-5.5 carries `tool_mode: null`), so substituting them would downgrade real data. On-disk
   sync also self-heals fallback-quality 5.6 entries (display_name stamped with the bare slug)
   by upgrading them to the snapshot entry; genuine entries from a newer installed codex are

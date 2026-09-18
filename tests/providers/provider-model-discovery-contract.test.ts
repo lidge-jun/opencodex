@@ -12,6 +12,7 @@ import { deriveKeyLoginMap, providerConfigSeed } from "../../src/providers/deriv
 import {
   extractProviderModelItems,
   isRegistryModelDiscoveryUrl,
+  providerModelsUrl,
   providerModelDiscoverySpecError,
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
@@ -68,6 +69,58 @@ function togetherConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
 }
 
 describe("registry-owned provider model discovery", () => {
+  test("normalizes custom model discovery URLs without collapsing path prefixes (#4724)", () => {
+    const buildCustom = (baseUrl: string) => buildModelsRequest({
+      adapter: "openai-responses",
+      baseUrl,
+      authMode: "key",
+    }, "secret", "custom-gateway").url;
+
+    expect(buildCustom("https://gw.example.com/v1")).toBe("https://gw.example.com/v1/models");
+    expect(buildCustom("https://gw.example.com/v1/")).toBe("https://gw.example.com/v1/models");
+    expect(buildCustom("https://gw.example.com/v1////")).toBe("https://gw.example.com/v1/models");
+    expect(buildCustom("https://gw.example.com/api/openai/v1/"))
+      .toBe("https://gw.example.com/api/openai/v1/models");
+    expect(buildCustom("https://gw.example.com/tenant/acme/api/openai/v1///"))
+      .toBe("https://gw.example.com/tenant/acme/api/openai/v1/models");
+    expect(buildCustom("https://gw.example.com/v1/models"))
+      .toBe("https://gw.example.com/v1/models");
+    expect(buildCustom("https://gw.example.com/v1/models/"))
+      .toBe("https://gw.example.com/v1/models");
+  });
+
+  test("keeps registry path discovery independent of default URL normalization (#4724)", () => {
+    const url = resolveProviderModelDiscoveryUrl(
+      "cloudflare-workers-ai",
+      {
+        adapter: "openai-chat",
+        baseUrl: "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/",
+      },
+      "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/",
+      providerModelsUrl("https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/"),
+    );
+    expect(url).toBe(
+      "https://api.cloudflare.com/client/v4/accounts/acct/ai/models/search?format=openrouter&per_page=1000",
+    );
+  });
+
+  test("keeps absolute and relative discovery endpoint overrides unchanged (#4724)", async () => {
+    await withTogetherDiscovery({
+      url: "https://catalog.example.test/custom/models?source=registry",
+    }, () => {
+      expect(buildModelsRequest(togetherConfig().providers.together!, "secret", "together").url)
+        .toBe("https://catalog.example.test/custom/models?source=registry");
+    });
+
+    await withTogetherDiscovery({ path: "catalog/models" }, () => {
+      expect(buildModelsRequest(
+        togetherConfig({ baseUrl: "https://api.together.xyz/v1/" }).providers.together!,
+        "secret",
+        "together",
+      ).url).toBe("https://api.together.xyz/v1/catalog/models");
+    });
+  });
+
   test("keeps every registry discovery contract inside static safety bounds", () => {
     for (const entry of PROVIDER_REGISTRY) {
       if (!entry.modelDiscovery) continue;
@@ -95,6 +148,44 @@ describe("registry-owned provider model discovery", () => {
       path: "models",
     } as unknown as ProviderModelDiscoverySpec)).toContain("mutually exclusive");
     expect(providerModelDiscoverySpecError({ maxModels: 25 })).toBeNull();
+    expect(providerModelDiscoverySpecError({ envelopeKey: " models ", idField: "slug" }))
+      .toContain("envelopeKey");
+    expect(providerModelDiscoverySpecError({ envelopeKey: "models", idField: "" }))
+      .toContain("idField");
+  });
+
+  test("zai uses its provider-specific discovery endpoint and response shape (#4822)", () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "zai");
+    if (!entry?.modelDiscovery) throw new Error("zai must declare modelDiscovery");
+    const seed = providerConfigSeed(entry);
+    const canonical = "https://api.z.ai/api/v1/models";
+
+    expect(resolveProviderModelDiscoveryUrl(
+      entry.id,
+      seed,
+      entry.baseUrl,
+      providerModelsUrl(entry.baseUrl),
+    )).toBe(canonical);
+    expect(isRegistryModelDiscoveryUrl(entry.id, canonical)).toBe(true);
+    expect(isRegistryModelDiscoveryUrl(entry.id, "https://api.z.ai/models")).toBe(false);
+
+    const discovery = resolveProviderModelDiscovery(entry.id, seed);
+    expect(extractProviderModelItems({ models: [{ slug: "glm-5.3" }] }, discovery)).toEqual({
+      ok: true,
+      rawCount: 1,
+      items: [{ slug: "glm-5.3", id: "glm-5.3" }],
+    });
+    expect(extractProviderModelItems(
+      { models: [{ slug: "glm-5.3" }] },
+      { maxResponseBytes: discovery.maxResponseBytes, maxModels: discovery.maxModels },
+    )).toEqual({ ok: false, reason: "invalid_shape" });
+
+    expect(entry.baseUrl).toBe("https://api.z.ai");
+    expect(entry.responsesPath).toBe("/api/v1/responses");
+    expect(entry.chatCompletionsPath).toBe("/api/coding/paas/v4/chat/completions");
+    expect(entry.destinationAliases).toEqual([
+      { baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat" },
+    ]);
   });
 
   test("clears cached rows before applying a temporary registry discovery policy", async () => {
@@ -168,6 +259,20 @@ describe("registry-owned provider model discovery", () => {
 
       expect(await validateApiKey("together", KEY_LOGIN_PROVIDERS.together!, "secret")).toBe(true);
     });
+  });
+
+  test("normalizes a custom API-key validation discovery URL (#4724)", async () => {
+    globalThis.fetch = (async (input, init) => {
+      expect(String(input)).toBe("https://custom.example/api/openai/v1/models");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer secret");
+      expect(init?.redirect).toBe("error");
+      return Response.json({ data: [] });
+    }) as typeof fetch;
+
+    expect(await validateApiKey("custom-gateway", {
+      ...KEY_LOGIN_PROVIDERS.together!,
+      baseUrl: "https://custom.example/api/openai/v1///",
+    }, "secret")).toBe(true);
   });
 
   test("pins fixed OAuth discovery before resolving relative and default endpoints", async () => {
@@ -639,6 +744,47 @@ describe("registry-owned provider model discovery", () => {
       );
       expect(isRegistryModelDiscoveryUrl(entry.id, resolved)).toBe(true);
     }
+  });
+
+  // #4261: Antigravity is the one live-discovery row that never declared its own
+  // discovery spec, so the loop above did not cover it and the proof returned
+  // false for Antigravity's OWN canonical URL. Under a Clash/Surge/Mihomo TUN the
+  // benchmark fake-IP answer was then rejected and the model list came back empty.
+  // Pin all three halves: the declared spec is valid, the URL the adapter already
+  // sends is unchanged, and a custom base still fails the proof.
+  test("google-antigravity proves its own canonical CCA discovery RPC (#4261)", () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "google-antigravity");
+    if (!entry?.modelDiscovery) throw new Error("google-antigravity must declare modelDiscovery");
+    expect(providerModelDiscoverySpecError(entry.modelDiscovery)).toBeNull();
+
+    const seed = providerConfigSeed(entry);
+    const canonical = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+    expect(resolveProviderModelDiscoveryUrl(entry.id, seed, entry.baseUrl, canonical)).toBe(canonical);
+    expect(isRegistryModelDiscoveryUrl(entry.id, canonical)).toBe(true);
+    // Declaring the spec must not move the request the adapter already made.
+    expect(buildModelsRequest(seed, "agy-access-token", entry.id)).toMatchObject({
+      method: "POST",
+      url: canonical,
+    });
+
+    // allowBaseUrlOverride is set on this row, so a custom base must stay custom
+    // and must NOT inherit the fake-IP exception.
+    const custom = resolveProviderModelDiscoveryUrl(
+      entry.id,
+      { ...seed, baseUrl: "https://custom.example/proxy" },
+      "https://custom.example/proxy",
+      "https://custom.example/proxy/v1internal:fetchAvailableModels",
+    );
+    expect(custom).toBe("https://custom.example/proxy/v1internal:fetchAvailableModels");
+    expect(isRegistryModelDiscoveryUrl(entry.id, custom)).toBe(false);
+
+    for (const url of [
+      "https://evil.example/v1internal:fetchAvailableModels",
+      `${canonical}?token=1`,
+      `${canonical}#frag`,
+      canonical.replace("https:", "http:"),
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:other",
+    ]) expect(isRegistryModelDiscoveryUrl(entry.id, url)).toBe(false);
   });
 
   // The resolver accepts an effective (possibly custom) baseUrl while the proof

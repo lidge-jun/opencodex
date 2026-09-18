@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type Server } from "node:net";
 import { pathToFileURL } from "node:url";
-import { findAvailablePort, isAddrInUse, isPortAvailable, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../../src/server/ports";
+import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, isPortAvailable, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../../src/server/ports";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 
 // Prototype overrides exist only inside the disposable child process.
@@ -232,4 +232,15 @@ describe("port selection", () => {
     // 192.0.2.1 is TEST-NET-1 — typically EADDRNOTAVAIL / not assignable on desktop stacks.
     expect(await isPortAvailable(54321, "192.0.2.1")).toBe(false);
   });
+});
+
+
+test("auxiliary bind diagnostics preserve non-conflict causes without claiming a busy port", () => {
+  const cause = Object.assign(new Error("permission denied"), { code: "EACCES" });
+  const failure = new AuxiliaryListenerBindError("hub.managementIngress", 12345, "127.0.0.1", cause);
+  expect(failure.cause).toBe(cause);
+  expect(failure.message).toContain("hub.managementIngress at 127.0.0.1:12345");
+  expect(failure.message).not.toContain("busy");
+  expect(isAddrInUse(failure)).toBe(false);
+  expect(isAddrInUse({ code: "EADDRINUSE" })).toBe(true);
 });

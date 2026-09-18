@@ -36,6 +36,36 @@ export function extractKiroImages(content: string | OcxContentPart[]): KiroImage
 }
 
 /**
+ * Count images Kiro cannot inline, so the loss is never silent.
+ *
+ * Kiro's wire carries base64 bytes only, so a remote reference genuinely cannot be
+ * sent, and this proxy does not fetch one on a request path. Such a part used to be
+ * dropped with neither bytes nor any trace that an attachment existed. Counting them
+ * lets the payload builder attach a bounded marker instead.
+ *
+ * The count is all that crosses: a remote image URL can carry a signed token, so the
+ * URL itself is never echoed into prose.
+ */
+export function countKiroUninlinableImages(content: string | OcxContentPart[]): number {
+  if (typeof content === "string") return 0;
+  let count = 0;
+  for (const p of content) {
+    if (p.type !== "image") continue;
+    // Keyed on the scheme, not on parse success: a malformed data URL also fails
+    // parseDataUrlImage, and labelling that "remote reference" would misstate the cause.
+    if (!p.imageUrl.startsWith("data:")) count++;
+  }
+  return count;
+}
+
+/** Bounded, content-free marker for images Kiro could not inline. */
+export function kiroUninlinableImageMarker(count: number): string {
+  if (count <= 0) return "";
+  if (count === 1) return "[image omitted: remote image references are not supported by this provider]";
+  return "[" + String(count) + " images omitted: remote image references are not supported by this provider]";
+}
+
+/**
  * Conservative POLICY caps for the CodeWhisperer GenerateAssistantResponse payload,
  * whose limits are undocumented. Derived from adjacent AWS surfaces
  * (devlog/260714_image_normalization_pipeline/050): Bedrock `Message` allows 20 images

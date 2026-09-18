@@ -61,7 +61,7 @@ a known configured model id. Cursor may require a model-list refresh or restart 
 
 `fastRows` is an optional boolean and defaults to `true`. The raw OpenAI-style
 `/v1/models` list, Claude Code discovery, and client config exports (including pi, OpenCode,
-OMP, Hermes, OpenClaw, Kimi, Gajae, DSH, MCode, ZCode, Prime, and Aside) add a `<base-id>--fast` selector for every model whose
+OMP, Hermes, OpenClaw, Kimi, gjc, DSH, MCode, ZCode, Prime, Aside, Raycast, and omo) add a `<base-id>--fast` selector for every model whose
 resolved Fast policy is eligible. Selecting one routes the base model and requests the `priority`
 service tier — the same Fast the Codex app exposes through its picker toggle. The base row stays
 listed, so the row is an addition rather than a replacement.

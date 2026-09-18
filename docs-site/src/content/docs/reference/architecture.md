@@ -23,7 +23,8 @@ src/
 ├── vision/             # vision sidecar (describe + plan)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -34,17 +35,19 @@ src/
 └── index.ts            # public entry
 ```
 
-Three formerly large entry files now preserve compatibility as facades: `codex/catalog.ts` exports
-the seven focused `codex/catalog/*.ts` modules, `server/management-api.ts` dispatches to the nine
-`server/management/*.ts` modules, and `server/responses.ts` exports the five
-`server/responses/*.ts` modules.
+Several formerly large entry files now preserve compatibility as facades: `codex/catalog.ts` exports
+its focused `codex/catalog/*.ts` modules, `server/management-api.ts` dispatches to
+`server/management/*.ts`, `server/responses.ts` exports `server/responses/*.ts`, and `bridge.ts`
+re-exports `bridge/*.ts`. A facade is the stable import path, not the implementation: each step
+below names the module that owns the code, and `structure/transports/responses.md` carries the
+full owner inventory for the Responses surface.
 
 ## Request flow
 
-`server/index.ts` owns the HTTP boundary and delegates the Responses data plane to
+`server/index/serve-options.ts` owns the HTTP boundary and delegates the Responses data plane to
 the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 
-1. `server/index.ts` applies CORS and API authentication, rejects new work while draining, and
+1. `server/index/serve-options.ts` applies CORS and API authentication, rejects new work while draining, and
    records request lifecycle metadata. It serves `GET /v1/models`, `POST /v1/responses`,
    `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits`
    (relayed to an OpenAI-family upstream by `server/images.ts` for codex's built-in `image_gen`
@@ -52,7 +55,7 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
    Realtime call-create, relayed by `server/live.ts`), sideband WebSocket joins on
    `/v1/live/{callId}` (and `/v1/realtime?call_id=`), and the optional WebSocket upgrade on
    `/v1/responses`.
-2. `server/responses/core.ts` decompresses and parses JSON, expands locally remembered
+2. `server/responses/request-prepare.ts` decompresses and parses JSON, expands locally remembered
    `previous_response_id` input when available, then calls `responses/parser.ts`.
 3. `router.ts` resolves a bare or `provider/model` id. The server then resolves Codex account
    affinity, refreshes provider OAuth when needed, and applies the selected credential to the route.
@@ -65,7 +68,7 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
    executes the real search through the configured backend (the OpenAI/ChatGPT sidecar or Anthropic),
    feeds results back to the routed model, and repeats within the configured loop limit. This loop
    supports only the standard HTTP path; adapters that implement `runTurn`, such as Cursor, bypass it.
-7. `bridge.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal
+7. `bridge/sse.ts` / `bridge/response-json.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal
    status, latency, provider/model labels, and best-effort token usage without changing the response.
 
 ## The parser
@@ -86,7 +89,7 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 
 ## The bridge
 
-`bridge.ts` turns the adapter's internal `AdapterEvent` stream back into Responses SSE that Codex
+`bridge/sse.ts` turns the adapter's internal `AdapterEvent` stream back into Responses SSE that Codex
 understands:
 
 | AdapterEvent | Responses SSE emitted |
@@ -138,7 +141,7 @@ diagnostics.
 
 ## Transport and compaction
 
-`server/index.ts` serves HTTP/SSE on `/v1/responses` by default. If Codex attempts a Responses
+`server/index/serve-options.ts` serves HTTP/SSE on `/v1/responses` by default. If Codex attempts a Responses
 WebSocket upgrade while `websockets` is `false`, opencodex returns `426 upgrade_required`; Codex then
 falls back to HTTP for that session. When `"websockets": true` is set, the same endpoint accepts the
 upgrade and uses the WebSocket bridge.
@@ -157,6 +160,15 @@ upstream WS responses keep the downstream SSE contract and bypass `tee()` throug
 single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow
 closes the upstream and emits a terminal downstream `response.failed` event followed by `[DONE]`.
 
+For the final outgoing model `gpt-5.3-codex-spark`, canonical ChatGPT forwarding explicitly
+disables Responses Lite in both the HTTP header and native WS frame metadata, including when
+an alias selects Spark — but only when the outgoing body carries no `additional_tools` item with a nonempty `tools` array.
+That group IS the Lite tool-delivery shape, so a Spark body that still uses it keeps Lite ON even
+if a caller or configured header said otherwise; otherwise the frame would advertise non-Lite
+while the tools exist only in the Lite shape. A changed Lite identity retires the old socket; subsequent eligible
+requests with the same identity can reuse the new socket. Other models and gateways keep
+their existing Lite policy. Malformed native metadata still falls back to HTTP with its body unchanged.
+
 When a provider rejects a streaming request with HTTP 413 before SSE begins, OpenCodex emits one
 terminal `response.failed` event with `context_length_exceeded` instead of relaying the retryable
 unknown status. This lets Codex stop its reconnect loop and apply its own context-compaction policy
@@ -165,7 +177,7 @@ retry after compaction. Non-streaming API callers continue to receive the provid
 
 Codex context compaction works for routed models. `server/responses/compact.ts` handles
 `POST /v1/responses/compact` by running an internal routed summarization turn and returning compacted
-history, while `responses/parser.ts` and `bridge.ts` handle remote compaction v2
+history, while `responses/parser.ts` and `bridge/sse.ts` handle remote compaction v2
 `compaction_trigger` turns by emitting exactly one synthetic `compaction` output item.
 
 ## Caching & the catalog

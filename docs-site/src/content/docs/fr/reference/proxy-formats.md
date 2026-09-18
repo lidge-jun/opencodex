@@ -276,6 +276,10 @@ Voir [le guide Desktop](/fr/guides/claude-code/). Relecture thinking et cache re
 
 ## `POST /v1/live` et bande latérale en temps réel
 
+La liaison de compte ci-dessous concerne les clients Codex natifs. Pour la dictée et GPT-Live avec une clé API externe, consultez la [spécification audio en anglais](/reference/proxy-formats/#streaming-dictation).
+
+Connections > API keys propose deux sections, Dictée et Voix en direct. La clé de données reste uniquement en mémoire dans le formulaire. La dictée envoie le fichier choisi ; la vérification vocale attend une confirmation de session sans microphone. Une configuration présente ne garantit pas la connexion.
+
 `POST /v1/live` accepte la surface de création d'appel ChatGPT/Codex App sans cadre.
 `POST /v1/realtime/calls` accepte la surface de création d'appel OpenAI Realtime. opencodex sélectionne un
 route OpenAI-family éligible, normalise la demande de création d'appel pour l'authentification en amont
@@ -331,6 +335,8 @@ utilisez la matrice ci-dessous. « Dédié » signifie `X-OpenCodex-API-Key` ; l
 Les requêtes Responses et Chat acceptent une clé du proxy dans l’en-tête dédié ou dans Bearer. Sur une route native, l’identifiant Codex stocké sélectionné remplace le bearer d’admission ; sur les autres routes, ce bearer est supprimé. Il ne sert jamais d’identifiant upstream. Utilisez l’en-tête dédié si vous fournissez aussi un bearer distinct pour le fournisseur.
 
 Une route Cursor sans clé et sans OAuth peut utiliser ce bearer distinct de l’appelant, mais jamais un secret du proxy ni l’authentification ChatGPT main ajoutée automatiquement. La sélection Combo/policy et les réécritures effectives shadow/thread-spawn ne transmettent pas les identifiants bruts de l’appelant aux nouvelles cibles. Le routage OpenAI canonique peut restaurer l’unique bearer de l’appelant qui n’est pas une clé du proxy après un changement de route interne uniquement si son JWT contient un claim de compte ChatGPT et si tout en-tête de compte explicite correspond à ce claim. La transmission de l’authentification de l’appelant aux sidecars OpenAI facultatifs exige un unique JWT et un `chatgpt-account-id` explicite et correspondant. Les bearers opaques ne sont pas restaurés lors des changements de route, même avec un en-tête de compte explicite. Dans les autres cas, la cible finale doit disposer de son propre identifiant configuré, OAuth ou stocké ; sinon, la requête échoue localement. Un simple marqueur thread-spawn sans changement de route ne supprime pas les identifiants.
+
+Pour une requête Chat vers Cursor sans clé configurée, l’enrichissement facultatif par l’authentification main stockée est différé jusqu’à ce qu’un auxiliaire OpenAI soit réellement prévu et qu’un candidat Direct canonique soit disponible. Une requête Cursor indépendante ne réserve donc pas native main par cette voie et ne retarde pas le changement de profil. Les identifiants auxiliaires respectent les protections de démarrage et de changement de profil et restent séparés du bearer Cursor. Les auxiliaires Pool ou associés à un compte précis conservent leur sélection de compte.
 
 Le replay Claude ne conserve l’authentification main que dans un snapshot en mémoire dont le turn a acquis la propriété, et ne la reconstruit que pour une route ChatGPT canonique finale.
 

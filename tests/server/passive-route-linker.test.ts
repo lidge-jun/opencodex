@@ -1,3 +1,4 @@
+import { readResponsesCoreSource } from "../helpers/responses-core-source";
 import { describe, expect, test, beforeEach } from "bun:test";
 import {
   setPassiveRouteLinker,
@@ -64,8 +65,8 @@ describe("passive route linker slot", () => {
 describe("core request path boundary", () => {
   // Guard 1 for this phase: the per-request module must not name Lab or the
   // compatibility layer at all. Driven red by restoring the old import.
-  test("responses/core.ts does not import lab or routing/compatibility", async () => {
-    const source = await Bun.file(new URL("../../src/server/responses/core.ts", import.meta.url)).text();
+  test("Responses owners do not import lab or routing/compatibility", async () => {
+    const source = readResponsesCoreSource();
     expect(source).not.toContain("routing/compatibility");
     expect(source).not.toContain('from "../../lab/');
     expect(source).not.toContain("resolveProductionRouteSubject");

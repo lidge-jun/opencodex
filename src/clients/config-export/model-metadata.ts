@@ -73,6 +73,39 @@ export function inputModalitiesForClient(
 }
 
 /**
+ * Input modalities opencode's model schema accepts (opencode.ai/config.json, both
+ * `modalities.input` and `modalities.output`). Wider than our internal `text | image | audio`
+ * vocabulary, so unlike Pi and Gajae this filter can only drop a value no current ingress
+ * produces: `/api/custom-models`, `ocx models add` and the catalog writer all normalize to
+ * the internal three. It exists so a future ingress cannot do to opencode what `audio` did
+ * to Gajae, whose loader rejected the whole config file over one out-of-enum value.
+ */
+const OPENCODE_INPUT_MODALITIES: ReadonlySet<string> = new Set(["text", "audio", "image", "video", "pdf"]);
+
+/**
+ * opencode's per-model capability fields for one catalog row, or `undefined` when the row
+ * declares nothing.
+ *
+ * `undefined` rather than `{ input: ["text"] }`: opencode already computes an entry without
+ * capabilities as text-only, and leaving the keys out keeps every model that declares
+ * nothing byte-identical to what shipped before. A declared list is carried across as-is, so
+ * an audio-only row keeps `attachment: true` instead of being rewritten to text it cannot
+ * read — the same call Pi's exporter makes, in the opposite direction.
+ */
+export function opencodeModelCapabilities(
+  modalities: readonly string[] | undefined,
+): { attachment: boolean; modalities: { input: string[]; output: string[] } } | undefined {
+  const input: string[] = [];
+  for (const value of modalities ?? []) {
+    if (OPENCODE_INPUT_MODALITIES.has(value) && !input.includes(value)) input.push(value);
+  }
+  if (input.length === 0) return undefined;
+  // `attachment` is what opencode's client gates pasting on; `modalities` refines it into
+  // which kinds. Output is always text — nothing in the catalog declares otherwise.
+  return { attachment: input.some(value => value !== "text"), modalities: { input, output: ["text"] } };
+}
+
+/**
  * Label shared by every client: `"<displayName|id> (<native|provider|routed>)"`. The
  * provider suffix is what makes two same-named models from different upstreams
  * distinguishable in a client's model picker.

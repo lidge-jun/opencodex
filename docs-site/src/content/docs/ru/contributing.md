@@ -124,7 +124,7 @@ Pull request'ы с ребейзом приветствуются: ребейз �
 ## Добавление провайдера в каталог
 
 Все селекторы провайдеров и seed-данные выводятся из канонического реестра
-(`src/providers/registry.ts`):
+(`src/providers/registry/entries-extended.ts`):
 
 ```ts
 {

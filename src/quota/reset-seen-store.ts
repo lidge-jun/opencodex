@@ -306,6 +306,7 @@ export function swapLastObservedWindows(
   scope: string,
   accountTag: string,
   windows: ReadonlyArray<QuotaWindowObservation>,
+  retainAbsentShortWindow = false,
 ): ReadonlyArray<QuotaWindowObservation> | undefined {
   hydrate();
   const key = observedKey(scope, accountTag);
@@ -317,7 +318,14 @@ export function swapLastObservedWindows(
   // Measured: the hottest scope was evicted and its next genuine scheduled reset was
   // silently missed, because a re-baselined row has no previous value to diff against.
   observed.delete(key);
-  observed.set(key, windows.map(window => ({ ...window })));
+  const next = windows.map(window => ({ ...window }));
+  // Codex display eviction is not a new short observation. Retain notification history
+  // with its original clock until a real reading replaces it or account cleanup forgets it.
+  if (retainAbsentShortWindow && !next.some(window => window.window === "5h")) {
+    const short = previous?.find(window => window.window === "5h");
+    if (short) next.push({ ...short });
+  }
+  observed.set(key, next);
   if (observed.size > MAX_OBSERVED_SCOPES) {
     // Least-recently-observed first. Evicting only costs a re-baseline, never a duplicate
     // notification, because the claim ledger is separate — but a re-baseline DOES cost the

@@ -1,0 +1,11 @@
+# Promotion implementation
+
+1. Pin RC af50c6d3451078a7d298b044c08fd2684c9e8eeb. Audit release-specific risks and open blockers using current GitHub state. Dispatch lifecycle for RC if absent.
+2. Default main still has workflow_call only, so workflow_dispatch is not yet registered. Use the existing scripts/bump-dev-version.ts 2.43.0 package.json locally on a dedicated branch and open a one-file package.json 2.43.0 -> 2.44.0 pre-move PR. Merge only after exact-head checks; this bootstraps the first release of the new pre-move workflow without changing it. Do not promote the new dev version into release payload.
+3. In isolated /private/tmp/ocx-release-01a07240, build promotion branch from origin/preview, merge pinned RC preserving ancestry, resolve package.json only to 2.43.0-preview.20260906. Any non-version conflict is audited explicitly. Push promotion branch, create templated PR to preview, inspect checks and owner-authorized merge. Prove RC ancestor and tree parity excluding package.json against RC. Wait branch push ci.yml and service-lifecycle.yml exact merged SHA. Publish via release.yml on preview, version and expected-sha pinned, tag preview, dry-run false. Verify GitHub/npm/tag before stable.
+4. Build main promotion from origin/main, merge the same pinned RC, set package.json 2.43.0. Follow same PR/check/ancestry/tree proof and branch push gates. Publish release.yml main tag latest with exact expected-sha.
+5. Verify registry latest and preview versions, gitHead against merged commits, release tags, release workflows and clean dedicated worktrees. Re-check original checkout changes preserved. Record evidence and close FSM.
+
+No production code edits intended. Changes are package versions and merge ancestry only; prepublish assets produced by release workflow. Main and preview independently inherit RC; preview need not be main ancestor. Public devlog omits unreleased security findings; any such analysis stays in ignored scratch.
+
+Execution amendment: the owner reiterated shipping this candidate now and deferring fixes. Preview/main PR preparation is parallel because both consume the same immutable RC; publication stays preview first, stable second. PRs: #3676 pre-move (1a6ebc22c), #3677 preview (5c2d63465), #3678 main (af50c6d34). Local broad pre-push hook deferred to exact-head hosted CI; no gate weakening or workflow edits.

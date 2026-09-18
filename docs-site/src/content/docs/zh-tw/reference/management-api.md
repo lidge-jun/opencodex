@@ -64,10 +64,14 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/grok` | 讀取 Grok 受管設定狀態與候選模型 | 400 狀態讀取失敗 |
 | `PUT /api/grok/selection` | 持久化排除的 Grok 模型 | 400 無效或過大選擇 |
 | `POST /api/grok/apply` | 透過受管同步套用持久化的 Grok 設定 | 409 `grok_apply_busy`；400/500 套用失敗 |
+| `GET /api/grok/reset-coupons?accountId=...` | 讀取活躍或指定 xAI 帳號剩餘的 Grok 計費重置 token 與有效期間 | 400 缺失帳號；401 未認證；502 上游 gRPC-Web 錯誤 |
+| `POST /api/grok/reset-coupons/consume` | 兌換一個合格的 reset coupon。請求主體為 `{ accountId?, tokenId?, operationId? }`。選用的 `operationId`（UUIDv4）可讓兌換具備冪等性：重複相同 id 會重播持久化結果，而不會重複兌換。 | 400 無效的 JSON/UUID；401 未認證；409 `identity_mismatch`；502 上游錯誤；503 ledger 容量 |
 | `GET, PUT /api/claude-desktop` | 讀取或持久化 Claude Desktop 路由／原生設定檔 | 400 無效或不可用指派 |
 | `POST /api/claude-desktop/apply` | 將儲存的設定檔寫入 Claude Desktop 的受管設定 | 400/500 寫入失敗 |
 | `GET /api/claude-desktop/status` | 檢查已儲存 vs 已套用設定檔與 Desktop 健康 | 400 狀態讀取失敗 |
 | `GET, PUT /api/claude-code` | 讀取或更新 Claude Code 閘道、auth-mode、model-map、context、agent 與 sidecar 設定 | 400 無效欄位或結構 |
+
+儀表板從 **Providers > xAI Grok > Accounts** 驅動這兩條 coupon 路徑：每個已登入帳號列都帶有票券徽章，顯示剩餘的 reset coupon 數量，徽章會開啟對話框，列出有效期間並兌換最接近到期的 reset coupon。該對話框會送出由客戶端鑄造的 `operationId`，並在逾時後停止送出而不重試，因為日誌記錄仍為開啟的兌換會再次執行。`ocx account grok-reset-coupons` 仍是終端機等價指令。
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 
@@ -129,6 +133,8 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET, PUT /api/storage/cleanup-policy` | 讀取或更新排程清理政策與工作狀態 | 400 無效政策 |
 | `POST /api/storage/cleanup-policy/run` | 啟動手動清理政策執行 | 409 `already_running`；500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | 僅測試的政策串流 hook | 不可用時 404 `not_found` |
+
+如果某行超過現有解析器的大小限制，`GET /api/usage` 和 `GET /api/keys` 會保留可讀取行的彙總，並在回應層級加入 `usageIncomplete: true` 和 `usageIncompleteReason: "oversized_rows"`。快取和增量附加會保留此診斷，即使結果為空或沒有篩選符合項目；重建時會重新計算。不會縮短供應商、模型或 API 金鑰識別碼來容納該行。沒有此標記不代表所有記錄均有效。它與 `historyTruncated`、`entriesTruncated` 及 token 測量覆蓋率相互獨立。
 
 `models`、`providers` 及 `days[].models` 中的列也帶有 `cacheHitRate`：表示由供應商提示快取提供的輸入權杖比例，並限制在 `[0, 1]`。當供應商未回報快取遙測資料，或該列沒有輸入權杖時，其值為 `null`，絕不會是 `0`；因為「沒有快取資料」與「確實為 0% 的命中率」是不同事實，若圖表將兩者呈現為相同狀態，便會造成誤導。
 

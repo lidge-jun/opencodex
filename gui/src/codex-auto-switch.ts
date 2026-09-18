@@ -1,5 +1,7 @@
 export const DEFAULT_AUTO_SWITCH_THRESHOLD = 80;
 
+import { CODEX_POOL_PROVIDER, putPoolSettings } from "./pool-settings";
+
 const AUTO_SWITCH_PUT_TIMEOUT_MS = 10_000;
 
 export type AutoSwitchFetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -78,15 +80,15 @@ export async function putAutoSwitchThreshold(
   timeoutMs = AUTO_SWITCH_PUT_TIMEOUT_MS,
 ): Promise<boolean> {
   if (!Number.isInteger(threshold) || threshold < 0 || threshold > 100) return false;
-  try {
-    const response = await fetchImpl(`${apiBase}/api/codex-auth/auto-switch`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ threshold }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  // Through the shared client, which maps `threshold` onto the contract's
+  // `autoSwitchThreshold` and sends the provider. This function reports only ok/not-ok, so a
+  // body the route silently ignored would read here as a successful save that changed nothing.
+  const settings = await putPoolSettings(
+    apiBase,
+    CODEX_POOL_PROVIDER,
+    { threshold },
+    (input, init) => fetchImpl(input, init as RequestInit),
+    { signal: AbortSignal.timeout(timeoutMs) },
+  );
+  return settings !== null;
 }

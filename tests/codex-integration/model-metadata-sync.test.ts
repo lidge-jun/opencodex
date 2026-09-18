@@ -22,9 +22,19 @@ const GENERATED = repoPath("src/generated/model-metadata.ts");
 const SOURCE = repoPath("scripts/model-metadata.source.json");
 
 describe("generated model metadata stays in sync with its source", () => {
-  test.skipIf(!existsSync(SOURCE))(
+  test(
     "regenerating reproduces the committed file byte for byte",
     async () => {
+      // The snapshot is tracked in this repository, so a missing input is a broken checkout,
+      // not an environment variation. This used to be `test.skipIf(!existsSync(SOURCE))`, which
+      // meant the drift gate this file exists to provide disappeared without a trace the moment
+      // the input went missing — including in CI, where nothing else compares the generated file
+      // against its source.
+      expect(
+        existsSync(SOURCE),
+        `${SOURCE} is missing; the generator input is repository-owned, so this checkout is incomplete`,
+      ).toBe(true);
+
       const outDir = mkdtempSync(join(tmpdir(), "model-metadata-sync-"));
       const outPath = join(outDir, "model-metadata.ts");
 

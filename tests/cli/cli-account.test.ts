@@ -586,6 +586,70 @@ afterEach(() => {
 });
 
 describe("ocx account CLI (issue #180 matrix)", () => {
+  test("OAuth quota diagnostics use a closed code in human and JSON output", async () => {
+    oauthAccounts = [{ id: "acct_1", quotaUnavailable: true, quotaFailure: "dns_failed" }];
+    const human = await run(["list", "anthropic", "--quota"]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("unavailable (dns_failed)");
+    const machine = await run(["list", "anthropic", "--quota", "--json"]);
+    expect(JSON.parse(machine.stdout).accounts[0].quotaFailure).toBe("dns_failed");
+    oauthAccounts = [{ id: "acct_1", quotaUnavailable: true, quotaFailure: RAW_SENTINEL }];
+    const unknown = await run(["list", "anthropic", "--quota", "--json"]);
+    expect(unknown.stdout).not.toContain(RAW_SENTINEL);
+    expect(JSON.parse(unknown.stdout).accounts[0]).not.toHaveProperty("quotaFailure");
+  });
+
+  test("plan exclusions survive the API projection and use the policy plan", async () => {
+    codexAccounts = [{ id: "policy", plan: "plus", selectionExcludedReason: "plan_excluded", selectionExcludedPlan: "free", paused: false }];
+    const human = await run(["list", "openai"]);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("not-auto-selected(plan=free)");
+    const machine = await run(["list", "openai", "--json"]);
+    expect(JSON.parse(machine.stdout).accounts[0]).toMatchObject({ selectionExcludedReason: "plan_excluded", selectionExcludedPlan: "free" });
+    codexAccounts = [{ id: "policy", plan: "plus", selectionExcludedReason: "unrecognized", selectionExcludedPlan: "free" }];
+    expect((await run(["list", "openai"])).stdout).not.toContain("not-auto-selected");
+    expect(JSON.parse((await run(["list", "openai", "--json"])).stdout).accounts[0]).not.toHaveProperty("selectionExcludedReason");
+  });
+
+  test.each(["estimated", "insufficient-evidence"] as const)("human and JSON history preserve capacity status %s", async status => {
+    const capacity = status === "estimated" ? { status, estimates: [{ window: "weekly", estimatedTokens: 10000, sampleCount: 2, confidence: "low" }] }
+      : { status, reason: "ledger_truncated", estimates: [] };
+    const deps: AccountDeps = { baseUrl: "http://127.0.0.1:10100", fetchImpl: (async () => Response.json({ observations: [{
+      observedAt: 1_800_000_000_000, source: "wham", windows: [{ family: "account", window: "weekly", usedPercent: 20 }],
+    }], capacity })) as typeof fetch };
+    const human = await run(["history", "openai", "pool-a"], deps);
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain(status === "estimated" ? "~10000 reported tokens / 100%\t2 samples" : "insufficient evidence (ledger_truncated)");
+    const json = await run(["history", "openai", "pool-a", "--json"], deps);
+    expect(JSON.parse(json.stdout).capacity).toEqual(capacity);
+  });
+
+  test("human quota history renders populated rows and safely handles oversized reset dates", async () => {
+    const result = await run(["history", "openai", "pool-a"], { baseUrl: "http://127.0.0.1:10100", fetchImpl: (async () => Response.json({
+      observations: [{ observedAt: 1_800_000_000_000, source: "wham", windows: [
+        { family: "account", window: "weekly", usedPercent: 20, resetAtMs: 1e20 },
+      ] }],
+    })) as typeof fetch });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("2027-01-15T08:00:00.000Z\twham\taccount/weekly\t20%\tunknown");
+  });
+
+  test("history reads one cached endpoint and rejects invalid arguments before I/O", async () => {
+    let calls = 0;
+    const deps: AccountDeps = { baseUrl: "http://127.0.0.1:10100", fetchImpl: (async input => {
+      calls++;
+      expect(String(input)).toBe("http://127.0.0.1:10100/api/codex-auth/quota/history?accountId=pool-a&limit=2");
+      return Response.json({ accountId: "pool-a", observations: [], retention: { maxObservations: 200, maxAgeDays: 30 }, truncated: false });
+    }) as typeof fetch };
+    const result = await run(["history", "openai", "pool-a", "--limit", "2", "--json"], deps);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).observations).toEqual([]);
+    for (const args of [["anthropic", "pool-a"], ["openai", "__main__"], ["openai", "pool-a", "--limit", "201"], ["openai", "pool-a", "--unknown"]]) {
+      expect((await run(["history", ...args], deps)).code).toBe(1);
+    }
+    expect(calls).toBe(1);
+  });
+
   test.each([100, 12])("pending validation stays visible at %s percent usage without exposing raw health details", async weeklyPercent => {
     codexAccounts = [{ id: "pending", email: "p***@example.test", quota: { weeklyPercent },
       health: { status: "warning", reason: "validation_pending", message: RAW_SENTINEL } }];

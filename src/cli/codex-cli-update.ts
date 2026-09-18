@@ -3,6 +3,14 @@ import {
   type CodexCliInstallProvenanceDeps,
   type CodexCliInstallReport,
 } from "../codex/cli-install-provenance";
+import type {
+  CodexCliInstallationIdentityInput,
+  CodexCliInstallationIdentityReport,
+} from "../codex/cli-installation-identity";
+import type {
+  CodexCliInstallationSnapshot,
+  CodexCliInstallationTargetDerivation,
+} from "../codex/cli-installation-targets";
 import {
   applyCodexCliUpdatePlan,
   createCodexCliUpdatePlan,
@@ -17,6 +25,8 @@ import { trustedNodeLauncherContext } from "./launcher-context";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
   ocx system codex-cli-update check [--json]
+  ocx system codex-cli-update attest [--json]
+  ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
   ocx system codex-cli-update plan [--channel latest] [--json]
   ocx system codex-cli-update apply --plan <id> [--json]`;
 
@@ -25,12 +35,35 @@ const PLAN_ID_RE = /^[0-9a-f]{32}$/;
 export type ParsedCodexCliUpdateArgs =
   | Readonly<{ action: "check"; json: boolean }>
   | Readonly<{ action: "plan"; json: boolean; channel: CodexCliUpdateChannel }>
-  | Readonly<{ action: "apply"; json: boolean; planId: string }>;
+  | Readonly<{ action: "apply"; json: boolean; planId: string }>
+  | Readonly<{ json: boolean; attest: CodexCliInstallationIdentityInput | "selected" }>;
 
 export interface CodexCliUpdateCommandDeps {
   readonly inspectInstall?: (deps: CodexCliInstallProvenanceDeps) => Promise<CodexCliInstallReport>;
+  readonly inspectIdentity?: (input: CodexCliInstallationIdentityInput) => Promise<CodexCliInstallationIdentityReport>;
+  readonly deriveInstallationInput?: (
+    snapshot: CodexCliInstallationSnapshot,
+  ) => CodexCliInstallationTargetDerivation;
   readonly createPlan?: (deps: CodexCliUpdatePlanDeps) => Promise<CodexCliUpdatePlan>;
   readonly applyPlan?: (planId: string, deps: CodexCliUpdateApplyDeps) => Promise<CodexCliUpdateApplyResult>;
+}
+
+function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
+  return [
+    `status: ${report.status}`,
+    `reason: ${report.reason}`,
+    `candidate-source: ${report.candidateSource}`,
+    `installation-identity-observed: ${report.installationIdentityObserved ? "yes" : "no"}`,
+    `selection-attested: ${report.selectionAttested ? "yes" : "no"}`,
+    `managed: ${report.managed ? "yes" : "no"}`,
+    `apply-allowed: ${report.applyAllowed ? "yes" : "no"}`,
+    `package-version: ${report.packageVersion ?? "unavailable"}`,
+    `npm-version: ${report.npmVersion ?? "unavailable"}`,
+    `identity-digest: ${report.identityDigest ?? "unavailable"}`,
+    `proof: ${report.proof ?? "unavailable"}`,
+    `toolchain: ${report.toolchain}`,
+    "scope: installation identity only; runtime selection and update ownership are not attested",
+  ];
 }
 
 function installSummary(report: CodexCliInstallReport): string[] {
@@ -115,9 +148,39 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
     }
     rest.push(token);
   }
+  if (rest[0] === "attest") {
+    // No options: attest the selected candidate identified from the proof-bound
+    // launcher snapshot. The four explicit paths remain all-or-none.
+    if (rest.length === 1) {
+      return Object.freeze({ json, attest: "selected" as const });
+    }
+    const options = new Map<string, keyof CodexCliInstallationIdentityInput>([
+      ["--candidate", "candidate"], ["--npm-prefix", "npmPrefix"],
+      ["--npm-cli", "npmCli"], ["--node", "node"],
+    ]);
+    const input: Partial<Record<keyof CodexCliInstallationIdentityInput, string>> = {};
+    for (let index = 1; index < rest.length; index += 2) {
+      const key = options.get(rest[index]!);
+      if (!key || input[key] !== undefined) {
+        throw new CliUsageError("unsupported or duplicate attest option", CODEX_CLI_UPDATE_USAGE);
+      }
+      const value = rest[index + 1];
+      if (!value || !value.trim() || /[\0\r\n]/.test(value)
+        || !(value.startsWith("/") || /^[a-z]:[\\/]/i.test(value))) {
+        throw new CliUsageError("attest options require explicit absolute paths", CODEX_CLI_UPDATE_USAGE);
+      }
+      input[key] = value;
+    }
+    if (!input.candidate || !input.npmPrefix || !input.npmCli || !input.node) {
+      throw new CliUsageError("attest requires --candidate, --npm-prefix, --npm-cli and --node", CODEX_CLI_UPDATE_USAGE);
+    }
+    return Object.freeze({ json, attest: Object.freeze({
+      candidate: input.candidate, npmPrefix: input.npmPrefix, npmCli: input.npmCli, node: input.node,
+    }) });
+  }
   const action = rest[0];
   if (action !== "check" && action !== "plan" && action !== "apply") {
-    throw new CliUsageError("codex-cli-update action must be check, plan or apply", CODEX_CLI_UPDATE_USAGE);
+    throw new CliUsageError("codex-cli-update action must be check, attest, plan or apply", CODEX_CLI_UPDATE_USAGE);
   }
 
   if (action === "check") {
@@ -206,6 +269,36 @@ export async function handleCodexCliUpdateCommand(
   // outcome exit code is decided here and only a thrown error is left to runCliAction.
   let outcome = 0;
   const code = await runCliAction(async () => {
+    if ("attest" in parsed) {
+      let report: CodexCliInstallationIdentityReport;
+      try {
+        const identityModule = await import("../codex/cli-installation-identity");
+        const inspectIdentity = deps.inspectIdentity ?? identityModule.inspectCodexCliInstallationIdentity;
+        if (parsed.attest === "selected") {
+          // The proof-bound launcher snapshot is the only trusted source for the
+          // selected candidate; a direct Bun/source launch has none and refuses.
+          const snapshot = trustedNodeLauncherContext()?.codexCliInspectionEnv;
+          const derive = deps.deriveInstallationInput
+            ?? (await import("../codex/cli-installation-targets")).deriveCodexCliInstallationInput;
+          const derived = derive({
+            codexCliPath: snapshot?.codexCliPath ?? null,
+            path: snapshot?.path ?? null,
+            pathExt: snapshot?.pathExt ?? null,
+          });
+          report = derived.kind === "derived"
+            ? await inspectIdentity(derived.input)
+            : identityModule.codexCliInstallationRefusal(derived.reason, "selected");
+        } else {
+          report = await inspectIdentity(parsed.attest);
+        }
+      } catch {
+        // Filesystem/native errors can contain the explicit private paths. The
+        // read-only inspector normally returns a refusal; unexpected errors stay redacted.
+        throw new Error("Installation identity inspection failed");
+      }
+      printData(report, parsed.json, identitySummary(report));
+      return;
+    }
     if (parsed.action === "check") {
       const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(inspectionDeps());
       printData(report, parsed.json, installSummary(report));

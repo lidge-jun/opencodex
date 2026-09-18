@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { cancelBodyOnAbort } from "../../src/lib/abort";
-import { readBodyCapped } from "../../src/server/live";
+import { handleLive, readBodyCapped } from "../../src/server/live";
+import { handleResponses } from "../../src/server/responses";
+import type { OcxConfig } from "../../src/types";
 
 function bodyWithCancelSpy(): { body: ReadableStream<Uint8Array>; cancelled: () => boolean } {
   let cancelled = false;
@@ -64,56 +66,220 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     expect(cancelled).toBe(true);
   });
 
-  // Wiring guard. The unit tests above exercise readBodyCapped and cancelBodyOnAbort
-  // directly, which means they ALL still pass when the /v1/live relay forgets to call the
-  // guard — an earlier revision of this change imported the helper and never invoked it, and
-  // no test noticed. Asserting the call site is crude but it is the thing that was actually
-  // missing.
-  test("the live relay attaches the body guard before consuming the upstream body", async () => {
-    const source = await Bun.file(new URL("../../src/server/live.ts", import.meta.url)).text();
+  test("an aborted live relay reaches fetch before settling its locked upstream body", async () => {
+    const originalFetch = globalThis.fetch;
+    const requestAbort = new AbortController();
+    const events: string[] = [];
+    let rejectRead!: (reason: unknown) => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
 
-    const guardAt = source.indexOf("cancelBodyOnAbort(upstreamResponse.body");
-    const readAt = source.indexOf("payload = await readBodyCapped(");
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(readAt).toBeGreaterThan(-1);
-    // Guard first, read second.
-    expect(guardAt).toBeLessThan(readAt);
-    // And detached on the normal path.
-    expect(source).toContain("detachBodyGuard()");
+    const reader = {
+      read(): Promise<ReadableStreamReadResult<Uint8Array>> {
+        events.push("reader.read");
+        markReadStarted();
+        return new Promise((_resolve, reject) => { rejectRead = reject; });
+      },
+      cancel(): Promise<void> {
+        events.push("reader.cancel");
+        return Promise.resolve();
+      },
+      releaseLock(): void {
+        events.push("reader.releaseLock");
+      },
+    } as ReadableStreamDefaultReader<Uint8Array>;
+    const body = {
+      getReader(): ReadableStreamDefaultReader<Uint8Array> {
+        events.push("body.getReader");
+        return reader;
+      },
+      cancel(): Promise<void> {
+        events.push("body.cancel");
+        return Promise.reject(new TypeError("body is locked"));
+      },
+    } as ReadableStream<Uint8Array>;
+
+    globalThis.fetch = (async (_input, init) => {
+      const signal = init?.signal;
+      if (!(signal instanceof AbortSignal)) throw new Error("live relay omitted its upstream abort signal");
+      signal.addEventListener("abort", () => {
+        events.push("fetch.abort");
+        rejectRead(signal.reason);
+      }, { once: true });
+      return {
+        status: 201,
+        headers: new Headers({ "content-type": "application/sdp" }),
+        body,
+      } as Response;
+    }) as typeof fetch;
+
+    const config = {
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-test-live",
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const pending = handleLive(new Request("http://localhost/v1/live", {
+        method: "POST",
+        headers: { "content-type": "application/sdp" },
+        body: "offer",
+        signal: requestAbort.signal,
+      }), config, { model: "", provider: "" });
+      await readStarted;
+      requestAbort.abort(new DOMException("client closed request", "AbortError"));
+
+      expect((await pending).status).toBe(499);
+      // Fetch observes the client abort first; the pre-reader guard then attempts body-level
+      // settlement, and the reader owns the locked-stream fallback before releasing its lock.
+      expect(events).toEqual([
+        "body.getReader",
+        "reader.read",
+        "fetch.abort",
+        "body.cancel",
+        "reader.cancel",
+        "reader.releaseLock",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  test("the bounded reader exclusively owns all non-combo Responses error bodies", async () => {
-    const source = await Bun.file(new URL("../../src/server/responses/core.ts", import.meta.url)).text();
+  test.each([
+    { label: "passthrough", adapter: "openai-responses", model: "fixture/model", combos: undefined },
+    { label: "translated adapter", adapter: "openai-chat", model: "fixture/model", combos: undefined },
+    {
+      label: "combo",
+      adapter: "openai-responses",
+      model: "combo/fallback",
+      combos: { fallback: { strategy: "failover" as const, targets: [{ provider: "fixture", model: "model" }] } },
+    },
+  ] as const)("$label Responses failure consumes each original body exactly once", async ({ adapter, model, combos }) => {
+    const originalFetch = globalThis.fetch;
+    const bodyReads: number[] = [];
+    globalThis.fetch = (async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: { message: "upstream failed" } })));
+          controller.close();
+        },
+      });
+      const response = new Response(body, {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+      const index = bodyReads.push(0) - 1;
+      Object.defineProperty(response, "body", {
+        configurable: true,
+        get() {
+          bodyReads[index] += 1;
+          return body;
+        },
+      });
+      return response;
+    }) as typeof fetch;
 
-    expect(source.match(/\breadDisplaySafeErrorText\(/g)).toHaveLength(4);
-    expect(source).not.toContain("detachPassthroughErrorGuard");
-    expect(source).not.toContain("detachErrorBodyGuard");
-    expect(source).not.toContain("detachContinuationErrorGuard");
-    expect(source).not.toContain("upstreamResponse.text().catch(() => \"\")");
-    expect(source).not.toContain("upstreamResponse.text().catch(() => \"unknown error\")");
-    expect(source).not.toContain("response.text().catch(() => \"unknown error\")");
+    const config = {
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter,
+          baseUrl: "https://fixture.example.test/v1",
+          apiKey: "sk-test",
+        },
+      },
+      ...(combos ? { combos } : {}),
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+      await response.text();
+      expect(bodyReads.length).toBeGreaterThan(0);
+      expect(bodyReads.every(reads => reads === 1)).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
-  // The combo branches are deliberately NOT guarded: consumeComboFailure ->
-  // readBoundedResponseBody reads `response.body` itself with the abort signal threaded
-  // through, and the combo contract is that the getter is touched exactly once (pinned by
-  // "captures passthrough failed usage from its original bounded body exactly once" in
-  // tests/server/server-combo-failover-e2e.test.ts). An earlier revision guarded them anyway and
-  // broke that test by adding a second `.body` read.
-  test("the combo failure branches do not add a second body read", async () => {
-    const source = await Bun.file(new URL("../../src/server/responses/core.ts", import.meta.url)).text();
-
-    for (const marker of ["const failure = await consumeComboFailure("]) {
-      let from = 0;
-      for (;;) {
-        const at = source.indexOf(marker, from);
-        if (at === -1) break;
-        // Look back a short window: no body guard may be attached immediately before a
-        // combo consumption.
-        const preceding = source.slice(Math.max(0, at - 400), at);
-        expect(preceding).not.toContain("cancelBodyOnAbort(upstreamResponse.body");
-        from = at + marker.length;
+  test("terminal continuation failure consumes its original body exactly once", async () => {
+    const originalFetch = globalThis.fetch;
+    const continuationBodyReads: number[] = [];
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) {
+        return new Response([
+          'data: {"choices":[{"delta":{"content":"我接下来会修改相关文件。"}}]}\n\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+          "data: [DONE]\n\n",
+        ].join(""), { headers: { "content-type": "text/event-stream" } });
       }
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: { message: "continuation failed" } })));
+          controller.close();
+        },
+      });
+      const response = new Response(body, {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+      const index = continuationBodyReads.push(0) - 1;
+      Object.defineProperty(response, "body", {
+        configurable: true,
+        get() {
+          continuationBodyReads[index] += 1;
+          return body;
+        },
+      });
+      return response;
+    }) as typeof fetch;
+
+    const config = {
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-chat",
+          baseUrl: "https://fixture.example.test/v1",
+          apiKey: "sk-test",
+          terminalContinuationGuard: true,
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/model",
+          input: "请检查这个问题并修复代码",
+          stream: true,
+          tools: [{
+            type: "function",
+            name: "exec_command",
+            description: "run a command",
+            parameters: { type: "object" },
+          }],
+        }),
+      }), config, { model: "", provider: "" });
+      await response.text();
+
+      expect(response.status).toBe(200);
+      expect(continuationBodyReads.length).toBeGreaterThan(0);
+      expect(continuationBodyReads.every(reads => reads === 1)).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 

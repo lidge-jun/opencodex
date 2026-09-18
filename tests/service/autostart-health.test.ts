@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { deriveStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../../src/codex/autostart-health";
+import { collectStartupHealth, deriveStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../../src/codex/autostart-health";
 import { unusedProxyWarningLines } from "../../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../../src/codex/inject";
+import { isCodexClientProcess, listCodexClientProcesses } from "../../src/codex/native-profile-processes";
+import { collectRoutingAdoption, deriveRoutingAdoption } from "../../src/codex/routing-adoption";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../../src/server/startup-health-cache";
 import type { OcxConfig } from "../../src/types";
@@ -393,5 +395,219 @@ describe("routing visibility (#2411)", () => {
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-remote" })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-local" })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "unknown" })).toEqual([]);
+  });
+});
+
+// #4550: configured routing is not adopted routing. A Codex client that started
+// before the route was injected cannot have read it, so status must name the
+// stale pid instead of presenting config on disk as live traffic. Everything
+// here runs through the pure derivation and the injected lister/start-time
+// seams — no real process table or journal is touched.
+describe("routing adoption (#4550)", () => {
+  const injectedAtMs = 1_700_000_000_000;
+
+  const staleClientEvidence = (
+    clients: ReadonlyArray<{ pid: number; startedAtMs: number | null }> = [
+      { pid: 4242, startedAtMs: injectedAtMs - 60_000 },
+    ],
+  ) => deriveRoutingAdoption({ routingKind: "opencodex-local", injectedAtMs, clients });
+
+  test("a client started before the injection is pending-client-restart with its pid named", () => {
+    const evidence = staleClientEvidence();
+    expect(evidence.adoption).toBe("pending-client-restart");
+    expect(evidence.staleClients).toEqual([{ pid: 4242, startedAtMs: injectedAtMs - 60_000 }]);
+    expect(evidence.observedClients).toBe(1);
+  });
+
+  test("a client started after the injection is adopted", () => {
+    const evidence = deriveRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      clients: [{ pid: 4242, startedAtMs: injectedAtMs + 60_000 }],
+    });
+    expect(evidence).toMatchObject({ adoption: "adopted", staleClients: [], observedClients: 1 });
+  });
+
+  test("a start in the same wall-clock second as the injection is not stale", () => {
+    // ps -o lstart is second-granularity, so a millisecond lead inside the same
+    // second is a rounding artifact, not proof the client predates the route.
+    // Both values sit inside second 1700000000; the comparison must truncate.
+    const evidence = deriveRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs: injectedAtMs + 900,
+      clients: [{ pid: 4242, startedAtMs: injectedAtMs + 100 }],
+    });
+    expect(evidence.adoption).toBe("adopted");
+    expect(evidence.staleClients).toEqual([]);
+  });
+
+  test("enumeration failure, a missing injection time, and an unreadable start all resolve to unknown", () => {
+    // "Could not tell" must never collapse into a clean bill of health.
+    expect(deriveRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      clients: [{ pid: 4242, startedAtMs: injectedAtMs + 60_000 }],
+      enumerationFailed: true,
+    }).adoption).toBe("unknown");
+    expect(deriveRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs: null,
+      clients: [{ pid: 4242, startedAtMs: injectedAtMs - 60_000 }],
+    }).adoption).toBe("unknown");
+    expect(deriveRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      clients: [{ pid: 4242, startedAtMs: null }],
+    }).adoption).toBe("unknown");
+  });
+
+  test("a stale client outranks an unreadable one", () => {
+    const evidence = staleClientEvidence([
+      { pid: 4242, startedAtMs: injectedAtMs - 60_000 },
+      { pid: 4343, startedAtMs: null },
+    ]);
+    expect(evidence.adoption).toBe("pending-client-restart");
+    expect(evidence.staleClients).toEqual([{ pid: 4242, startedAtMs: injectedAtMs - 60_000 }]);
+  });
+
+  test.each(["native", "custom-local"] as const)("routing kind %s is not-applicable without enumerating clients", (routingKind) => {
+    // We do not speak for routing we do not own — the collector must not even
+    // walk the process table for a kind that is not opencodex-local.
+    let listCalls = 0;
+    const evidence = collectRoutingAdoption({
+      routingKind,
+      listClients: () => {
+        listCalls += 1;
+        return { status: "enumerated", processes: [] };
+      },
+      readStartMsBatch: () => new Map(),
+    });
+    expect(evidence.adoption).toBe("not-applicable");
+    expect(listCalls).toBe(0);
+  });
+
+  test("collectRoutingAdoption reads start times through its seams and names the stale pid", () => {
+    const evidence = collectRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      platform: "linux",
+      listClients: () => ({
+        status: "enumerated" as const,
+        processes: [{ pid: 4242, commandLine: "codex chat" }],
+      }),
+      readStartMsBatch: pids => new Map(pids.map(pid => [pid, injectedAtMs - 60_000])),
+    });
+    expect(evidence.adoption).toBe("pending-client-restart");
+    expect(evidence.staleClients).toEqual([{ pid: 4242, startedAtMs: injectedAtMs - 60_000 }]);
+  });
+
+  test("collectRoutingAdoption maps an unavailable walk and a start-time failure to unknown", () => {
+    expect(collectRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      listClients: () => ({ status: "unavailable" as const }),
+    }).adoption).toBe("unknown");
+    expect(collectRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      listClients: () => ({
+        status: "enumerated" as const,
+        processes: [{ pid: 4242, commandLine: "codex chat" }],
+      }),
+      readStartMsBatch: () => { throw new Error("start times unavailable"); },
+    }).adoption).toBe("unknown");
+  });
+
+  test("formatStartupRoutingDetail keeps the routing/service/shim prefix and appends stale clients", () => {
+    const plain = formatStartupRoutingDetail(deriveStartupHealth(base));
+    expect(plain).toBe("routing=opencodex-local, service=absent, shim=absent");
+
+    // adopted evidence adds nothing — the string stays byte-identical, which is
+    // what keeps the pre-#4550 assertions above valid.
+    const adopted = deriveRoutingAdoption({
+      routingKind: "opencodex-local",
+      injectedAtMs,
+      clients: [{ pid: 4242, startedAtMs: injectedAtMs + 60_000 }],
+    });
+    expect(formatStartupRoutingDetail(deriveStartupHealth({ ...base, routingAdoption: adopted }))).toBe(plain);
+
+    const stale = staleClientEvidence();
+    expect(formatStartupRoutingDetail(deriveStartupHealth({ ...base, routingAdoption: stale })))
+      .toBe(`${plain}, clients=pending-restart(pid 4242)`);
+  });
+
+  test("a stale client adds a restart action to the summary without changing restart-safety classification", () => {
+    const without = deriveStartupHealth(base);
+    const withStale = deriveStartupHealth({ ...base, routingAdoption: staleClientEvidence() });
+    // Adoption evidence describes client opportunity, not restart safety —
+    // conflating them would silently change unrelated behaviour.
+    expect(withStale).toMatchObject({
+      status: without.status,
+      protection: without.protection,
+      rebootSafe: without.rebootSafe,
+      recommendedCommand: without.recommendedCommand,
+    });
+    expect(startupHealthSummary(withStale)).toBe(
+      `${startupHealthSummary(without)}; restart Codex client pid 4242 so it adopts the injected proxy route`,
+    );
+  });
+
+  test("the summary names every stale client when more than one predates the injection", () => {
+    const stale = staleClientEvidence([
+      { pid: 4242, startedAtMs: injectedAtMs - 60_000 },
+      { pid: 4000, startedAtMs: injectedAtMs - 120_000 },
+    ]);
+    expect(startupHealthSummary(deriveStartupHealth({ ...base, routingAdoption: stale })))
+      .toContain("restart Codex clients pid 4000, 4242 so they adopt the injected proxy route");
+  });
+
+  test("collectStartupHealth carries injected routingAdoption evidence into the health summary", () => {
+    const health = collectStartupHealth({ codexAutoStart: true }, {
+      routingKind: "opencodex-local",
+      service: {
+        supported: true,
+        installed: false,
+        enabled: false,
+        running: false,
+        viable: false,
+        startable: false,
+        stale: false,
+        conflict: false,
+        backend: null,
+        summary: "test service diagnostic",
+      },
+      shim: { installed: false, healthy: false, summary: "test shim diagnostic" },
+      routingAdoption: staleClientEvidence(),
+    });
+    expect(health.routingAdoption?.adoption).toBe("pending-client-restart");
+    expect(startupHealthSummary(health)).toContain("restart Codex client pid 4242");
+  });
+
+  test("isCodexClientProcess matches direct and interpreter-wrapped Codex clients only", () => {
+    expect(isCodexClientProcess("codex", "codex chat")).toBe(true);
+    expect(isCodexClientProcess("/usr/local/bin/codex", "/usr/local/bin/codex --profile work")).toBe(true);
+    expect(isCodexClientProcess("node", "node /home/user/.codex/codex.js chat")).toBe(true);
+    expect(isCodexClientProcess("vim", "vim note.txt")).toBe(false);
+    expect(isCodexClientProcess("codex-helper", "codex-helper run")).toBe(false);
+    expect(isCodexClientProcess("node", "node server.js")).toBe(false);
+  });
+
+  test("listCodexClientProcesses keeps a failed walk distinct from an empty match set", () => {
+    // A throw means "could not tell"; an empty array means "none running".
+    // Collapsing them would turn a failed enumeration into a false adopted.
+    expect(listCodexClientProcesses({
+      listSnapshots: () => { throw new Error("walk failed"); },
+    })).toEqual({ status: "unavailable" });
+    expect(listCodexClientProcesses({
+      pid: -1,
+      listSnapshots: () => [{ pid: 4321, commandLine: "vim note.txt", executable: "vim" }],
+    })).toEqual({ status: "enumerated", processes: [] });
+    expect(listCodexClientProcesses({
+      pid: -1,
+      listSnapshots: () => [
+        { pid: 4242, commandLine: "codex chat", executable: "/usr/local/bin/codex" },
+        { pid: 4321, commandLine: "vim note.txt", executable: "vim" },
+      ],
+    })).toEqual({ status: "enumerated", processes: [{ pid: 4242, commandLine: "codex chat" }] });
   });
 });

@@ -102,6 +102,29 @@ function depthDelta(line: string): number {
 }
 
 /**
+ * Does the block opened at `start` do nothing but hand the request to another module?
+ *
+ * The shape is a dynamic import followed by a return of the imported handler, with no
+ * method token anywhere in between. Requiring BOTH the import and the return keeps this
+ * from swallowing a real route whose method the scanner simply failed to read: a guard
+ * that inspects `req.method`, or that does any work of its own before returning, still
+ * comes back unresolved and still fails loudly.
+ */
+function isDelegationBlock(lines: readonly string[], start: number): boolean {
+  let sawImport = false;
+  for (let j = start + 1; j <= Math.min(start + 4, lines.length - 1); j++) {
+    const ahead = stripCommentsAndStrings(lines[j] ?? "");
+    if (ahead.trim() === "") continue;
+    if (/await\s+import\(/.test(ahead) && !/\bmethod\b/.test(ahead)) { sawImport = true; continue; }
+    if (/^\s*return\s+\w/.test(ahead) && !/\bmethod\b/.test(ahead)) return sawImport;
+    // Anything else is the block doing work of its own, so the method may well be
+    // knowable here and a missed read must stay loud.
+    return false;
+  }
+  return false;
+}
+
+/**
  * Scan one source file for `(method, path)` route guards.
  *
  * Deliberately text-based rather than AST-based: the assertion this feeds is about
@@ -180,6 +203,18 @@ export function scanRoutes(file: string): ScannedRoute[] {
         if (method === null && narrowings.length > 0) {
           method = narrowings[narrowings.length - 1]!.method;
         }
+      }
+      // A guard that only hands the path to another module defines no method here: the
+      // verbs live in the handler it imports, and the registry declares them against
+      // THAT module. Emitting an unresolved route for the dispatch site would report a
+      // scanner gap that does not exist, and resolving it by adding a method list to the
+      // guard would change behavior — the handler answers 405 for an unsupported verb,
+      // while a narrowed guard would fall through to the generic dispatch and 404.
+      // Prefix delegations (`pathname.startsWith(...)`) are already invisible for the
+      // same reason; this is the equality-guard form of it.
+      if (method === null && form === "equality" && isDelegationBlock(lines, i)) {
+        depth += depthDelta(line);
+        continue;
       }
       routes.push({ path, method, line: i + 1, form });
     } else {

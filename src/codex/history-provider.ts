@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
+import { openCodexStateForPreflight } from "./history-state-open";
 import { atomicWriteFile, getConfigDir } from "../config";
 import {
   CODEX_HISTORY_RESUMABLE_SOURCES,
   codexHistoryBackupId,
+  legacyCodexHistoryBackupId,
   sameCodexHistoryPath,
   validateCodexHistoryBackupManifest,
   type CodexHistoryBackupEntry,
@@ -33,6 +35,32 @@ export function historyBackupPathFor(stateDbPath: string): string {
 }
 
 /**
+ * Manifest name a database path spelled with the Win32 extended-length prefix
+ * (`\\?\C:\...`) received before that prefix was normalized out of the identity
+ * (#4442). Identical to historyBackupPathFor for every other spelling.
+ */
+export function legacyHistoryBackupPathFor(stateDbPath: string): string {
+  return join(getConfigDir(), `codex-history-backup-${legacyCodexHistoryBackupId(stateDbPath)}.json`);
+}
+
+/**
+ * The manifest that actually shadows one state database. Canonical name first; when
+ * only a pre-#4442 extended-length name exists, that manifest still shadows the
+ * database rather than reading as absent. When BOTH names exist the canonical
+ * manifest wins and the legacy file is left untouched — a conflict is resolved by
+ * keeping both, never by silently replacing one.
+ */
+export function resolveExistingHistoryBackupPath(
+  stateDbPath: string,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  const canonical = historyBackupPathFor(stateDbPath);
+  if (exists(canonical)) return canonical;
+  const legacy = legacyHistoryBackupPathFor(stateDbPath);
+  return legacy !== canonical && exists(legacy) ? legacy : canonical;
+}
+
+/**
  * Open the live `state_5.sqlite` the way the Codex app expects a *secondary* writer to behave:
  * wait on the WAL/file lock instead of failing instantly, so we never race the app's own
  * connection pool into a half-applied checkpoint. The app opens this DB with `busy_timeout=5s`
@@ -47,6 +75,22 @@ let historyDbBusyTimeoutMs = 5000;
  */
 export function setHistoryDbBusyTimeoutForTests(ms: number): void {
   historyDbBusyTimeoutMs = ms;
+}
+
+/**
+ * Carry that timeout across a realm boundary. A Worker starts from the default above and cannot
+ * observe a parent that shortened the window — the same reason its run message carries the homes
+ * explicitly — so `history-job.ts` sends this value and `history-worker.ts` adopts it. In
+ * production both sides already hold the codex-rs-matching 5s. A non-finite or negative value is
+ * refused rather than allowed to disable the wait the app expects.
+ */
+export function currentHistoryDbBusyTimeoutMs(): number {
+  return historyDbBusyTimeoutMs;
+}
+
+export function adoptHistoryDbBusyTimeout(ms: number): void {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  historyDbBusyTimeoutMs = Math.floor(ms);
 }
 
 function openStateDb(stateDbPath: string): Database {
@@ -75,14 +119,21 @@ function openStateDb(stateDbPath: string): Database {
  * rollout's updated_at), and forcing it backwards could hide a real edit from list ordering.
  */
 function appendRolloutLine(path: string, line: string): Buffer {
-  const fd = openSync(path, "a");
+  assertLegacyHistoryRecord(line);
+  // No O_CREAT: a disappeared target is not an invitation to recreate history.
+  const fd = openSync(path, constants.O_RDWR | constants.O_APPEND);
   const buf = Buffer.from(line.endsWith("\n") ? line : `${line}\n`, "utf8");
   try {
+    assertLegacyHistoryWritable(path, fd);
+    historyAppendHooks?.beforeWrite?.(path);
+    assertHistoryDescriptorIdentity(path, fd);
     let offset = 0;
     while (offset < buf.length) {
       offset += writeSync(fd, buf, offset, buf.length - offset, null);
     }
     try { fsyncSync(fd); } catch { /* best-effort durability */ }
+    historyAppendHooks?.afterWrite?.(path);
+    assertHistoryDescriptorIdentity(path, fd);
   } finally {
     closeSync(fd);
   }
@@ -137,6 +188,41 @@ function readFirstRolloutLine(fd: number): string | null {
   return nlIndex === -1 ? null : collected.subarray(0, nlIndex).toString("utf8");
 }
 
+/**
+ * Bounded tail of complete JSONL lines, newest-last.
+ *
+ * Used to refuse a rollout that *became* paginated after a legacy first line
+ * (#4311). Line 1 can still look writable after a newer Codex migrates the
+ * thread in place, and the native projector then dies on the first
+ * out-of-sequence ordinal a legacy append introduces. Every record written
+ * after such a migration carries an ordinal, so the newest records are where
+ * the evidence is.
+ *
+ * One read of a fixed window from EOF, split once. An earlier draft grew the
+ * window chunk by chunk and re-decoded the accumulated buffer on every
+ * iteration, which is quadratic: a rollout whose only `session_meta` sits at
+ * the top would have decoded and split up to the whole window ~256 times. The
+ * window is a cap, not a target — it is not walked and it is not the file.
+ *
+ * Returns `null` only when the file cannot be measured, which the caller
+ * treats as an unreadable record rather than a writable rollout.
+ */
+const ROLLOUT_TAIL_WINDOW_BYTES = 1 << 20;
+
+function readRolloutTailCompleteLines(fd: number): string[] | null {
+  const size = Number(fstatSync(fd).size);
+  if (!Number.isFinite(size) || size < 0) return null;
+  if (size === 0) return [];
+  const start = Math.max(0, size - ROLLOUT_TAIL_WINDOW_BYTES);
+  const window = Buffer.alloc(size - start);
+  const read = readSync(fd, window, 0, window.length, start);
+  if (read === 0) return [];
+  const lines = window.subarray(0, read).toString("utf8").split("\n");
+  // Unless the window reached BOF, the first element starts mid-record (and
+  // possibly mid-codepoint), so it is not a complete line.
+  return (start === 0 ? lines : lines.slice(1)).filter(line => line.length > 0);
+}
+
 function planFirstLineProvider(firstLine: string, expectedId: string, provider: string): FirstLineProviderPlan {
   const meta = parseSessionMetaLine(firstLine);
   if (!meta || meta.record.payload.id !== expectedId) return { state: "unsafe" };
@@ -186,21 +272,38 @@ function readFirstLineProviderValue(path: string, expectedId: string): string | 
   }
 }
 
-function patchFirstLineProviderInPlace(path: string, expectedId: string, provider: string): FirstLineProviderResult {
-  if (!existsSync(path)) return "unsafe";
+function patchFirstLineProviderInPlace(
+  path: string, expectedId: string, provider: string,
+  expectedIdentity: { dev: number | bigint; ino: number | bigint },
+): FirstLineProviderResult {
+  historyAppendHooks?.beforeFirstLineOpen?.(path);
   const fd = openSync(path, "r+");
   try {
+    const assertIdentity = (): void => {
+      assertHistoryDescriptorIdentity(path, fd);
+      const held = fstatSync(fd);
+      if (held.dev !== expectedIdentity.dev || held.ino !== expectedIdentity.ino) {
+        throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
+      }
+    };
+    assertIdentity();
+    assertLegacyHistoryWritable(path, fd);
     const firstLine = readFirstRolloutLine(fd);
     if (firstLine === null) return "unsafe";
     const plan = planFirstLineProvider(firstLine, expectedId, provider);
     if (plan.state === "unsafe") return "unsafe";
     if (plan.state === "current") return "current";
     const out = Buffer.from(plan.patchedLine, "utf8");
+    historyAppendHooks?.beforeFirstLineWrite?.(path);
+    assertIdentity();
+    assertLegacyHistoryWritable(path, fd);
     let offset = 0;
     while (offset < out.length) {
       offset += writeSync(fd, out, offset, out.length - offset, offset);
     }
     try { fsyncSync(fd); } catch { /* best-effort durability */ }
+    historyAppendHooks?.afterFirstLineWrite?.(path);
+    assertIdentity();
     return "patched";
   } finally {
     closeSync(fd);
@@ -218,6 +321,144 @@ class CodexHistoryIntegrityError extends Error {
   ) {
     super(code);
     this.name = "CodexHistoryIntegrityError";
+  }
+}
+
+/** Paginated ordinals and projection offsets belong to Codex's live writer.
+ * O_APPEND does not allocate an ordinal or update that writer's in-memory cursor.
+ * Refuse before changing the DB, manifest, or first-line provider; never guess N+1.
+ */
+/**
+ * The one refusal reason that means "the native writer owns this history", as opposed
+ * to "something is wrong". It is a stand-down for the relabel unit on apply
+ * (`src/codex/inject.ts`) and for the history half of a restore; every other reason is
+ * a hard refusal in both directions.
+ *
+ * Exported as a constant rather than repeated as a literal because the apply and restore
+ * directions have to agree on it exactly. They drifted once already: apply learned to
+ * stand down while restore kept refusing, which is how #4812's uninstall deadlock
+ * survived the fix that was supposed to end it.
+ */
+export const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
+
+function assertLegacyHistoryRecord(line: string): void {
+  let value: unknown;
+  try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+  }
+  const record = value as Record<string, unknown>;
+  const payload = record.payload;
+  if (Object.hasOwn(record, "ordinal") || (payload !== null && typeof payload === "object" && (payload as Record<string, unknown>).history_mode === "paginated")) {
+    throw new CodexHistoryIntegrityError(HISTORY_RELABEL_STANDS_DOWN);
+  }
+}
+
+function assertHistoryDescriptorIdentity(path: string, fd: number): void {
+  const held = fstatSync(fd);
+  let current: ReturnType<typeof lstatSync>;
+  try { current = lstatSync(path); } catch { throw new CodexHistoryIntegrityError("history_rollout_identity_changed"); }
+  if (!current.isFile() || current.isSymbolicLink() || current.dev !== held.dev || current.ino !== held.ino) {
+    throw new CodexHistoryIntegrityError("history_rollout_identity_changed");
+  }
+}
+
+let historyAppendHooks: {
+  beforeWrite?: (path: string) => void;
+  afterWrite?: (path: string) => void;
+  beforeFirstLineOpen?: (path: string) => void;
+  beforeFirstLineWrite?: (path: string) => void;
+  afterFirstLineWrite?: (path: string) => void;
+} | undefined;
+export function setHistoryAppendHooksForTests(hooks: typeof historyAppendHooks): void { historyAppendHooks = hooks; }
+
+function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
+  if (!path || !existsSync(path)) return;
+  const fd = heldFd ?? openSync(path, "r");
+  try {
+    assertHistoryDescriptorIdentity(path, fd);
+    const first = readFirstRolloutLine(fd);
+    if (!first) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    assertLegacyHistoryRecord(first);
+    // Line 1 is not enough: a newer Codex can migrate a live rollout in place,
+    // leaving the original session_meta and writing ordinals / history_mode only
+    // onto later records (#4311). The native projector then stops at the first
+    // cloned ordinal-0 append. Inspect a bounded window of the newest records
+    // and refuse before any mutation of the rollout, the row, or the manifest.
+    const tail = readRolloutTailCompleteLines(fd);
+    if (tail === null) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    if (tail.length === 0) return;
+    const last = tail[tail.length - 1];
+    if (!last) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    if (last !== first) assertLegacyHistoryRecord(last);
+    // Cheap filter: only re-parse tail lines that look paginated. Needed because
+    // a compensating append can make the last line look legacy again while an
+    // earlier-in-tail native conversion still carries ordinals (#4311).
+    for (const line of tail) {
+      if (line === first || line === last) continue;
+      if (line.includes("\"ordinal\"") || line.includes("\"history_mode\"")) {
+        assertLegacyHistoryRecord(line);
+      }
+    }
+  } finally {
+    if (heldFd === undefined) closeSync(fd);
+  }
+}
+
+/** A store with history_mode can migrate legacy rows while Codex is running.
+ * Refuse the entire external mutation, not only rows already marked paginated.
+ */
+function assertLegacyHistoryStore(db: Database): void {
+  const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
+  if (columns.some(column => column.name === "history_mode")) {
+    throw new CodexHistoryIntegrityError(HISTORY_RELABEL_STANDS_DOWN);
+  }
+}
+
+/** Read-only preflight before the injector changes provider definitions.
+ * Native paginated history cannot participate in the legacy relabel protocol.
+ * Returning a refusal preserves the existing config as well as the rollout.
+ */
+export function preflightCodexHistoryInjection(
+  providerTableMode: boolean,
+  resumeHistory: boolean,
+  stateDbPath?: string,
+): string | null {
+  let db: Database | undefined;
+  try {
+    const resolvedPath = stateDbPath ?? resolveCodexStateDbPath();
+    // A partially restored row may already be native while its manifest still
+    // owns work. Match the restore worker's target set before removing routing.
+    const restoreEntries = providerTableMode ? []
+      : Object.values(readBackup(resolveExistingHistoryBackupPath(resolvedPath), resolvedPath).manifest.entries);
+    if (!existsSync(resolvedPath)) {
+      return restoreEntries.length > 0 ? "history_state_database_missing" : null;
+    }
+    // Read-only, and narrowed so a cleanly-closed WAL store is inspected rather than refused
+    // (#4943). The open order is the safety property; see history-state-open.ts.
+    db = openCodexStateForPreflight(resolvedPath);
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
+    const paginatedColumn = columns.some(column => column.name === "history_mode");
+    if (paginatedColumn && restoreEntries.length > 0) return HISTORY_RELABEL_STANDS_DOWN;
+    for (const entry of restoreEntries) assertLegacyHistoryWritable(entry.rolloutPath);
+    const rows = db.query<{ rollout_path: string; history_mode: string | null }, []>(`
+      SELECT rollout_path, ${paginatedColumn ? "history_mode" : "NULL AS history_mode"}
+      FROM threads
+      WHERE ${providerTableMode
+        ? resumeHistory ? "model_provider IN ('openai', 'opencodex')" : "0"
+        : "model_provider = 'opencodex'"}
+    `).all();
+    for (const row of rows) {
+      if (paginatedColumn || row.history_mode === "paginated") return HISTORY_RELABEL_STANDS_DOWN;
+      assertLegacyHistoryWritable(row.rollout_path);
+    }
+    return null;
+  } catch (error) {
+    return error instanceof CodexHistoryIntegrityError
+      ? error.message
+      : "history_injection_preflight_unavailable";
+  } finally {
+    db?.close();
   }
 }
 
@@ -1026,6 +1267,7 @@ function updateSessionMeta(
   } = {},
 ): SessionMetaUpdateResult {
   if (!path || !existsSync(path)) return { changed: false, durableProvider: false };
+  const validatedIdentity = lstatSync(path);
   if (options.expectedFileIdentity !== undefined
     && historyFileIdentity(path) !== options.expectedFileIdentity) {
     return { changed: false, durableProvider: false, conflict: true };
@@ -1039,6 +1281,11 @@ function updateSessionMeta(
   const latest = readLatestSessionMetaForId(path, expectedId);
   if (!latest) return { changed: false, durableProvider: false };
   const record = latest.record;
+
+  assertLegacyHistoryWritable(path);
+  if (Object.hasOwn(record, "ordinal") || record.payload.history_mode === "paginated") {
+    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+  }
 
   const latestProvider = typeof record.payload.model_provider === "string" && record.payload.model_provider
     ? record.payload.model_provider
@@ -1094,8 +1341,9 @@ function updateSessionMeta(
     let firstLine: FirstLineProviderResult = "current";
     if (patch.provider !== undefined) {
       try {
-        firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider);
-      } catch {
+        firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider, validatedIdentity);
+      } catch (error) {
+        if (error instanceof CodexHistoryIntegrityError) throw error;
         firstLine = "unsafe";
       }
     }
@@ -1122,8 +1370,9 @@ function updateSessionMeta(
   let firstLine: FirstLineProviderResult = "current";
   if (patch.provider !== undefined) {
     try {
-      firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider);
-    } catch {
+      firstLine = patchFirstLineProviderInPlace(path, expectedId, patch.provider, validatedIdentity);
+    } catch (error) {
+      if (error instanceof CodexHistoryIntegrityError) throw error;
       firstLine = "unsafe";
     }
     if (options.requireDurableProvider && firstLine === "unsafe") {
@@ -1151,6 +1400,8 @@ function relabelAllRoutedHistoryToOpenai(db: Database): { rows: number; files: n
     `)
     .all();
 
+  if (rows.length > 0) assertLegacyHistoryStore(db);
+  for (const row of rows) assertLegacyHistoryWritable(row.rollout_path);
   let files = 0;
   for (const row of rows) {
     try {
@@ -1158,8 +1409,8 @@ function relabelAllRoutedHistoryToOpenai(db: Database): { rows: number; files: n
         provider: "openai",
         source: row.source === "exec" ? "cli" : undefined,
       }).changed) files++;
-    } catch {
-      /* explicit legacy recovery still relabels the DB when an old rollout is missing */
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
   }
 
@@ -1251,7 +1502,7 @@ function openaiRestoreIsNoop(stateDbPath: string, backupPath: string): boolean {
 export function syncCodexHistoryProvider(
   provider: CodexHistoryProvider,
   stateDbPath = resolveCodexStateDbPath(),
-  backupPath = historyBackupPathFor(stateDbPath),
+  backupPath = resolveExistingHistoryBackupPath(stateDbPath),
   opts: { skipWhenProvablyNoop?: boolean } = {},
 ): CodexHistorySyncResult {
   // Opt-in steady-state gate (Design B loopback callers only): default semantics of
@@ -1302,6 +1553,8 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
       `)
       .all();
 
+    if (openaiRows.length + execRows.length > 0) assertLegacyHistoryStore(db);
+    for (const row of [...openaiRows, ...execRows]) assertLegacyHistoryWritable(row.rollout_path);
     const manifest = readBackup(backupPath, stateDbPath).manifest;
     for (const row of [...openaiRows, ...execRows]) rememberOriginal(manifest, row);
     writeBackup(backupPath, manifest, stateDbPath);
@@ -1367,15 +1620,15 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
       for (const row of openaiRows) {
         try {
           if (updateSessionMeta(row.rollout_path, row.id, { provider: "opencodex" }).changed) files++;
-        } catch {
-          /* keep DB migration moving; the manifest still carries exact original metadata */
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
         }
       }
       for (const row of execRows) {
         try {
           if (updateSessionMeta(row.rollout_path, row.id, { source: "cli" }).changed) files++;
-        } catch {
-          /* keep DB migration moving; the manifest still carries exact original metadata */
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
         }
       }
     });
@@ -1409,9 +1662,12 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   const manifest = backup.manifest;
   const entries = Object.values(manifest.entries);
 
+  for (const entry of entries) assertLegacyHistoryWritable(entry.rolloutPath);
+
   const db = openStateDb(stateDbPath);
   try {
     if (entries.length === 0) return { rows: 0, files: 0 };
+    assertLegacyHistoryStore(db);
 
     // Validate the whole manifest-to-database target set before touching a rollout. Only the
     // OpenCodex post-image (or an already-restored target from an interrupted retry) is owned by
@@ -1547,6 +1803,7 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
 
 export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath()): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
+  try {
   const retried = withHistoryRetryResult(() => {
     const db = openStateDb(stateDbPath);
     try {
@@ -1556,6 +1813,10 @@ export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath
     }
   });
   return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
+  } catch (error) {
+    if (error instanceof CodexHistoryIntegrityError) return integrityFailureResult(error);
+    throw error;
+  }
 }
 
 /**
@@ -1567,7 +1828,7 @@ export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath
  */
 export function migrateHistoryToOpenai(
   stateDbPath = resolveCodexStateDbPath(),
-  backupPath = historyBackupPathFor(stateDbPath),
+  backupPath = resolveExistingHistoryBackupPath(stateDbPath),
   opts: { attempts?: number; delayMs?: number; sleepFn?: (ms: number) => void } = {},
 ): CodexHistorySyncResult {
   // Steady-state gate: this migration is Design-B-specific (inject + guardian callers),
@@ -1600,7 +1861,7 @@ export function snapshotCodexHistoryNoop(
   const stateDbPresent = existsSync(stateDbPath);
   const backupPresent = existsSync(backupPath);
   const base = { canonicalStateDbPath, stateDbPresent, canonicalBackupPath, backupPresent };
-  if (!sameCodexHistoryPath(backupPath, historyBackupPathFor(stateDbPath))) {
+  if (!sameCodexHistoryPath(backupPath, resolveExistingHistoryBackupPath(stateDbPath))) {
     return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "backup-path" };
   }
   const backup = inspectBackupForNoop(backupPath, stateDbPath);
@@ -1684,7 +1945,7 @@ export interface PendingHistoryCount {
  */
 export function countPendingOpencodexHistory(
   stateDbPath = resolveCodexStateDbPath(),
-  backupPath = historyBackupPathFor(stateDbPath),
+  backupPath = resolveExistingHistoryBackupPath(stateDbPath),
   opts: { validateRestoreTargets?: boolean } = {},
 ): PendingHistoryCount {
   const backup = readBackupStrict(backupPath, stateDbPath);

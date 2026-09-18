@@ -1,0 +1,9 @@
+# Release operation
+
+1. Verify source RC and previous published tags. Read merged review state and policy. Run candidate CI on dev; inspect exact SHA and jobs. Separate outstanding unrelated PRs from candidate blockers.
+2. MODIFY package.json only on a dev bump branch using scripts/bump-dev-version.ts: 2.46.0 -> 2.47.0. Verify unused tags, version-line tests, typecheck/full tests as appropriate. Push branch, template PR to dev and integrate after checks; retain frozen RC for release.
+3. NEW independent promotion branches based on existing origin/preview and origin/main. Merge frozen RC into each; resolve only channel-version conflicts. MODIFY preview package.json to 2.46.0-preview.20260907; main package.json to 2.46.0. Runtime tree must match the frozen RC, with explicit version-only/channel lineage differences. Publish template promotion PRs and verify head/base/native membership/review/CI before merge. Record owner-authorized promotion decision, never self-approval.
+4. Require each merged SHA's own successful push-event Cross-platform CI and lifecycle. Validate current branch tips, dev 2.47.0, package name/version and unused target tags. Invoke existing release.yml dry-run (build/pack), then actual preview publication, then stable, serialized. expected-sha must equal branch tip.
+5. Inspect npm dist-tags, version gitHead, SHA512 tarball integrity, provenance and GitHub tag/release; run safe published-package version/help smoke in isolated home. No installed service changes. Capture final branch ancestry and preserve initial dirty files.
+
+Activation scenarios: moved branch -> refuse dispatch and repin/revalidate; wrong package/tag mapping -> reject; failed CI -> inspect and repair or rerun substantiated transient failure; post-publish smoke failure -> inspect registry before retry, finish missing GitHub metadata only after publication proof. Existing rollback artifact v2.45.0 remains published; no destructive rollback is planned.

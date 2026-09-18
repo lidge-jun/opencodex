@@ -1,0 +1,29 @@
+# Reauthenticate the existing native main identity with device code
+
+Cycle reauth-api; C4, independent dev branch. Preserve /api/codex-auth/login rejection of __main__. Allow existing native-main credentials in every runtime role, with no codex binary/keyring requirement. Same-identity reauth only; account switching remains the native profile workflow. Main device service does not call startLoginFlow(chatgpt), whose completion persists into the OAuth store.
+
+MODIFY `src/oauth/chatgpt-device.ts`: factor the private grant exchange to retain raw validated token payload for a new native-only result. Existing loginChatGPTDevice still projects OAuthCredentials and returns no id_token. New loginChatGPTNativeDevice returns `{credential: OAuthCredentials, idToken: string}` only in process; reject missing access/refresh/id token or mismatched token account identity. Device callback remains human URL/code, opaque device_auth_id private.
+
+MODIFY `src/codex/main-account.ts`: new beginNativeMainReauth captures existing MainAuthJsonCredential snapshot into a closure without exposing it to callers; returned commit accepts complete native device tokens. At commit acquire existing withNativeMainExclusiveClaim after authorization, verify startup/recovery and in-process admission fence, assert original path/hash/inode before atomic rename, require same chatgpt account identity. Write access_token, refresh_token, id_token, account_id together, preserving allowed root metadata. Check cancellation/current-flow before entering commit and before rename. Advance mutation epoch and reconcile same-account runtime/quota/reauth state explicitly. Never retain the old identity token beside new credentials. No claim held during human polling.
+
+NEW `src/codex/main-device-reauth.ts`: one process-owned active flow, opaque UUID, AbortController and bounded terminal retention; injectable login/commit dependencies for tests. Start/status/cancel return only flowId, status, verificationUrl, deviceCode and closed safe failure code. Superseded/cancelled completion may not publish. Terminal data clears URL/code when no longer useful. No tokens/emails/raw account IDs in DTO/log/error.
+
+NEW `src/codex/main-device-reauth-api.ts`: dedicated handler for POST/GET/DELETE `/api/codex-auth/main/reauth-device`, exact opaque flow query for status/cancel, strict request keys and safe 400/404/409 errors. Register at existing management registry/auth handler boundary (read latest dispatch before B); existing management auth/origin/session controls remain authoritative. No CLI direct account file write.
+
+MODIFY `src/cli/account-main.ts`: `reauth --device [--no-wait]`, `reauth status --flow <id>`, `reauth cancel --flow <id>` via same management API; reject extra args before start. Register capability/help and regenerate skill surface using source-only tooling if needed. Blocking wait bounded by service flow expiry; --no-wait returns handle/code and follow-up commands.
+
+Field chain: device token creation→native private commit only, never API serialization; flow DTO created by service→management JSON→CLI/GUI typed parsing→human code/status. Tests: same-account success without codex/keyring, wrong identity, missing token fields, cancelled late result, concurrent file replace/refresh/profile switch, pending recovery, atomic write failure, same-account quarantine clearing, no pool-row mutation, secret-free all routes, unauthorized endpoints. Security draft stays scratch; implementation and regression diff may be published. Sync all src/codex/src/oauth/src/cli/src/server ownership docs and public headless recovery instructions. Local suites/build/typecheck/install NOT RUN; hosted final API/UI tip and independent security review required.
+
+Reflection native publication contract: pin NativeProfileContext once. Use a short owner/shared operation for preparation; capture original bytes and dev/ino from the SAME opened descriptor using an additive snapshot variant of native-profile-store.ts readBounded, preserving no-follow/regular-file/size bounds and wrapper compatibility. Closure retains this original snapshot throughout login. Explicitly assertNativeMainOwner at preparation and commit; withNativeMainOwnerOperation tracks work but does not replace this assertion. Acquire exclusive claim after human authorization, then recheck recovery, flow, cancellation and ownership before rename. Missing owner/claim fails safely, no NativeProfileManager/keyring enrollment. Tests include same-byte replacement, capture-time replacement, in-place edits, deletion/nonregular/symlink, cancellation waiting for claim, missing owner and unsupported claim.
+
+```ts
+type MainDeviceReauthStatus =
+ | {flowId: string; status: "pending"; verificationUrl: string; deviceCode: string}
+ | {flowId: string; status: "committing"}
+ | {flowId: string; status: "succeeded"; credentialUpdated: true}
+ | {flowId: string; status: "cancelled"}
+ | {flowId: string; status: "failed"; credentialUpdated?: true; code: "identity_mismatch" | "credential_changed" | "native_main_unavailable" | "device_authorization_failed" | "publication_failed" | "reconciliation_failed"};
+```
+Cancellation after publication returns succeeded, never cancelled. Post-publication reconciliation failure reports credentialUpdated=true/reconciliation_failed, no rollback claim or automatic retry. Tokens/snapshots stay private. Start waits for human-code publication or terminal result so pending always has URL/code. One active flow rejects overlapping start (409), terminal retention 5 minutes, grant deadline 15 minutes inherited from device owner.
+
+Reflection residual accepted: reconciliation_failed is a distinct DTO union member requiring credentialUpdated:true. Cancellation after publication preserves either succeeded or reconciliation_failed, never overwrites reconciliation failure and never reports cancelled.

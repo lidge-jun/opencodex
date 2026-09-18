@@ -550,3 +550,26 @@ test("redact-folding folds colon confusables with aligned offsets and stays a ze
   const source = readFileSync(repoPath("src/lib/redact-folding.ts"), "utf8");
   expect(source).not.toMatch(/^import /m);
 });
+
+describe("bare credential shapes with no label to key off", () => {
+  test("a Devin session token is masked wherever it appears", () => {
+    // A Connect EOS trailer can quote the request that carried the key, and the
+    // labelled rules never fire on a quoted proto field.
+    const token = "devin-session-token$eyJhbGciOiJIUzI1NiJ9.eyJhIjoxfQ.c2ln";
+    const masked = redactSecretString(`permission_denied: api_key ${token} was rejected`);
+    expect(masked).not.toContain("devin-session-token$eyJ");
+    expect(masked).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+  });
+
+  test("a bare JWT is masked, and ordinary prose is not", () => {
+    const masked = redactSecretString("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl here");
+    expect(masked).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+    for (const benign of [
+      "version 1.2.3 shipped",
+      "see src/lib/redact.ts for the rules",
+      "a.b.c",
+    ]) {
+      expect(redactSecretString(benign)).toBe(benign);
+    }
+  });
+});

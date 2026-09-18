@@ -185,6 +185,34 @@ export function loadServiceTokenFromFile(env: Record<string, string | undefined>
 }
 
 /**
+ * The data-plane token a boot should export, or null when the environment already has one
+ * (or there is nothing to export).
+ *
+ * The launchd plist and the systemd unit `cat` the token file into the environment before
+ * exec'ing the proxy, and WinSW native mode names it through `OCX_API_TOKEN_FILE` — so under
+ * a service the server has always seen `OPENCODEX_API_AUTH_TOKEN` regardless of the calling
+ * shell. A FOREGROUND `ocx start` on the same machine had neither, so `assertServerAuthConfig`
+ * refused to bind a non-loopback hostname that the installed service was serving happily.
+ * This closes that gap with the same precedence the wrappers use, in one place.
+ *
+ * `authRequired` is the caller's admission decision (`isApiAuthRequired`), passed in rather
+ * than recomputed: this module must not load config, and the installed file is deliberately
+ * NOT consulted on a loopback bind — on a machine connected to a hub it holds that hub's
+ * issued client key, which is not this proxy's admission secret.
+ */
+export function startupDataPlaneToken(
+  env: Record<string, string | undefined>,
+  options: { authRequired: boolean },
+): string | null {
+  if (env.OPENCODEX_API_AUTH_TOKEN?.trim()) return null;
+  const named = loadServiceTokenFromFile(env);
+  if (named) return named;
+  if (!options.authRequired) return null;
+  const state = readServiceApiTokenState();
+  return state.kind === "present" ? state.token : null;
+}
+
+/**
  * Contents of the installed service token file. The launch wrapper always re-exports
  * this file as OPENCODEX_API_AUTH_TOKEN, so doctor and start must inspect it even
  * when the calling shell has no data-plane env var.

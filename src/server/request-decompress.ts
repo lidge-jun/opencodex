@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
@@ -29,7 +30,7 @@ export const MAX_DECOMPRESSED_BODY_BYTES = 256 * 1024 * 1024;
  * shrink and is stuck. An UNBOUNDED inbound cap is not an acceptable answer: this admission
  * limit is the only thing standing between one request and the process heap, and
  * `readBoundedJsonRequestBody` materializes the body several times over (retained wire bytes,
- * decoded bytes, the decoded string, the re-encoded measurement copies, and the parsed object
+ * decoded bytes, the decoded string, the serialized measurement string, and the parsed object
  * graph), so peak RSS is a MULTIPLE of whatever is admitted here. 512 MiB is the largest value
  * that keeps that multiple survivable on an ordinary machine, and it is what #3573 asked for.
  */
@@ -324,12 +325,14 @@ export async function readBoundedJsonRequestBody(
     const decoded = decodeRequestBody(raw, encoding, maxBytes);
     releaseDecoded = decoded === raw ? undefined : budget?.observeAcceptedRequestCopy(decoded.byteLength);
     const text = new TextDecoder().decode(decoded);
-    releaseText = budget?.observeAcceptedRequestCopy(new TextEncoder().encode(text).byteLength);
+    // Count UTF-8 without allocating another request-sized byte array for diagnostics.
+    releaseText = budget?.observeAcceptedRequestCopy(Buffer.byteLength(text, "utf8"));
     if (options && "emptyBodyFallback" in options && text.trim() === "") {
       return options.emptyBodyFallback;
     }
     const parsed = JSON.parse(text);
-    budget?.observeAcceptedRequestCopy(new TextEncoder().encode(JSON.stringify(parsed)).byteLength);
+    // Keep the serialized-size contract: normalization can expand numeric literals.
+    budget?.observeAcceptedRequestCopy(Buffer.byteLength(JSON.stringify(parsed), "utf8"));
     return parsed;
   } finally {
     releaseText?.();

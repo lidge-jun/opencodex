@@ -151,7 +151,7 @@ describe("xAI OAuth Chat reasoning streaming", () => {
       let received = "";
       await Promise.race([
         (async () => {
-          while (!received.includes("response.reasoning_summary_text.delta")) {
+          while (!received.includes("response.reasoning_text.delta")) {
             const chunk = await reader!.read();
             if (chunk.done) throw new Error("stream ended before the first xAI reasoning delta");
             received += decoder.decode(chunk.value, { stream: true });
@@ -170,7 +170,10 @@ describe("xAI OAuth Chat reasoning streaming", () => {
       expect(outboundBody?.model).toBe("grok-4.6");
       expect(outboundBody?.messages).toBeArray();
       expect(outboundBody?.stream).toBe(true);
-      expect(outboundBody?.service_tier).toBeUndefined();
+      // The OAuth lane is fast-classified for grok-4.6 (2026-09-13 probe), so a
+      // caller-sent priority tier now forwards on the Chat wire instead of being
+      // stripped by the old unclassified-route pin.
+      expect(outboundBody?.service_tier).toBe("priority");
       expect(outboundBody?.reasoning_effort).toBe("xhigh");
       expect(outboundBody?.input).toBeUndefined();
       expect(outboundBody?.reasoning).toBeUndefined();
@@ -184,7 +187,7 @@ describe("xAI OAuth Chat reasoning streaming", () => {
         if (chunk.done) break;
         received += decoder.decode(chunk.value, { stream: true });
       }
-      const reasoningIndex = received.indexOf("response.reasoning_summary_text.delta");
+      const reasoningIndex = received.indexOf("response.reasoning_text.delta");
       const contentIndex = received.indexOf("response.output_text.delta");
       const completedIndex = received.indexOf("response.completed");
       expect(reasoningIndex).toBeGreaterThanOrEqual(0);

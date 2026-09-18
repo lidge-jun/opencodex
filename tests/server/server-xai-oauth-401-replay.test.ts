@@ -317,11 +317,13 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(seenAuth).toEqual([`Bearer ${firstKey}`, `Bearer ${secondKey}`]);
       const entries = readUsageEntries();
       expect(entries).toHaveLength(1);
-      const attempt = entries[0]?.attempts?.[0];
-      expect(entries[0]?.attempts).toHaveLength(1);
+      const attempts = entries[0]?.attempts;
+      expect(attempts).toHaveLength(2);
+      for (const attempt of attempts ?? []) {
       expect(attempt?.credentialSource).toBe("xai-api-key");
-      expect(attempt?.sendCount).toBe(2);
+      expect(attempt?.sendCount).toBe(1);
       expect(attempt?.adapter).toBe("openai-chat");
+      }
       const persisted = readFileSync(usageLogPath(), "utf8");
       expect(persisted).not.toContain(firstKey);
       expect(persisted).not.toContain(secondKey);

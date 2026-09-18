@@ -1,9 +1,16 @@
+import { request as httpRequest } from "node:http";
+import { getActiveTurnCount } from "../../src/server/lifecycle";
+// Holds INV-AUTH-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { clearContextSessionOwnersForTests } from "../../src/codex/context-owner";
+import { resetContextRelayActivationForTests } from "../../src/codex/context-compat";
 import { startServer } from "../../src/server";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import type { OcxConfig } from "../../src/types";
@@ -24,6 +31,7 @@ import {
   setPlatformForTests,
   timedOutSecretPathCountForTests,
   hardenSecretDir,
+  flushWindowsSecretAclReapsBeforeRemoval,
 } from "../../src/lib/windows-secret-acl";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -86,9 +94,15 @@ import { setSystemRestartIoForTests } from "../../src/server/management/system-r
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
+const previousCodexHome = process.env.CODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
 let testHome = "";
+
+function enableContextRelay(): void {
+  writeFileSync(join(testHome, "config.toml"), "[features]\ncontext_management.experimental_mode = true\n");
+  resetContextRelayActivationForTests();
+}
 
 function remoteConfig(): OcxConfig {
   return {
@@ -172,11 +186,46 @@ function websocketHandshakeOpens(url: URL, token: string): Promise<boolean> {
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-management-auth-"));
   process.env.OPENCODEX_HOME = testHome;
+  process.env.CODEX_HOME = testHome;
+  resetContextRelayActivationForTests();
   process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Settle every in-flight config-directory harden before anything here removes a directory.
+  //
+  // `hardenConfigDir()` spawns `icacls.exe`, which holds the directory open until it exits, and
+  // Windows file locking is mandatory: removing that tree while the child lives returns EPERM no
+  // matter how long the caller waits. Windows shard 1/6 of run 35108652486 proved the waiting is
+  // not the answer -- it exhausted the full 15s exponential budget and still threw
+  // `EPERM: operation not permitted, rm .../tmp/ocx-management-auth-fDchUb` out of this hook.
+  // #4789 filed the same failure at this same line when the budget was 2.5s, and raising it to
+  // 15s in #4796 bought six times the wait and changed nothing, because the handle was never
+  // going to close on its own schedule. The process that started the child has to wait for it.
+  //
+  // The all-directories variant is the required one. `server.stop` already flushes, but through
+  // `flushConfigDirHardening()`, which defaults to `getConfigDir()` read at stop time -- and this
+  // hook moves OPENCODEX_HOME back to the developer's real home a few lines below, so a
+  // directory-scoped flush here would settle the wrong tree and leave this one held.
+  await flushConfigDirHardeningForTests();
+  // The ACL wrapper has its own watchdog, so its public flight can settle before a killed
+  // icacls.exe reports `exited`. This is a removal barrier, not part of ordinary shutdown: only
+  // the code about to delete this tree waits for the distinct handle-release guarantee.
+  await flushWindowsSecretAclReapsBeforeRemoval(testHome);
+  // And settle any native-main release nobody awaited. `server.stop` awaits its own, but a
+  // startServer that THREW cannot: the rollback fires `void lifecycle.release()` and rethrows,
+  // because startServer is synchronous by contract. That release closes the owner's SQLite lease
+  // and stable lock file, both under CODEX_HOME, which is this very directory.
+  //
+  // This file reaches that path. Two of its cases bind a management ingress on the fixed port
+  // 10101, which nine other test files also use, so a collision on the six-shard Windows leg
+  // turns a passing start into the rollback. That is why the same file and line failed on shard
+  // 1, then 2, then 3 while every other shard passed: the trigger is another shard, not this one.
+  await flushNativeMainStartupReleases();
+  resetContextRelayActivationForTests();
+  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = previousCodexHome;
   setSystemRestartIoForTests();
   setIcaclsRunnerForTests(null);
   setPlatformForTests(null);
@@ -617,6 +666,114 @@ describe("management and data-plane credential separation", () => {
       resetHardenedStateForTests();
       if (previousUsername === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("Codex backend aliases retain data-plane authentication and cannot enter management", async () => {
+    enableContextRelay();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const token of [undefined, "admin-secret", "data-secret"]) {
+        const headers: Record<string, string> = token ? { "x-opencodex-api-key": token } : {};
+        const models = await fetch(new URL("/backend-api/codex/models", server.url), { headers });
+        expect(models.status).toBe(token === "data-secret" ? 200 : 401);
+        const context = await fetch(new URL("/backend-api/codex/alpha/notes/v2/read_file", server.url), {
+          method: "POST", headers, body: "{}",
+        });
+        expect(context.status).toBe(token === "data-secret" ? 400 : 401);
+        const management = await fetch(new URL("/backend-api/codex/api/config", server.url), { headers });
+        expect(management.status).toBe(404);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("canceling an incomplete context body releases the actual listener turn", async () => {
+    enableContextRelay();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    const baseline = getActiveTurnCount();
+    const request = httpRequest(new URL("/v1/alpha/notes/v2/write_file", server.url), {
+      method: "POST", headers: { authorization: "Bearer data-secret", "content-length": "1000" },
+    });
+    request.on("error", () => {}); // Destroying this deliberately unfinished request resets the socket.
+    const waitForCount = async (expected: number) => {
+      const deadline = Date.now() + 5000;
+      while (getActiveTurnCount() !== expected && Date.now() < deadline) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      expect(getActiveTurnCount()).toBe(expected);
+    };
+    try {
+      request.write("{"); // Never end the body: the server is waiting inside the bounded parser.
+      await waitForCount(baseline + 1);
+      request.destroy();
+      await waitForCount(baseline);
+    } finally {
+      request.destroy();
+      await server.stop(true);
+    }
+  });
+
+  test("context relay remains absent without the native experimental opt-in", async () => {
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/alpha/notes/v2/read_file", server.url), {
+        method: "POST", headers: { authorization: "Bearer data-secret" }, body: "{}",
+      });
+      expect(response.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("context bearer admission reaches body validation without accepting foreign credentials", async () => {
+    enableContextRelay();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const prefix of ["/v1", "/backend-api/codex"]) {
+        for (const token of ["data-secret", "admin-secret", "foreign-secret"]) {
+          const response = await fetch(new URL(`${prefix}/alpha/notes/v2/read_file`, server.url), {
+            method: "POST", headers: { authorization: `Bearer ${token}` }, body: "{}",
+          });
+          expect(response.status).toBe(token === "data-secret" ? 400 : 401);
+          if (token === "data-secret") expect(await response.text()).toContain("context.session_id");
+        }
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("authenticated context without a successful model owner fails closed on both listener prefixes", async () => {
+    enableContextRelay();
+    const cfg = remoteConfig();
+    cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" };
+    saveConfig(cfg); clearContextSessionOwnersForTests();
+    const originalFetch = globalThis.fetch;
+    let upstreamCalls = 0;
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "0.0.0.0") return originalFetch(input, init);
+      upstreamCalls++; throw new Error("unknown context owner must not reach upstream");
+    }, { preconnect: originalFetch.preconnect });
+    const server = startServer(0);
+    try {
+      for (const prefix of ["/v1", "/backend-api/codex"]) {
+        const response = await fetch(new URL(`${prefix}/alpha/notes/v2/read_file`, server.url), {
+          method: "POST", headers: { authorization: "Bearer data-secret" },
+          body: JSON.stringify({ context: { session_id: "unknown-root" } }),
+        });
+        expect(response.status).toBe(409);
+        expect(await response.text()).toContain("context_account_unavailable");
+      }
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      await server.stop(true); globalThis.fetch = originalFetch; clearContextSessionOwnersForTests();
     }
   });
 

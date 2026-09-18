@@ -1,0 +1,115 @@
+{
+  "models": [
+    {
+      "apply_patch_tool_type": "freeform",
+      "base_instructions": "",
+      "context_window": 1048576,
+      "default_reasoning_level": "max",
+      "default_reasoning_summary": "none",
+      "description": "Z.ai's latest flagship model",
+      "display_name": "glm-5.3",
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text"
+      ],
+      "max_context_window": 1048576,
+      "priority": 0,
+      "shell_type": "shell_command",
+      "slug": "glm-5.3",
+      "support_verbosity": false,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Light reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Enhanced reasoning",
+          "effort": "high"
+        },
+        {
+          "description": "Deep reasoning",
+          "effort": "max"
+        }
+      ],
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_summaries": true,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "bytes"
+      },
+      "visibility": "list"
+    },
+    {
+      "apply_patch_tool_type": "freeform",
+      "base_instructions": "",
+      "context_window": 1048576,
+      "default_reasoning_level": "max",
+      "default_reasoning_summary": "none",
+      "description": "Fast multimodal coding model",
+      "display_name": "glm-5.3-flash",
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 1048576,
+      "priority": 1,
+      "shell_type": "shell_command",
+      "slug": "glm-5.3-flash",
+      "support_verbosity": false,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Light reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Enhanced reasoning",
+          "effort": "high"
+        },
+        {
+          "description": "Deep reasoning",
+          "effort": "max"
+        }
+      ],
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_summaries": true,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "bytes"
+      },
+      "visibility": "list"
+    },
+    {
+      "apply_patch_tool_type": "freeform",
+      "base_instructions": "",
+      "context_window": 204800,
+      "default_reasoning_level": "max",
+      "default_reasoning_summary": "none",
+      "description": "Agent-optimized model",
+      "display_name": "glm-5-turbo",
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text"
+      ],
+      "max_context_window": 204800,
+      "priority": 2,
+      "shell_type": "shell_command",
+      "slug": "glm-5-turbo",
+      "support_verbosity": false,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [],
+      "supports_parallel_tool_calls": true,
+      "supports_reasoning_summaries": true,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "bytes"
+      },
+      "visibility": "list"
+    }
+  ]
+}

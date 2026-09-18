@@ -13,6 +13,38 @@
 import { getCachedProviderAccountQuota, hasPassiveAccountQuota } from "../providers/quota";
 import { getKiroAccountExhaustion } from "../providers/kiro-usage";
 
+/** Antigravity hosts Gemini and Claude windows on one account; ranking must not mix them. */
+export type QuotaModelFamily = "gem" | "cla";
+
+export function classifyModelFamilyForQuota(
+  provider: string,
+  modelId?: string | null,
+): QuotaModelFamily | undefined {
+  if (provider !== "google-antigravity" || typeof modelId !== "string" || !modelId.trim()) {
+    return undefined;
+  }
+  const id = modelId.toLowerCase();
+  // Gemma is not Gemini: a substring/prefix match would poison Gemini ranking.
+  if (/(?:^|[^a-z])gemma(?:[^a-z]|$)/.test(id)) return undefined;
+  // Catalog ids are gemini-*, never a bare gem- token. Window labels still match Gem via
+  // windowMatchesFamily; this classifier is only for request model ids.
+  if (/(?:^|[^a-z])gemini(?:[^a-z]|$)/.test(id)) return "gem";
+  if (
+    /(?:^|[^a-z])claude(?:[^a-z]|$)/.test(id)
+    || /(?:^|[^a-z])opus(?:[^a-z]|$)/.test(id)
+    || /(?:^|[^a-z])sonnet(?:[^a-z]|$)/.test(id)
+    || /(?:^|[^a-z])haiku(?:[^a-z]|$)/.test(id)
+    || /(?:^|[^a-z])gpt[-_]oss(?:[^a-z]|$)/.test(id)
+  ) return "cla";
+  return undefined;
+}
+
+function windowMatchesFamily(label: string, family: QuotaModelFamily): boolean {
+  const token = label.trim().split(/[\s(/]+/)[0] ?? "";
+  if (family === "gem") return /^gem(?:ini)?$/i.test(token);
+  return /^cla(?:ude)?$/i.test(token);
+}
+
 /** Lower sorts earlier. Unknown sits between measured-healthy and measured-empty. */
 const RANK_HEALTHY = 0;
 const RANK_UNKNOWN = 1;
@@ -48,15 +80,24 @@ const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
 /**
  * Remaining headroom across every window the provider reports.
  *
- * The minimum wins: an account at 5% of its five-hour window is unusable right now even if
- * its monthly allowance is barely touched.
- */
-function headroomOf(provider: string, accountId: string): number | null {
+* The minimum wins: an account at 5% of its five-hour window is unusable right now even if
+* its monthly allowance is barely touched.
+*/
+function headroomOf(provider: string, accountId: string, requestedModelId?: string | null): number | null {
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (!quota) return null;
   // Null, not a low rank: this must reproduce "no evidence" so a stale roster degrades to
   // the unranked ring rather than to a differently wrong answer.
   if (hasPassiveAccountQuota(provider) && Date.now() - quota.updatedAt > PASSIVE_HEADROOM_MAX_AGE_MS) return null;
+  const family = classifyModelFamilyForQuota(provider, requestedModelId);
+  if (family) {
+    const percents = (quota.customWindows ?? [])
+      .filter(window => windowMatchesFamily(window.label, family))
+      .map(window => window.percent)
+      .filter((value): value is number => typeof value === "number");
+    if (percents.length === 0) return null;
+    return 100 - Math.max(...percents);
+  }
   const percents = [
     quota.fiveHourPercent,
     quota.weeklyPercent,
@@ -67,11 +108,30 @@ function headroomOf(provider: string, accountId: string): number | null {
   return 100 - Math.max(...percents);
 }
 
+/**
+ * Remaining headroom percent for one account, or null when nothing has measured it.
+ *
+ * Exported for the generic fill-first threshold, which needs the measurement itself rather
+ * than an ordering. Null stays null all the way out: a caller must decide what "unmeasured"
+ * means for its own rule instead of being handed a fabricated 0 or 100.
+ */
+export function accountHeadroomPercent(
+  provider: string,
+  accountId: string,
+  requestedModelId?: string | null,
+): number | null {
+  return headroomOf(provider, accountId, requestedModelId);
+}
+
 /** Unknown usage is not exhaustion; Kiro's explicit overage verdict is authoritative. */
-export function isAccountQuotaExhausted(provider: string, accountId: string): boolean {
+export function isAccountQuotaExhausted(
+  provider: string,
+  accountId: string,
+  requestedModelId?: string | null,
+): boolean {
   const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${accountId}`) : null;
   if (exhaustion !== null) return exhaustion.exhausted;
-  const headroom = headroomOf(provider, accountId);
+  const headroom = headroomOf(provider, accountId, requestedModelId);
   return headroom !== null && headroom <= 0;
 }
 
@@ -81,24 +141,28 @@ export function isAccountQuotaExhausted(provider: string, accountId: string): bo
  * Returns the input untouched when no candidate has quota evidence, which keeps every
  * provider without per-account quota on exactly the behaviour it has today.
  */
-export function rankAccountsByHeadroom(provider: string, ring: readonly string[]): string[] {
+export function rankAccountsByHeadroom(
+  provider: string,
+  ring: readonly string[],
+  requestedModelId?: string | null,
+): string[] {
   if (ring.length < 2) return [...ring];
 
   let sawEvidence = false;
   // Same rule as hasHeadroomEvidence: a passive provider's partial roster must not rank
   // at all. The failover path calls this directly (selectFailoverAccount), so the guard
   // cannot live only in the pre-dispatch predicate.
-  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id) !== null)) {
+  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id, requestedModelId) !== null)) {
     return [...ring];
   }
   const ranked: Ranked[] = ring.map((id, index) => {
     // A provider-declared exhaustion verdict outranks the percentage: an account may sit at
     // 100% and still be servable when overage is enabled, and the verdict knows that.
     const exhaustion = provider === "kiro" ? getKiroAccountExhaustion(`${provider}\u0000${id}`) : null;
-    const headroom = headroomOf(provider, id);
+    const headroom = headroomOf(provider, id, requestedModelId);
     if (exhaustion !== null || headroom !== null) sawEvidence = true;
 
-    if (isAccountQuotaExhausted(provider, id)) return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
+    if (isAccountQuotaExhausted(provider, id, requestedModelId)) return { id, bucket: RANK_EXHAUSTED, headroom: 0, index };
     if (headroom === null) return { id, bucket: RANK_UNKNOWN, headroom: 0, index };
     return { id, bucket: RANK_HEALTHY, headroom, index };
   });
@@ -118,7 +182,11 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
  * told "ranked" when nothing was measured. Pre-dispatch selection asks this first so it
  * can decline to act on a roster it knows nothing about.
  */
-export function hasHeadroomEvidence(provider: string, ids: readonly string[]): boolean {
+export function hasHeadroomEvidence(
+  provider: string,
+  ids: readonly string[],
+  requestedModelId?: string | null,
+): boolean {
   // A PASSIVE provider needs evidence for EVERY candidate, not any one of them.
   //
   // A probe fills the whole roster in one pass (fetchProviderAccountQuotas), so "any"
@@ -129,10 +197,10 @@ export function hasHeadroomEvidence(provider: string, ids: readonly string[]): b
   // AWAY from an unmeasured account and TOWARD the one account known to be spent, which
   // is the exact inversion of what ranking is for.
   if (hasPassiveAccountQuota(provider)) {
-    return ids.length > 0 && ids.every(id => headroomOf(provider, id) !== null);
+    return ids.length > 0 && ids.every(id => headroomOf(provider, id, requestedModelId) !== null);
   }
   return ids.some(id =>
-    headroomOf(provider, id) !== null
+    headroomOf(provider, id, requestedModelId) !== null
     || (provider === "kiro" && getKiroAccountExhaustion(`${provider}\u0000${id}`) !== null));
 }
 /**

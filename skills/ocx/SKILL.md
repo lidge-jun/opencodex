@@ -103,6 +103,11 @@ replacement, and report only confirmation plus non-secret key/rotation IDs.
 Never ask for the plaintext key in chat or offer a pipe, redirection, or API
 workaround to perform the secret-returning step inside the agent session.
 
+`ocx hub invite` has the same boundary: text and JSON output expose a plaintext pairing
+grant or a command embedding it. Use the human-operated terminal handoff in
+[recipe 10](references/03_recipes.md#10-invite-one-more-machine-onto-a-hub); never ask for
+the grant or generated command in chat. Continue non-secret setup and verification normally.
+
 Configuration confirmation is not approval to revoke the existing credential.
 Identify the existing key ID and obtain separate explicit revocation approval
 before committing an in-place rotation or removing an old, separately replaced key.
@@ -127,7 +132,20 @@ Report the count and bytes from that output and get explicit approval before add
 `--mode quarantine` (the default) can be undone with `storage trash restore`; `--mode permanent`
 cannot.
 
-## Remote hub: two things agents get wrong
+## Remote hub: three things agents get wrong
+
+**A hub is one port, and `ocx hub invite` writes the join command for you.** Remote machines dial
+`hostname:port` with their own per-client key; the hub's own processes dial `127.0.0.1:<the same
+port>` with no credential, through the loopback companion listener
+(`unauthenticatedLoopbackListener: {"enabled": true}`, no port). Have the operator run `ocx hub invite`
+on the hub outside the agent session rather than assembling an `ocx connect` line: it mints a single-use code and prints the exact
+command, with both origins already filled in. Its `--management-url` is a confirmation of
+`hub.managementPublicOrigin`, not an override. The operator transfers the command directly to the joining machine; keep it out of the transcript.
+
+Two consequences that look like bugs and are not. `ocx status` on a hub prints a `Hub:` block —
+read it before asking the operator anything about ports or tokens. And a hub does not rewrite its
+**own** Codex/Grok/Claude configs unless that listener is enabled; the skip says so in those words,
+and it is a gate, not the `clientIntegrations` toggle.
 
 **Pairing is not hub setup.** Configuring a hub — providers, accounts, routing, keys — never
 needs a pairing code. `GET /opencodex-session` mints a session by itself for a loopback
@@ -150,7 +168,11 @@ When `disconnect` refuses, do not route around it. Each refusal means the unwind
 proven safe: another process owns the token, no journal records the pre-connect state, a
 different client key owns the journal, or the restore was only partial.
 
-Details, including key rotation's two-step commit: `references/05_remote_hub.md`.
+Details, including the one-port recipe, the invite flow and key rotation's two-step commit:
+`references/05_remote_hub.md`. Service and launchd semantics, including why
+`ocx service repair` can correctly do nothing while `ocx service restart` always restarts —
+so a restart is never a hand-written `launchctl kickstart`:
+`references/04_failure_semantics.md`.
 
 ## References
 

@@ -163,19 +163,17 @@ describe("OpenCode Go stateless reasoning and continuation routes", () => {
       const initial = { type: "message", role: "user", content: [{ type: "input_text", text: "Run probe" }] };
       const first = await drive({ input: [initial] });
       expect(first.document.output[0]).toEqual(reasoning[0]);
-      expect(first.document.output[1]).toEqual(continuation.summary === "auto" ? {
-        type: "reasoning", id: `rs_${prefix}_content`, status: "completed", summary: [{ type: "summary_text", text: "Visible thinking" }],
-      } : reasoning[1]);
+      // The passthrough keeps native content-channel reasoning in both display modes.
+      expect(first.document.output[1]).toEqual(reasoning[1]);
       expect(first.document.output[2]).toEqual(reasoning[2]);
       expect(first.document.output[3]).toMatchObject(call);
       expect(first.document.output[4]).toEqual(priorMessage);
       if (streaming) {
-        const channel = continuation.summary === "auto" ? "reasoning_summary_text" : "reasoning_text";
-        expect(first.text).toContain(`"type":"response.${channel}.delta"`);
+        expect(first.text).toContain('"type":"response.reasoning_text.delta"');
       }
       const result = { type: "function_call_output", call_id: call.call_id, output: "probe succeeded" };
       // Echo exactly the client-visible history through handleResponses. An upstream-shape
-      // cache would prepend it again after the content-to-summary rewrite (F1).
+      // cache would prepend it again (F1).
       const nextBody = {
         input: continuation.fullHistory ? [initial, ...first.document.output, result] : [result],
         previous_response_id: first.document.id, store: true,
@@ -207,9 +205,8 @@ describe("OpenCode Go stateless reasoning and continuation routes", () => {
       expect(replay.filter(item => item.type === "reasoning")).toHaveLength(3);
       expect(replay).toContainEqual(expect.objectContaining({ type: "reasoning", encrypted_content: blob }));
       expect(JSON.stringify(replay)).toContain("Already summarized");
-      if (continuation.summary === "auto") expect(replay).toContainEqual(expect.objectContaining({
-        type: "reasoning", summary: [{ type: "summary_text", text: "Visible thinking" }],
-      }));
+      // Replay sanitation strips reasoning content in both display modes (F1), so the
+      // visible "Visible thinking" trace does not re-enter the upstream history.
       expect(JSON.stringify(replay)).not.toContain("no tool result was recorded");
     });
   }

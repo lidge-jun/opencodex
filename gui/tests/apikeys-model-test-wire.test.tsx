@@ -89,7 +89,7 @@ function installFetch(sent: SentRequest[], dataPlaneStatus = 200): void {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.endsWith("/v1/models") && method === "GET") {
-      return Response.json({ data: [{ id: "gpt-5.4", owned_by: "openai" }] });
+      return Response.json({ data: [{ id: "gpt-5.5", owned_by: "openai" }] });
     }
     if (url.endsWith("/api/keys") && method === "GET") return Response.json(KEYS_OK);
     if (url.endsWith("/api/keys") && method === "POST") return Response.json({ key: ONE_TIME_KEY });
@@ -163,11 +163,11 @@ test("each protocol chip posts its own endpoint and body, carrying the one-time 
     // Each protocol speaks its own wire. A chat body posted at /v1/responses
     // would be rejected for its shape, not for the key, and the green chip
     // would then be lying about what it proved.
-    expect(sent[0]!.body).toMatchObject({ model: "gpt-5.4", input: "ping", stream: false });
+    expect(sent[0]!.body).toMatchObject({ model: "gpt-5.5", input: "ping", stream: false });
     expect(sent[0]!.body).not.toHaveProperty("messages");
-    expect(sent[1]!.body).toMatchObject({ model: "gpt-5.4", max_tokens: 1, stream: false });
+    expect(sent[1]!.body).toMatchObject({ model: "gpt-5.5", max_tokens: 1, stream: false });
     expect(sent[1]!.body).toHaveProperty("messages");
-    expect(sent[2]!.body).toMatchObject({ model: "gpt-5.4", max_tokens: 1 });
+    expect(sent[2]!.body).toMatchObject({ model: "gpt-5.5", max_tokens: 1 });
     expect(sent[2]!.body).not.toHaveProperty("stream");
 
     // The dedicated header is the only one every data-plane endpoint accepts;

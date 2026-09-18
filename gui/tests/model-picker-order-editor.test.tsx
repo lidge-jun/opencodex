@@ -388,3 +388,39 @@ test("Models pins cache-inferred Custom across late parent GET publication, then
   await act(async () => { root!.render(<LanguageProvider><Models apiBase="/b" /></LanguageProvider>); });
   expect(host.querySelector(".picker-order-editor")).toBeNull();
 });
+
+test("Models refuses an incomplete most-used snapshot before PUT and accepts a later readable snapshot", async () => {
+  const modelRows = ids.map(row => ({ ...row, disabled: false }));
+  const catalog = { models: modelRows, providers: [{ name: "p" }], selectedModels: {}, disabled: [], contextCaps: {}, contextCapValue: 350_000 };
+  const settings = { ...initial(), pickerOrderMode: "most-used" };
+  win.sessionStorage.setItem("ocx.models.catalog.v1:/a", JSON.stringify(catalog));
+  win.sessionStorage.setItem("ocx.models.catalog.v1:/a:picker-order", JSON.stringify(settings));
+  const deferredFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.includes("/api/usage?") || init?.method === "PUT") return deferredFetch(input, init);
+    const payload = path.endsWith("/api/subagent-models") ? settings
+      : path.endsWith("/api/models") ? modelRows
+      : path.endsWith("/api/providers") ? catalog.providers
+      : path.endsWith("/api/provider-context-caps") ? { caps: {} }
+      : path.endsWith("/api/selected-models") ? { selected: {} }
+      : path.endsWith("/api/aliases") ? { providers: {}, models: {}, defaults: { global: false, providers: {} } }
+      : undefined;
+    return Promise.resolve(payload === undefined ? new Response(null, { status: 404 }) : Response.json(payload));
+  } });
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Models apiBase="/a" /></LanguageProvider>); });
+  await click("Apply order");
+  expect(requests[0]?.url).toBe("/a/api/usage?range=all&surface=all");
+  const models = [{ provider: "p", model: "b", requests: 3 }];
+  await reply(0, { models, usageIncomplete: true, usageIncompleteReason: "oversized_rows" });
+  expect(host.textContent).toContain("Cannot save most-used order because usage history is incomplete");
+  expect(requests.map(r => r.method)).toEqual(["GET"]);
+  expect(button("Apply order").disabled).toBe(false);
+  await click("Apply order");
+  await reply(1, { models });
+  expect(requests[2]?.url).toBe("/a/api/subagent-models");
+  expect(requests[2]?.method).toBe("PUT");
+  expect(requests[2]?.body).toEqual({ pickerOrder: ["p/b", "p/a", "p/c", "p/f"], pickerOrderMode: "most-used" });
+  await reply(2, { ok: true, pickerOrder: ["p/b", "p/a", "p/c", "p/f"], pickerOrderMode: "most-used" });
+});

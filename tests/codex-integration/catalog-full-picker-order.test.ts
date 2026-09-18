@@ -1,3 +1,4 @@
+// Holds INV-AGENT-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { routedSlug } from "../../src/providers/slug-codec";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";

@@ -34,7 +34,7 @@ const PERMITTED_ROOTS = new Set(["codex/history-worker.ts"]);
  */
 const INLINE_ALLOWED = new Set([
   "codex/history-provider.ts",
-  "codex/inject.ts",
+  "codex/inject/restore.ts",
   "codex/internal/history-writer.ts",
 ]);
 

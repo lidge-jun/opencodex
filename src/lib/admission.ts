@@ -58,20 +58,26 @@ export function createAdmissionGate(name: string, limit: number): {
 }
 
 export function retainedUtf8Bytes(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  // Keep TextEncoder's runtime coercion for legacy callers outside the string-typed contract.
+  // Template coercion rejects Symbols; String(value) would silently accept them.
+  return Buffer.byteLength(typeof value === "string" ? value : value === undefined ? "" : `${value}`, "utf8");
 }
 
 function utf8Prefix(value: string, maxBytes: number): string {
   if (maxBytes <= 0) return "";
   let bytes = 0;
-  let result = "";
-  for (const character of value) {
-    const size = retainedUtf8Bytes(character);
+  let end = 0;
+  while (end < value.length) {
+    const code = value.charCodeAt(end);
+    const next = value.charCodeAt(end + 1);
+    const pair = code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+    // An unpaired surrogate encodes as a three-byte replacement, like TextEncoder.
+    const size = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : pair ? 4 : 3;
     if (bytes + size > maxBytes) break;
-    result += character;
     bytes += size;
+    end += pair ? 2 : 1;
   }
-  return result;
+  return value.slice(0, end);
 }
 
 export function truncateRetainedUtf8(value: string, maxBytes: number): string {

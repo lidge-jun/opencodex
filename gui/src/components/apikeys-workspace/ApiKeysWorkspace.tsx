@@ -24,15 +24,20 @@ import {
 } from "../../pages/api-keys-panels";
 import ClientConfigPanel from "./ClientConfigPanel";
 import ApiKeysListPanel from "./ApiKeysListPanel";
+import type { UsageReadMetadata } from "../../usage-summary-resource";
+import { UsageIncompleteNotice } from "../usage-incomplete-notice";
+import { DictationPanel, LiveVoicePanel } from "./AudioApiPanel";
 
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
   /** Management API origin the client-config panel fetches from. */
   apiBase: string;
+  active?: boolean;
   /** Dataset-level. Absent means nothing is attributable yet — a different
    *  statement from a key whose counters read zero. */
   attributionSince?: string;
   historyTruncated?: boolean;
+  usageMetadata?: UsageReadMetadata;
   authMatrix: ApiAuthMatrixRow[];
   keysLoading: boolean;
   keysLoadFailed: boolean;
@@ -78,8 +83,10 @@ export interface ApiKeysWorkspaceProps {
 export default function ApiKeysWorkspace({
   keys,
   apiBase,
+  active = true,
   attributionSince,
   historyTruncated,
+  usageMetadata,
   authMatrix,
   keysLoading,
   keysLoadFailed,
@@ -164,6 +171,8 @@ export default function ApiKeysWorkspace({
     { id: "keys", label: t("api.section.keys"), meta: keysLoading ? undefined : String(keys.length) },
     { id: "connect", label: t("api.section.connect") },
     { id: "endpoints", label: t("api.section.endpoints") },
+    { id: "dictation", label: t("audio.dictation") },
+    { id: "live-voice", label: t("audio.liveVoice") },
     { id: "models", label: t("api.section.models"), meta: String(modelCount) },
     { id: "examples", label: t("api.section.examples") },
   ], [t, keys.length, keysLoading, modelCount]);
@@ -245,7 +254,7 @@ export default function ApiKeysWorkspace({
           one, the pattern Usage / Logs / Subagents already use. A rail plus a
           content pane was a second vertical band competing for the same width,
           and at 1280px it cost the content column 252px it could not spare. */}
-      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} />}
+      {!selected && <SectionTabs scope="api" items={sectionTabs} ariaLabel={t("api.workspace.sections")} mobileReadingLine={108} />}
       <div className="apikeys-workspace-root">
         <section className="apikeys-workspace-main" aria-label={t("api.workspace.details")}>
           {selected ? (
@@ -397,6 +406,7 @@ export default function ApiKeysWorkspace({
                 </div>
                 <div className="awi-section">
                   <h3 className="awi-section-title">{t("api.attribution.title")}</h3>
+                  <UsageIncompleteNotice data={usageMetadata} />
                   {/* Branch on the DATASET field, not on `usage`: a key with zero
                       requests under a live dataset really was used zero times,
                       which is not the same as having nothing to attribute. */}
@@ -411,17 +421,17 @@ export default function ApiKeysWorkspace({
                         <dd>{selected.usage.requests7d.toLocaleString(localeTag)}</dd>
                       </div>
                       <div className="awi-kv-row">
-                        <dt>{historyTruncated ? t("api.attribution.totalRequestsAvailable") : t("api.attribution.totalRequests")}</dt>
+                        <dt>{historyTruncated || usageMetadata?.usageIncomplete ? t("api.attribution.totalRequestsAvailable") : t("api.attribution.totalRequests")}</dt>
                         <dd>{selected.usage.totalRequests.toLocaleString(localeTag)}</dd>
                       </div>
                       <div className="awi-kv-row">
                         <dt>{t("api.attribution.lastUsed")}</dt>
                         <dd>{selected.usage.lastUsedAt
                           ? formatCreatedDate(selected.usage.lastUsedAt, localeTag)
-                          : t("api.attribution.neverUsed")}</dd>
+                          : t(usageMetadata?.usageIncomplete ? "api.attribution.noRecordedUse" : "api.attribution.neverUsed")}</dd>
                       </div>
                       <div className="awi-kv-row">
-                        <dt>{historyTruncated ? t("api.attribution.sinceAvailable") : t("api.attribution.since")}</dt>
+                        <dt>{historyTruncated || usageMetadata?.usageIncomplete ? t("api.attribution.sinceAvailable") : t("api.attribution.since")}</dt>
                         <dd>{formatCreatedDate(attributionSince, localeTag)}</dd>
                       </div>
                     </dl>
@@ -465,6 +475,7 @@ export default function ApiKeysWorkspace({
                     keysLoading={keysLoading}
                     keysLoadFailed={keysLoadFailed}
                     attributionSince={attributionSince}
+                    usageMetadata={usageMetadata}
                     localeTag={localeTag}
                     busy={mutationPending}
                     onSelect={id => {
@@ -483,6 +494,12 @@ export default function ApiKeysWorkspace({
                 </div>
                 <div id={sectionAnchorId("api", "endpoints")} className="awi-section-anchor">
                   <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                </div>
+                <div id={sectionAnchorId("api", "dictation")} className="awi-section-anchor">
+                  {active && <DictationPanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}
+                </div>
+                <div id={sectionAnchorId("api", "live-voice")} className="awi-section-anchor">
+                  {active && <LiveVoicePanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}
                 </div>
                 <div id={sectionAnchorId("api", "models")} className="awi-section-anchor">
                 <ApiKeysModelsPanel

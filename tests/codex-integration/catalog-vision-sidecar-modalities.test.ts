@@ -410,3 +410,20 @@ describe("Cursor native vs sidecar vision registry", () => {
     }
   });
 });
+
+
+test("exact capability modalities override legacy catalog hints and clear back to inference", () => {
+  const provider: OcxProviderConfig = {
+    adapter: "openai-chat", baseUrl: "https://example.test/v1",
+    modelInputModalities: { ModelA: ["audio"] },
+    modelCapabilities: { ModelA: { inputModalities: ["text", "image"] } },
+  };
+  const hint = (id: string) => applyProviderConfigHints("custom", provider, { provider: "custom", id, inputModalities: ["text"] }).inputModalities;
+  expect(hint("ModelA")).toEqual(["text", "image"]);
+  expect(hint("modela")).toEqual(["audio"]);
+  expect(hint("ModelA:variant")).toEqual(["audio"]);
+  delete provider.modelCapabilities!.ModelA;
+  expect(hint("ModelA")).toEqual(["audio"]);
+  provider.modelCapabilities!.ModelA = { inputModalities: ["text"] };
+  expect(hint("ModelA")).toEqual(["text", "image"]);
+});

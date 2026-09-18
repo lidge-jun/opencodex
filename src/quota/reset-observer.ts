@@ -55,6 +55,7 @@ export function observeQuotaSnapshot(input: {
   readonly accountKey: string;
   readonly windows: ReadonlyArray<QuotaWindowObservation>;
   readonly now?: number;
+  readonly retainAbsentShortWindow?: boolean;
 }): QuotaResetEvent[] {
   try {
     if (!sink) return [];
@@ -65,7 +66,7 @@ export function observeQuotaSnapshot(input: {
     // between two observations to tell a rolling window's natural decay from a real reset,
     // and only this layer knows when the snapshot was taken.
     const stamped = input.windows.map(window => ({ ...window, observedAt: now }));
-    const previous = swapLastObservedWindows(input.scope, accountTag, stamped);
+    const previous = swapLastObservedWindows(input.scope, accountTag, stamped, input.retainAbsentShortWindow);
     if (!previous) return [];
 
     const detected = detectQuotaResets({

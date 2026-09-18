@@ -6,6 +6,8 @@ import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-worksp
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
+import { SUBAGENT_SURFACE_GUIDE_URL } from "../subagent-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
@@ -49,6 +51,13 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const ultraModeCurrent = ultraState?.apiBase === apiBase;
   const ultraMode = ultraModeCurrent ? ultraState.mode : UNLOADED_ULTRA_MODE;
   const [ultraSaving, setUltraSaving] = useState(false);
+  /** A base/v2 selection from this page waiting on the approval dialog. */
+  /**
+   * A base/v2 selection waiting on the approval dialog, tagged with the endpoint it was staged
+   * for. Switching endpoints with the dialog open must not apply one proxy's answer to another,
+   * and tagging beats clearing it from an effect, which would be a cascading render.
+   */
+  const [pendingSurface, setPendingSurface] = useState<{ mode: "default" | "v2"; apiBase: string } | null>(null);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
   const currentUltraApiBase = useRef(apiBase);
@@ -361,11 +370,38 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onSave: patch => { void delegation.save(patch); },
           ultraMode,
           ultraSaving: ultraSaving || !ultraModeCurrent,
-          onUltraModeSave: patch => { void saveUltraMode(patch); },
+          // This page carries the same v1/base/v2 switch as Models and the Dashboard, so it
+          // needs the same gate: base and v2 wait for an answer, everything else writes.
+          onUltraModeSave: patch => {
+            if (patch.multiAgentMode === "default" || patch.multiAgentMode === "v2") {
+              setPendingSurface({ mode: patch.multiAgentMode, apiBase });
+              return;
+            }
+            void saveUltraMode(patch);
+          },
           ultraLoadFailed,
           onUltraModeRetry: () => { void retryUltraMode(); },
         }}
       />
+      {pendingSurface && pendingSurface.apiBase === apiBase && (
+        <SubagentSurfaceWarningModal
+          reason="selection"
+          mode={pendingSurface.mode}
+          docsUrl={SUBAGENT_SURFACE_GUIDE_URL}
+          busy={ultraSaving}
+          onContinue={() => {
+            const next = pendingSurface.mode;
+            setPendingSurface(null);
+            // Answer the advisory too: this operator has just read the same warning.
+            void saveUltraMode({ multiAgentMode: next, multiAgentSurfaceAdvisoryAcknowledged: true });
+          }}
+          onChooseV1={() => {
+            setPendingSurface(null);
+            if (ultraMode.multiAgentMode !== "v1") void saveUltraMode({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryAcknowledged: true });
+          }}
+          onDismiss={() => setPendingSurface(null)}
+        />
+      )}
     </>
   );
 }

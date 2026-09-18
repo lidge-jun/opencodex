@@ -7,6 +7,10 @@ import { NumberStepper } from "./NumberStepper";
 export type AutoSwitchFeedback = { tone: "ok" | "err"; message: string } | null;
 
 const AUTO_SWITCH_DESCRIPTION_KEYS = {
+  "reset-first": {
+    on: "accountPool.strategyHintResetFirst",
+    off: "codexAuth.autoSwitchQuotaOffDesc",
+  },
   quota: {
     on: "codexAuth.autoSwitchQuotaDesc",
     off: "codexAuth.autoSwitchQuotaOffDesc",

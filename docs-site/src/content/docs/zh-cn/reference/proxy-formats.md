@@ -213,6 +213,10 @@ thinking 重放与提示缓存仍由独立的 [#3719](https://github.com/lidge-j
 
 ## `POST /v1/live` 和 Realtime sideband
 
+下文的账户绑定说明适用于原生 Codex 客户端。通过外部 API 密钥使用语音转写和 GPT-Live，请参阅[英文音频 API 规范](/reference/proxy-formats/#streaming-dictation)。
+
+Connections > API keys 包含独立的听写和实时语音区域。数据密钥仅保留在表单内存中。听写会上传所选文件；语音连接检查不使用麦克风，而是等待会话确认。已配置不代表连接成功。
+
 `POST /v1/live` 接受 ChatGPT/Codex App 的 Frameless call-creation 表面。
 `POST /v1/realtime/calls` 接受 OpenAI Realtime 的 call-creation 表面。opencodex 会选择
 一个符合条件的 OpenAI 家族路由，将 call-creation 请求规范化为上游认证模式，并转发有界响应。
@@ -261,6 +265,8 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 Responses 系列和 Chat 请求接受专用标头或 Bearer 字段中的代理密钥。在原生路由上，所选的已保存 Codex 凭据会替换 admission bearer；其他路由会移除该 bearer。代理密钥绝不会用作 upstream 凭据。如果还要提供独立的 provider bearer，请将代理密钥放在专用标头中。
 
 没有密钥且不使用 OAuth 的 Cursor 路由可以使用调用方单独提供的 bearer，但不能使用代理 secret 或自动补充的 ChatGPT main 凭据。Combo/policy 选择以及实际发生的 shadow/thread-spawn 路由改写不会将调用方的原始凭据传递给新目标。规范 OpenAI 路由仅在 JWT 包含 ChatGPT 账户声明，且任何显式账户标头都与该声明匹配时，才可在内部路由变更后恢复调用方的单个非代理密钥 bearer。 向可选的 OpenAI sidecar 转发调用方认证时，需要单个 JWT 以及显式提供且匹配的 `chatgpt-account-id`。即使提供了显式账户标头，opaque bearer 也不会跨路由变更恢复。 除此之外，最终目标必须拥有自己的配置、OAuth 或已保存凭据，否则请求会在本地失败。只有 thread-spawn 标记而没有路由变化时，不会移除凭据。
+
+对于未配置密钥的 Cursor Chat 请求，只有实际计划了 OpenAI 辅助调用且存在规范的 Direct 候选时，才会补充已存储的 main 身份验证。无关的 Cursor 请求不会通过此流程占用 native main，因此不会延迟配置文件切换。辅助调用凭据仍受启动和切换保护限制，并与 Cursor bearer 分离。Pool 及明确指定账号的辅助调用保留现有账号选择。
 
 Claude replay 只会以当前 turn 已取得所有权的内存 snapshot 保留 main 凭据，并且仅在最终目标为规范 ChatGPT 路由时恢复它。
 

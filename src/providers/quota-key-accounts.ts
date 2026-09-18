@@ -29,6 +29,56 @@ export function clearProviderApiKeyQuotaCache(): void {
   flights.clear();
 }
 
+/**
+ * Cached-only, synchronous per-key quota. Never probes, never awaits, never schedules a read.
+ *
+ * The selector that calls this sits on the first-attempt path, where a network read would be a
+ * worse defect than the one it is there to fix. A miss is simply "no evidence".
+ *
+ * An `unavailable` row is a miss too, and that is the whole point of the check. `readEntry`
+ * keeps a last-good quota attached for up to LAST_GOOD_MS after a probe starts failing, so
+ * returning `entry.quota` on any hit would rank on a number up to half an hour stale -- and
+ * rank it ABOVE a key with no row at all. Last-good is a display value, not a selection input.
+ *
+ * A SUCCESSFUL row expires too, on exactly `readEntry`'s freshness predicate. Checking only
+ * `unavailable` was not enough: nothing on the selection path probes or sweeps, so once a
+ * dashboard or CLI read had populated the cache, a row could outlive ACCOUNT_QUOTA_TTL_MS and
+ * keep a "roomy" ten-minute-old measurement ranked above a key with no evidence at all --
+ * until some unrelated write happened to sweep it. Expired is no evidence, same as absent.
+ */
+export function cachedApiKeyQuota(
+  name: string,
+  provider: OcxProviderConfig,
+  keyId: string,
+  key: string,
+): ProviderQuota | null {
+  let resolved: string | undefined;
+  // resolveProviderApiKey swallows its own failures; the catch is belt-and-braces because this
+  // runs on the dispatch path and must not throw there under any future change.
+  try { resolved = resolveProviderApiKey(key)?.trim(); } catch { return null; }
+  if (!resolved) return null;
+  const entry = cache.get(identity(name, provider, keyId, resolved));
+  if (!entry || entry.unavailable || !entry.quota) return null;
+  const now = Date.now();
+  if (now - entry.ts >= ACCOUNT_QUOTA_TTL_MS) return null;
+  if (now - entry.quota.updatedAt >= LAST_GOOD_MS) return null;
+  return entry.quota;
+}
+
+/** Test seam: keyed on identity(), so it takes the raw key rather than an account id. */
+export function setCachedProviderApiKeyQuotaForTests(
+  name: string,
+  provider: OcxProviderConfig,
+  keyId: string,
+  key: string,
+  quota: ProviderQuota | null,
+  unavailable?: true,
+): void {
+  const resolved = resolveProviderApiKey(key)?.trim();
+  if (!resolved) return;
+  remember(identity(name, provider, keyId, resolved), { ts: Date.now(), quota, ...(unavailable ? { unavailable } : {}) });
+}
+
 /** Four workers per roster, not a process-wide network limit. */
 export async function mapQuotaRoster<T, R>(rows: readonly T[], read: (row: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(rows.length);

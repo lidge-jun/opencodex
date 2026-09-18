@@ -27,6 +27,11 @@ import {
   RESERVE_METADATA_SOURCE_FIELD,
   RESERVE_LUNA_METADATA_SOURCE,
 } from "../../src/codex/catalog/reserve";
+import {
+  reserveCatalogSuppressionReason,
+  resetReserveSuppressionWarningsForTests,
+  warnReserveSuppressedOnce,
+} from "../../src/codex/catalog/reserve-warn";
 import { findSupportedNativeTemplate, type RawEntry } from "../../src/codex/catalog/parsing";
 import { clampCatalogModelsToObservedCodexSupport } from "../../src/codex/catalog/effort";
 
@@ -249,6 +254,32 @@ describe("Reserve catalog metadata is not permission", () => {
     expect(diagnostic.removedEfforts).toContain("xhigh");
   });
 
+  test("a Reserve row whose sole survivors would be max/ultra is kept, not spliced out", () => {
+    const rows = merge(build(config(), [actualReserve({
+      supported_reasoning_levels: [
+        { effort: "max", description: "Source max" },
+        { effort: "ultra", description: "Source ultra" },
+      ],
+      default_reasoning_level: "ultra",
+    })]));
+    const diagnostic = clampCatalogModelsToObservedCodexSupport(rows, new Set(["medium"]));
+    // max/ultra are exempt from the observed-runtime intersection, so the ladder never
+    // empties and the omission branch never fires.
+    expect(rows.map(row => row.slug)).toContain("personal/gpt-reserve");
+    expect(rows.find(isReserveCatalogProjection)).toMatchObject({
+      supported_reasoning_levels: [
+        { effort: "max", description: "Source max" },
+        { effort: "ultra", description: "Source ultra" },
+      ],
+      default_reasoning_level: "ultra",
+    });
+    // Other rows in the merged catalog legitimately lose rungs against {medium}; the point
+    // is that nothing clampable was taken from the Reserve row.
+    expect(diagnostic.removedEfforts).not.toContain("max");
+    expect(diagnostic.removedEfforts).not.toContain("ultra");
+    expect(diagnostic.affectedModels).not.toContain("personal/gpt-reserve");
+  });
+
   test("partial effort intersection keeps only source efforts and a surviving default", () => {
     const rows = merge(build(config(), [actualReserve({
       supported_reasoning_levels: [
@@ -263,5 +294,76 @@ describe("Reserve catalog metadata is not permission", () => {
       supported_reasoning_levels: [{ effort: "high", description: "Source high" }],
       default_reasoning_level: "high",
     });
+  });
+});
+
+/**
+ * #4811: the Reserve row is account-qualified, so an authless install with no main-account
+ * selector produces nothing at all. An omission has no row to carry a reason, so the two
+ * properties that matter are that the explanation reaches the operator who opted in, and that
+ * it stays silent for the default install that never asked for a Reserve row.
+ */
+describe("reserve catalog suppression reason", () => {
+  const selectors = { mainSelectors: [], includeAccountBoundNativeOpenAi: true } as const;
+
+  test("a fresh authless install with no account namespaces is told why the row is missing", () => {
+    expect(reserveCatalogSuppressionReason(
+      config({ codexAccountPickerEnabled: undefined, codexAccountNamespaces: undefined }),
+      selectors,
+    )).toBe("no-account-namespaces");
+  });
+
+  test("an explicitly disabled picker is named ahead of the empty selector map", () => {
+    expect(reserveCatalogSuppressionReason(
+      config({ codexAccountPickerEnabled: false, codexAccountNamespaces: undefined }),
+      selectors,
+    )).toBe("account-picker-disabled");
+  });
+
+  test("selectors that exist but never target the main account are distinguished", () => {
+    expect(reserveCatalogSuppressionReason(
+      config({ codexAccountNamespaces: { second: "pool-account" } }),
+      selectors,
+    )).toBe("no-main-account-selector");
+  });
+
+  test("an absent canonical OpenAI provider is reported before the selector map", () => {
+    expect(reserveCatalogSuppressionReason(
+      config({ codexAccountNamespaces: undefined }),
+      { mainSelectors: [], includeAccountBoundNativeOpenAi: false },
+    )).toBe("no-canonical-openai-provider");
+  });
+
+  test("a main selector means the projection is written, so nothing is reported", () => {
+    expect(reserveCatalogSuppressionReason(
+      config(),
+      { mainSelectors: ["personal"], includeAccountBoundNativeOpenAi: true },
+    )).toBeUndefined();
+  });
+
+  test("an install that never opted into authless routing is never warned", () => {
+    expect(reserveCatalogSuppressionReason(
+      config({ codexDesktopAuthless: undefined, codexAccountNamespaces: undefined }),
+      selectors,
+    )).toBeUndefined();
+  });
+
+  test("the warning names the cause and its action exactly once per reason", () => {
+    resetReserveSuppressionWarningsForTests();
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    try {
+      warnReserveSuppressedOnce("no-account-namespaces");
+      warnReserveSuppressedOnce("no-account-namespaces");
+      warnReserveSuppressedOnce("account-picker-disabled");
+    } finally {
+      console.warn = original;
+      resetReserveSuppressionWarningsForTests();
+    }
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("codexAccountNamespaces is empty");
+    expect(lines[0]).toContain(NATIVE_RESERVE_MODEL);
+    expect(lines[1]).toContain("codexAccountPickerEnabled is false");
   });
 });

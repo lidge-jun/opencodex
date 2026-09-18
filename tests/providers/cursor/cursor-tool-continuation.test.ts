@@ -116,6 +116,42 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
     expect(serialized).not.toContain("[tool_result]");
     expect(serialized).toContain("read a file");
   });
+
+  test("an echoed tool-result envelope in assistant history is dropped from root replay", () => {
+    // Wiring guard, not a unit test of the filter: grok-4.6 pastes the replayed envelope after
+    // real prose, that text is stored as assistant output, and replaying it verbatim primes the
+    // next turn to echo again. The strip has to be reached from the root-replay path to matter.
+    const echoed: OcxMessage[] = [
+      { role: "user", content: "write the script", timestamp: 1 },
+      {
+        role: "assistant",
+        model: "cursor/grok-4.6",
+        timestamp: 2,
+        content: [{
+          type: "text",
+          text: "I wrote the import script.\n[Tool Result]\nname: Write\noutput: ECHOED BODY\n\nIt handles 41 rows.",
+        }],
+      },
+      { role: "toolResult", toolCallId: "call_1", toolName: "read_file", toolNamespace: "mcp__fs", content: "GENUINE RESULT", isError: false, timestamp: 3 },
+    ];
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c-echo",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nGENUINE RESULT" }],
+      rawMessages: echoed,
+    });
+    const serialized = JSON.stringify(decodeRoots(bytes));
+
+    expect(serialized).not.toContain("ECHOED BODY");
+    // The genuine replayed envelope is built from the toolResult message and must survive; only
+    // the copy the model pasted into its own text is removed.
+    expect(serialized).toContain("GENUINE RESULT");
+    // The model's own prose on BOTH sides of the echo survives: bounding the strip at the blank
+    // line is what keeps the answer that follows it.
+    expect(serialized).toContain("I wrote the import script.");
+    expect(serialized).toContain("It handles 41 rows.");
+  });
 });
 
 import { create as createPb } from "@bufbuild/protobuf";

@@ -41,6 +41,7 @@ const REPLACEMENT_STYLE_OAUTH = new Set<string>();
 
 const ACCOUNT_USAGE = `Usage:
   ocx account list [provider] [--json] [--all] [--quota [--refresh]]
+  ocx account history openai <pool-account-id> [--limit <1-200>] [--json]
   ocx account current <provider> [--json]
   ocx account use <provider> <account-or-key-id|main> [--json]
   ocx account refresh <provider> [--json]
@@ -50,7 +51,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account pause <provider> <account-id|main> [--json]
   ocx account resume <provider> <account-id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <account-or-key-id|main> --yes [--json]
   ocx account clear-cooldown <provider> <account-id|main> [--json]
@@ -60,7 +61,8 @@ const ACCOUNT_USAGE = `Usage:
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json]
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
-  ocx account main <doctor|list|register|add|switch|recover> ...
+  ocx account grok-reset-coupons [<account-id>] [--consume --yes] [--token-id <token-id>] [--json]
+  ocx account main <doctor|list|register|add|reauth|switch|recover> ...
 
 List and switch provider accounts and API-key pools (masked output only).
 'main' selects the Codex App login for the openai account pool.`;
@@ -100,6 +102,9 @@ function statusText(row: AccountRow): string {
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth) parts.push("needs-reauth");
   if (row.validationPending) parts.push("validation-pending");
+  if (row.selectionExcludedReason === "plan_excluded") {
+    parts.push(`not-auto-selected(plan=${row.selectionExcludedPlan ?? row.plan ?? "unknown"})`);
+  }
   return parts.join(" ");
 }
 
@@ -114,7 +119,7 @@ function priorityText(row: AccountRow): string {
  * decides on before a long session. The full breakdown stays in `--json`.
  */
 function quotaText(row: AccountRow): string {
-  if ((row as { quotaUnavailable?: boolean }).quotaUnavailable) return "unavailable";
+  if (row.quotaUnavailable) return row.quotaFailure ? `unavailable (${row.quotaFailure})` : "unavailable";
   const quota = row.quota;
   if (!quota) return "-";
   const parts: string[] = [];
@@ -318,13 +323,36 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   if (res.status === 0) return proxyUnreachable(res.transportError);
   if (res.status !== 200) return apiError(res.json, `failed to switch ${name}`, res.status);
 
-  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: c.type, activeId }, null, 2));
-  else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+  // The route reports this only when routing would drop the pin it just recorded, so an
+  // absent field means the pin survives (#4521).
+  const pinDrainReason = typeof res.json.pinDrainReason === "string" ? res.json.pinDrainReason : undefined;
+  if (wantsJson) {
+    console.log(JSON.stringify({
+      ok: true,
+      provider: name,
+      type: c.type,
+      activeId,
+      ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
+    }, null, 2));
+  } else {
+    console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+  }
   if (c.type === "codex") {
     console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
     const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {
-      console.error(`Note: auto-switch (threshold ${active.json.autoSwitchThreshold}%) may override this pin.`);
+    const threshold = active.status === 200 && typeof active.json.autoSwitchThreshold === "number"
+      ? active.json.autoSwitchThreshold
+      : undefined;
+    if (pinDrainReason !== undefined) {
+      // "may override" is the right caveat for a pin that is currently fine and could be
+      // overtaken later. It is the wrong sentence for one the next request will discard, and
+      // printing only that is what left the operator believing the account was pinned.
+      const because = pinDrainReason === "quota_threshold"
+        ? `is at or above the auto-switch threshold${threshold !== undefined ? ` (${threshold}%)` : ""}`
+        : `cannot currently be selected (${pinDrainReason})`;
+      console.error(`Note: ${displayId(activeId)} ${because}, so routing releases this pin on its next request.`);
+    } else if (threshold !== undefined && threshold > 0) {
+      console.error(`Note: auto-switch (threshold ${threshold}%) may override this pin.`);
     }
   }
   return 0;
@@ -334,6 +362,10 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
   const [sub, ...rest] = args;
   try {
     if (sub === "list") return await cmdList(rest, deps);
+    if (sub === "history") {
+      const { cmdAccountHistory } = await import("./account-history");
+      return await cmdAccountHistory(rest, deps);
+    }
     if (sub === "current") return await cmdCurrent(rest, deps);
     if (sub === "use") return await cmdUse(rest, deps);
     if (sub === "refresh") return await cmdRefresh(rest, deps);
@@ -355,7 +387,7 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
       const { cmdNativeMainAccount } = await import("./account-main");
       return await cmdNativeMainAccount(rest, deps);
     }
-    if (["login", "reauth", "code", "cancel", "reset-credits"].includes(sub ?? "")) {
+    if (["login", "reauth", "code", "cancel", "reset-credits", "grok-reset-coupons"].includes(sub ?? "")) {
       const { handleAccountAuthCommand } = await import("./account-auth");
       return await handleAccountAuthCommand(sub!, rest, deps) ?? 1;
     }

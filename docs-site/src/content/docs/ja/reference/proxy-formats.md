@@ -202,6 +202,10 @@ API ではありません。Desktop のキー移行・復旧・切断は既存�
 
 ## `POST /v1/live` とRealtime サイドバンド
 
+以下のアカウント連携は既存の Codex クライアント向けです。外部 API キーで利用する音声入力と GPT-Live は[英語版の音声 API 仕様](/reference/proxy-formats/#streaming-dictation)を参照してください。
+
+Connections > API keys に音声入力とリアルタイム音声の項目があります。データキーは入力欄のメモリにのみ保持されます。文字起こしは選択したファイルを送信し、音声の接続確認はマイクを使わずセッション応答を待ちます。設定済みの表示は接続成功を意味しません。
+
 `POST /v1/live` は、ChatGPT/Codex アプリのフレームレス通話作成サーフェスを受け入れます。 `POST /v1/realtime/calls` は、OpenAI Realtime 呼び出し作成サーフェスを受け入れます。 opencodex は、適格な OpenAI ファミリ ルートを選択し、アップストリーム認証モードのコール作成リクエストを正規化し、制限付き応答を中継します。
 
 コールの作成後、クライアントはサポートされている受信フォームを使用してサイドバンド WebSocket に参加できます。
@@ -248,6 +252,8 @@ API ではありません。Desktop のキー移行・復旧・切断は既存�
 Responses 系列と Chat のリクエストは、専用ヘッダーまたは Bearer フィールドのプロキシキーを受け付けます。ネイティブルートでは選択された保存済み Codex 認証情報が admission bearer を置き換え、他のルートではその bearer を削除します。プロキシキーを upstream の認証情報として使うことはありません。別の provider bearer も渡す場合は、プロキシキーを専用ヘッダーに設定してください。
 
 キーがなく OAuth を使用しない Cursor ルートは、別途指定された呼び出し元 bearer を使用できますが、プロキシ secret や自動補完された ChatGPT main 認証は使用しません。Combo/policy の選択と実際の shadow/thread-spawn ルート変更では、呼び出し元の生の認証情報を新しい対象へ渡しません。正規の OpenAI ルーティングでは、JWT に ChatGPT アカウントの claim が含まれ、明示的なアカウントヘッダーがある場合はその claim と一致するときに限り、内部ルート変更後にプロキシキーではない呼び出し元の単一 bearer を復元できます。 オプションの OpenAI sidecar に呼び出し元の認証を転送するには、単一の JWT とそれに一致する明示的な `chatgpt-account-id` が必要です。Opaque bearer は、明示的なアカウントヘッダーがあっても、ルート変更をまたいで復元されません。 それ以外の最終対象には自身の設定済み・OAuth・保存済み認証情報が必要で、なければローカルで失敗します。ルート変更のない thread-spawn マーカーだけでは認証情報を削除しません。
+
+設定済みキーのない Cursor への Chat リクエストでは、保存済み main 認証による任意の補完を、OpenAI 補助呼び出しが実際に計画され、canonical Direct の候補が利用可能になるまで延期します。無関係な Cursor リクエストはこの経路で native main を占有せず、プロファイル切り替えを遅らせません。補助認証は起動時と切り替え時の保護に従い、Cursor bearer とは分離されます。Pool およびアカウント指定の補助呼び出しは既存のアカウント選択を維持します。
 
 Claude replay は、その turn が所有権を確保した main 認証だけをメモリ内 snapshot に保持し、最終対象が正規の ChatGPT ルートである場合にのみ復元します。
 

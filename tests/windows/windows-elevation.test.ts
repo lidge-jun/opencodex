@@ -39,7 +39,7 @@ describe("windows elevation helpers", () => {
     expect(isWindowsAccessDeniedError(error)).toBe(true);
   });
 
-  test("formats schtasks create access-denied errors with marker and UAC guidance", () => {
+  test("formats schtasks create access-denied errors with marker and non-elevation guidance", () => {
     const error = Object.assign(new Error("Command failed"), {
       stderr: "FEHLER: Zugriff verweigert\r\n",
       stdout: "",
@@ -55,7 +55,10 @@ describe("windows elevation helpers", () => {
     ]);
     expect(message).toContain("Windows access denied while running Task Scheduler.");
     expect(message).toContain("schtasks /create /tn opencodex-proxy /xml task.xml /f");
-    expect(message).toContain("UAC prompt");
+    // #4425: the scoped task definition registers without elevation, so the diagnostic
+    // must not send the user to approve a UAC prompt as the fix.
+    expect(message).toContain("normally registers without elevation");
+    expect(message).not.toContain("Approve the Windows UAC prompt");
     expect(message).toContain(WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER);
     expect(isWindowsSchtasksCreateAccessDenied(message)).toBe(true);
   });

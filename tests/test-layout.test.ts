@@ -1,3 +1,4 @@
+// Holds INV-TESTS-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";

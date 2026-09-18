@@ -145,6 +145,17 @@ export interface CatalogModel {
   /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
   capabilities?: string[];
   /**
+   * This row is listed but cannot currently serve a request (#1711). Today the only value is
+   * "no_credit", set when every usable target has positive quota-exhaustion evidence.
+   *
+   * It is NOT visibility. The row stays `visibility: "list"` on purpose: the issue explicitly
+   * rejects hiding, and Codex Desktop only understands "list" and "hide" anyway, so hiding would
+   * be the one outcome the reporter asked not to have. An OpenCodex-aware consumer greys the
+   * entry; the native picker ignores the field, which is the honest limit of what a custom
+   * catalog field can do.
+   */
+  quotaInactiveReason?: "no_credit";
+  /**
    * Discovered per-token cost class for this routed model (#3666). "free" means the provider's
    * own /models row reported a numeric zero for BOTH the prompt and the completion rate;
    * "paid" means at least one rate is above zero. ABSENT means unknown — the provider published
@@ -172,6 +183,23 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
   // Issue #2330: OpenCode Go models absent from current documentation or returning terminal HTTP 400 errors.
   "opencode-go/mimo-v2-omni",
   "opencode-go/mimo-v2-pro",
+  /*
+   * DeepSeek retired `deepseek-v4-pro` on 2026-09-14 04:00 UTC and routes its requests to
+   * V4.1-Flash (api-docs.deepseek.com/news/news260910). Deleting the registry rows removes
+   * the model on providers that publish a static roster, but every provider below discovers
+   * its models live — there, a deleted row does not remove anything, it only strips the
+   * context window, the effort ladder and the text-only hint, so the retired model would
+   * keep appearing with its capabilities broken. Excluding the slug is what actually takes
+   * it out of the routed catalog.
+   */
+  "command-code/deepseek-deepseek-v4-pro",
+  "commandcode/deepseek-deepseek-v4-pro",
+  "orcarouter/deepseek-deepseek-v4-pro",
+  "cline-pass/cline-pass-deepseek-v4-pro",
+  "baseten/deepseek-ai-DeepSeek-V4-Pro",
+  "digitalocean/deepseek-v4-pro",
+  "qoder/DeepSeek-V4-Pro",
+  "codebuddy/deepseek-v4-pro",
 ]);
 
 export function isRoutedModelCompatibilityExcluded(slug: string): boolean {
@@ -227,12 +255,19 @@ export function readCodexCatalogPath(): string {
   return activeDefaultCatalogPath();
 }
 
-/** Resolve the configured catalog without consulting ambient CODEX_HOME again. */
-export function readCodexCatalogPathForHome(codexHome: string): string {
+/**
+ * Resolve the configured catalog without consulting ambient CODEX_HOME again.
+ *
+ * `configText` is for a caller that has already read that same `config.toml` under
+ * its own constraints - the prompt-text probe reads it bounded, on the request
+ * thread - so resolving the catalog does not cost a second, unbounded read of the
+ * file the caller is holding. Omitting it keeps the original behaviour.
+ */
+export function readCodexCatalogPathForHome(codexHome: string, configText?: string): string {
   try {
     const configPath = join(codexHome, "config.toml");
-    if (existsSync(configPath)) {
-      const toml = readFileSync(configPath, "utf-8");
+    if (configText !== undefined || existsSync(configPath)) {
+      const toml = configText ?? readFileSync(configPath, "utf-8");
       const path = readRootTomlString(toml, "model_catalog_json");
       if (path) return resolve(codexHome, path);
     }
@@ -251,6 +286,30 @@ export function readConfiguredAutoReviewModel(): string | null {
     if (existsSync(configPath)) {
       const toml = readFileSync(configPath, "utf-8");
       return readRootTomlString(toml, "auto_review_model");
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Read the root `model` pin from Codex's config.toml (issue #4646).
+ *
+ * Codex starts every new session on this id, and nothing in opencodex checks that the id is one
+ * the proxy actually exposes: the pin lives in Codex's config, while exposure is decided here by
+ * `disabledModels`, provider `selectedModels`, and account entitlements. When the two disagree
+ * every turn fails and no surface says why, which is what the `ocx doctor` section added for
+ * #4646 reports.
+ *
+ * Read-only, and deliberately the same shape and the same swallow-and-return-null error policy as
+ * `readConfiguredAutoReviewModel` above: a diagnostic must degrade to "unknown" on an unreadable
+ * or absent config rather than throw out of the surface that called it.
+ */
+export function readConfiguredDefaultModel(): string | null {
+  try {
+    const configPath = activeCodexConfigPath();
+    if (existsSync(configPath)) {
+      const toml = readFileSync(configPath, "utf-8");
+      return readRootTomlString(toml, "model");
     }
   } catch { /* ignore */ }
   return null;
@@ -308,15 +367,6 @@ export function findSupportedNativeTemplate(catalog: RawCatalog | null): RawEntr
       && !(typeof m.description === "string" && m.description.startsWith("Routed via opencodex → ")),
   ) ?? null;
 }
-
-/**
- * Native OpenAI slugs that do NOT support the Fast (priority) service tier.
- * Upstream may advertise service_tiers for these models, but the tier is not
- * actually available — strip it so the Codex UI does not offer a dead toggle.
- */
-const NO_FAST_TIER_NATIVE_SLUGS = new Set([
-  "gpt-5.3-codex-spark",
-]);
 
 /** Does this row already carry an `ultrafast` tier the operator put there themselves? */
 /**
@@ -410,14 +460,6 @@ export function normalizeServiceTiers(entry: RawEntry): RawEntry {
         ? { ...tier, description: "2x speed, increased usage" } : tier,
     );
   }
-  // Strip service tiers for models that do not actually support the Fast tier.
-  if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
-    delete entry.service_tier;
-    delete entry.service_tiers;
-    delete entry.default_service_tier;
-    delete entry.additional_speed_tiers;
-    return entry;
-  }
   // Codex stores the user-facing config spelling as "fast", but the catalog/request
   // service tier id is "priority" in current codex-rs. Keep legacy catalogs working.
   if (entry.service_tier === "fast") entry.service_tier = "priority";
@@ -489,8 +531,8 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
     }
   }
   // providerContextCaps.openai is a ceiling for native OpenAI rows regardless of where the
-  // advertised window came from (#1430): preserved rows without a hardcoded override (e.g.
-  // gpt-5.4-mini) must stay under the cap too, and auto-compaction follows the capped window.
+  // advertised window came from (#1430): preserved rows without a hardcoded override
+  // must stay under the cap too, and auto-compaction follows the capped window.
   // The per-model window narrows the same rows for the same reason.
   const currentContext = typeof entry.context_window === "number" ? entry.context_window : undefined;
   const cappedContext = narrowNativeMaxContextWindow(nativeSlug, currentContext, limits);

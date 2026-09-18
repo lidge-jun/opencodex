@@ -16,7 +16,7 @@ import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
-import { applyAccountQuotaFromUpstreamHeaders } from "../../src/codex/quota";
+import { applyAccountQuotaFromUpstreamHeaders, getAccountQuotaHistory } from "../../src/codex/quota";
 
 const originalFetch = globalThis.fetch;
 
@@ -183,6 +183,8 @@ describe("Responses account usage attribution", () => {
           await response.text();
           expect(getAccountQuota(accountId)?.weeklyPercent).toBe(20);
           expect(getAccountQuota("untouched-account")?.weeklyPercent).toBe(7);
+          expect(getAccountQuotaHistory(accountId).observations.map(row => row.windows[0].usedPercent))
+            .toEqual(accountId === MAIN_CODEX_ACCOUNT_ID ? [] : [10, 20]);
         }
       });
     } finally {
@@ -235,6 +237,7 @@ describe("Responses account usage attribution", () => {
           codexWsRuntimeIdentity: "1.4.0",
         });
         expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
+        expect(getAccountQuotaHistory("pool-ws-replaced").observations.map(row => row.windows[0].usedPercent)).toEqual([10]);
 
         savePoolCredential("pool-ws-replaced");
         clearAccountQuota("pool-ws-replaced");
@@ -242,6 +245,7 @@ describe("Responses account usage attribution", () => {
         await response.text();
 
         expect(getAccountQuota("pool-ws-replaced")).toBeNull();
+        expect(getAccountQuotaHistory("pool-ws-replaced").observations).toEqual([]);
       });
     } finally {
       releaseFinalQuota();
@@ -337,6 +341,32 @@ describe("Responses account usage attribution", () => {
         cooldownSource: "default",
       });
       expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toBeGreaterThan(Date.now());
+    });
+  });
+
+  // Pool health reads a 429 as the account saying it is out of quota. The replay refusal wears
+  // the same status but no upstream produced it, so recording it would cool a credential that
+  // refused nothing -- and the cooldown outlives the request that invented it.
+  test("a refused reset replay is not quota evidence and invites no client retry", async () => {
+    await withPoolHome(async () => {
+      const config = poolConfig(["pool-a"]);
+      savePoolCredential("pool-a");
+      updateAccountQuota("pool-a", 10);
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+      }) as typeof fetch;
+
+      const response = await handleResponses(request(), config, { model: "", provider: "" }, {});
+
+      expect(response.status).toBe(429);
+      expect(sends).toBe(1);
+      expect((await response.json() as { error?: { code?: string } }).error?.code)
+        .toBe("upstream_reset_replay_refused");
+      expect(response.headers.get("Retry-After")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-a")?.lastFailureStatus).toBeUndefined();
+      expect(getCodexUpstreamHealth("pool-a")?.cooldownUntil).toBeUndefined();
     });
   });
 

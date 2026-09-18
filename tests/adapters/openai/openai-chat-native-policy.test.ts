@@ -397,4 +397,77 @@ describe("main and native Chat tier authorization parity", () => {
       expect(native.service_tier).toBe(main.service_tier);
     }
   });
+
+  test("the native lane keeps caller image bytes only for positively vision-capable models", async () => {
+    // Scope boundary for the openai-chat inline image budget (see
+    // tests/adapters/openai/openai-chat-image-normalization.test.ts). That budget lives in
+    // the adapter's buildRequest, but an eligible Chat-inbound request is dispatched down
+    // this native lane, which builds through buildOpenAIChatPassthroughRequest and never
+    // reaches the normalizer. Asserted through the real handler rather than the builder,
+    // so it proves the dispatcher selects that lane. Widening the budget to cover the
+    // fast path is a separate contract change.
+    const url = `data:image/png;base64,${"A".repeat(4_000_000)}`;
+    const captured: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(String(init?.body ?? ""));
+      return Response.json({
+        id: "chatcmpl_native_image",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      });
+    }) as typeof fetch;
+
+    const target = provider({
+      modelCapabilities: { [MODEL_ID]: { inputModalities: ["text", "image"] } },
+    });
+    const response = await handleChatCompletions(
+      new Request("http://localhost/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: `${PROVIDER_NAME}/${MODEL_ID}`,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "what is this" },
+              ...Array.from({ length: 4 }, () => ({ type: "image_url", image_url: { url } })),
+            ],
+          }],
+        }),
+      }),
+      { port: 0, defaultProvider: PROVIDER_NAME, providers: { [PROVIDER_NAME]: target } } as OcxConfig,
+      { model: "", provider: "" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    const parts = (JSON.parse(captured[0]!) as { messages: Array<{ content: unknown }> })
+      .messages.flatMap(m => (Array.isArray(m.content) ? m.content : []))
+      .filter((p): p is { type: string; image_url: { url: string } } =>
+        typeof p === "object" && p !== null && (p as { type?: unknown }).type === "image_url");
+    // Well over the 3.5MiB image budget, and still byte-identical on the wire.
+    expect(parts).toHaveLength(4);
+    for (const part of parts) expect(part.image_url.url).toBe(url);
+  });
+});
+
+
+test("explicit text-only capabilities divert image-bearing native Chat requests", async () => {
+  const { isNativeChatRouteEligible } = await import("../../../src/server/chat-native");
+  const { routeModel } = await import("../../../src/router");
+  const config = { port: 10100, defaultProvider: "custom", providers: { custom: provider({ modelCapabilities: { model: { inputModalities: ["text"] } } }) } } as OcxConfig;
+  const route = routeModel(config, "custom/model");
+  expect(isNativeChatRouteEligible(route, { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,YQ==" } }] }] }, config)).toBe(false);
+  expect(isNativeChatRouteEligible(route, { messages: [{ role: "user", content: "hello" }] }, config)).toBe(true);
+});
+
+test("unknown image capability retains native Chat compatibility until capability is known", async () => {
+  const { isNativeChatRouteEligible } = await import("../../../src/server/chat-native");
+  const { routeModel } = await import("../../../src/router");
+  const config = { port: 10100, defaultProvider: "custom", providers: { custom: provider() } } as OcxConfig;
+  const route = routeModel(config, "custom/model");
+  const imageBody = { messages: [{ role: "user", content: [{
+    type: "image_url", image_url: { url: "data:image/png;base64,YQ==" },
+  }] }] };
+  expect(isNativeChatRouteEligible(route, imageBody, config)).toBe(true);
 });

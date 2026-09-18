@@ -87,7 +87,7 @@ export async function describeImage(
     input: [{ type: "message", role: "user", content }],
     reasoning: { effort: settings.reasoning },
     // The ChatGPT (codex) backend rejects `max_output_tokens` ("Unsupported parameter"); the shared
-    // SSE parser bounds raw response bytes before DESC_MAX_CHARS applies its display clamp.
+    // SSE parser bounds wire and decoded payload before DESC_MAX_CHARS applies its display clamp.
     store: false,
     stream: true,
   };
@@ -108,7 +108,7 @@ export async function describeImage(
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
       }, recovery)),
-      { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
@@ -121,9 +121,9 @@ export async function describeImage(
       const parsed = await parseSidecarSSE(res);
       if (linkedSignal.signal.aborted) throw linkedSignal.signal.reason;
       recordOutcome?.(res.status);
-      // The backend can return HTTP 200 then stream a `response.failed`/`error` event with no text;
-      // surface that as a describe error instead of an empty (silently-blank) description.
-      if (!parsed.text.trim() && parsed.error) return { text: "", error: parsed.error };
+      // Any parser error invalidates decoded text: it may be a prefix from a bounded or incomplete
+      // stream and must never be rendered or cached as a complete image description.
+      if (parsed.error) return { text: "", error: parsed.error };
       return { text: parsed.text };
     } finally {
       detachBodyGuard();

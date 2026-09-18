@@ -13,7 +13,7 @@ export interface OcxTool {
   loadedFromToolSearch?: boolean;
   /** Cursor-only synthetic exact-match edit tool; never inferred from the wire name. */
   cursorStructuredEdit?: true;
-  /** Synthetic web_search tool: the model's call is executed by the gpt-5.4-mini sidecar, not relayed to Codex. */
+  /** Synthetic web_search tool: the model's call is executed by the gpt-5.6-luna sidecar, not relayed to Codex. */
   webSearch?: boolean;
   /** Synthetic image_gen tool: the model's call is executed by the xAI image bridge sidecar, not relayed to Codex. */
   imageGeneration?: boolean;
@@ -47,16 +47,17 @@ export function dottedToolName(namespace: string | undefined, name: string): str
  *
  * Codex's code-mode shell tool is declared as `exec` (a freeform custom tool whose own
  * description mentions the nested `await tools.exec_command(...)` helper). Some routed providers
- * echo that helper name as the tool-call name, emitting `exec_command`, `write_stdin`, or
- * `apply_patch` instead of the declared `exec`. Accept these nested helper names only when the
- * request catalog actually declares `exec` and does not itself declare the emitted name (an MCP
- * server may legitimately advertise one under its own namespace).
+ * echo that helper name as the tool-call name, emitting `exec_command`, `write_stdin`,
+ * `apply_patch`, or `view_image` instead of the declared `exec`. Accept these nested helper names
+ * only when the request catalog actually declares `exec` and does not itself declare the emitted
+ * name (an MCP server may legitimately advertise one under its own namespace).
  */
 const LEGACY_SHELL_BRIDGE_TOOL_NAMES = ["exec_command", "shell_command"] as const;
 const CODE_MODE_HELPER_TOOL_NAMES = [
   ...LEGACY_SHELL_BRIDGE_TOOL_NAMES,
   "write_stdin",
   "apply_patch",
+  "view_image",
 ] as const;
 
 /**
@@ -66,22 +67,87 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
  */
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 
+/**
+ * Spellings that may never be MANUFACTURED as a bare alias for a namespaced tool.
+ *
+ * A bare alias is an ordinary compatibility affordance -- providers echo a namespaced tool
+ * without its prefix, and restoring the identity needs the bare spelling registered. For these
+ * six it is also an authorization decision, because a declared-name set is what
+ * `normalizeDeclaredToolName` and `declaresCodeModeExec` read: bare `exec` turns nested-helper
+ * normalization on for a catalog that never declared the shell, bare `exec_command` or
+ * `shell_command` turns it off for one that did, and the rest are accepted as declared calls the
+ * caller only ever authorized under a namespace.
+ *
+ * This is a property of the SPELLING, not of the namespace that declared it and not of the reason
+ * the alias was being added. It lives here, beside the names it protects, because every site that
+ * builds a declared-name set has to apply the same list -- the two that kept their own copies each
+ * drifted, once to a single namespace and once to a single name.
+ *
+ * A genuine namespace-free declaration is NOT covered: that is the caller declaring the tool, not
+ * a namespace being discarded to synthesize a bare name.
+ */
+export const NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES: ReadonlySet<string> = new Set<string>([
+  CODE_MODE_EXEC_TOOL_NAME,
+  ...CODE_MODE_HELPER_TOOL_NAMES,
+]);
+
+/**
+ * Normalizes provider-emitted tool names against declared tool catalogs.
+ *
+ * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool
+ * is declared and neither `default.<name>` nor `default__<name>` was explicitly declared (#4176).
+ * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`, `view_image`) to
+ * `exec` when code-mode `exec` is declared in the request catalog.
+ *
+ * @param name - The tool name emitted on the wire by the provider.
+ * @param declared - All wire tool names declared in the request catalog, including aliases.
+ * @param declaredBare - Explicitly declared bare tool names without namespace provenance.
+ *                       When omitted, falls back to `declared`.
+ * @returns The normalized tool name to expose downstream.
+ */
 export function normalizeDeclaredToolName(
   name: string,
   declared: ReadonlySet<string> | undefined,
+  declaredBare?: ReadonlySet<string>,
 ): string {
-  if (!declared || !declared.has(CODE_MODE_EXEC_TOOL_NAME)) return name;
+  if (!declared) return name;
   if (declared.has(name)) return name;
-  if (name === "apply_patch") return CODE_MODE_EXEC_TOOL_NAME;
+  let candidate = name;
+  if (name.startsWith("default.")) {
+    const bare = name.slice("default.".length);
+    const bareDeclared = declaredBare ?? declared;
+    if (
+      bare.length > 0
+      && bareDeclared.has(bare)
+      && !declared.has("default." + bare)
+      && !declared.has("default__" + bare)
+    ) {
+      candidate = bare;
+    } else if (
+      // Code mode never declares bare helper names; a provider that invents `default.`
+      // for one still means the nested helper. Strip the prefix so the helper list
+      // below can rewrite it to `exec` (#4412).
+      bare.length > 0
+      && declared.has(CODE_MODE_EXEC_TOOL_NAME)
+      && (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(bare)
+      && !declared.has("default." + bare)
+      && !declared.has("default__" + bare)
+    ) {
+      candidate = bare;
+    }
+  }
+  if (!declared.has(CODE_MODE_EXEC_TOOL_NAME)) return candidate;
+  if (declared.has(candidate)) return candidate;
+  if (candidate === "apply_patch") return CODE_MODE_EXEC_TOOL_NAME;
   // When the catalog explicitly declares any legacy shell bridge name, the environment
   // genuinely exposes that tool — turn normalization off so a call is never mis-routed
   // to `exec`.
   if ((LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy))) {
-    return name;
+    return candidate;
   }
-  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(name)
+  return (CODE_MODE_HELPER_TOOL_NAMES as readonly string[]).includes(candidate)
     ? CODE_MODE_EXEC_TOOL_NAME
-    : name;
+    : candidate;
 }
 
 /**

@@ -73,13 +73,15 @@ the resulting list; otherwise the native default is used when present, then the 
 choice. Stored custom configuration is unchanged, and repeated syncs do not add `max` back to a
 narrow custom list.
 
-This requires the exact provider, destination, and capability-backed model identity. An arbitrary
-gateway such as `YYLJ/gpt-6-astra` does not inherit native capabilities from its name. Its explicit
-custom ladder continues to override discovered provider metadata under the normal routed rules.
+The same catalog bound applies when the custom model id has pinned native capability metadata,
+including an arbitrary gateway such as `YYLJ/gpt-6-astra`. Desktop validates the model id, so
+`none` and `minimal` are stripped from that catalog row. Full native identity still requires the
+exact provider, destination, and capability-backed model identity; a gateway does not inherit
+Responses Lite, multi-agent, or native windows from its name.
 Codex's native Astra `ultra` choice is retained: it is a client delegation mode converted to a
 supported wire effort, distinct from the [API model's effort list](https://developers.openai.com/api/docs/models/gpt-6-astra).
-Catalog normalization does not rewrite existing thread settings or establish support for a
-particular installed Desktop version.
+Catalog normalization does not rewrite existing thread settings. Request-time native effort
+clamps remain canonical-forward only.
 
 When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
 `codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for
@@ -130,6 +132,29 @@ through the configured combo before canonical OpenAI routing. It also omits disa
 rows from the effective catalog while compatibility aliases exist, so Desktop cannot resurrect
 them by ignoring `visibility`. See [Codex Desktop native-allowlist compatibility](/guides/combos/#codex-desktop-native-allowlist-compatibility)
 for the command, disable-key semantics, and safety constraints.
+
+### What this means for a disabled native model
+
+Without a native alias configured, disabling a bare native GPT slug does not remove it from the
+catalog. The row stays with `visibility: "hide"`, which `/v1/models` and the dashboard both honour
+— they stop listing the model — while Desktop, under the policy above, can keep showing it. So the
+model can still be picked in Desktop after you disabled it, and the surfaces disagree about whether
+it exists.
+
+Picking it is not rejected for being disabled. `disabledModels` controls catalog visibility, not
+admission, so the request is routed by the ordinary rules as though the model were enabled: the turn
+runs on the model you disabled, or fails on whatever path that id resolves to. Either way the
+outcome is not the one the toggle implies.
+
+The row is retained deliberately. It holds the real upstream metadata, so re-enabling the model
+restores that metadata instead of a synthesized guess. When you need the row gone outright rather
+than hidden, configure a `nativeAlias` combo: while one exists, disabled bare native rows are
+omitted from the effective catalog entirely.
+
+If Codex's `config.toml` pins a root `model` that this proxy does not expose — a disabled model
+among them — every new session starts on a model opencodex does not serve. `ocx doctor` reports
+that under **Codex default model exposure**, as a warning rather than a failure, and says when it
+could not determine the exposed set at all.
 
 ## Integration path
 
@@ -188,8 +213,8 @@ including OpenAI service-tier metadata.
 
 ## Current stable model coverage
 
-The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. For the GPT-5.5/5.4 family, opencodex preserves
+The native fallback set includes `gpt-5.5` and GPT-5.6 Sol/Terra/Luna.
+For the GPT-5.5 family, opencodex preserves
 the installed Codex catalog's richer live entries and only synthesizes a missing entry. The bundled
 upstream snapshot is used only for GPT-5.6, where it supplies the real per-model identity and
 metadata instead of an older-template approximation.
@@ -253,6 +278,17 @@ preserved, so Luna has `max` but no `ultra`.
 On the wire, routed adapters map or clamp unsupported tiers. For older native models whose real
 ladder stops at `xhigh`, `nativeEffortClamp` maps a direct `max` or an `ultra` selection to `xhigh`
 (for example, GPT-5.5). Sol, Terra, and Luna have a real `max` rung.
+
+Catalog advertisement of the two top tiers is unconditional: `ocx sync` no longer removes `max` or
+`ultra` when the installed Codex binary is too old to offer them — Codex versions without those
+rungs are out of support, and hiding them from current clients costs more than it buys. Other
+rungs are still intersected with the observed runtime ladder, and a clamp diagnostic recorded by a
+previous binary stops applying once the binary at that path reports a different version (the
+in-place upgrade case), so `ocx status` and `ocx doctor` stop warning about a clamp the upgraded
+runtime no longer needs.
+Catalog visibility is not entitlement: advertising `max`/`ultra` does not guarantee the upstream
+account or provider accepts the tier, and for older native models whose real ladder stops at
+`xhigh` the wire clamp above still maps the selection down at request time.
 
 ## Fast tier rules
 

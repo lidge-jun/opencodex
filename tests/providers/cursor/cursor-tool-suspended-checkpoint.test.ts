@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createCursorAdapter as createCursorAdapterProduction } from "../../../src/adapters/cursor";
-import { clearCursorCheckpointsForTests, getCursorCheckpoint } from "../../../src/adapters/cursor/checkpoint-store";
+import { clearCursorCheckpointsForTests, cursorCheckpointShape, getCursorCheckpoint } from "../../../src/adapters/cursor/checkpoint-store";
 import { create, toBinary } from "@bufbuild/protobuf";
 import { ConversationStateStructureSchema } from "../../../src/adapters/cursor/gen/agent_pb";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -92,5 +92,38 @@ describe("tool-suspended checkpoint commit (devlog 260826 050)", () => {
     if (done?.type !== "done") throw new Error("expected done");
     expect(done.providerState?.cursor?.checkpointRef).toBeUndefined();
     clearCursorCheckpointsForTests();
+  });
+});
+
+describe("checkpoint shape (#4245 coverage question)", () => {
+  test("reports counts, and pendingToolCalls is what distinguishes coverage from arrival", () => {
+    // A snapshot that knows about a suspended call.
+    expect(cursorCheckpointShape(checkpointBytes)).toEqual({
+      turns: 0,
+      turnsOld: 0,
+      rootPromptMessages: 0,
+      todos: 0,
+      pendingToolCalls: 1,
+    });
+
+    // The same structure with nothing pending: byte length alone cannot tell these apart,
+    // which is exactly why capturedBytes was not enough to settle the native-gate question.
+    const noPending = toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      turns: [new Uint8Array([1, 2, 3])],
+    }));
+    expect(cursorCheckpointShape(noPending)).toEqual({
+      turns: 1,
+      turnsOld: 0,
+      rootPromptMessages: 0,
+      todos: 0,
+      pendingToolCalls: 0,
+    });
+  });
+
+  test("fails closed on absent, empty, and undecodable bytes", () => {
+    expect(cursorCheckpointShape(undefined)).toBeUndefined();
+    expect(cursorCheckpointShape(new Uint8Array())).toBeUndefined();
+    // Protobuf cannot parse this; a diagnostic must never throw into the request path.
+    expect(cursorCheckpointShape(new Uint8Array([0xff, 0xff, 0xff, 0xff]))).toBeUndefined();
   });
 });

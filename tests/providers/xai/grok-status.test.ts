@@ -129,6 +129,28 @@ describe("Grok fence endpoint drift", () => {
     )).toBeNull();
   });
 
+  /**
+   * The unauthenticated loopback listener makes "the port we listen on" a SET (#4236). `ocx
+   * sync` writes the LISTENER's port into the fence, so comparing against the public port alone
+   * warned every hub operator that their freshly synced, working config pointed at a closed
+   * port — and told them to run the command that had just written it.
+   */
+  test("accepts either port when a loopback listener is configured", () => {
+    const fence = { present: true, baseUrl: "http://127.0.0.1:10104/v1" } as const;
+    // Ported form: the fence names the listener, the public listener is elsewhere.
+    expect(grokFenceEndpointDrift(fence, 10100, 10104)).toBeNull();
+    // The public port is equally correct.
+    expect(grokFenceEndpointDrift({ present: true, baseUrl: "http://127.0.0.1:10100/v1" }, 10100, 10104)).toBeNull();
+    // Companion form: both members of the set are the same port.
+    expect(grokFenceEndpointDrift({ present: true, baseUrl: "http://127.0.0.1:10100/v1" }, 10100, 10100)).toBeNull();
+    // A third port is still drift, and is still reported against the public listener.
+    expect(grokFenceEndpointDrift({ present: true, baseUrl: "http://127.0.0.1:4179/v1" }, 10100, 10104))
+      .toEqual({ fencePort: 4179, livePort: 10100 });
+    // Absent listener: unchanged behaviour, whichever way "absent" is spelled.
+    expect(grokFenceEndpointDrift(fence, 10100, null)).toEqual({ fencePort: 10104, livePort: 10100 });
+    expect(grokFenceEndpointDrift(fence, 10100)).toEqual({ fencePort: 10104, livePort: 10100 });
+  });
+
   // No fence, no live port, or an endpoint shape we never emit: there is nothing the user
   // could act on, and a false warning about their own config is worse than silence.
   test("stays quiet when there is nothing to compare", () => {

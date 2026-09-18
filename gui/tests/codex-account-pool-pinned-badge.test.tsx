@@ -280,3 +280,40 @@ test("healthy account cards omit log-label and 30-day usage copy", async () => {
   expect(main.textContent).not.toContain("Log label: main");
   expect(hasPinnedHint(main)).toBe(false);
 });
+
+
+test("plan exclusion is visible without presenting the account as the next automatic selection", async () => {
+  await mountPool(makeController({
+    accounts: [mainAccount, { ...account, plan: "plus", selectionExcludedReason: "plan_excluded", selectionExcludedPlan: "free" }],
+    activeId: account.id,
+  }));
+  const card = cardFor(account.email);
+  const excluded = [...card.querySelectorAll(".badge")].find(el => el.textContent === en["codexAuth.planExcluded"]);
+  expect(excluded).toBeTruthy();
+  expect(excluded!.getAttribute("title")).toContain("free");
+  expect([...card.querySelectorAll(".badge")].some(el => el.textContent === en["codexAuth.nextSession"])).toBe(false);
+  expect(card.textContent).not.toContain(en["codexAuth.paused"]);
+  expect(switchAction(card)).toBeNull();
+  await act(async () => {
+    root!.render(<LanguageProvider><CodexAccountPool apiBase="" controller={makeController({ accounts: [mainAccount, { ...account, plan: "plus" }] })} /></LanguageProvider>);
+  });
+  expect(cardFor(account.email).textContent).not.toContain(en["codexAuth.planExcluded"]);
+});
+
+
+test("eligible next-session badge coexists with reset tickets while plan exclusion only removes selection", async () => {
+  const eligible = { ...account, plan: "plus", quota: { weeklyPercent: 10, resetCredits: 2, updatedAt: Date.now() } };
+  await mountPool(makeController({ accounts: [mainAccount, eligible], activeId: eligible.id }));
+  const current = cardFor(account.email);
+  expect([...current.querySelectorAll(".badge")].some(el => el.textContent === en["codexAuth.nextSession"])).toBe(true);
+  expect(current.querySelector(".badge-clickable")).not.toBeNull();
+  await act(async () => {
+    root!.render(<LanguageProvider><CodexAccountPool apiBase="" controller={makeController({
+      accounts: [mainAccount, { ...eligible, selectionExcludedReason: "plan_excluded", selectionExcludedPlan: "free" }],
+      activeId: eligible.id,
+    })} /></LanguageProvider>);
+  });
+  const excluded = cardFor(account.email);
+  expect([...excluded.querySelectorAll(".badge")].some(el => el.textContent === en["codexAuth.nextSession"])).toBe(false);
+  expect(excluded.querySelector(".badge-clickable")).not.toBeNull();
+});

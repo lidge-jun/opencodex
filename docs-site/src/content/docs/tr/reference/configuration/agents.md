@@ -136,9 +136,9 @@ kurtarır.
   "injectionModel": "gpt-5.5",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallback": ["gpt-5.6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.4-mini"]
+    "gpt-5.5": ["gpt-5.6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -258,6 +258,8 @@ en yüksek basamağa otururlar. Bir modelin çaba kontrolü yoksa veya desteklen
 hiçbir basamak uymuyorsa opencodex çabayı kaldırır ve sağlayıcı varsayılanının
 uygulanmasına izin verir. `max` ve `ultra` kabul edilirken kontrol paneli `low`
 ile `xhigh` arasını sunar.
+
+Yapılandırılmış sınırlar, model effort sabitlemesi olmayan uygun yerel Chat Completions turlarına da uygulanır. Sağlayıcının iletim değerine eşleme yalnızca sabitleme uygulandığında veya sınır değeri değiştirdiğinde yapılır; aksi hâlde yerel çağıran değeri özgün yazımını korur.
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.

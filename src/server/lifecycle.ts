@@ -365,12 +365,11 @@ export async function runListenerShutdown(
   always: () => Promise<void>,
 ): Promise<void> {
   const failures: unknown[] = [];
-  for (const step of steps) {
-    try {
-      await step();
-    } catch (error) {
-      failures.push(error);
-    }
+  // Close admission and start connection-owner cleanup before waiting for any drain.
+  // A graceful listener stop can itself depend on a later owner closing its sockets.
+  const results = await Promise.allSettled(steps.map(async step => { await step(); }));
+  for (const result of results) {
+    if (result.status === "rejected") failures.push(result.reason);
   }
   try {
     await always();

@@ -78,6 +78,7 @@ export function CodexAccountPoolCards({
     <>
       {pool.map(a => {
         const healthStatus = a.health?.status;
+        const planExcluded = a.selectionExcludedReason === "plan_excluded";
         const showReauth = Boolean(a.needsReauth) || oauthHealthShowsReauth(healthStatus);
         const inCooldown = oauthHealthIsCooldown(healthStatus);
         const validationPending = a.health?.reason === "validation_pending";
@@ -90,6 +91,11 @@ export function CodexAccountPoolCards({
             <strong>{a.alias ?? a.email}</strong>
             <span className="card-badges">
               {a.plan && <span className="badge badge-green">{a.plan}</span>}
+              {planExcluded && (
+                <span className="badge badge-muted" title={t("codexAuth.planExcludedHint", { plan: a.selectionExcludedPlan ?? a.plan ?? "" })}>
+                  {t("codexAuth.planExcluded")}
+                </span>
+              )}
               {a.paused && (
                 <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
                   {t("codexAuth.paused")}
@@ -102,13 +108,13 @@ export function CodexAccountPoolCards({
                 <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
               )}
               {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
-              {isNext(a) && !showReauth && !inCooldown && !validationPending && (
+              {isNext(a) && !planExcluded && !showReauth && !inCooldown && !validationPending && (
                 <span className="badge badge-primary">
                   {t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")}
                 </span>
               )}
             </span>
-            {!a.paused && (!isNext(a) || pinnedId !== a.id) && !showReauth && !inCooldown && !validationPending && (
+            {!a.paused && !planExcluded && (!isNext(a) || pinnedId !== a.id) && !showReauth && !inCooldown && !validationPending && (
               <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(a)}>
                 {switchActionLabel}
               </button>

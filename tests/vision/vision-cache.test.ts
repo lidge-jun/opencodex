@@ -17,6 +17,8 @@ import {
   setVisionDescriptionCache,
   setVisionDescriptionCacheLimitsForTests,
   shouldResolveOpenAiVisionSidecar,
+  planVisionSidecar,
+  requiresVisionPreprocessing,
   visionDescriptionRetainedStoreSnapshot,
   type VisionPlan,
 } from "../../src/vision";
@@ -41,6 +43,50 @@ const textOnlyProvider: OcxProviderConfig = {
   apiKey: "routed",
   noVisionModels: ["text-model"],
 };
+
+test("direct image admission preprocesses proven-negative capability without guessing unknown custom models", () => {
+  const config = {
+    port: 10100, defaultProvider: "custom", providers: {
+      custom: { adapter: "openai-chat", baseUrl: "https://custom.test/v1" },
+      declared: {
+        adapter: "openai-chat", baseUrl: "https://declared.test/v1",
+        modelInputModalities: { vision: ["text", "image"] },
+      },
+      openrouter: { adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1" },
+    },
+  } as OcxConfig;
+  expect(requiresVisionPreprocessing(config, config.providers.custom!, "unknown-model", "custom")).toBe(false);
+  expect(requiresVisionPreprocessing(config, config.providers.declared!, "vision", "declared")).toBe(false);
+  const runtimePositive = {
+    ...config.providers.custom!,
+    modelCapabilities: { runtimeVision: { inputModalities: ["text", "image"] } },
+  };
+  expect(requiresVisionPreprocessing(config, runtimePositive, "runtimeVision", "custom")).toBe(false);
+  expect(requiresVisionPreprocessing(
+    config, config.providers.openrouter!, "openai/gpt-5.4-mini", "openrouter",
+  )).toBe(true);
+});
+
+test("routed vision sidecar rejects proven-blind models without guessing unknown configured models", () => {
+  const main: OcxProviderConfig = {
+    adapter: "openai-chat", baseUrl: "https://main.test/v1", noVisionModels: ["blind"],
+  };
+  const helper: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://helper.test/v1" };
+  const request = parseRequest({
+    model: "main/blind",
+    input: [{ type: "message", role: "user", content: [{ type: "input_image", image_url: DATA_A }] }],
+  });
+  const config = {
+    port: 10100, defaultProvider: "main", providers: { main, helper },
+    visionSidecar: { enabled: true, backend: "routed", model: "helper/unknown" },
+  } as OcxConfig;
+  expect(planVisionSidecar(config, main, "blind", request, undefined, { providerName: "main" })?.backend).toBe("routed");
+  config.providers.helper!.modelInputModalities = { blind: ["text"], vision: ["text", "image"] };
+  config.visionSidecar!.model = "helper/blind";
+  expect(planVisionSidecar(config, main, "blind", request, undefined, { providerName: "main" })).toBeUndefined();
+  config.visionSidecar!.model = "helper/vision";
+  expect(planVisionSidecar(config, main, "blind", request, undefined, { providerName: "main" })?.backend).toBe("routed");
+});
 
 function plan(overrides: Partial<VisionPlan> = {}): VisionPlan {
   return {
@@ -73,6 +119,23 @@ test("vision sidecar auth stays lazy for no-image and disabled branches", () => 
     withImage,
   )).toBe(false);
   expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", withImage)).toBe(true);
+});
+
+test("vision auth and planning agree on a routed describer and its legacy fallback", () => {
+  const cfg: OcxConfig = { port: 10100, defaultProvider: "routed", providers: {
+    routed: textOnlyProvider, sighted: {
+      adapter: "openai-chat", baseUrl: "https://vision.test/v1", apiKey: "vision-key",
+      modelInputModalities: { "vision-model": ["text", "image"] },
+    },
+  }, visionSidecar: { enabled: true, backend: "routed", model: "sighted/vision-model" } };
+  const request = parseRequest({ model: "routed/text-model",
+    input: [{ type: "message", role: "user", content: [{ type: "input_image", image_url: DATA_A }] }],
+  });
+  expect(planVisionSidecar(cfg, textOnlyProvider, "text-model", request)?.backend).toBe("routed");
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", request)).toBe(false);
+  cfg.visionSidecar!.model = "legacy-bare-model";
+  expect(shouldResolveOpenAiVisionSidecar(cfg, textOnlyProvider, "text-model", request)).toBe(true);
+  expect(planVisionSidecar(cfg, textOnlyProvider, "text-model", request, plan().forwardSidecar)?.backend).toBe("openai");
 });
 
 function parsed(parts: Array<Record<string, unknown>>) {

@@ -29,6 +29,8 @@ export interface CodexAccountCredentialRecord {
   credential?: CodexAccountCredentials;
   generation: number;
   refreshGrantFingerprint?: string;
+  /** Private non-secret publication identity, stable across same-account token refresh. */
+  quotaHistoryIdentity?: string;
   deletedAt?: number;
   replacedAt?: number;
   lastCodexValidatedAt?: number;
