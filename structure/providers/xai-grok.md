@@ -124,6 +124,8 @@ The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is l
 the DeepSeek provider and does not alter xAI metadata or transport behavior; explicit capability
 overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and
 `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are unchanged and unprobed here.
+The Crusoe fixed-key registry row, discovery predicate, effort ladder, and input-modality map are
+also provider-scoped and do not alter xAI model metadata, OAuth routing, or wire behavior.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
