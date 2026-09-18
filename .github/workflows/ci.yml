@@ -647,7 +647,20 @@ jobs:
     # suite runs in one pool, so it is the place that catches what sharding
     # hides. The flakes it keeps surfacing are timing, not logic, and the fix
     # is the tests, not a fourth lane.
-    timeout-minutes: 30
+    #
+    # Sized to measured work, not to a guess. At 30 this lane never once finished:
+    # every run was cancelled slightly past halfway and the cancellations were read
+    # as runner capacity for months (#4905). An authorized one-off measurement let it
+    # complete for the first time and it took 50m39s wall, Bun reporting 3034.18s over
+    # 26526 tests in 1343 files. 75 leaves roughly 24 minutes of headroom on that
+    # number, which is the growth room the suite needs without letting a genuine hang
+    # sit for an hour before anyone sees it.
+    #
+    # This bound is not a fix for anything the run reports. That first complete run
+    # surfaced four tests that exceed their own timeouts under shared-process pressure,
+    # tracked separately in #4997; raising this budget is what made them observable and
+    # must not be mistaken for resolving them.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
