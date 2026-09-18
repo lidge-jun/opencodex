@@ -8,8 +8,9 @@ import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaW
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
-import { CODEX_EXHAUSTED_USAGE_PERCENT } from "./quota-types";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
+
 export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
 export { CODEX_EXHAUSTED_USAGE_PERCENT } from "./quota-types";
 
@@ -140,7 +141,7 @@ export function isCompleteCodexQuotaRecoverySnapshot(
   return quota.monthlyIsPrimaryWindow === true && finitePercent(quota.monthlyPercent);
 }
 
-function finitePercent(value: number | undefined): boolean {
+function finitePercent(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
@@ -239,14 +240,20 @@ function shortResetHasElapsed(resetAt: number | undefined, now: number): boolean
   return resetAtToMs(resetAt) <= now;
 }
 
-/** Display/rotation carry expires; a reset clock cannot retract hard-lock evidence. */
+/** Display/rotation carry expires; a reset clock cannot retract blocking hard-lock evidence. */
 function assignCarriedShort(
   next: StoredAccountQuota,
   existing: StoredAccountQuota | undefined,
   now: number,
   policyEvidence = false,
 ): void {
-  if (!existing || (!policyEvidence && shortResetHasElapsed(existing.shortResetAt, now))) return;
+  if (!existing) return;
+  const existingShortPercent = existing.shortPercent;
+  const preserveBlockingEvidence = policyEvidence
+    && finitePercent(existingShortPercent)
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent <= 100;
+  if (!preserveBlockingEvidence && shortResetHasElapsed(existing.shortResetAt, now)) return;
   if (existing.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
   if (existing.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
   if (existing.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
@@ -357,7 +364,12 @@ function mergeAccountQuota(
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
   }
 
-  const preserveKnownShort = policyEvidence && quota.shortPercent === undefined && finitePercent(existing?.shortPercent);
+  const existingShortPercent = existing?.shortPercent;
+  const preserveKnownShort = policyEvidence
+    && quota.shortPercent === undefined
+    && finitePercent(existingShortPercent)
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent <= 100;
   if (snapshotHasShort(quota) && !preserveKnownShort) {
     if (quota.shortPercent !== undefined) {
       next.shortPercent = quota.shortPercent;

@@ -80,7 +80,7 @@ opencodex の状態ファイルは `$OPENCODEX_HOME`(デフォルト `~/.opencod
  --- | --- |
 | `$OPENCODEX_HOME/config.json` | プロバイダー、デフォルトプロバイダー、ポート、オプション。 |
 | `$OPENCODEX_HOME/ocx.pid` | 実行中のプロキシの PID(単一インスタンスガード)。 |
-| `$OPENCODEX_HOME/runtime-port.json` | 自動で選んだ代替ポートを含む現在の PID、ホスト名、ポート。 |
+| `$OPENCODEX_HOME/runtime-port.json` | 現在の PID、ホスト名、ポート。`config.port` が `0` の場合に OS が割り当てたポートも含みます。 |
 | `$OPENCODEX_HOME/auth.json` | 保存された OAuth 認証情報(`ocx login` 時)。 |
 | `$OPENCODEX_HOME/catalog-backup*.json` | opencodex が変更する前に作成した Codex モデルカタログのバックアップ。 |
 | `$CODEX_HOME/config.toml` | ローカル専用構成では opencodex が管理するルート `openai_base_url` を追加します。ローカル以外のアドレスにバインドする場合は Codex が API 認証ヘッダーを送れるよう `model_provider = "opencodex"` と `[model_providers.opencodex]` を使います。 |

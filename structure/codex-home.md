@@ -91,6 +91,9 @@ call time, and admission/residue checks consume the same database path. Storage 
 owns the Codex-home tree separately and does not gain deletion authority over an external SQLite
 root from this resolver alone. Durable service launchers preserve an explicitly supplied
 `CODEX_SQLITE_HOME` so a background service resolves the same split state as the installing shell.
+Service install state records that effective SQLite home beside `CODEX_HOME` and `OPENCODEX_HOME`,
+and a lifecycle command requires the recorded value to match the current effective resolution; a
+legacy record without the field keeps its existing behavior.
 An absent `config.toml` or absent root `sqlite_home` permits the environment/home fallback. Any
 other read failure, malformed TOML, wrong-typed or blank `sqlite_home` is indeterminate and fails
 closed so history code cannot select a different database by accident. This strict parse is scoped
@@ -126,7 +129,12 @@ owner lifecycle), path/hash/inode re-verification inside the claim, and one
 atomic write of access/refresh/id token + account_id. The old identity token
 is never retained beside the new grant. No claim is held while the human
 completes the device page, and no DTO, log, or error carries tokens, emails,
-or raw account ids.
+or raw account ids. Cancellation is bound to the commit's exclusive claim and
+is rechecked immediately before publication, so a cancel delivered while the
+claim is contended aborts the wait and a cancelled flow cannot replace
+`auth.json` or clear its reauthentication quarantine. A cancel that arrives
+after the write still reports `succeeded`: the credential was replaced, so
+that is the honest terminal.
 
 > Decision record: [ADR-0008](decisions/ADR-0008-codex-home.md)
 
@@ -272,7 +280,7 @@ a deliberate user choice:
   (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
   override.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Plan-based automatic exclusions leave native credential files untouched and preserve the native-main exemption in the [selection policy](providers/openai-tiers.md#automatic-pool-plan-exclusions).

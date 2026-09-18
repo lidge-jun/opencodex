@@ -87,7 +87,7 @@ under `$CODEX_HOME` (default `~/.codex`).
 | --- | --- |
 | `$OPENCODEX_HOME/config.json` | Your providers, default provider, port, and options. |
 | `$OPENCODEX_HOME/ocx.pid` | PID of the running proxy (single-instance guard). |
-| `$OPENCODEX_HOME/runtime-port.json` | The live PID, hostname, and port, including an automatically selected fallback port. |
+| `$OPENCODEX_HOME/runtime-port.json` | The live PID, hostname, and port — including an OS-assigned port when `config.port` is `0`. |
 | `$OPENCODEX_HOME/auth.json` | Stored OAuth credentials (when you `ocx login`). |
 | `$OPENCODEX_HOME/catalog-backup*.json` | Codex model catalog backups made before opencodex edits it. |
 | `$CODEX_HOME/config.toml` | On loopback, opencodex adds a marker-owned root `openai_base_url`; non-loopback binds use `model_provider = "opencodex"` plus `[model_providers.opencodex]` so Codex can send the API-auth header. |

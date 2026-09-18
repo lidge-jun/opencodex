@@ -301,7 +301,9 @@ export async function executeResponsesRunTurn(
       try {
         while (true) {
           const preflight = await preflightAdapterEvents(source);
-          if (!preflight.error || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
+          if (preflight.replayUnsafe
+            || !preflight.error
+            || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
             return preflight.stream;
           }
           const retryQueue = createAdapterEventQueue({

@@ -388,6 +388,8 @@ export interface PassthroughWebSearchBridgeStreamOptions {
    * message when the extended body may not be sent, or undefined when it is admitted.
    */
   checkOutboundBody?: (body: string) => string | undefined;
+  /** Releases request-scoped resources when the stream completes, fails, or is cancelled. */
+  onFinalize?: () => void;
   signal?: AbortSignal;
 }
 
@@ -1187,21 +1189,36 @@ export function createPassthroughWebSearchBridgeStream(
   const aborted = (): boolean => cancelled || options.signal?.aborted === true;
   const iterator = bridgeStreamBlocks(options, aborted)[Symbol.asyncIterator]();
   const encoder = new TextEncoder();
+  let finalized = false;
+  const finalize = (): void => {
+    if (finalized) return;
+    finalized = true;
+    options.onFinalize?.();
+  };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const next = await iterator.next();
         if (next.done) {
+          finalize();
           controller.close();
           return;
         }
         controller.enqueue(encoder.encode(next.value));
       } catch (error) {
+        finalize();
         controller.error(error);
       }
     },
     cancel(reason) {
       cancelled = true;
+      // Release request-scoped authority immediately. An async generator cannot
+      // process a queued return() while its active next() is blocked on an
+      // upstream read, so deferring finalize until that settles would hold the
+      // sidecar probe lease for as long as the abandoned upstream leg does.
+      // Optional chaining would also skip finalize entirely for an iterator
+      // with no return method.
+      finalize();
       void iterator.return?.(reason);
     },
   });

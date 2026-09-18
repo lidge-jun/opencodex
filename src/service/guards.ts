@@ -10,6 +10,7 @@ import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { diagnoseService } from "./diagnostics";
 import type { ServiceDiagnostic } from "./diagnostics";
 import { currentCodexHome, currentOpenCodexHome, normalizePathForCompare, readServiceInstallState } from "./state";
+import { resolveCodexSqliteHome } from "../codex/paths";
 import { win32 } from "node:path";
 
 /**
@@ -60,6 +61,15 @@ export function assertServiceEnvironmentMatchesInstall(): void {
       `Service was installed with OPENCODEX_HOME=${state.opencodexHome}, but current OPENCODEX_HOME=${currentOpenCodexHome()}. ` +
         "Run the service command from the same OpenCodex home so service state and secrets match.",
     );
+  }
+  if (state.codexSqliteHome !== undefined) {
+    const actualCodexSqliteHome = resolveCodexSqliteHome({ codexHome: actualCodexHome });
+    if (normalizePathForCompare(state.codexSqliteHome) !== normalizePathForCompare(actualCodexSqliteHome)) {
+      throw new ServiceOwnershipError(
+        `Service was installed with Codex SQLite home=${state.codexSqliteHome}, but the current Codex SQLite home=${actualCodexSqliteHome}. ` +
+          "Run the service command with the same sqlite_home configuration and CODEX_SQLITE_HOME so native Codex history restore updates the correct database.",
+      );
+    }
   }
 }
 

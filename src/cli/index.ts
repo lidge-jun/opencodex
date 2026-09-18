@@ -79,9 +79,9 @@ import {
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { redactUrlForLog } from "../lib/redact";
-import { dispatchCommand, decideStartWithLiveOwner } from "./dispatch";
+import { dispatchCommand, decideBusyPreferredPort, decideStartWithLiveOwner } from "./dispatch";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
-import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
+import { findLiveProxy, probeHostname, probePortOwner, START_OWNERSHIP_LIVENESS, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
 import { isApiAuthRequired } from "../server/auth-cors";
 import { runReady, type ReadyArgs } from "./ready";
@@ -267,8 +267,41 @@ async function chooseListenPort(
       // ever a config collision.
       ...(reservedLoopbackPort !== undefined ? { reservedPort: reservedLoopbackPort } : {}),
     });
-    if (preferred > 0 && selected !== preferred) {
-      console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
+    if (selected !== preferred) {
+      // The hop used to be automatic, and that is how a bare `start` beside a healthy
+      // proxy produced a second one (#5004): nothing on this path ever asked who held the
+      // preferred port. Ask the holder itself — not this home's pid/runtime bookkeeping,
+      // which is exactly what was wrong when the duplicate happened — and give the
+      // question a budget that cannot mistake one lost probe for an empty port.
+      const holder = preferred > 0 && !hardPin
+        ? await probePortOwner(preferred, { hostname: config.hostname }, START_OWNERSHIP_LIVENESS)
+        : null;
+      const decision = decideBusyPreferredPort({
+        preferredPort: preferred,
+        selectedPort: selected,
+        hardPin,
+        holderIsOpencodex: holder !== null,
+        ocxService: process.env.OCX_SERVICE,
+      });
+      if (decision === "service-stay-out") {
+        // Same contract as the pre-bind owner check: the wrapper's retry loop terminates
+        // on a zero exit, and the port it was asked to serve is already served.
+        console.log(`Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}); service wrapper staying out of the way.`);
+        process.exit(0);
+      }
+      if (decision === "refuse-live-proxy") {
+        console.error(`⚠️  Proxy already running (PID ${holder?.pid ?? "unknown"}, port ${preferred}). Use 'ocx stop' first.`);
+        process.exit(1);
+      }
+      if (decision === "refuse-unidentified-holder") {
+        console.error(`❌ Port ${preferred} is busy and its holder did not identify as opencodex.`);
+        console.error("   Starting on another port would leave Codex pointed at a proxy you did not ask for.");
+        console.error("   Stop whatever holds that port, or start on a free one with 'ocx start --port <port>'.");
+        process.exit(1);
+      }
+      if (preferred > 0) {
+        console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
+      }
     }
     if (shouldPersistSelectedPort(config.port, selected, preferred, options)) {
       config.port = selected;
@@ -291,7 +324,12 @@ async function findProxyOwnerBeforeJournalRecovery(
   const pidSnapshot = readPidFileValue();
   const hasRuntimeOwner = readRuntimePort() !== null;
   const shouldProbe = pidSnapshot !== null || hasRuntimeOwner || options.probeConfiguredPort === true;
-  const live = shouldProbe ? await findLiveProxy() : null;
+  // A negative answer here is acted on twice over: the caller walks past a proxy it was
+  // supposed to find, and the lines below delete this home's pid record and reconcile the
+  // journal. One 750ms probe is not enough evidence for either (#5004) — a transport
+  // failure is indistinguishable from an empty port, and the reported Windows duplicate
+  // came from exactly that answer on a proxy the previous command had just found healthy.
+  const live = shouldProbe ? await findLiveProxy(START_OWNERSHIP_LIVENESS) : null;
   if (live) return { live, pidSnapshot };
 
   // The probe established that the snapshotted owner is stale. Compare before

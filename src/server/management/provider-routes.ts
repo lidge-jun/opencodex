@@ -1264,19 +1264,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       || Object.hasOwn(body.provider, "modelPinnedReasoningEfforts")
       || latest?.pinnedReasoningEffort !== undefined || latest?.modelPinnedReasoningEfforts !== undefined;
     // New registration also edits discovery/disabled-model state; stage those
-    // side effects with the pin draft instead of mutating live state before validation.
-    const registrationDraft = pinsOwned && !latest ? {
+    // side effects with the registration draft instead of mutating live state
+    // before validation.
+    const registrationDraft = !latest ? {
       ...config,
       ...(config.modelDiscovery === undefined ? {} : { modelDiscovery: structuredClone(config.modelDiscovery) }),
     } : undefined;
     initializeProviderModelSelection(name, prov, latest, registrationDraft ?? config);
     const candidate = stripRegistryOnlyStaticHeaders(name, prov);
-    if (pinsOwned) {
-      const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate },
-        ...(body.setDefault === true ? { defaultProvider: name } : {}) };
-      const validation = validateConfigCandidate(draft);
-      if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
-    }
+    const draft = { ...(registrationDraft ?? config), providers: { ...config.providers, [name]: candidate },
+      ...(body.setDefault === true ? { defaultProvider: name } : {}) };
+    const validation = validateConfigCandidate(draft);
+    if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
     const previous = Object.getOwnPropertyDescriptor(config.providers, name);
     const rollback = pinsOwned ? captureConfigTopLevelRollback(config, ["defaultProvider", "modelDiscovery", "disabledModels"]) : undefined;
     try {

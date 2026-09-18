@@ -494,6 +494,8 @@ export interface ObservedCatalogMergeInput {
   readonly openaiContextCap?: NativeContextLimitsInput;
   /** Exact display-only labels for bare native OpenAI models. */
   readonly nativeDisplayNames?: Readonly<Record<string, string>>;
+  /** Pristine installed-catalog multi-agent pins; see MultiAgentModeOptions.nativeDefaults. */
+  readonly nativeMultiAgentDefaults?: ReadonlyMap<string, string | null>;
 }
 
 /**
@@ -529,6 +531,7 @@ export function mergeCatalogEntriesFromObservedState({
   policy,
   openaiContextCap,
   nativeDisplayNames,
+  nativeMultiAgentDefaults,
 }: ObservedCatalogMergeInput): RawEntry[] {
   // Raw catalog rows contain nested arrays/objects that normalization mutates. Detach every row at
   // the observed-core boundary so callers can safely retain evidence objects or repeat the merge.
@@ -886,7 +889,7 @@ export function mergeCatalogEntriesFromObservedState({
     applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
     multiAgentMode,
     multiAgentV2Enabled,
-    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
+    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults },
   );
   applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {
@@ -937,6 +940,7 @@ export function mergeCatalogEntriesForSync(
   ),
   openaiContextCap?: NativeContextLimitsInput,
   keepNativeChatGptOnV1 = false,
+  nativeMultiAgentDefaults?: ReadonlyMap<string, string | null>,
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must
   // not suppress same-named native rows; actual admitted combo entries own that decision now.
@@ -973,6 +977,7 @@ export function mergeCatalogEntriesForSync(
     accountBoundEntries,
     suppressedBareNativeSlugs,
     openaiContextCap,
+    nativeMultiAgentDefaults,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "emit",

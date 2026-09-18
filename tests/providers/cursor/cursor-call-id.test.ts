@@ -20,6 +20,12 @@ beforeEach(() => {
 });
 
 describe("cursor call-id codec", () => {
+  test("local side effects map to replay-unsafe invisible heartbeats", () => {
+    expect(mapCursorServerMessage({ type: "local_side_effect" }, mapperState())).toEqual([
+      { type: "heartbeat", replayUnsafe: true },
+    ]);
+  });
+
   test("plain ids pass through unchanged", () => {
     expect(encodeCursorCallId("call_abc123")).toBe("call_abc123");
     expect(decodeCursorCallId("call_abc123")).toBe("call_abc123");

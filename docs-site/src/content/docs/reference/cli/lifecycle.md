@@ -18,10 +18,14 @@ optionally installs the Codex autostart shim.
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Start the proxy server (preferred port `10100`). If that port is occupied, opencodex selects and
-records another available port. It writes PID/runtime-port state and refuses to start a second live
-instance. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
-native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`).
+Start the proxy server (preferred port `10100`). It writes PID/runtime-port state and refuses to
+start a second live instance. When the preferred port is occupied, `start` asks the holder who it
+is and stops either way: it refuses outright when an opencodex answers there, and reports an
+unidentified holder otherwise. It never moves the listener to another port on its own, because that
+would leave the first proxy running and re-point Codex at the second. Name a different port with
+`--port`, or set `port: 0` in the config to ask the OS for one. On start it syncs each provider's
+models into Codex's catalog. On shutdown it restores native Codex — unless it was launched as a
+managed service (`OCX_SERVICE=1`).
 
 `--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
 HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
