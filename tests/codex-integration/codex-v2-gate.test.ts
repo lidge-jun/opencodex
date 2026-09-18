@@ -20,6 +20,7 @@ import {
   buildCatalogEntriesFromObservedState,
   mergeCatalogEntriesFromObservedState,
 } from "../../src/codex/catalog/sync";
+import { nativeMultiAgentDefaults } from "../../src/codex/catalog/parsing";
 import {
   getAgentsEnabled,
   getAgentsMaxDepth,
@@ -2106,6 +2107,59 @@ describe("3-state multi-agent mode", () => {
     );
     expect(merged.find(e => e.slug === "custom-native")?.multi_agent_version).toBe("v2");
     expect(merged.find(e => e.slug === "provider/model")?.multi_agent_version).toBeUndefined();
+  });
+
+  test("mode default keys baseline pins by trusted account-bound slugs only", () => {
+    // hasNativeDefault resolves the lookup slug through
+    // trustedAccountBoundNativeCatalogSlug, so an account-bound clone tracks its
+    // bound native's pristine pin: the backup's "v1" beats both the bundled
+    // snapshot's "v2" and a stale stamp on the clone, and a baseline row with no
+    // pin still clears the clone's stale stamp.
+    const boundSol = {
+      ...template(),
+      slug: "team/gpt-5.6-sol",
+      display_name: "team / GPT-5.6 Sol",
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      multi_agent_version: "v2",
+    };
+    const boundNative = {
+      ...template(),
+      slug: "team/gpt-5.5",
+      display_name: "team / gpt-5.5",
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      multi_agent_version: "v2",
+    };
+    // An untrusted slashed row must not key the baseline by its post-slash part:
+    // "external/gpt-5.6-sol" is not the native "gpt-5.6-sol" row, so its preserved
+    // pin survives instead of being rewritten to the baseline's "v1".
+    const foreignRouted = {
+      ...template(),
+      slug: "external/gpt-5.6-sol",
+      display_name: "External Sol",
+      multi_agent_version: "v2",
+    };
+    const merged = mergeCatalogEntriesForSync(
+      [foreignRouted as never], [], new Map(), [], false,
+      new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [boundSol as never, boundNative as never],
+      new Set(), new Set(), undefined, false,
+      new Map<string, string | null>([["gpt-5.6-sol", "v1"], ["gpt-5.5", null]]),
+    );
+    expect(merged.find(e => e.slug === "team/gpt-5.6-sol")?.multi_agent_version).toBe("v1");
+    expect(merged.find(e => e.slug === "team/gpt-5.5")?.multi_agent_version).toBeUndefined();
+    expect(merged.find(e => e.slug === "external/gpt-5.6-sol")?.multi_agent_version).toBe("v2");
+
+    // The baseline extractor itself never indexes slashed rows, so account-bound
+    // or routed rows inside a backup cannot alias a bare native slug.
+    const defaults = nativeMultiAgentDefaults([
+      { slug: "gpt-5.6-sol", multi_agent_version: "v1" },
+      { slug: "team/gpt-5.6-sol", multi_agent_version: "v2" },
+      { slug: "gpt-5.5" },
+    ]);
+    expect(defaults.get("gpt-5.6-sol")).toBe("v1");
+    expect(defaults.has("team/gpt-5.6-sol")).toBe(false);
+    expect(defaults.has("gpt-5.5")).toBe(true);
+    expect(defaults.get("gpt-5.5")).toBeNull();
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
