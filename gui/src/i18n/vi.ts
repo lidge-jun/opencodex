@@ -1580,6 +1580,7 @@ export const vi: Record<TKey, string> = {
   "codexSet.dialog.sourceBytes": "{bytes} byte",
   "codexSet.dialog.emptySource": "Tệp tại {path} tồn tại nhưng không có dữ liệu, vì vậy layer này không gửi đi nội dung nào cả.",
   "codexSet.dialog.notExposed": "Base prompt di chuyển bên ngoài danh sách tin nhắn mà Codex có thể in ra, vì vậy không thể hiển thị ở đây. Tuy nhiên có thể thay thế nó thông qua model_instructions_file.",
+  "codexSet.dialog.unmapped": "Lớp này chưa có ánh xạ được xác nhận trong đầu ra prompt, vì vậy chưa thể hiển thị văn bản của nó ở đây.",
   "codexSet.dialog.textUnavailable": "Không thể đọc prompt Codex trên máy này, do đó văn bản không khả dụng.",
   "codexSet.class.base": "Base instructions",
   "codexSet.class.config-toggle": "Có thể chuyển đổi tại đây",

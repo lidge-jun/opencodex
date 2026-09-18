@@ -1604,6 +1604,7 @@ export const fr: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "Lors du tour que nous avons lu, cette couche n'a rien envoyé. Les sections ne sont renvoyées qu'en cas de changement : un seul échantillon peut donc ne pas la contenir.",
   "codexSet.dialog.emptySource": "Le fichier {path} existe mais il est vide : cette couche n'envoie donc rien.",
   "codexSet.dialog.notExposed": "L'invite de base circule en dehors de la liste de messages que Codex peut afficher ; elle ne peut donc pas être montrée ici. On peut la remplacer via model_instructions_file.",
+  "codexSet.dialog.unmapped": "Cette couche n'a pas encore de correspondance confirmée dans la sortie de l'invite ; son texte ne peut donc pas encore être affiché ici.",
   "codexSet.dialog.textUnavailable": "L'invite Codex n'a pas pu être lue sur cette machine, le texte est donc indisponible.",
   "codexSet.class.base": "Instructions de base",
   "codexSet.class.config-toggle": "Modifiable ici",

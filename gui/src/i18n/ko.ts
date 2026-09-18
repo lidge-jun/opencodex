@@ -1122,6 +1122,7 @@ export const ko: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "확인한 턴에서는 이 레이어가 아무것도 보내지 않았습니다. 각 섹션은 내용이 바뀔 때만 다시 전송되므로, 한 번 확인한 것만으로는 빠져 보일 수 있습니다.",
   "codexSet.dialog.emptySource": "{path} 파일은 있지만 비어 있어서 이 레이어는 아무것도 보내지 않습니다.",
   "codexSet.dialog.notExposed": "기본 프롬프트는 Codex가 출력하는 메시지 목록 밖으로 전달되어 여기서 보여줄 수 없습니다. 대신 model_instructions_file로 교체할 수 있습니다.",
+  "codexSet.dialog.unmapped": "이 레이어는 프롬프트 출력에서 확인된 매핑이 아직 없어 여기에서 텍스트를 표시할 수 없습니다.",
   "codexSet.dialog.textUnavailable": "이 컴퓨터에서 Codex 프롬프트를 읽지 못해 원문을 표시할 수 없습니다.",
   "codexSet.class.base": "기본 지침",
   "codexSet.class.config-toggle": "여기서 전환 가능",

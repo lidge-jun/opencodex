@@ -1529,6 +1529,7 @@ export const ja: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "確認したターンでは、このレイヤーは何も送信していません。各セクションは内容が変わったときだけ再送されるため、一度の確認では欠けて見えることがあります。",
   "codexSet.dialog.emptySource": "{path} のファイルは存在しますが空のため、このレイヤーは何も送信しません。",
   "codexSet.dialog.notExposed": "基本プロンプトは Codex が出力するメッセージ一覧の外を通るため、ここには表示できません。model_instructions_file で置き換えることは可能です。",
+  "codexSet.dialog.unmapped": "このレイヤーにはプロンプト出力内で確認済みの対応付けがまだないため、ここにはテキストを表示できません。",
   "codexSet.dialog.textUnavailable": "このマシンでは Codex のプロンプトを読み取れず、原文を表示できません。",
   "codexSet.class.base": "基本指示",
   "codexSet.class.config-toggle": "ここで切り替え可能",

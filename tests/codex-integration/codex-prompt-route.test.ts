@@ -1520,5 +1520,16 @@ describe("020 coverage completions", () => {
     expect(res.body.code).toBe("invalid_body");
   });
 
+  test("41. unmapped layers stay distinct from the unprintable base prompt", async () => {
+    // "not-exposed" is the base prompt's contract: it is confirmed to travel
+    // outside the printable message list, and the GUI renders a
+    // base-prompt-specific explanation for it. Reusing that reason for layers
+    // whose tag the extractor has not verified showed that explanation on
+    // unrelated layers.
+    const probe = await Bun.file(new URL("../../src/codex/prompt-text-probe.ts", import.meta.url)).text();
+    expect(probe).toContain('"unmapped" | "unavailable"');
+    expect(probe).toContain('layers[id] ??= { text: null, reason: "unmapped"');
+  });
+
 
 });

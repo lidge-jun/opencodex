@@ -1618,6 +1618,7 @@ export const tr: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "Okuduğumuz turda bu katman hiçbir şey göndermedi. Bölümler yalnızca değiştiklerinde yeniden gönderilir, bu yüzden tek bir örnekte görünmeyebilir.",
   "codexSet.dialog.emptySource": "{path} konumundaki dosya var ancak boş, bu yüzden bu katman hiçbir şey göndermiyor.",
   "codexSet.dialog.notExposed": "Temel istem, Codex'in yazdırabildiği mesaj listesinin dışından geçtiği için burada gösterilemez. model_instructions_file ile değiştirilebilir.",
+  "codexSet.dialog.unmapped": "Bu katmanın istem çıktısında henüz doğrulanmış bir eşlemesi yok, bu nedenle metni burada henüz gösterilemiyor.",
   "codexSet.dialog.textUnavailable": "Bu makinede Codex istemi okunamadı, bu yüzden metin kullanılamıyor.",
   "codexSet.class.base": "Temel talimatlar",
   "codexSet.class.config-toggle": "Buradan değiştirilebilir",

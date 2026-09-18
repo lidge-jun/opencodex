@@ -1103,6 +1103,7 @@ export const zh: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "在我们读取的那一轮中，此层没有发送任何内容。各部分仅在内容变化时才会重新发送，因此单次采样可能看不到它。",
   "codexSet.dialog.emptySource": "{path} 文件存在但为空，因此此层不会发送任何内容。",
   "codexSet.dialog.notExposed": "基础提示词不在 Codex 可打印的消息列表中传递，因此无法在此显示。可以通过 model_instructions_file 替换它。",
+  "codexSet.dialog.unmapped": "此层在提示词输出中尚无已确认的映射，因此暂时无法在此显示其文本。",
   "codexSet.dialog.textUnavailable": "本机无法读取 Codex 提示词，因此无法显示原文。",
   "codexSet.class.base": "基础指令",
   "codexSet.class.config-toggle": "可在此切换",

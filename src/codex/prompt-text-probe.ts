@@ -85,7 +85,7 @@ export interface LayerText {
   /** Rendered text, when this layer produced a section on the probed turn. */
   text: string | null;
   /** Why the text is absent, when it is. */
-  reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unavailable";
+  reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unmapped" | "unavailable";
   bytes: number;
   /**
    * `expanded` is text Codex sends as written. `template` is a catalog
@@ -944,9 +944,12 @@ export async function probePromptText(
 
   // Layers whose rendered tag we have not confirmed against live output. Leaving
   // them absent made the GUI fall through to "unavailable", which claims the probe
-  // failed when it succeeded. Saying we have no mapping is the smaller claim.
+  // failed when it succeeded. Keep this distinct from the base prompt's
+  // "not-exposed", which is confirmed to travel outside the printable message
+  // list - reusing it showed a base-prompt-specific explanation for unrelated
+  // layers.
   for (const id of UNMAPPED_LAYER_IDS) {
-    layers[id] ??= { text: null, reason: "not-exposed", bytes: 0 };
+    layers[id] ??= { text: null, reason: "unmapped", bytes: 0 };
   }
   return { ok: true, codexHome, layers, base, ...(reportedRuntime ? { runtime: reportedRuntime } : {}) };
 }

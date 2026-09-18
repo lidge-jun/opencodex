@@ -1631,6 +1631,7 @@ export const en = {
 "codexSet.dialog.notRendered": "This layer sent nothing on the turn we read. Sections are only re-sent when they change, so an unchanged layer is absent from a single sample.",
   "codexSet.dialog.emptySource": "The file at {path} exists but is empty, so this layer sends nothing.",
   "codexSet.dialog.notExposed": "The base prompt travels outside the message list Codex can print, so it cannot be shown here. Replacing it is possible through model_instructions_file.",
+  "codexSet.dialog.unmapped": "This layer has no confirmed mapping in the prompt output, so its text cannot be shown here yet.",
   "codexSet.dialog.textUnavailable": "The Codex prompt could not be read on this machine, so the text is unavailable.",
   "codexSet.class.base": "Base instructions",
   "codexSet.class.config-toggle": "Switchable here",

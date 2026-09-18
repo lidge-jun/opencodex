@@ -1375,6 +1375,7 @@ export const zhTW: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "在我們讀取的那一輪中，此層沒有傳送任何內容。各區段只在內容變更時才會重新傳送，因此單次取樣可能看不到它。",
   "codexSet.dialog.emptySource": "{path} 檔案存在但為空，因此此層不會傳送任何內容。",
   "codexSet.dialog.notExposed": "基礎提示詞不在 Codex 可列印的訊息清單中傳遞，因此無法在此顯示。可以透過 model_instructions_file 取代它。",
+  "codexSet.dialog.unmapped": "此層在提示詞輸出中尚無已確認的對應，因此暫時無法在此顯示其文字。",
   "codexSet.dialog.textUnavailable": "本機無法讀取 Codex 提示詞，因此無法顯示原文。",
   "codexSet.class.base": "基礎指令",
   "codexSet.class.config-toggle": "可在此切換",

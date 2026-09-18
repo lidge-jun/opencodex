@@ -1084,6 +1084,7 @@ export const de: Record<TKey, string> = {
 "codexSet.dialog.notRendered": "In der gelesenen Runde hat diese Ebene nichts gesendet. Abschnitte werden nur bei Änderungen erneut gesendet, daher kann eine einzelne Stichprobe sie nicht enthalten.",
   "codexSet.dialog.emptySource": "Die Datei unter {path} existiert, ist aber leer, daher sendet diese Ebene nichts.",
   "codexSet.dialog.notExposed": "Der Basis-Prompt läuft außerhalb der Nachrichtenliste, die Codex ausgeben kann, und lässt sich hier nicht anzeigen. Ersetzen ist über model_instructions_file möglich.",
+  "codexSet.dialog.unmapped": "Für diese Ebene gibt es noch keine bestätigte Zuordnung in der Prompt-Ausgabe, daher kann ihr Text hier noch nicht angezeigt werden.",
   "codexSet.dialog.textUnavailable": "Der Codex-Prompt konnte auf diesem Rechner nicht gelesen werden, daher ist der Text nicht verfügbar.",
   "codexSet.class.base": "Basisanweisungen",
   "codexSet.class.config-toggle": "Hier umschaltbar",
