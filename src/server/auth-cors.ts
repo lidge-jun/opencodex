@@ -799,6 +799,8 @@ export function providerManagementConfigError(
   }
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
+  const suppressSyntheticMaxError = booleanRecordConfigError(raw.modelSuppressSyntheticMax, "modelSuppressSyntheticMax");
+  if (suppressSyntheticMaxError) return `provider ${name} ${suppressSyntheticMaxError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
     raw.modelReasoningSummaryDelivery,
     raw.modelSupportsReasoningSummaries,
@@ -986,6 +988,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   refreshPolicy: "editor",
   reasoningEfforts: "editor",
   modelReasoningEfforts: "editor",
+  modelSuppressSyntheticMax: "editor",
   modelDefaultReasoningEfforts: "editor",
   pinnedReasoningEffort: "editor",
   modelPinnedReasoningEfforts: "editor",

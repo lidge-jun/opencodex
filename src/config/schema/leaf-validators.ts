@@ -252,6 +252,7 @@ export const providerConfigSchema = z.object({
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
+  modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),

@@ -499,6 +499,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     inMod: prov.modelInputModalities ?? null,
     capabilities: prov.modelCapabilities ?? null,
     re: prov.modelReasoningEfforts ?? null,
+    suppressMax: prov.modelSuppressSyntheticMax ?? null,
     defRe: prov.modelDefaultReasoningEfforts ?? null,
     rsSum: prov.modelSupportsReasoningSummaries ?? null,
     verbosity: prov.modelSupportsVerbosity ?? null,

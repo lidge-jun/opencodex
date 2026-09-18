@@ -618,6 +618,8 @@ export interface OcxProviderConfig {
   reasoningEfforts?: string[];
   /** Model-specific Codex-visible reasoning tiers. An empty array means “do not expose effort”. */
   modelReasoningEfforts?: Record<string, string[]>;
+  /** Catalog-only: do not synthesize a missing max rung for matching routed models. */
+  modelSuppressSyntheticMax?: Record<string, boolean>;
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
   /** Operator-owned effort override; none omits effort and uses the provider default. */

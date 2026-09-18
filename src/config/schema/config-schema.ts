@@ -468,6 +468,17 @@ export const configSchema = z.object({
         message: reasoningSummariesError,
       });
     }
+    const suppressSyntheticMaxError = booleanRecordConfigError(
+      (provider as { modelSuppressSyntheticMax?: unknown }).modelSuppressSyntheticMax,
+      "modelSuppressSyntheticMax",
+    );
+    if (suppressSyntheticMaxError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelSuppressSyntheticMax"],
+        message: suppressSyntheticMaxError,
+      });
+    }
     const verbositySupportError = booleanRecordConfigError(
       (provider as { modelSupportsVerbosity?: unknown }).modelSupportsVerbosity,
       "modelSupportsVerbosity",
