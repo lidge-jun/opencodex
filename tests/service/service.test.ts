@@ -319,9 +319,14 @@ describe("systemd service unit", () => {
     // Both verbs enter the shared repair branch, which hands the distinction to
     // `repairService` rather than dispatching twice. Without the second half of the
     // condition, `restart` would fall through to the usage error.
-    expect(serviceCommand).toContain('if (command === "repair" || command === "restart") {');
-    expect(serviceCommand).toContain('const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";');
-    expect(serviceCommand).toContain("await repairService({ verb });");
+   expect(serviceCommand).toContain('if (command === "repair" || command === "restart") {');
+   expect(serviceCommand).toContain('const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";');
+   expect(serviceCommand).toContain("await repairService({ verb });");
+    // `service start` launches the installed launcher, which preserves the recorded
+    // CODEX_SQLITE_HOME: a changed sqlite home must be rejected before ops.start()
+    // runs, the same environment guard `stop` already carries.
+    const startCase = serviceCommand.slice(serviceCommand.indexOf('case "start":'));
+    expect(startCase).toMatch(/assertServiceEnvironmentMatchesInstall\(\);\s*ops\.start\(\);/);
   });
 
   test("Windows install presence distinguishes unknown queries from proven absence", () => {

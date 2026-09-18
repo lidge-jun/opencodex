@@ -270,6 +270,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       await maybeShowStarPrompt();
       break;
     case "start":
+      // The installed launcher preserves the recorded CODEX_SQLITE_HOME: a
+      // changed sqlite_home/CODEX_SQLITE_HOME/CODEX_HOME would start the service
+      // on the recorded database while this shell resolves another, splitting
+      // native Codex history between databases. Same guard `stop` already runs.
+      assertServiceEnvironmentMatchesInstall();
       ops.start();
       await reportServiceServing("started");
       break;
