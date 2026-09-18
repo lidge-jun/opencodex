@@ -105,9 +105,10 @@ Four routes, in the order most people should try them:
 3. **Trust a direct key-auth Responses relay.** A provider you explicitly mark with
    `allowEncryptedV2AgentTasks: true` receives the opaque payload instead of the 400. Only do this
    for a destination you know can consume it.
-4. **Enable `agentTaskRecovery`.** Experimental and off by default. It recovers most fresh spawns
-   through the ChatGPT backend, at the cost of quota, latency and a dependency on undocumented
-   behavior, and it still loses message-type follow-ups and multipart envelopes.
+4. **Enable `agentTaskRecovery`.** Experimental and off by default. It recovers unreadable encrypted
+   `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK`, and `FINAL_ANSWER` items through the ChatGPT backend, at
+   the cost of quota, latency and a dependency on undocumented behavior; combo recovery remains
+   limited to spawned-child turns, and split-token fragments stay unsupported.
 
 See [Sub-agent Surface](/guides/sub-agent-surface/) for the full mechanics of each, and
 [Agent configuration](/reference/configuration/agents/) for the settings themselves.

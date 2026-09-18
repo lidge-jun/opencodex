@@ -16,6 +16,8 @@ import {
   codexHeaders,
   encryptedInput,
   FERNET_TASK,
+  FINAL_ANSWER_ENVELOPE,
+  FINAL_ANSWER_TASK_ENVELOPE,
   originalFetch,
   post,
   providerResponse,
@@ -37,7 +39,7 @@ describe("agent task recovery (opt-in, default off)", () => {
     resetAgentTaskRecoveryState();
   });
 
-  for (const messageType of ["NEW_TASK", "MESSAGE"] as const) {
+  for (const messageType of ["NEW_TASK", "MESSAGE", "FOLLOWUP_TASK"] as const) {
     test(`typed ${messageType} recovery preserves boolean, replay and discard contracts`, async () => {
       const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
       const config = routedConfig();
@@ -991,7 +993,7 @@ describe("bounded multipart encrypted task recovery", () => {
     ...tokens.map(encrypted_content => ({ type: "encrypted_content", encrypted_content })),
   ]);
 
-  test.each(["NEW_TASK", "MESSAGE"] as const)("recovers ordered %s parts in one request and isolates sequence caches", async messageType => {
+  test.each(["NEW_TASK", "MESSAGE", "FOLLOWUP_TASK"] as const)("recovers ordered %s parts in one request and isolates sequence caches", async messageType => {
     let sends = 0;
     const sent: Array<{ input: Array<{ content: Array<{ encrypted_content?: string }> }> }> = [];
     globalThis.fetch = (async (_url, init) => {
@@ -1113,5 +1115,99 @@ describe("bounded multipart encrypted task recovery", () => {
     const result = await recoverEncryptedAgentTaskWithResult(new Request("http://localhost/v1/responses", { headers: codexHeaders() }), multipart(), {}, routedConfig());
     expect(result).toEqual({ recovered: false, reason: "recovery_http_rejected" });
     expect(sends).toBe(1);
+  });
+});
+
+describe("FINAL_ANSWER encrypted task recovery", () => {
+  beforeEach(() => resetAgentTaskRecoveryState());
+  afterEach(() => { globalThis.fetch = originalFetch; resetAgentTaskRecoveryState(); });
+
+  test("recovers a FINAL_ANSWER without a Task name line and replays it from cache", async () => {
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse("Recovered final answer."));
+    }) as typeof fetch;
+    const input = () => agentMessage([
+      { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    const typedInput = input();
+    expect(await recoverEncryptedAgentTaskWithResult(req, typedInput, {}, routedConfig())).toEqual({ recovered: true });
+    expect(typedInput).toEqual([{
+      type: "message", role: "user", content: [
+        { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+        { type: "input_text", text: "Recovered final answer." },
+      ],
+    }]);
+    expect(restoreCachedEncryptedAgentTasks(req, input(), routedConfig())).toBe(1);
+    expect(fetches).toBe(1);
+    discardEncryptedAgentTaskRecovery(req, input(), routedConfig());
+    expect(restoreCachedEncryptedAgentTasks(req, input(), routedConfig())).toBe(0);
+  });
+
+  test("recovers a FINAL_ANSWER whose Task name matches the structured recipient", async () => {
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse("Recovered final answer."));
+    }) as typeof fetch;
+    const input = agentMessage([
+      { type: "input_text", text: FINAL_ANSWER_TASK_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, routedConfig())).toEqual({ recovered: true });
+    expect(fetches).toBe(1);
+  });
+
+  test("accepts a FINAL_ANSWER assignment that echoes its own header", async () => {
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse(`${FINAL_ANSWER_ENVELOPE}Recovered final answer.`));
+    }) as typeof fetch;
+    const input = agentMessage([
+      { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, routedConfig())).toEqual({ recovered: true });
+    expect(input).toEqual([{
+      type: "message", role: "user", content: [
+        { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+        { type: "input_text", text: "Recovered final answer." },
+      ],
+    }]);
+    expect(fetches).toBe(1);
+  });
+
+  test.each([
+    ["sender mismatch", () => [{
+      type: "agent_message",
+      author: "/other",
+      recipient: "/root/worker",
+      content: [
+        { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+        { type: "encrypted_content", encrypted_content: FERNET_TASK },
+      ],
+    }]],
+    ["recipient mismatch against the Task name line", () => agentMessage([
+      { type: "input_text", text: FINAL_ANSWER_TASK_ENVELOPE.replace("/root/worker", "/root/other-worker") },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ])],
+  ] as const)("refuses %s FINAL_ANSWER without a recovery dispatch", async (_label, makeInput) => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse("must not run"));
+    }) as typeof fetch;
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    const input = makeInput();
+    const before = structuredClone(input);
+    expect(await recoverEncryptedAgentTaskWithResult(req, input, {}, routedConfig())).toEqual({ recovered: false, reason: "unsupported_envelope" });
+    expect(input).toEqual(before);
+    expect(fetches).toBe(0);
   });
 });

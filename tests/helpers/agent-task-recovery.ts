@@ -47,6 +47,19 @@ function routingEnvelope(
 
 export const ROUTING_ENVELOPE = routingEnvelope();
 
+function finalAnswerEnvelope(withTaskName: boolean, taskName = "/root/worker", sender = "/root"): string {
+  return [
+    "Message Type: FINAL_ANSWER",
+    ...(withTaskName ? [`Task name: ${taskName}`] : []),
+    `Sender: ${sender}`,
+    "Payload:",
+    "",
+  ].join("\n");
+}
+
+export const FINAL_ANSWER_ENVELOPE = finalAnswerEnvelope(false);
+export const FINAL_ANSWER_TASK_ENVELOPE = finalAnswerEnvelope(true);
+
 export function agentMessage(content: Array<Record<string, unknown>>): unknown[] {
   return [{
     type: "agent_message",

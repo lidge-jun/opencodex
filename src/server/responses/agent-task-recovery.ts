@@ -75,15 +75,17 @@ interface AgentEnvelope {
   encryptedStartIndex: number;
   inputSnapshot: string;
   headerText: string;
-  messageType: "NEW_TASK" | "MESSAGE";
-  taskName: string;
+  messageType: "NEW_TASK" | "MESSAGE" | "FOLLOWUP_TASK" | "FINAL_ANSWER";
+  taskName: string | null;
   sender: string;
   ciphertexts: readonly string[];
   author: string;
   recipient: string;
 }
 
-const ROUTING_HEADER = /(?:^|\n)Message Type\s*:\s*(NEW_TASK|MESSAGE)\s*\nTask name\s*:\s*(\S+)\s*\nSender\s*:\s*(\S+)\s*\nPayload\s*:\s*(?:\n|$)/;
+const ROUTING_HEADER = /(?:^|\n)Message Type\s*:\s*(NEW_TASK|MESSAGE|FOLLOWUP_TASK)\s*\nTask name\s*:\s*(\S+)\s*\nSender\s*:\s*(\S+)\s*\nPayload\s*:\s*(?:\n|$)/;
+// FINAL_ANSWER omits the Task name line when the sender declares no recipient.
+const FINAL_ANSWER_HEADER = /(?:^|\n)Message Type\s*:\s*FINAL_ANSWER\s*\n(?:Task name\s*:\s*(\S+)\s*\n)?Sender\s*:\s*(\S+)\s*\nPayload\s*:\s*(?:\n|$)/;
 
 function findEnvelope(input: unknown): AgentEnvelope | null {
   if (!Array.isArray(input)) return null;
@@ -104,7 +106,7 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
   if (!Array.isArray(content)) return null;
 
   let headerText: string | null = null;
-  let messageType: "NEW_TASK" | "MESSAGE" | null = null;
+  let messageType: "NEW_TASK" | "MESSAGE" | "FOLLOWUP_TASK" | "FINAL_ANSWER" | null = null;
   let taskName: string | null = null;
   let sender: string | null = null;
   let encryptedStartIndex = -1;
@@ -119,16 +121,24 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
       && typeof part.text === "string"
     ) {
       const match = ROUTING_HEADER.exec(part.text);
-      if (match) {
+      const finalMatch = match ? null : FINAL_ANSWER_HEADER.exec(part.text);
+      if (match || finalMatch) {
         if (headerText !== null) return null;
+        const m = match ?? finalMatch!;
         if (
-          part.text.slice(0, match.index).trim().length > 0
-          || part.text.slice(match.index + match[0].length).trim().length > 0
+          part.text.slice(0, m.index).trim().length > 0
+          || part.text.slice(m.index + m[0].length).trim().length > 0
         ) return null;
-        headerText = match[0].startsWith("\n") ? match[0].slice(1) : match[0];
-        messageType = match[1] as "NEW_TASK" | "MESSAGE";
-        taskName = match[2]!;
-        sender = match[3]!;
+        headerText = m[0].startsWith("\n") ? m[0].slice(1) : m[0];
+        if (match) {
+          messageType = match[1] as "NEW_TASK" | "MESSAGE" | "FOLLOWUP_TASK";
+          taskName = match[2]!;
+          sender = match[3]!;
+        } else {
+          messageType = "FINAL_ANSWER";
+          taskName = finalMatch![1] ?? null;
+          sender = finalMatch![2]!;
+        }
       }
     }
     if (part.type !== "encrypted_content") continue;
@@ -145,7 +155,6 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
   if (
     !headerText
     || !messageType
-    || !taskName
     || !sender
     || encryptedStartIndex < 0
     || ciphertexts.length === 0
@@ -153,7 +162,13 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
 
   const itemRecord = item as { author?: unknown; recipient?: unknown };
   if (typeof itemRecord.author !== "string" || typeof itemRecord.recipient !== "string") return null;
-  if (itemRecord.author !== sender || itemRecord.recipient !== taskName) return null;
+  // A FINAL_ANSWER without a Task name line declares no recipient, so the structured
+  // recipient is only cross-checked when a task name is present; admission is the
+  // trust boundary either way.
+  if (
+    itemRecord.author !== sender
+    || (taskName !== null && itemRecord.recipient !== taskName)
+  ) return null;
 
   return {
     itemIndex,
@@ -170,10 +185,13 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
 }
 
 function stripMatchingEnvelope(assignment: string, envelope: AgentEnvelope): string | null {
-  const match = ROUTING_HEADER.exec(assignment);
+  const header = envelope.messageType === "FINAL_ANSWER" ? FINAL_ANSWER_HEADER : ROUTING_HEADER;
+  const match = header.exec(assignment);
   if (!match) return assignment;
   if (match.index !== 0) return null;
-  if (
+  if (envelope.messageType === "FINAL_ANSWER") {
+    if ((match[1] ?? null) !== envelope.taskName || match[2] !== envelope.sender) return null;
+  } else if (
     match[1] !== envelope.messageType
     || match[2] !== envelope.taskName
     || match[3] !== envelope.sender
@@ -302,7 +320,11 @@ function admittedRecovery(
     .update("\0")
     .update(envelope.messageType)
     .update("\0")
-    .update(envelope.taskName)
+    .update(envelope.taskName ?? "")
+    .update("\0")
+    // A FINAL_ANSWER that omits its Task name line carries no addressing in the header,
+    // so the structured recipient is the only field separating two such envelopes.
+    .update(envelope.recipient)
     .update("\0")
     .update(envelope.sender)
     .update("\0")
