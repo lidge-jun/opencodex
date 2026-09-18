@@ -19,6 +19,11 @@ describe("gracefulStopHost", () => {
     expect(gracefulStopHost("2001:db8::5")).toBe("[2001:db8::5]");
     expect(gracefulStopHost("[2001:db8::5]")).toBe("[2001:db8::5]");
   });
+
+  test("DNS bind names fall back to loopback so credentials are never sent through DNS", () => {
+    expect(gracefulStopHost("proxy.internal.example")).toBe("127.0.0.1");
+    expect(gracefulStopHost("attacker.invalid")).toBe("127.0.0.1");
+  });
 });
 
 describe("stopProxyGracefully", () => {
@@ -125,6 +130,21 @@ describe("stopProxyGracefully", () => {
     });
 
     expect(headers?.["x-opencodex-api-key"]).toBe("admin-secret");
+  });
+
+  test("never sends the management token to a recorded DNS hostname", async () => {
+    let requestedUrl = "";
+    await stopProxyGracefully(1, {
+      readRuntime: () => ({ port: 10100, hostname: "attacker.invalid" }),
+      fetchFn: (async (url: string | URL | Request) => {
+        requestedUrl = String(url);
+        return okResponse();
+      }) as typeof fetch,
+      waitExit: () => true,
+      env: { OPENCODEX_ADMIN_AUTH_TOKEN: "admin-secret" },
+    });
+
+    expect(requestedUrl).toBe("http://127.0.0.1:10100/api/stop");
   });
 
   test("returns false when no runtime port is recorded (caller falls back to killProxy)", async () => {
