@@ -6,8 +6,8 @@ import {
   workflowSpendCeilingReached,
 } from "../../lib/workflow-budget";
 import { workflowRefusalResponse } from "../workflow-refusal";
-import type { AttemptRecoveryKind } from "../../usage/log";
-import { noteAttemptSend } from "../request-log";
+import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
+import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
 import { TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
 import type {
   DispatchDecision,
@@ -112,6 +112,16 @@ export function createResponsesSendBudget(
   ): void => {
     if (send.ordinal <= 1) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
+  };
+  /**
+   * Records a recovery an adapter was ready to make and the budget refused.
+   *
+   * No send happened, so this deliberately does not touch `sendCount`. It is the other half of
+   * the pair that makes a one-send log readable: no recovery kind AND no withheld reason means
+   * nothing was eligible; a withheld reason means something was (#5044).
+   */
+  const noteAdapterRecoveryWithheld = (withheld: { reason: AttemptRecoveryWithheld }): void => {
+    noteAttemptRecoveryWithheld(logCtx.activeAttempt, withheld.reason);
   };
   /**
    * Whether this request has any base send left under `cap`.
@@ -247,6 +257,7 @@ export function createResponsesSendBudget(
     adapterSendBudget,
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
+    noteAdapterRecoveryWithheld,
     sendBudgetExhausted,
     get pendingHopPermit(): SingleUseDispatchPermit | undefined {
       return pendingHopPermit;

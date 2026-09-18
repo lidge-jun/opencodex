@@ -13,6 +13,7 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
+import { noteAttemptRecoveryWithheld } from "../request-log";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
@@ -86,6 +87,7 @@ export function createAdapterContinuations(
     ResponsesSendBudget,
     | "adapterDispatchBudget"
     | "noteAdapterPhysicalSend"
+    | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "reserveCredentialHop"
@@ -116,6 +118,7 @@ export function createAdapterContinuations(
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
+    noteAdapterRecoveryWithheld,
     remainingTransientSendBudget,
     noteTransientSends,
     reserveCredentialHop,
@@ -194,6 +197,7 @@ export function createAdapterContinuations(
             timeoutMs: connectMs,
               sendBudget: adapterDispatchBudget,
             onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
+            onRecoveryWithheld: noteAdapterRecoveryWithheld,
             stream: nextParsed.stream,
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               pacingSlotAcquired: true,
@@ -421,6 +425,9 @@ export function createAdapterContinuations(
             route.modelId,
           )
           : null;
+        // Eligible and refused by the shared budget, as opposed to eligible and finding no next
+        // account: the two produce the same response and need different follow-ups (#5044).
+        if (!hop.allowed) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
         if (!nextAccountId) hop.permit?.release();
         if (nextAccountId) {
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }

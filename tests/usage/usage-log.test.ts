@@ -80,6 +80,39 @@ describe("usage log", () => {
     expect(readUsageEntries().every(row => row.claudeCompatibility === undefined)).toBe(true);
   });
 
+  test("round trips only recognized recovery-withheld reasons (#5044)", () => {
+    // The attribution is a wire value a maintainer reads, so it is a bounded vocabulary: an
+    // unknown reason is dropped rather than failing the row, which is how a log written by a
+    // newer build stays readable by an older one — the same rule `recoveryKinds` follows.
+    const attempt = {
+      ordinal: 1, provider: "google", model: "gemini-test", adapter: "google", status: 429,
+      durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const,
+    };
+    const normalized = normalizeUsageEntryForTest({
+      requestId: "withheld", timestamp: Date.now(), provider: "google", model: "gemini-test",
+      status: 429, durationMs: 1, usageStatus: "reported",
+      attempts: [
+        { ...attempt, recoveryWithheld: ["retry-send-budget"] },
+        { ...attempt, ordinal: 2, recoveryWithheld: ["rotation-send-budget", "rotation-send-budget"] },
+        { ...attempt, ordinal: 3, recoveryWithheld: ["secret-canary"] },
+        { ...attempt, ordinal: 4 },
+      ],
+    });
+    expect(normalized?.attempts?.map(row => row.recoveryWithheld)).toEqual([
+      ["retry-send-budget"],
+      // Deduplicated: one rotation refused twice is one fact about the attempt.
+      ["rotation-send-budget"],
+      // Unknown value dropped, and the key omitted entirely rather than left as an empty array,
+      // so an attempt that withheld nothing keeps the exact shape it had before this field.
+      undefined,
+      undefined,
+    ]);
+
+    // The count that means "requests this proxy actually made" does not move for a refusal.
+    expect(normalized?.attempts?.every(row => row.sendCount === 1)).toBe(true);
+  });
+
+
   test("round trips only recognized per-attempt xAI credential sources", () => {
     const attempt = {
       ordinal: 1, provider: "xai", model: "grok-test", adapter: "openai-chat", status: 200,

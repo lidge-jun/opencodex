@@ -1,7 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
-import type { AttemptRecoveryKind } from "../usage/log";
+import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../usage/log";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
@@ -168,6 +168,16 @@ export interface AdapterFetchContext {
    * to `sendCount` and no regression could assert a count for them (#4546).
    */
   onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
+  /**
+   * Observes a recovery this adapter was ready to make and did not, because the send budget
+   * refused the dispatch.
+   *
+   * Separate from `onPhysicalSend` because nothing was sent: folding it in would inflate
+   * `sendCount`, the one number that means "requests this proxy actually made". Without it a
+   * log with one send cannot distinguish "no recovery was eligible" from "one was and the
+   * budget withheld it", and those need opposite follow-ups (#5044).
+   */
+  onRecoveryWithheld?: (withheld: { reason: AttemptRecoveryWithheld }) => void;
 }
 
 /**
