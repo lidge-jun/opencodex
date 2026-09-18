@@ -254,6 +254,30 @@ describe("multi-account auth store", () => {
     expect(existsSync(`${authPath}.pre-multiauth`)).toBe(false);
   });
 
+  test("a logout that removed nothing keeps the downgrade backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    // The backup is a whole-store copy, so a no-op removal for one provider must
+    // not destroy downgrade recovery for every other provider in it.
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    expect(await removeCredential("anthropic")).toBe("not-found");
+
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+  });
+
+  test("an account deletion that matched nothing keeps the downgrade backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    writeFileSync(`${authPath}.pre-multiauth`, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    expect(await removeAccount("xai", "no-such-account")).toBe(false);
+
+    expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
+  });
+
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {
     // Legacy stores are re-normalized on EVERY load without being persisted, so the
     // derived id must be stable: a time-salted id would make getAccountSet and
