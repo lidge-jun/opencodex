@@ -306,6 +306,19 @@ ocx system codex-cli-update check --json
 
 Windows üzerinde `CODEX_CLI_PATH=codex` gibi yalın bir komut, uzak yol veya aygıt yolu aday olarak yakalanırsa `candidate_path_unavailable` bildirilir. Aday yakalanmıştır; ancak yolu bu inceleme için uygun değildir.
 
+#### Windows x64 kurulumunu açıkça gözlemleme
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest`, seçili veya açıkça belirtilen bir Windows x64 npm kurulumunu yalnızca okuyan isteğe bağlı bir işlemdir. Seçenek verilmezse komut, güvenilir başlatıcı anlık görüntüsünün belirlediği seçili adayı (yapılandırılmış `CODEX_CLI_PATH` veya yakalanan PATH üzerindeki ilk `codex`) gözlemler; opencodex sarmalayıcısı, yeniden adlandırılmış `codex.opencodex-real.cmd` npm yedeğine çözümlenir. Dört mutlak yolun tümünü sağlamak keşfi geçersiz kılar; keşif yalnızca yol önerir ve tutulan tanıtıcı gözlemi nihai otoritedir. `--candidate`, standart npm `<prefix>/codex.cmd` veya `<prefix>/node_modules/@openai/codex/bin/codex.js` yoludur. `--npm-cli`, `node_modules/npm/bin/npm-cli.js` ile bitmeli; `--node` açık bir `node.exe` belirtmelidir. Uygulama paketleri, tanınan sürüm yöneticisi yerleşimleri, npm yedeği olmayan opencodex shim’leri ve özel sarmalayıcılar reddedilir.
+
+Sınırlı okuma boyunca yerel tanıtıcılar üst dizinleri ve dosyaları açık tutar. Desteklenmeyen platformlar, yeniden ayrıştırma noktaları/junction, çakışan yazıcılar, güvenli olmayan yollar ve aşırı büyük dosyalar reddedilir. Sabit rapor yol içermez: `status`, `observed` veya `refused` olur ve `installationIdentityObserved` sunulur. `selectionAttested`, `managed` ve `applyAllowed` daima `false` kalır. Raporlanan ret 0 çıkış kodu üretebildiğinden `status` alanını denetleyin.
+
+Kimlik veya özet yalnızca gözlem anındaki dosyaları tanımlar; kalıcı güncelleme izni değildir. Seçilen çalışma zamanını, geçmiş yükleyiciyi, etkin npm yapılandırmasını veya araçların gerçekliğini kanıtlamaz. Verilen Node yalnızca gözlemlenir; başlatıcının onu seçeceği kanıtlanmaz. Hiçbir hedef çalıştırılmaz; kayıt deposu isteği, kurulum, yapılandırma yazımı veya süreç denetimi yapılmaz. Mevcut Windows `check`, aday veya yapılandırma dosya sistemi G/Ç işlemlerini hâlâ yapmaz.
+
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
 Doğrulanmış OpenCodex yapılandırmasını inceleyin ve güvenle değiştirin. `show`

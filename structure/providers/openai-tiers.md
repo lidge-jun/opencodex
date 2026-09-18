@@ -2,6 +2,8 @@
 
 Management provider-validation calls use the [shared relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
 
+Explicit Codex CLI installation observation does not identify an account, attest provider selection or alter account state. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
 
@@ -246,6 +248,19 @@ ordinary Luna or another account. Native vision/search helpers and standalone se
 under this compatibility opt-in; ordinary helper/default behavior is unchanged.
 Upstream remains the entitlement authority.
 
+`isCodexReserveOptInMissing` in `src/codex/loopback-target.ts` is the strict complement of
+`isCodexReserveRequestEligible` for the opt-in reason alone: exact `gpt-reserve`, a non-client role,
+loopback admission, and the flag off. Callers classify the destination as canonical forward first.
+A request matching it is refused locally with HTTP 400 `invalid_request_error` naming
+`codexDesktopAuthless` and `ocx system settings --desktop-authless on`, carrying no account
+identifier, credential or request body, and no retry semantics. It is not a cooldown and does not use
+`CodexReserveUnavailableError`, whose `CodexAccountCooldownError` base maps to 429
+`rate_limit_error` through `cooldownErrorResponse` and would restate the upstream verdict this
+refusal exists to replace. The other two ineligibility reasons, a client role and a non-loopback
+admission source, still forward unchanged, as does a `gpt-reserve` selector an operator has aliased
+or routed onto a noncanonical provider. Enabling the flag restores eligibility rather than the
+refusal, so the two predicates can never both hold.
+
 ### Quota cache and short-window history
 
 `src/codex/quota.ts` drops an omitted account-level short tuple from the display/rotation
@@ -332,6 +347,22 @@ is released by drain, exclusion, deletion, an explicit failover/promotion away, 
 newer statement wins. Ordinary round-robin movement inside the capped tier does not release it.
 Without that last rule a pin made before any order existed, which is just an ordinary account switch,
 would outrank every order set afterwards for as long as the account kept headroom.
+
+Whether a pin is about to be released is one predicate, `codexAccountPinDrainReason` in
+`src/codex/routing/pin-drain.ts`, and the surface that accepts a pin evaluates it rather than
+keeping a second copy. It lives beside selection rather than in `routing.ts` for the same reason
+`routing/cache-affinity.ts` does: two callers ask it and must answer identically, one acting on
+the answer and one reporting it.
+
+`PUT /api/codex-auth/active` still accepts a pin on a drained account -- a usage reading is a
+preference and can be stale, so refusing would turn a proactive threshold into a hard capacity limit
+-- but it reports `pinDrained` with a `pinDrainReason` of `needs_reauth`, `paused`, `unusable` or
+`quota_threshold` when the next resolve would drop what it just recorded. The fields are absent when
+the pin survives, so a client that does not know them reads no drain. Without this the route answered
+a bare 200 and the operator watched an accepted selection be ignored one request later, which is the
+contradiction reported in #4521. Reauth and pause are classified before the native-main fence,
+because a selection-only caller makes every later classification answer "no drain" and a pin on a
+signed-out main would otherwise read as durable.
 
 Only an actual selection pins. Clearing the active account states that no account is chosen, so it
 releases the pin instead of recording one against the `__main__` fallback that the same handler uses

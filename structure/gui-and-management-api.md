@@ -1,6 +1,7 @@
 # GUI And Management API
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
@@ -481,7 +482,12 @@ status, so an unexpected management response cannot add raw upstream material.
 
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
-`src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`.
+`src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`
+inside an owner-only `0o700` directory. Consecutive appends reuse the directory and permission
+check for at most one second; the first append at or after that boundary attempts to reapply both
+modes, and an `ENOENT` append invalidates the cache and recreates the path immediately. This is a
+bounded, write-triggered repair of externally widened POSIX modes, not continuous filesystem
+monitoring or protection against another process changing the path again after the check.
 An opt-in shadow-call rewrite persists the bounded, redacted original helper model as
 `shadowCallRewrittenFrom`, so helper traffic remains identifiable after restart without storing
 request content or inferring a helper subtype from timing.
