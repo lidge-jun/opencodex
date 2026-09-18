@@ -44,6 +44,7 @@ import {
   usageStatusForFinalLog,
   usageTotalTokens,
   type AttemptRecoveryKind,
+  type AttemptRecoveryWithheld,
   type CacheTelemetryProvenance,
   type PersistedRequestSpend,
   type PersistedUsageAttempt,
@@ -854,7 +855,13 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
  * Mark a refusal this proxy synthesized locally. Sets origin to `synthetic` and a
  * distinct local reason so the request log cannot be read as an upstream overload.
  */
-export function markLocalRequestLogRefusal(logCtx: RequestLogContext, reason: string): void {
+// Typed by the two fields it writes rather than by the whole context: the durable-spend tracker
+// has to mark a row from a narrow view of it, and widening that view to the full context there
+// would pull the entire log shape into a module that touches two of its fields.
+export function markLocalRequestLogRefusal(
+  logCtx: Pick<RequestLogContext, "localTerminalReason" | "terminalSource">,
+  reason: string,
+): void {
   logCtx.localTerminalReason = reason;
   logCtx.terminalSource = "synthetic";
 }
@@ -1300,6 +1307,7 @@ export function addFinalRequestLog(
   const attempts = logCtx.attempts?.map(attempt => ({
     ...attempt,
     recoveryKinds: [...attempt.recoveryKinds],
+    ...(attempt.recoveryWithheld?.length ? { recoveryWithheld: [...attempt.recoveryWithheld] } : {}),
     ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
     ...(attempt.tierOutcome ? { tierOutcome: { ...attempt.tierOutcome } } : {}),
   }));
@@ -1701,6 +1709,22 @@ export function noteAttemptSend(
   if (recovery && !attempt.recoveryKinds.includes(recovery)) {
     attempt.recoveryKinds.push(recovery);
   }
+}
+
+/**
+ * Record that a recovery this attempt was eligible for did not happen.
+ *
+ * Deliberately NOT `noteAttemptSend`: nothing was sent, so `sendCount` must not move. The two
+ * together are what make a one-send log readable — no kind and no withheld reason means nothing
+ * was eligible, a withheld reason means something was and the budget refused it (#5044).
+ */
+export function noteAttemptRecoveryWithheld(
+  attempt: PersistedUsageAttempt | undefined,
+  reason: AttemptRecoveryWithheld,
+): void {
+  if (!attempt) return;
+  if (!attempt.recoveryWithheld) attempt.recoveryWithheld = [];
+  if (!attempt.recoveryWithheld.includes(reason)) attempt.recoveryWithheld.push(reason);
 }
 
 export function finishRequestAttempt(

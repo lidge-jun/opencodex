@@ -112,7 +112,14 @@ export async function fetchGoogleWithRetry(
     } catch (err) {
       if (ctx.abortSignal?.aborted) throw err;
       if (err instanceof SendBudgetExhaustedError) {
-        if (pendingResponse) return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, ctx.abortSignal);
+        if (pendingResponse) {
+          // The ladder had already classified this response as retryable and was about to send
+          // again; the budget refused. Returning the original response is right — it is a real
+          // upstream answer — but it used to leave the log indistinguishable from a request
+          // where no retry was ever eligible (#5044).
+          ctx.onRecoveryWithheld?.({ reason: "retry-send-budget" });
+          return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, ctx.abortSignal);
+        }
         throw err;
       }
       lastError = err;

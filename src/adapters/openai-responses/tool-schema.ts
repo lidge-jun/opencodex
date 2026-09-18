@@ -1,5 +1,5 @@
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { isHostedToolUnsupportedForModel } from "../../responses/hosted-tool-policy";
+import { declaredUnsupportedHostedTools, isHostedToolUnsupportedForModel } from "../../responses/hosted-tool-policy";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { stripUnicodePropertyPatterns } from "../responses-tool-schema";
 import {
@@ -225,17 +225,29 @@ export function promoteClientLoadedTools(body: unknown): unknown {
 }
 
 /**
- * Remove hosted tool entries the target native slug rejects, so the OAuth-passthrough body never
- * carries a tool the upstream model 400s on. No-op (returns the original reference) when nothing
- * matches, keeping the common path allocation-free.
+ * Remove hosted tool entries the destination rejects, so the OAuth-passthrough body never
+ * carries a tool the upstream 400s on. Two sources of truth are consulted: the built-in
+ * table of known-broken native slugs and destinations, and the routed provider's own
+ * `unsupportedHostedTools` declaration. The declaration is what lets an OpenAI-compatible
+ * Responses gateway with a narrower capability set be described in config instead of
+ * requiring a hard-coded destination rule per vendor (#5002).
+ *
+ * No-op (returns the original reference) when nothing matches, keeping the common path
+ * allocation-free.
  */
-export function stripUnsupportedHostedTools(body: unknown, provider: Pick<OcxProviderConfig, "baseUrl">): unknown {
+export function stripUnsupportedHostedTools(
+  body: unknown,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "unsupportedHostedTools">,
+): unknown {
   if (!isPlainObject(body)) return body;
   const model = typeof body.model === "string" ? body.model : "";
+  // Expanded once per request rather than per tool: the alias walk is the only
+  // non-lookup work in this filter.
+  const declaredUnsupported = declaredUnsupportedHostedTools(provider);
   const filterTools = (tools: unknown[]): unknown[] => {
     const filtered = tools.filter(t => {
       const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;
-      return !type || !isHostedToolUnsupportedForModel(model, type, provider.baseUrl);
+      return !type || !isHostedToolUnsupportedForModel(model, type, provider.baseUrl, declaredUnsupported);
     });
     return filtered.length === tools.length ? tools : filtered;
   };
@@ -274,7 +286,7 @@ export function stripUnsupportedHostedTools(body: unknown, provider: Pick<OcxPro
   } else if (
     isPlainObject(toolChoice)
     && typeof toolChoice.type === "string"
-    && isHostedToolUnsupportedForModel(model, toolChoice.type, provider.baseUrl)
+    && isHostedToolUnsupportedForModel(model, toolChoice.type, provider.baseUrl, declaredUnsupported)
   ) {
     next = { ...next, tool_choice: "none" };
     changed = true;

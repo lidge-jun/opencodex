@@ -380,6 +380,17 @@ Ultra is always advertised in the catalog regardless of the `multi_agent_v2` tog
 controls only the multi-agent collab surface, not ultra visibility. The `nativeEffortClamp` function
 wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire).
 
+For routed models, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
+prevents `src/codex/catalog/effort.ts` from adding a missing synthetic `max` and prevents
+`src/codex/catalog/build-entries.ts` from repairing that missing rung during observed-state merge.
+It never removes a provider-declared `max`, and `ultra` remains advertised. If the configured default
+names a suppressed missing `max`, the catalog selects the highest real rung below it. A degraded sync
+also preserves any `max` already recorded on disk: without persisted provenance OpenCodex cannot
+distinguish an older synthetic rung from a real provider rung, so only a later healthy provider rebuild
+can remove the former. Codex uses this same membership for the picker and explicit `spawn_agent`
+effort validation; an explicit `max` spawn can therefore fail client-side before proxy wire clamping,
+while retained `ultra` remains the supported harness path.
+
 `effortCap` and `subagentEffortCap` are hard ceilings applied on the V2 path
 (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting
 the request, and they never raise it.

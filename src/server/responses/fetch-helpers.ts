@@ -79,6 +79,38 @@ export interface PaceAwareFetch {
 
 export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
 
+/**
+ * Apply the physical-send connection policy to whichever fetch actually performs the send.
+ *
+ * The executor `providerFetch` builds is not the only physical boundary. A `dispatchOverride`
+ * that revalidates credentials re-reads `route.provider.fetch` at send time -- reselection can
+ * install a different provider transport after this wrapper was constructed -- and then calls
+ * that fetch directly instead of the supplied executor. Keeping the policy inside the executor
+ * alone therefore left every provider-scoped transport reusing a pooled socket for a host the
+ * operator had named in `OCX_FRESH_CONNECTION_HOSTS` (#4992). The policy belongs around the
+ * selected fetch so it follows the selection rather than the construction.
+ *
+ * Idempotent on purpose: an override that hands the send back to the supplied executor passes
+ * through here twice, and both passes derive the same headers from the same wire URL.
+ */
+export function sendWithConnectionPolicy(
+  physicalFetch: typeof globalThis.fetch,
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  const fresh = wantsFreshConnection(input);
+  if (fresh) {
+    headers.set("Connection", "close");
+  }
+  return physicalFetch(input, {
+    ...init,
+    headers,
+    redirect: "manual",
+    ...(fresh ? { keepalive: false } : {}),
+  });
+}
+
 export interface ProviderFetchOptions {
   nativeControl?: NativeResponseControl;
   providerName?: string;
@@ -109,19 +141,8 @@ export function providerFetch(
   // Rebuilt dispatches must use the same physical-send boundary as ordinary HTTP sends.
   // Return the original 3xx so the response owner retains its retry/health/relay contract.
   const dispatch = Object.assign(
-    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      const fresh = wantsFreshConnection(input);
-      if (fresh) {
-        headers.set("Connection", "close");
-      }
-      return base(input, {
-        ...init,
-        headers,
-        redirect: "manual",
-        ...(fresh ? { keepalive: false } : {}),
-      });
-    },
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+      sendWithConnectionPolicy(base, input, init),
     { preconnect },
   ) as typeof globalThis.fetch;
   const httpFetch = Object.assign(

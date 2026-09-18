@@ -97,7 +97,20 @@ export function antigravitySessionId(parsed: OcxParsedRequest): string {
  * collision, is the failure mode this function exists to prevent.
  */
 function clientThreadAnchor(parsed: OcxParsedRequest): string | undefined {
-  const threadId = parsed._clientThreadId?.trim();
+  // The request's OWN thread first. `_clientThreadId` carries `x-codex-parent-thread-id`, which
+  // every parallel child of one parent presents identically, so anchoring on it collapsed
+  // concurrent children onto a single upstream Cloud Code Assist session. A thread id is only
+  // unique within its parent, which is why `codexConversationIdentity` keys on both; this surface
+  // needs the narrower half, not the shared one (#5033).
+  //
+  // A root turn is unaffected: it presents `thread-id` equal to its parent id, so the anchor is
+  // byte-identical to what it was. Only a child's anchor moves, and it moves once.
+  //
+  // Deliberately NOT the general lane key: `codexConversationKeyFor` is an HMAC under a
+  // process-random secret, so it changes across a proxy restart — and instability, not sharing,
+  // is the failure mode this derivation has to avoid. `thread-id` is Codex's own value and
+  // survives both compaction and restart.
+  const threadId = parsed._codexOwnThreadId?.trim() || parsed._clientThreadId?.trim();
   return threadId ? `codex-thread:${threadId}` : undefined;
 }
 

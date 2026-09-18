@@ -34,6 +34,18 @@ function stripMarkdownCodeFence(text: string, toolName: string): string {
   return match ? match[1] : text;
 }
 
+/**
+ * The single-field wrappers `unwrapFreeformToolInput` accepts for one tool name, besides the
+ * canonical `input`.
+ *
+ * Exported so the streaming side can hold a buffer that is still turning into one of these.
+ * A second list of key names beside this one is how the streamed bytes and the completed item
+ * come to disagree, which is the defect it exists to prevent (#5047).
+ */
+export function freeformFallbackKeys(toolName: string): readonly string[] {
+  return FREEFORM_FALLBACK_KEYS[toolName] ?? [];
+}
+
 /** Unwrap the `{input:string}` function-call wrapper used for freeform tools. */
 export function unwrapFreeformToolInput(argumentsText: unknown, toolName = ""): string {
   if (typeof argumentsText !== "string") return "";

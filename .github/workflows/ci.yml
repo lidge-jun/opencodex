@@ -60,8 +60,27 @@ permissions:
 
 # Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
 concurrency:
-  group: cross-platform-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # `push` and `pull_request` want supersession: a newer head on the same ref
+  # makes the older one irrelevant, and cancelling it saves an hour of runners
+  # for an answer nobody will read.
+  #
+  # `workflow_dispatch` is the opposite. An operator dispatching a lane has
+  # asked for evidence about one specific commit, and the next merge into
+  # `dev` is not a newer answer to that question — it is an unrelated commit
+  # that happens to share `github.ref`. Keyed on the ref alone, the merge
+  # cancelled the dispatch, so the `macos control` lane — the longest job in
+  # this workflow at roughly fifty minutes — could not complete on any branch
+  # under active development. Run 35318264610 was cancelled in the same second
+  # its job started, three minutes after it was queued. Cancellations of that
+  # shape were read as runner capacity for months, and a maintainer dispatching
+  # the lane for release evidence usually got nothing back without noticing,
+  # because a cancelled job reports neither pass nor fail (#5037).
+  #
+  # `github.run_id` is unique per run, so each dispatch is a group of one: it
+  # cancels nothing and nothing cancels it, including a second dispatch of the
+  # same ref.
+  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   # Which Windows runner this run is allowed to use.
@@ -157,6 +176,7 @@ jobs:
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
       docs: ${{ steps.filter.outputs.docs }}
+      structure: ${{ steps.filter.outputs.structure }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -221,6 +241,30 @@ jobs:
             # skip the thing it adds.
             docs:
               - 'docs-site/**'
+              - '.github/workflows/ci.yml'
+            # `structure/` is the one directory whose entire purpose is a gate,
+            # and it was the one directory the gate never saw. `ci` above omits
+            # it for the same reason it omits `docs-site/**`, so a pull request
+            # touching only `structure/` skipped every expensive leg — including
+            # the suite that contains `tests/ci-workflows/structure-ssot.test.ts`,
+            # the only place CI runs `bun run structure:check`. The aggregate
+            # then reported success over nothing. #4999, a pure doc split, is the
+            # live example; it stayed invisible for so long because
+            # `structure/AGENTS.md` makes a `structure/` edit almost always
+            # arrive beside a `src/` one, which the `ci` filter does match.
+            #
+            # The job this feeds runs the gate alone rather than widening `ci`,
+            # so a prose edit still does not start the cross-platform matrix.
+            # `.github/workflows/ci.yml` is listed for the same reason `docs`
+            # lists it: without it this filter's own pull request would skip the
+            # job it adds.
+            # This list stays PULL-REQUEST scope only, like `docs` above: the
+            # push trigger's `paths:` is pinned to mirror `ci` exactly, and
+            # `dev`, `main` and `preview` are all protected to require a pull
+            # request, so every `structure/` change is read at the pull request
+            # before it can reach an integration line.
+            structure:
+              - 'structure/**'
               - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
@@ -647,7 +691,20 @@ jobs:
     # suite runs in one pool, so it is the place that catches what sharding
     # hides. The flakes it keeps surfacing are timing, not logic, and the fix
     # is the tests, not a fourth lane.
-    timeout-minutes: 30
+    #
+    # Sized to measured work, not to a guess. At 30 this lane never once finished:
+    # every run was cancelled slightly past halfway and the cancellations were read
+    # as runner capacity for months (#4905). An authorized one-off measurement let it
+    # complete for the first time and it took 50m39s wall, Bun reporting 3034.18s over
+    # 26526 tests in 1343 files. 75 leaves roughly 24 minutes of headroom on that
+    # number, which is the growth room the suite needs without letting a genuine hang
+    # sit for an hour before anyone sees it.
+    #
+    # This bound is not a fix for anything the run reports. That first complete run
+    # surfaced four tests that exceed their own timeouts under shared-process pressure,
+    # tracked separately in #4997; raising this budget is what made them observable and
+    # must not be mistaken for resolving them.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -985,6 +1042,40 @@ jobs:
         working-directory: docs-site
         run: bun run build
 
+  # The gate for the directory that is itself a gate.
+  #
+  # `structure:check` normally reaches CI only through
+  # `tests/ci-workflows/structure-ssot.test.ts`, inside the suite the `ci` filter
+  # decides whether to run. A pull request touching only `structure/` does not
+  # match that filter, so on #4999 every expensive leg reported `skipped` and the
+  # aggregate reported success while nothing had read the change (#5001).
+  #
+  # Running the gate directly here, rather than adding `structure/**` to `ci`,
+  # keeps a prose edit from starting nine Windows shards and two macOS shards for
+  # a check that takes seconds. It runs whenever `structure/` changes, including
+  # alongside a `src/` change where the suite covers it too; a duplicate of a
+  # seconds-long check is not worth a condition that could be wrong.
+  structure-gate:
+    name: structure gate
+    needs: changes
+    if: needs.changes.outputs.structure == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Structure doc-map, ownership, and invariant bindings
+        run: bun run structure:check
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
     needs: changes
@@ -1063,7 +1154,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, npm-global-smoke]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1081,6 +1172,7 @@ jobs:
           CHANGES_CI: ${{ needs.changes.outputs.ci }}
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
           CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
+          CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1109,6 +1201,10 @@ jobs:
           if [ "$CHANGES_DOCS" = "true" ]; then
             docs=requested
           fi
+          structure=not-requested
+          if [ "$CHANGES_STRUCTURE" = "true" ]; then
+            structure=requested
+          fi
           dispatch=not-requested
           windows=not-requested
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -1124,6 +1220,7 @@ jobs:
           GATED_JOBS="changes select-windows-runner test storage-policy api-usage gates"
           GATED_JOBS="$GATED_JOBS platform-macos keyring-smoke docker-smoke npm-global-smoke"
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
+          GATED_JOBS="$GATED_JOBS structure-gate"
 
           expected_for() {
             case "$1" in
@@ -1132,6 +1229,7 @@ jobs:
                 echo "$scoped" ;;
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;
+              structure-gate) echo "$structure" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;
               *) echo undeclared ;;

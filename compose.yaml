@@ -7,6 +7,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
+      args:
+        # Required when context is a remote Git URL; harmless for local clones.
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
     init: true
     read_only: true
     environment:

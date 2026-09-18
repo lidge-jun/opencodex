@@ -1,4 +1,4 @@
-import { CODEX_EXHAUSTED_USAGE_PERCENT, TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
+import { isTerminalShortWindow } from "../../src/codex/quota-types";
 
 export interface AccountQuota {
   weeklyPercent?: number;
@@ -83,17 +83,24 @@ export function computeCodexUsageScore(
     : [quota.weeklyPercent, quota.monthlyPercent];
   const knownLong = longWindows.filter(finite);
   if (knownLong.length === 0) {
-    const shortReset = quota.fiveHourResetAt ?? quota.shortResetAt;
-    const shortObservationAge = typeof quota.shortObservedAt === "number"
-      ? now - quota.shortObservedAt
-      : undefined;
-    const isExhausted = finite(shortPercent) && shortPercent >= CODEX_EXHAUSTED_USAGE_PERCENT && (
-      (typeof shortReset === "number" && shortReset > now) ||
-      (typeof shortObservationAge === "number"
-        && shortObservationAge >= 0
-        && shortObservationAge <= TERMINAL_SHORT_WINDOW_FRESHNESS_MS)
-    );
-    return isExhausted ? 100 : null;
+    // The same decision the router makes, made by the same function rather than by a second
+    // copy of the rule. The copy that used to live here differed twice: it compared a stored
+    // reset against `now` without normalizing seconds to milliseconds, so a seconds-form
+    // future reset read as expired; and it accepted a fresh observation even when an ELAPSED
+    // reset was present, where routing treats a reset as authoritative once it exists. Either
+    // difference reports an account the router will refuse as usable (#5045).
+    //
+    // The alias collapse happens here because it is a wire concern of this DTO: the account
+    // API spells the same burst window `fiveHour*` and the stored snapshot spells it `short*`.
+    return isTerminalShortWindow({
+      ...(finite(shortPercent) ? { shortPercent } : {}),
+      ...(finite(quota.fiveHourResetAt ?? quota.shortResetAt)
+        ? { shortResetAt: quota.fiveHourResetAt ?? quota.shortResetAt }
+        : {}),
+      ...(finite(quota.shortObservedAt) ? { shortObservedAt: quota.shortObservedAt } : {}),
+    }, now)
+      ? 100
+      : null;
   }
   const values = finite(shortPercent) ? [...knownLong, shortPercent] : knownLong;
   return values.length ? Math.max(...values) : null;

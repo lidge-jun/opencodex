@@ -116,8 +116,8 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
-import { admitWorkflowTurn, type WorkflowLane } from "../lib/workflow-budget";
-import { workflowRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
+import { configureSharedSpendLedger, spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
+import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
   filterRequestLogs,
@@ -299,6 +299,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   registerAppOwnedMemorySweepFallback();
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
+  // Operator token ceilings (#4546). Applied before the listener binds: the shared ledger is
+  // built on the first reservation, and a request arriving before this ran would build it with
+  // no policy and enforce nothing. An absent `spend` section resolves to the unconfigured
+  // default, which refuses nothing and opens no journal -- so on an install that never wrote
+  // the key this line changes no behaviour at all.
+  configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
   registerCodexCooldownRecoveryProbeWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
@@ -498,23 +504,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   ): Promise<Response> {
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
     if (!lease) return serverBusyResponse(req, "active turns", policy);
-    // A fan-out shares the conversation it serves. Without a reserve, a worker burst takes every
-    // slot under its own root and the interactive turn that started it waits behind its own
-    // children. A request that names a parent is treated as that fan-out; a top-level request is
-    // the conversation and may use the reserved slots.
-    const workflowRootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-    const workflowThreadId = req.headers.get("thread-id")?.trim() || undefined;
-    const workflowLane: WorkflowLane = workflowRootId !== undefined
-      && workflowThreadId !== undefined
-      && workflowThreadId !== workflowRootId
-      ? "worker"
-      : "interactive";
-    const workflow = admitWorkflowTurn(workflowRootId, workflowLane, undefined, workflowThreadId);
+    // Root, lane, and the refusal that follows from them, all live in ./workflow-refusal.
+    const workflow = admitHttpWorkflowTurn(req.headers);
     if (workflow && !workflow.admitted) {
       lease.release();
       // withCors, because without Access-Control-Allow-Origin the exposed refusal header is
       // still unreadable to a browser dashboard -- which made exposing it pointless.
-      return withCors(workflowRefusalResponse(workflow.reason, undefined, refusalLog), req, policy);
+      return withCors(workflowDecisionRefusalResponse(workflow, undefined, refusalLog), req, policy);
     }
     const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
     let response: Response;

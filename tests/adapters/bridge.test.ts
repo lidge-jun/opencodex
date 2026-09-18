@@ -1735,3 +1735,85 @@ describe("declared tool enforcement is separate from declared tool normalization
     expect((json.error as Record<string, unknown>).message).toContain("undeclared client tool");
   });
 });
+
+// #5047: #4983 widened what counts as a freeform wrapper at COMPLETION, but partial input
+// streaming still knew only the compact `{"input":"` form. A wrapper such as `{"code":"..."}`
+// therefore streamed as raw JSON deltas and then finished with the unwrapped body, so
+// concatenated deltas no longer equalled the authoritative input and a client that renders
+// tool input mid-stream had to rewind.
+describe("fallback freeform wrappers stream one stable representation (#5047)", () => {
+  const FALLBACK_KEYS = ["code", "script", "js", "javascript", "command", "cmd", "content"];
+
+  async function streamExec(chunks: string[]) {
+    return collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "exec" } as AdapterEvent,
+      ...chunks.map(chunk => ({ type: "tool_call_delta", arguments: chunk }) as AdapterEvent),
+      { type: "tool_call_end" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]), "model", undefined, new Set(["exec"])));
+  }
+
+  function inputView(frames: { event?: string; data: Record<string, unknown> }[]) {
+    const deltas = frames
+      .filter(f => f.event === "response.custom_tool_call_input.delta")
+      .map(f => String(f.data.delta));
+    const done = frames.find(f => f.event === "response.custom_tool_call_input.done")?.data.input;
+    const item = frames.find(f => f.event === "response.output_item.done")?.data.item as Record<string, unknown> | undefined;
+    return { concatenated: deltas.join(""), done, itemInput: item?.input };
+  }
+
+  test("delta concatenation equals the completed input for every accepted fallback key", async () => {
+    for (const key of FALLBACK_KEYS) {
+      const body = "const x = 1;";
+      const view = inputView(await streamExec([JSON.stringify({ [key]: body })]));
+      expect({ key, ...view }).toEqual({ key, concatenated: body, done: body, itemInput: body });
+    }
+  });
+
+  test("a wrapper split at every byte boundary never leaks raw JSON and never rewinds", async () => {
+    const wrapper = JSON.stringify({ code: "a\nb" });
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const view = inputView(await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]));
+      expect({ cut, ...view }).toEqual({ cut, concatenated: "a\nb", done: "a\nb", itemInput: "a\nb" });
+    }
+  });
+
+  test("an ambiguous multi-field object stays unrepaired and byte-exact", async () => {
+    // Two string fallback fields: `unwrapFreeformToolInput` declines to guess and returns the
+    // object unchanged. The stream must reach the same answer, which is the whole point of
+    // holding until the object closes rather than unwrapping the first key that appears.
+    const wrapper = JSON.stringify({ code: "a", script: "b" });
+    expect(inputView(await streamExec([wrapper])))
+      .toEqual({ concatenated: wrapper, done: wrapper, itemInput: wrapper });
+
+    // A non-string value is not a wrapper either, and it never matched `{"code":"`, so it was
+    // never held: this pins that ordinary bodies keep streaming immediately.
+    const numeric = JSON.stringify({ code: 1 });
+    expect(inputView(await streamExec([numeric])))
+      .toEqual({ concatenated: numeric, done: numeric, itemInput: numeric });
+  });
+
+  test("the canonical input wrapper still streams progressively", async () => {
+    // `input` wins by precedence in `unwrapFreeformToolInput` whatever else the object carries,
+    // so it stays decidable from its prefix and must not regress into holding.
+    const frames = await streamExec(['{"input":"line1\\', 'nline2"}']);
+    expect(frames.filter(f => f.event === "response.custom_tool_call_input.delta").length)
+      .toBeGreaterThan(1);
+    expect(inputView(frames))
+      .toEqual({ concatenated: "line1\nline2", done: "line1\nline2", itemInput: "line1\nline2" });
+  });
+
+  test("a stream that dies inside a held wrapper manufactures no tool call", async () => {
+    // The held buffer is suppressed output, never content. An aborted turn must not turn it
+    // into a completed call, and must not release it as raw JSON either.
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "exec" } as AdapterEvent,
+      { type: "tool_call_delta", arguments: '{"code":"const x = 1' } as AdapterEvent,
+    ]), "model", undefined, new Set(["exec"])));
+    expect(frames.filter(f => f.event === "response.custom_tool_call_input.delta")).toEqual([]);
+    const completed = frames
+      .map(f => f.data.item as Record<string, unknown> | undefined)
+      .filter(item => item?.type === "custom_tool_call" && item?.status === "completed");
+    expect(completed).toEqual([]);
+  });
+});

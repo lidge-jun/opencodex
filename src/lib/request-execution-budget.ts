@@ -128,8 +128,16 @@ export type DispatchDecision =
  * send rather than merely describe one.
  */
 export interface RequestSendObserver {
-  /** Book one physical send. False refuses the dispatch before the budget charges it. */
-  charge(): boolean;
+  /**
+   * Book one physical send. False refuses the dispatch before the budget charges it.
+   *
+   * `alreadySent` marks a send that has already left, which the reporting transports below
+   * do after the fact. Its answer is not a decision -- nothing can un-send it -- and the
+   * observer must RECORD it rather than drop it. Dropping it is a fixpoint: the send that
+   * would cross a ceiling never joins the total, the total stays just under, and the ceiling
+   * never fires for any later request either.
+   */
+  charge(options?: { alreadySent?: boolean }): boolean;
   /** Give back a booking whose send never happened. */
   refund(): void;
 }
@@ -218,7 +226,7 @@ function createRequestExecutionBudgetWithLedger(
       // These sends have already left. The ledger records them even past a ceiling it would
       // have refused, because refusing after the fact only hides spend that was really
       // incurred -- the refusal has to happen at the reservation below, or not at all.
-      for (let index = 0; index < charged; index += 1) observer?.charge();
+      for (let index = 0; index < charged; index += 1) observer?.charge({ alreadySent: true });
     },
     logicalRequestId: logicalRequestId ?? `lr-${Date.now().toString(36)}-${(logicalRequestSeq += 1).toString(36)}`,
     policyVersion: REQUEST_BUDGET_POLICY_VERSION,

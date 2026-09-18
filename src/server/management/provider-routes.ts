@@ -1,4 +1,5 @@
 import { modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -103,7 +104,7 @@ import {
   type ProviderEditorConfigDTO,
   type ProviderEditorProviderDTO,
 } from "../auth-cors";
-import { providerServiceTierConfigError } from "./provider-capability-config";
+import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
 import { applySystemEnvToggle } from "../system-env";
 import {
@@ -264,7 +265,7 @@ function providerEditorCandidate(
     // the seed check must only pin the canonical transport/auth keys.
     const providerError = providerManagementConfigError(name, transportCandidate, { allowOperatorOverlays: true })
       ?? providerEmptyToolOutputConfigError(name, transportCandidate)
-      ?? providerServiceTierConfigError(name, transportCandidate);
+      ?? providerCatalogCapabilityConfigError(name, transportCandidate);
     if (providerError) return { ok: false, status: 400, error: providerError, code: "invalid_provider" };
     providers[name] = merged;
   }
@@ -646,6 +647,29 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelSuppressSyntheticMax")) {
+    const value = rawBody.modelSuppressSyntheticMax;
+    if (value === null) {
+      delete next.modelSuppressSyntheticMax;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelSuppressSyntheticMax must be a plain object or null" };
+      const capabilities: Record<string, boolean> = { ...(next.modelSuppressSyntheticMax ?? {}) };
+      for (const [model, suppressed] of Object.entries(value)) {
+        if (!model.trim()) return { error: "modelSuppressSyntheticMax keys must be nonblank model ids" };
+        if (suppressed === null) {
+          delete capabilities[model];
+          continue;
+        }
+        if (typeof suppressed !== "boolean") {
+          return { error: "modelSuppressSyntheticMax values must be booleans or null" };
+        }
+        capabilities[model] = suppressed;
+      }
+      if (Object.keys(capabilities).length > 0) next.modelSuppressSyntheticMax = capabilities;
+      else delete next.modelSuppressSyntheticMax;
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
     const value = rawBody.noStructuredOutputModels;
     if (value === null) {
@@ -669,6 +693,26 @@ function applyProviderPatchFields(
       const models = normalizeNonBlankStringArray(value as string[]);
       if (models.length > 0) next.noJsonSchemaModels = models;
       else delete next.noJsonSchemaModels;
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "unsupportedHostedTools")) {
+    const value = rawBody.unsupportedHostedTools;
+    if (value === null) {
+      delete next.unsupportedHostedTools;
+    } else {
+      const error = nonBlankStringArrayConfigError(value, "unsupportedHostedTools");
+      if (error) return { error };
+      const tools = normalizeNonBlankStringArray(value as string[]);
+      const unknownTool = tools.find(tool => !DECLARABLE_HOSTED_TOOL_TYPES.has(tool));
+      if (unknownTool !== undefined) {
+        return {
+          error: `unsupportedHostedTools must name only hosted tool types: `
+            + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`,
+        };
+      }
+      if (tools.length > 0) next.unsupportedHostedTools = tools;
+      else delete next.unsupportedHostedTools;
     }
     touched = true;
   }
@@ -871,8 +915,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       modelPinnedReasoningEfforts: p.modelPinnedReasoningEfforts,
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
       modelSupportsServiceTier: p.modelSupportsServiceTier,
+      modelSuppressSyntheticMax: p.modelSuppressSyntheticMax,
       noStructuredOutputModels: p.noStructuredOutputModels,
       noJsonSchemaModels: p.noJsonSchemaModels,
+      unsupportedHostedTools: p.unsupportedHostedTools,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
@@ -1100,8 +1146,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (rawProvider.upstreamWebsocket !== undefined && typeof rawProvider.upstreamWebsocket !== "boolean") {
       return jsonResponse({ error: "upstreamWebsocket must be a boolean" }, 400);
     }
-    const serviceTierError = providerServiceTierConfigError(name, transportCandidate);
-    if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+    const catalogCapabilityError = providerCatalogCapabilityConfigError(name, transportCandidate);
+    if (catalogCapabilityError) return jsonResponse({ error: catalogCapabilityError }, 400);
     const prov = stripCodexRuntimeProviderFields(transportCandidate as unknown as OcxProviderConfig);
     // PATCH already clears on null; POST persisted the body as submitted, so a `null` here
     // reached disk and the next loadConfig() refused it. Canonicalize to absent, which is what
@@ -1403,8 +1449,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           ?? providerEmptyToolOutputConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
       if (!canonicalBudgetOnly) {
-        const serviceTierError = providerServiceTierConfigError(name, next);
-        if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
+        const catalogCapabilityError = providerCatalogCapabilityConfigError(name, next);
+        if (catalogCapabilityError) return jsonResponse({ error: catalogCapabilityError }, 400);
         // Same DNS gate as POST and re-enable: the canonical built-in OpenAI forward
         // provider may resolve through Clash/Mihomo fake-IP DNS (198.18.0.0/15), so the
         // ordinary PATCH must not reject the very same destination the provider was
@@ -1450,9 +1496,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           return;
         }
         if (!canonicalBudgetOnly) {
-          const serviceTierError = providerServiceTierConfigError(name, replay.next);
-          if (serviceTierError) {
-            replayError = serviceTierError;
+          const catalogCapabilityError = providerCatalogCapabilityConfigError(name, replay.next);
+          if (catalogCapabilityError) {
+            replayError = catalogCapabilityError;
             return;
           }
         }

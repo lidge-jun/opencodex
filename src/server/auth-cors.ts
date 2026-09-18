@@ -30,6 +30,7 @@ import {
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
+import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -798,6 +799,8 @@ export function providerManagementConfigError(
   }
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
+  const suppressSyntheticMaxError = booleanRecordConfigError(raw.modelSuppressSyntheticMax, "modelSuppressSyntheticMax");
+  if (suppressSyntheticMaxError) return `provider ${name} ${suppressSyntheticMaxError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
     raw.modelReasoningSummaryDelivery,
     raw.modelSupportsReasoningSummaries,
@@ -839,6 +842,22 @@ export function providerManagementConfigError(
     "omitReasoningEffortWithToolsModels",
   );
   if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
+  const unsupportedHostedToolsError = nonBlankStringArrayConfigError(
+    raw.unsupportedHostedTools,
+    "unsupportedHostedTools",
+  );
+  if (unsupportedHostedToolsError) return `provider ${name} ${unsupportedHostedToolsError}`;
+  if (Array.isArray(raw.unsupportedHostedTools)) {
+    // Closed vocabulary, same reason as the config schema: an unrecognized name would be
+    // stored and then strip nothing, so the operator would keep getting the upstream 400
+    // this field exists to prevent.
+    const unknownTool = (raw.unsupportedHostedTools as unknown[])
+      .find(tool => typeof tool === "string" && !DECLARABLE_HOSTED_TOOL_TYPES.has(tool.trim()));
+    if (unknownTool !== undefined) {
+      return `provider ${name} unsupportedHostedTools must name only hosted tool types: `
+        + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`;
+    }
+  }
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   const vercelError = vercelGatewayRoutingConfigError(typed);
@@ -969,6 +988,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   refreshPolicy: "editor",
   reasoningEfforts: "editor",
   modelReasoningEfforts: "editor",
+  modelSuppressSyntheticMax: "editor",
   modelDefaultReasoningEfforts: "editor",
   pinnedReasoningEffort: "editor",
   modelPinnedReasoningEfforts: "editor",
@@ -984,6 +1004,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   xaiResponsesDefaultVersion: "runtime",
   zaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
+  unsupportedHostedTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
   reasoningEffortMap: "editor",

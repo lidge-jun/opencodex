@@ -226,10 +226,12 @@ export function applyReasoningLevels(
   effortsOverride?: string[],
   defaultOverride?: string,
   preserveExact = false,
+  suppressSyntheticMax = false,
 ): void {
   let efforts = sanitizeCodexReasoningEfforts(effortsOverride) ?? ROUTED_REASONING_LEVELS.map(l => l.effort);
-  // Mock top tiers (user decision 260709): every reasoning-capable model advertises `max`
-  // even when the provider ladder stops lower — subagent spawns pass `max` DIRECTLY
+  // Mock top tiers (user decision 260709): reasoning-capable routed models advertise `max`
+  // even when the provider ladder stops lower, unless the model opts out of that synthesis.
+  // Subagent spawns pass `max` DIRECTLY
   // (no ultra->max client conversion) and codex-rs validates it by catalog membership,
   // so a missing max rung hard-fails spawn_agent effort overrides. The wire stays honest:
   // routed adapters clamp via clampToSupportedCodexEffort and natives via
@@ -237,7 +239,7 @@ export function applyReasoningLevels(
   // reasoning-capable, so it must not grow synthetic top rungs.
   if (!preserveExact && efforts.length > 0 && efforts.some(effort => effort !== "none" && effort !== "minimal")) {
     const additions: string[] = [];
-    if (!efforts.includes("max")) additions.push("max");
+    if (!suppressSyntheticMax && !efforts.includes("max")) additions.push("max");
     if (!efforts.includes("ultra")) additions.push("ultra");
     if (additions.length > 0) efforts = sanitizeCodexReasoningEfforts([...efforts, ...additions]) ?? efforts;
   }
@@ -258,9 +260,11 @@ export function applyReasoningLevels(
   }
   entry.default_reasoning_level = defaultOverride && efforts.includes(defaultOverride)
     ? defaultOverride
-    : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high"
-    // Sentinels never become the implicit default when real rungs are declared.
-    : efforts.find(effort => effort !== "none" && effort !== "minimal") ?? efforts[0];
+    : suppressSyntheticMax && defaultOverride === "max"
+      ? clampedDefaultEffort(defaultOverride, efforts)
+      : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high"
+        // Sentinels never become the implicit default when real rungs are declared.
+        : efforts.find(effort => effort !== "none" && effort !== "minimal") ?? efforts[0];
 }
 
 /**

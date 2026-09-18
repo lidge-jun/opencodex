@@ -315,6 +315,13 @@ export const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
  */
 export const COMMAND_CODE_IMAGE_MODELS = [
   `deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`,
+  // Probed 2026-09-18 through a running 2.58.0 proxy: a 3x3 random-color grid
+  // (180x180 PNG, six candidate colors) came back 9/9 correct both as a user
+  // message and as a tool_result, and the request logs show the route served
+  // the image natively — no vision-sidecar call in either window. #4505 asked
+  // for exactly this upstream probe before promoting the id. The sibling
+  // deepseek/deepseek-v4-flash route remains verified-negative above.
+  "deepseek/deepseek-v4.1-flash",
   "gpt-5.6-luna",
   "gpt-5.6-sol",
   "MiniMaxAI/MiniMax-M3",
@@ -334,20 +341,19 @@ export const COMMAND_CODE_IMAGE_MODELS = [
 /**
  * Native image stays sourced from COMMAND_CODE_IMAGE_MODELS. Text-only routes
  * sit beside that list so the catalog can still advertise sidecar coverage
- * without claiming the gateway itself accepts a picture.
- *
- * The gateway-prefixed DeepSeek V4.1 Flash route has no verified native image
- * support, so declaring it image-capable would hand it a picture it drops. A
- * positive text-only declaration makes it a vision-sidecar consumer
+ * without claiming the gateway itself accepts a picture. A positive text-only
+ * declaration makes the route a vision-sidecar consumer
  * (src/vision/eligibility.ts), so the catalog advertises image input on its
- * behalf and the four-target combo in #4505 intersects to ["text","image"]
- * instead of ["text"] — without claiming native vision. modelInputModalities
- * is per-key filled, so this reaches an existing install even when
- * noVisionModels was persisted before the id joined that list.
+ * behalf — without claiming native vision — and modelInputModalities is
+ * per-key filled, so that reaches an existing install even when noVisionModels
+ * was persisted before the id joined a list.
+ *
+ * Empty as of 2026-09-18. Its only entry, deepseek/deepseek-v4.1-flash, moved
+ * to COMMAND_CODE_IMAGE_MODELS once the #4505-requested probe passed on both
+ * the user-message and tool-result paths (see the note at that entry). The
+ * mechanism stays for the next route that measures text-only.
  */
-export const COMMAND_CODE_TEXT_ONLY_MODELS = [
-  "deepseek/deepseek-v4.1-flash",
-] as const;
+export const COMMAND_CODE_TEXT_ONLY_MODELS = [] as const;
 export const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text"] | ["text", "image"]> = {
   ...Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
   ...Object.fromEntries(COMMAND_CODE_TEXT_ONLY_MODELS.map(id => [id, ["text"] as ["text"]])),

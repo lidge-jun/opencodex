@@ -50,7 +50,7 @@ import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./responses/fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { linkAbortSignal } from "./responses";
 import {
   addFinalRequestLog,
@@ -351,9 +351,15 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
                 noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
-                const dispatched = await ((activeProvider as OcxProviderTransport).fetch ?? execute)(request.url, applyUpstreamRecoveryInit({
-                  ...init, method: request.method, headers, body: request.body,
-                }, transportRecovery));
+                // A reselected provider transport is still a physical send: the connection policy
+                // and manual-redirect ownership wrap the selected implementation (#4992).
+                const dispatched = await sendWithConnectionPolicy(
+                  (activeProvider as OcxProviderTransport).fetch ?? execute,
+                  request.url,
+                  applyUpstreamRecoveryInit({
+                    ...init, method: request.method, headers, body: request.body,
+                  }, transportRecovery),
+                );
                 if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
                 return dispatched;
               },

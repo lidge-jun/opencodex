@@ -128,6 +128,7 @@ export async function prepareAdapterExchange(
     ResponsesSendBudget,
     | "adapterDispatchBudget"
     | "noteAdapterPhysicalSend"
+    | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
     | "noteTransientSends"
     | "recoverySendAllowance"
@@ -161,6 +162,7 @@ export async function prepareAdapterExchange(
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
+    noteAdapterRecoveryWithheld,
     remainingTransientSendBudget,
     noteTransientSends,
     recoverySendAllowance,
@@ -287,6 +289,7 @@ export async function prepareAdapterExchange(
         timeoutMs: connectMs,
         sendBudget: adapterDispatchBudget,
         onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
+        onRecoveryWithheld: noteAdapterRecoveryWithheld,
         stream: parsed.stream,
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               pacingSlotAcquired: true,
@@ -443,6 +446,7 @@ export async function prepareAdapterExchange(
               timeoutMs: connectMs,
             sendBudget: adapterDispatchBudget,
               onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
+              onRecoveryWithheld: noteAdapterRecoveryWithheld,
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 pacingSlotAcquired: true,

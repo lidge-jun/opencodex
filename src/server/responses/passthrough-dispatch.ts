@@ -69,6 +69,7 @@ import {
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
 } from "../request-log";
+import { noteAttemptRecoveryWithheld } from "../request-log";
 import {
   upstreamHostHealthKey,
   normalizeUpstreamHostCircuitThreshold,
@@ -1233,6 +1234,11 @@ export async function preparePassthroughExchange(
         }
         // No credential moved, so the reservation costs nothing.
         hop.permit?.release();
+      } else {
+        // Rotation was available -- the roster cap above admitted it -- and the shared request
+        // budget refused. Recorded so a one-send log is not read as "nothing was eligible",
+        // which is the ambiguity this attribution exists to remove (#5044).
+        noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
       }
     }
 

@@ -118,7 +118,9 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
-    expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(30);
+    // 75, not 30: the unsharded control measured 50m39s for a complete run and had
+    // therefore never finished inside 30. See the rationale in ci.yml and #4905.
+    expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(75);
     // Higher than the Linux shards on purpose: at 15 the Windows leg cancelled a
     // shard mid-suite, which reports as neither pass nor fail (#2152).
     expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(30);

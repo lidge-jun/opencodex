@@ -296,6 +296,7 @@ export function applyProviderConfigHints(
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
+  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id) === true;
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const supportsVerbosity = configuredVerbositySupport(name, prov, model.id);
@@ -305,6 +306,7 @@ export function applyProviderConfigHints(
     supportsServiceTier: _staleServiceTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
+    suppressSyntheticMax: _staleSuppressSyntheticMax,
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
@@ -321,6 +323,7 @@ export function applyProviderConfigHints(
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(suppressSyntheticMax ? { suppressSyntheticMax: true } : {}),
     ...(configuredMaxInput !== undefined
       ? {
         maxInputTokens: typeof model.maxInputTokens === "number" && model.maxInputTokens > 0
@@ -393,6 +396,31 @@ export function applyConfigHintsToCachedModels(
   effectiveAlias?: string | null,
 ): CatalogModel[] {
   return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias));
+}
+
+/** Catalog slugs whose configured model must not gain a missing synthetic max rung. */
+export function suppressedSyntheticMaxCatalogSlugs(
+  config: Pick<OcxConfig, "providers">,
+  models: readonly CatalogModel[],
+  observedEntries: readonly { slug?: unknown }[] = [],
+): ReadonlySet<string> {
+  const slugs = new Set(models
+    .filter(model => model.suppressSyntheticMax === true)
+    .map(catalogModelSlug));
+  for (const [provider, providerConfig] of Object.entries(config.providers)) {
+    const configured = providerConfig.modelSuppressSyntheticMax ?? {};
+    const encoded = Object.fromEntries(Object.entries(configured)
+      .map(([modelId, suppress]) => [routedSlug(provider, modelId).slice(provider.length + 1), suppress]));
+    for (const [modelId, suppress] of Object.entries(configured)) {
+      if (suppress === true) slugs.add(routedSlug(provider, modelId));
+    }
+    for (const entry of observedEntries) {
+      const slug = typeof entry.slug === "string" ? entry.slug : "";
+      if (!slug.startsWith(`${provider}/`)) continue;
+      if (modelRecordValue(encoded, slug.slice(provider.length + 1)) === true) slugs.add(slug);
+    }
+  }
+  return slugs;
 }
 export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 

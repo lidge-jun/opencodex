@@ -618,6 +618,8 @@ export interface OcxProviderConfig {
   reasoningEfforts?: string[];
   /** Model-specific Codex-visible reasoning tiers. An empty array means “do not expose effort”. */
   modelReasoningEfforts?: Record<string, string[]>;
+  /** Catalog-only: do not synthesize a missing max rung for matching routed models. */
+  modelSuppressSyntheticMax?: Record<string, boolean>;
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
   /** Operator-owned effort override; none omits effort and uses the provider default. */
@@ -677,6 +679,23 @@ export interface OcxProviderConfig {
    * apply_patch passthrough compatibility for OpenAI and unclassified gateways.
    */
   supportsResponsesCustomTools?: boolean;
+  /**
+   * Hosted tool declarations this Responses destination rejects, so they are stripped from
+   * the request instead of being forwarded and 400'd.
+   *
+   * This is how an OpenAI-compatible gateway with a narrower capability set than OpenAI
+   * describes itself. Before it existed, a destination that accepted plain Responses and
+   * `function` tools but rejected hosted `web_search` could only be handled by adding a
+   * hard-coded baseUrl rule to `src/responses/hosted-tool-policy.ts`, so every such gateway
+   * needed a proxy release; a text-only prompt like "Reply exactly with OK" failed before
+   * the model answered because the hosted declaration travelled with it (#5002).
+   *
+   * Values come from `DECLARABLE_HOSTED_TOOL_TYPES`. Spelling variants of one capability
+   * are aliased, so `["web_search"]` also denies `web_search_preview`. Pair this with
+   * `supportsResponsesCustomTools: false` for a gateway that also rejects native custom
+   * tools; the two capabilities are independent and denied independently.
+   */
+  unsupportedHostedTools?: string[];
   /**
    * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
    * fields or closing events (#893). Disabled by default and applied only to client-facing

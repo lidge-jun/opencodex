@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -50,6 +50,7 @@ import {
   windowsIdentityPowerShellCommandForTests,
   windowsIdentityPowerShellSpawnOptionsForTests,
 } from "../../src/codex/user-identity";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -118,6 +119,29 @@ function initChangedRunFixture(): { cwd: string; base: string } {
 }
 
 describe("test runner captured output", () => {
+  // This describe's first real lane pays Bun's test-runner bootstrap inside its child timeout.
+  // Replay one trivial lane in setup because an import scan cannot warm Bun's runner startup.
+  beforeAll(async () => {
+    await warmColdSpawn("bun-test-lane", async deadlineMs => {
+      const root = mkdtempSync(join(tmpdir(), "opencodex-capture-lane-warmup-"));
+      const fixture = join(root, "warmup.test.ts");
+      writeFileSync(fixture, 'import { test } from "bun:test";\ntest("warm-up fixture", () => {});\n');
+      try {
+        const runId = process.env[TEST_RUN_ID_ENV]!;
+        const result = await runTestLane(
+          { label: "warm-up fixture", args: [fixture], timeoutMs: deadlineMs },
+          runId,
+          resolveInheritedTestRunLock({ wrappedRunId: runId, env: process.env }),
+          true,
+          { stdout: () => {}, stderr: () => {} },
+        );
+        expect(result.exitCode).toBe(0);
+      } finally {
+        removeTreeWithRetry(root);
+      }
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("preserves both streams and UTF-8 characters split across chunks", async () => {
     const bytes = new TextEncoder().encode("before 한글 after\n");
     const stdout = new ReadableStream<Uint8Array>({

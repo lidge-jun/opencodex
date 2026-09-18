@@ -112,6 +112,8 @@ export interface CatalogModel {
   displayName?: string;
   owned_by?: string;
   reasoningEfforts?: string[];
+  /** Suppress only catalog synthesis of a missing max rung; provider-declared max survives. */
+  suppressSyntheticMax?: boolean;
   defaultReasoningEffort?: string;
   contextWindow?: number;
   maxInputTokens?: number;
@@ -762,7 +764,9 @@ export function applyMultiAgentMode(
           ? nativeMultiAgentVersion(codexForwardCapabilityAlias)
           : hasNativeDefault
             ? options.nativeDefaults?.get(nativeLookupSlug)
-            : UPSTREAM_NATIVE_ENTRIES.get(nativeLookupSlug)?.multi_agent_version;
+            : options.nativeDefaults === undefined
+              ? UPSTREAM_NATIVE_ENTRIES.get(nativeLookupSlug)?.multi_agent_version
+              : undefined;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
       } else if (options.nativeDefaults !== undefined

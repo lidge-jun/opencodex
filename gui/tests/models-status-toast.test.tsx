@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 import Models from "../src/pages/Models";
+import { en } from "../src/i18n/en";
 
 const globals = [
   "document", "window", "navigator", "localStorage", "sessionStorage",
@@ -132,7 +133,7 @@ test("apply feedback renders as a fixed toast, not an inline notice before the w
   expect(toast).not.toBeNull();
   expect(toast!.className).toContain("notice-ok");
   expect(toast!.getAttribute("role")).toBe("status");
-  expect(toast!.textContent).toContain("Applied");
+  expect(toast!.textContent).toContain(en["models.applied"]);
   // No inline notice sits in the flow before the workspace anymore.
   const workspace = container.querySelector<HTMLElement>(".models-workspace-root");
   expect(workspace?.previousElementSibling?.classList.contains("action-toast")).toBe(true);
@@ -311,7 +312,7 @@ test("a saved selection keeps its success toast and separate catalog warning unt
   const toast = container.querySelector<HTMLElement>(".action-toast")!;
   const warning = container.querySelector<HTMLElement>(".models-integration-warning")!;
   expect(mutations).toBe(1);
-  expect(toast.textContent).toContain("Applied");
+  expect(toast.textContent).toContain(en["models.applied"]);
   expect(toast.getAttribute("role")).toBe("status");
   expect(warning).not.toBeNull();
   expect(warning.querySelector(".notice.notice-warn")).not.toBeNull();
