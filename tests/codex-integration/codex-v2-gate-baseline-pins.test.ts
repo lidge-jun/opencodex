@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CODEX_ACCOUNT_BOUND_CATALOG_KIND,
   mergeCatalogEntriesForSync,
-} from "../../src/codex/catalog/sync";
+} from "../../src/codex/catalog";
 import { nativeMultiAgentDefaults } from "../../src/codex/catalog/parsing";
 
 function template(): Record<string, unknown> {
