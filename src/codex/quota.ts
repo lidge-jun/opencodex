@@ -164,41 +164,6 @@ function isInvalidPolicyUsagePercent(value: unknown): boolean {
   return !Number.isFinite(numeric) || numeric < 0 || numeric > 100;
 }
 
-const POLICY_USAGE_PERCENT_HEADERS = [
-  "x-codex-primary-used-percent",
-  "x-codex-secondary-used-percent",
-  "x-codex-tertiary-used-percent",
-] as const;
-
-/**
- * Every header that feeds the same parsed window tuple as each percent header. An
- * invalid percent must take its whole tuple down with it: a surviving
- * `window-minutes`/`reset-at` would still mint a short tuple with no percent,
- * which reads as an unknown short window and suppresses a fresh weekly block.
- */
-const POLICY_WINDOW_HEADER_GROUPS: ReadonlyArray<readonly string[]> = [
-  [POLICY_USAGE_PERCENT_HEADERS[0], "x-codex-primary-reset-at", "x-codex-primary-window-minutes"],
-  [POLICY_USAGE_PERCENT_HEADERS[1], "x-codex-secondary-reset-at", "x-codex-secondary-window-minutes"],
-  [POLICY_USAGE_PERCENT_HEADERS[2], "x-codex-tertiary-reset-at"],
-];
-
-/**
- * A copy of upstream headers with the full window tuple removed wherever its percent
- * header is invalid. Re-parsing it drops exactly the tuple the invalid header would
- * have fed — the clamped percent never lands — while the valid windows still parse
- * normally, so a poisoned short reading cannot suppress a fresh weekly block in the
- * policy merge.
- */
-function withoutInvalidPolicyPercentHeaders(headers: Headers): Headers {
-  const sanitized = new Headers(headers);
-  for (const group of POLICY_WINDOW_HEADER_GROUPS) {
-    if (isInvalidPolicyUsagePercent(sanitized.get(group[0]))) {
-      for (const name of group) sanitized.delete(name);
-    }
-  }
-  return sanitized;
-}
-
 function normalizeResetAt(value: unknown): number | undefined {
   const numeric = typeof value === "number"
     ? value
@@ -590,12 +555,11 @@ export function applyAccountQuotaFromUpstreamHeaders(
 ): void {
   const quota = parseUpstreamQuotaHeaders(headers, options);
   if (!quota) return;
-  const invalidPolicyPercent = POLICY_USAGE_PERCENT_HEADERS
+  const policyQuota = [
+    "x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent",
+  ].some(name => isInvalidPolicyUsagePercent(headers.get(name))) ? null : filterMainPolicyMonthlyQuota(quota);
+  const validHistory = !["x-codex-primary-used-percent", "x-codex-secondary-used-percent", "x-codex-tertiary-used-percent"]
     .some(name => isInvalidPolicyUsagePercent(headers.get(name)));
-  const policyQuota = invalidPolicyPercent
-    ? filterMainPolicyMonthlyQuota(parseUpstreamQuotaHeaders(withoutInvalidPolicyPercentHeaders(headers), options))
-    : filterMainPolicyMonthlyQuota(quota);
-  const validHistory = !invalidPolicyPercent;
   setAccountQuotaFromParsed(accountId, quota, writerGeneration, mainWriter, policyQuota,
     options?.poolWriter && validHistory ? { writer: options.poolWriter, observedAt: Date.now(), source: "response-header", raw: quota } : undefined);
 }

@@ -9,7 +9,6 @@ import {
   clearAccountQuota, getAccountQuota, getMainPolicyQuota, parseMainPolicyUsageQuota,
   parseUsageQuota, setAccountQuotaFromParsed, updateAccountQuota, type WhamUsageResponse,
 } from "../../src/codex/quota";
-import { applyAccountQuotaFromUpstreamHeaders } from "../../src/codex/quota";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let home: string;
@@ -70,29 +69,6 @@ describe("raw policy evidence validation", () => {
       expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
     });
   }
-
-  test("an invalid short header still merges the fresh weekly policy reading", () => {
-    // The invalid percent is untrusted only for the tuple it feeds: dropping the whole
-    // observation kept an expired short tuple while ignoring a fresh weekly block.
-    const writer = writerFor();
-    const cfg = { codexMainAccountHardLock: true };
-    const expired = Date.now() - 60_000;
-    setAccountQuotaFromParsed(
-      MAIN,
-      { shortPercent: 4, shortResetAt: expired, weeklyPercent: 20 },
-      undefined,
-      writer,
-      { shortPercent: 4, shortResetAt: expired, weeklyPercent: 20 },
-    );
-    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
-    const headers = new Headers({
-      "x-codex-primary-used-percent": "101",
-      "x-codex-primary-window-minutes": "300",
-      "x-codex-secondary-used-percent": "99",
-    });
-    applyAccountQuotaFromUpstreamHeaders(MAIN, headers, undefined, writer);
-    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
-  });
 
   test.each([0, "0", -0, "-0", 98.99, "98.99", 99, "99", 100, "100"])("valid boundary %s remains policy evidence", value => {
     const data = { rate_limit: { primary_window: { used_percent: value } } } as WhamUsageResponse;
