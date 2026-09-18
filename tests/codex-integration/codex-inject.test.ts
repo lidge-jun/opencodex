@@ -15,6 +15,12 @@ import {
   stripRootContextWindowOverrides,
   standaloneCodexRoutingTarget,
 } from "../../src/codex/inject";
+import {
+  DEFAULT_CODEX_PROVIDER_DISPLAY_NAME,
+  buildProfileFileForTarget,
+  buildProviderTableBlockForTarget,
+  resolveCodexProviderDisplayName,
+} from "../../src/codex/inject/config-toml";
 import { extractOcxProviderTableBlock } from "../../src/codex/inject/remove";
 import { OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
@@ -23,6 +29,78 @@ import {
 } from "../../src/codex/subagent-defaults";
 
 describe("Codex config injection", () => {
+  describe("provider display name (#4810)", () => {
+    const target = standaloneCodexRoutingTarget(10100, {});
+    // The reference profile only carries a provider table when the target uses one; plain
+    // loopback is Design B and emits the root override instead.
+    const tableTarget = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+
+    test("an unset name keeps the previous bytes exactly", () => {
+      expect(DEFAULT_CODEX_PROVIDER_DISPLAY_NAME).toBe("OpenCodex Proxy");
+      expect(buildProviderTableBlockForTarget(target)).toContain('name = "OpenCodex Proxy"');
+      // Passing the unset value explicitly must be indistinguishable from omitting it, so an
+      // operator who never touches the setting sees no diff in config.toml.
+      expect(buildProviderTableBlockForTarget(target, false, undefined))
+        .toBe(buildProviderTableBlockForTarget(target));
+      expect(buildProfileFileForTarget(tableTarget, null, false, undefined, undefined))
+        .toBe(buildProfileFileForTarget(tableTarget, null));
+      expect(buildProfileFileForTarget(tableTarget, null)).toContain('name = "OpenCodex Proxy"');
+    });
+
+    test("a chosen name reaches both the provider table and the reference profile", () => {
+      const block = buildProviderTableBlockForTarget(target, false, "My Gateway");
+      expect(block).toContain('name = "My Gateway"');
+      expect(block).not.toContain("OpenCodex Proxy");
+      const profile = buildProfileFileForTarget(tableTarget, "/tmp/opencodex-catalog.json", false, undefined, "My Gateway");
+      expect(profile).toContain('name = "My Gateway"');
+      expect(profile).not.toContain("OpenCodex Proxy");
+    });
+
+    test("renaming the label never moves the identifier routing resolves through", () => {
+      // The whole point of the setting: presentation is separate from identity. A row already
+      // tagged `opencodex` must still find a provider with that id after a rename.
+      const block = buildProviderTableBlockForTarget(target, false, "My Gateway");
+      expect(block).toContain("[model_providers.opencodex]");
+      expect(block).toContain('base_url = "http://127.0.0.1:10100/v1"');
+      expect(block).toContain('wire_api = "responses"');
+      expect(buildProfileFileForTarget(tableTarget, null, false, undefined, "My Gateway"))
+        .toContain('model_provider = "opencodex"');
+    });
+
+    test("a name with TOML metacharacters is escaped rather than breaking the file", () => {
+      expect(buildProviderTableBlockForTarget(target, false, 'He said "hi" \\ bye'))
+        .toContain('name = "He said \\"hi\\" \\\\ bye"');
+    });
+
+    test("the admission and authless contracts are unchanged by a rename", () => {
+      const authless = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+      const authlessBlock = buildProviderTableBlockForTarget(authless, false, "My Gateway");
+      expect(authlessBlock).toContain("requires_openai_auth = false");
+      expect(authlessBlock).not.toContain("env_key");
+      const remote = standaloneCodexRoutingTarget(10100, { hostname: "192.168.1.20" });
+      const remoteBlock = buildProviderTableBlockForTarget(remote, false, "My Gateway");
+      expect(remoteBlock).toContain("requires_openai_auth = true");
+      expect(remoteBlock).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    });
+
+    test("STILL REFUSED: no value can make the emitted provider nameless", () => {
+      // Codex rejects a provider whose name is empty, and it rejects the whole config rather
+      // than one thread — see "no nameless provider survives" below. So suppressing the
+      // branding means choosing another label; every unusable value falls back to the default
+      // instead of writing a file Codex would refuse to load.
+      for (const rejected of ["", "   ", "\t\n", "x".repeat(129), "bad\u0000name", "line\nbreak"]) {
+        expect(resolveCodexProviderDisplayName(rejected)).toBe(DEFAULT_CODEX_PROVIDER_DISPLAY_NAME);
+        expect(buildProviderTableBlockForTarget(target, false, rejected))
+          .toContain('name = "OpenCodex Proxy"');
+      }
+      expect(resolveCodexProviderDisplayName(undefined)).toBe(DEFAULT_CODEX_PROVIDER_DISPLAY_NAME);
+      // A usable label is taken verbatim apart from surrounding whitespace, and the boundary
+      // length is accepted rather than silently dropped.
+      expect(resolveCodexProviderDisplayName("  My Gateway  ")).toBe("My Gateway");
+      expect(resolveCodexProviderDisplayName("y".repeat(128))).toBe("y".repeat(128));
+    });
+  });
+
   test("standalone routing-target wrappers remain byte-compatible", () => {
     const target = standaloneCodexRoutingTarget(10100, { hostname: "192.168.1.20" });
     expect(buildProviderTableBlock(target, true)).toBe(

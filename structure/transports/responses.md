@@ -43,6 +43,12 @@ the upstream HTTP-version helper. Server, provider, and WebSocket data types rem
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 
+`OCX_FRESH_CONNECTION_HOSTS` accepts comma-separated hostnames whose outbound HTTP sends bypass
+keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts and their subdomains
+match case-insensitively. The helper applies this policy at the final executor boundary, after a
+dispatch override has selected or rebuilt the destination, so matching follows the URL sent on the
+wire rather than the URL supplied before credential revalidation.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
@@ -887,6 +893,11 @@ it reads as an exhausted request and stops sending on. `adapter-continuation.ts`
 because its replay is the next loop iteration. `run-turn-execution.ts` always hands the reservation
 down, because a runTurn adapter is by definition the layer that sends. The passthrough ladder keeps
 the shape it already had: reserve with `countedExternally: true` and pass the permit to the rebuild.
+
+An explicit provider `transientRetryOn5xx.attempts` value is the exact physical-send total for that
+request. Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
+original upstream response. The guarded profile's shared reserve remains available only when the
+provider leaves that transient policy unconfigured; its existing hop-permit settlement is unchanged.
 
 What must not happen is a ladder that charges and then returns through a path that neither confirms
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a

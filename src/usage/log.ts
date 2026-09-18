@@ -852,18 +852,61 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   };
 }
 
-function ensureUsageLogDir(): void {
+// Bound hot-path filesystem hardening to once per second while ensuring an external mode
+// widening cannot suppress write-triggered repair for the lifetime of the process.
+const USAGE_LOG_PERMISSION_RECHECK_MS = 1_000;
+
+type UsageLogPermissionCheck = {
+  path: string;
+  checkedAt: number;
+};
+
+let ensuredUsageLogDir: UsageLogPermissionCheck | null = null;
+let ensuredUsageLogFile: UsageLogPermissionCheck | null = null;
+
+function usageLogPermissionCheckIsCurrent(
+  check: UsageLogPermissionCheck | null,
+  path: string,
+  now: number,
+): boolean {
+  return check?.path === path
+    && now >= check.checkedAt
+    && now - check.checkedAt < USAGE_LOG_PERMISSION_RECHECK_MS;
+}
+
+function ensureUsageLogDir(now: number): void {
   const dir = getConfigDir();
+  if (usageLogPermissionCheckIsCurrent(ensuredUsageLogDir, dir, now)) return;
   recordOwnedConfigPath(dir, usageLogPath());
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
+  ensuredUsageLogDir = { path: dir, checkedAt: now };
 }
 
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
-  ensureUsageLogDir();
+  const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
   const path = usageLogPath();
-  appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+  const now = Date.now();
+  const doAppend = (): void => {
+    ensureUsageLogDir(now);
+    const filePermissionsCurrent = usageLogPermissionCheckIsCurrent(ensuredUsageLogFile, path, now);
+    appendFileSync(path, line, { encoding: "utf-8", mode: 0o600 });
+    if (!filePermissionsCurrent) {
+      try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+      ensuredUsageLogFile = { path, checkedAt: now };
+    }
+  };
+  try {
+    doAppend();
+  } catch (error: any) {
+    if (error?.code === "ENOENT") {
+      ensuredUsageLogDir = null;
+      ensuredUsageLogFile = null;
+      doAppend();
+      return;
+    }
+    throw error;
+  }
 }
 
 export type UsageLogRevision = {
@@ -1057,6 +1100,8 @@ export function resetUsageReadCacheForTests(): void {
   managementUsageReadInflight?.abort.abort();
   managementUsageReadInflight = null;
   retainedUsageSnapshot = null;
+  ensuredUsageLogDir = null;
+  ensuredUsageLogFile = null;
 }
 
 function readExactly(fd: number, length: number, position: number): Buffer | null {
