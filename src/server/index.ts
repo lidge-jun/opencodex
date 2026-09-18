@@ -225,7 +225,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
-  applyProxyEnv(config);
+  applyProxyEnv(config, true);
   assertServerAuthConfig(config);
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
   const managementSessionControl = createManagementSessionControl(managementAuth);

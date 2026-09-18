@@ -238,7 +238,12 @@ describe("Grok fence lifecycle wiring", () => {
     expect(controlSource).toContain("io.runtimeEndpoint ?? readRuntime(pid)");
     // Inherited obligations are snapshotted BEFORE this run claims anything, so its own
     // receipt is never mistaken for one it inherited.
-    expect(stopFn).toContain("isPendingTeardownAbandoned(read, isProcessAlive)");
+    expect(stopFn).toContain("isPendingTeardownAbandoned(read, teardownOwnerStillRunning)");
+    // Ownership is identity, not bare liveness. A reused PID reported the owner as still
+    // running forever, so the receipt was never recovered while both updater gates kept
+    // refusing on it (#4897). Passing `isProcessAlive` straight in is the regression.
+    expect(stopFn).toContain("isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid)");
+    expect(stopFn).not.toContain("isPendingTeardownAbandoned(read, isProcessAlive)");
     expect(stopFn.indexOf("listPendingTeardowns()")).toBeLessThan(claimAt);
     expect(stopFn).toContain("clearPendingTeardown(nonce)");
     expect(stopFn.indexOf("await restoreSharedClientStateAfterStop()"))

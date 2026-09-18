@@ -83,7 +83,9 @@ for (const method of ["GET", "POST"] as const) {
   }
 
   // TUN handles the validated IPv6 address even if unrelated proxy variables exist.
-  const directEnvs: Record<string, string>[] = [{}, { HTTP_PROXY: "http://127.0.0.1:7897" }, { ALL_PROXY: "socks5://127.0.0.1:7891" }];
+  // HTTP ALL_PROXY remains unused (Bun fetch does not honour it). A SOCKS5 ALL_PROXY
+  // is a real wrapper route and is not an unrelated variable.
+  const directEnvs: Record<string, string>[] = [{}, { HTTP_PROXY: "http://127.0.0.1:7897" }, { ALL_PROXY: "http://127.0.0.1:7891" }];
   for (const env of directEnvs) {
     await attempt(env, [fake], "pinned");
   }

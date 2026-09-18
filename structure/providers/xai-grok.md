@@ -24,6 +24,10 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
+Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
+The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
+limited to unambiguous bare `exec` and `apply_patch` calls and does not rewrite foreign grammars.
+
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
 `devlog/_fin/260716_grok_build_hardening/`.
 
@@ -120,6 +124,8 @@ The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is l
 the DeepSeek provider and does not alter xAI metadata or transport behavior; explicit capability
 overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and
 `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are unchanged and unprobed here.
+The Crusoe fixed-key registry row, discovery predicate, effort ladder, and input-modality map are
+also provider-scoped and do not alter xAI model metadata, OAuth routing, or wire behavior.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 

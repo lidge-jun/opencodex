@@ -43,6 +43,7 @@ import {
   saveConfig,
 } from "../config";
 import {
+  isLikelyOcxProcess,
   readPid,
   readPidFileValue,
   readRuntimePort,
@@ -65,6 +66,7 @@ import {
 import { collectStatus, hubStatusLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
+import { parseStartOptions, StartArgsError } from "./start-args";
 
 import {
   discoverStableProxyForRestart,
@@ -76,7 +78,8 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
+import { redactUrlForLog } from "../lib/redact";
+import { dispatchCommand, decideStartWithLiveOwner } from "./dispatch";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
@@ -169,21 +172,13 @@ const head = await runCli(process.argv.slice(2));
 const args = head.args;
 const command = head.command;
 
-function parsePortOption(): number | undefined {
-  if (args.length === 1) return undefined;
-  if (args.length !== 3 || args[1] !== "--port") {
-    console.error("Usage: ocx start [--port <port>]");
+function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
+  try {
+    return parseStartOptions(args.slice(1));
+  } catch (error) {
+    console.error(error instanceof StartArgsError ? error.message : String(error));
     process.exit(1);
   }
-  const portIdx = args.indexOf("--port");
-  if (portIdx === -1) return undefined;
-  const value = args[portIdx + 1];
-  const port = value && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    console.error("Invalid port number");
-    process.exit(1);
-  }
-  return port;
 }
 
 async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
@@ -328,7 +323,26 @@ async function handleStart(options: { block?: boolean } = {}) {
   // already-broken file cannot fence /api/* closed at boot (#2696).
   const present = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (present) assertNotAdminToken(present);
-  const requestedPort = parsePortOption();
+  const startOpts = parseStartCliOptions();
+  if (startOpts.socks5 !== undefined || startOpts.socks5Off) {
+    const proxyConfig = loadConfig();
+    if (startOpts.socks5Off) {
+      if (proxyConfig.proxy && !/^socks5h?:\/\//i.test(proxyConfig.proxy.trim())) {
+        console.error("Cannot use --socks5-off: config.proxy is not a SOCKS5 URL; it was left unchanged.");
+        process.exit(1);
+      }
+      if (proxyConfig.proxy) {
+        delete proxyConfig.proxy;
+        saveConfig(proxyConfig);
+        console.log("Cleared config.proxy (outbound SOCKS5 proxy off).");
+      }
+    } else {
+      proxyConfig.proxy = startOpts.socks5!;
+      saveConfig(proxyConfig);
+      console.log(`Outbound SOCKS5: ${redactUrlForLog(startOpts.socks5!)} (saved to config.proxy)`);
+    }
+  }
+  const requestedPort = startOpts.port;
   // Always probe the configured port, even when both state files are absent. A
   // fallback-port sibling overwrites the pid/runtime records when it starts and
   // removes them on its own shutdown, so their absence proves nothing about the
@@ -927,8 +941,24 @@ async function handleStop() {
   // `inheritedTeardowns` is the inverse case: PREVIOUS stops that left obligations
   // unfinished. Snapshot them BEFORE this run claims anything, so this run's own receipt
   // is never mistaken for one it inherited.
+  //
+  // Ownership is decided by IDENTITY, not by bare liveness. A receipt records a number, and
+  // the OS reuses numbers: once the owner exits, an unrelated process can be handed its PID,
+  // and `isProcessAlive` alone then answers "that stop is still running" for as long as the
+  // new process lives. The receipt is filtered out, so no run ever recovers it, quarantines
+  // it or even mentions it — while both updater gates keep seeing an outstanding obligation
+  // and refuse. That is the permanent fail-closed reported in #4897: no proxy running, a
+  // dead owner, and `ocx update` aborting on `teardown-outstanding` every time.
+  //
+  // Requiring the live PID to be an opencodex process is the narrowing that costs the safety
+  // intent nothing: a stop that really is in flight is still left strictly alone, because its
+  // process is one of ours. Recognizing the receipt as abandoned only admits it to the
+  // recovery loop below, which still has to prove the recorded endpoint is down before
+  // anything is restored.
+  const teardownOwnerStillRunning = (ownerPid: number): boolean =>
+    isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
   const inheritedTeardowns = listPendingTeardowns()
-    .filter(read => isPendingTeardownAbandoned(read, isProcessAlive));
+    .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce) return;
