@@ -1147,6 +1147,38 @@ describe("FINAL_ANSWER encrypted task recovery", () => {
     expect(restoreCachedEncryptedAgentTasks(req, input(), routedConfig())).toBe(0);
   });
 
+  test("does not share a cache entry when a NUL byte moves between recipient and sender", async () => {
+    // Both envelopes below carry the same admission scope, parent thread, message type, absent
+    // Task name and ciphertext, and their recipient/sender fields concatenate to the same bytes
+    // once a separator is placed between them. Moving where the NUL sits must not move the key.
+    const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response(recoverySse("Recovered final answer."));
+    }) as typeof fetch;
+    const input = (recipient: string, sender: string) => [{
+      type: "agent_message",
+      author: sender,
+      recipient,
+      content: [
+        {
+          type: "input_text",
+          text: ["Message Type: FINAL_ANSWER", `Sender: ${sender}`, "Payload:", ""].join("\n"),
+        },
+        { type: "encrypted_content", encrypted_content: FERNET_TASK },
+      ],
+    }];
+    expect(await recoverEncryptedAgentTaskWithResult(req, input("r", "s\0t"), {}, routedConfig()))
+      .toEqual({ recovered: true });
+    expect(fetches).toBe(1);
+    // A different split of the same concatenation is a different envelope, not a cache hit.
+    expect(restoreCachedEncryptedAgentTasks(req, input("r\0s", "t"), routedConfig())).toBe(0);
+    // The envelope the cache was actually filled from still replays, so the line above is not
+    // passing because nothing was cached at all.
+    expect(restoreCachedEncryptedAgentTasks(req, input("r", "s\0t"), routedConfig())).toBe(1);
+  });
+
   test("recovers a FINAL_ANSWER whose Task name matches the structured recipient", async () => {
     const req = new Request("http://localhost/v1/responses", { headers: codexHeaders() });
     let fetches = 0;

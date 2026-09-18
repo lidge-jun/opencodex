@@ -318,22 +318,21 @@ function admittedRecovery(
   if (!envelope) return { admitted: false, reason: "unsupported_envelope" };
   const admission = recoveryAdmission(req, config);
   if (!admission) return { admitted: false, reason: "admission_denied" };
+  // A JSON-encoded fixed-order tuple, not a delimiter-joined string: a field that carries the
+  // delimiter shifts every boundary after it, so two envelopes could hash to one entry and one
+  // recovery would replay for the other. A FINAL_ANSWER that omits its Task name line carries no
+  // addressing in the header, which leaves the structured recipient as the only field separating
+  // two such envelopes and makes the boundary the whole difference.
   const cacheKey = createHash("sha256")
-    .update(admission.cacheScope)
-    .update("\0")
-    .update(parentThreadId ?? "")
-    .update("\0")
-    .update(envelope.messageType)
-    .update("\0")
-    .update(envelope.taskName ?? "")
-    .update("\0")
-    // A FINAL_ANSWER that omits its Task name line carries no addressing in the header,
-    // so the structured recipient is the only field separating two such envelopes.
-    .update(envelope.recipient)
-    .update("\0")
-    .update(envelope.sender)
-    .update("\0")
-    .update(JSON.stringify(envelope.ciphertexts))
+    .update(JSON.stringify([
+      admission.cacheScope,
+      parentThreadId ?? "",
+      envelope.messageType,
+      envelope.taskName ?? "",
+      envelope.recipient,
+      envelope.sender,
+      envelope.ciphertexts,
+    ]))
     .digest("hex");
   return { admitted: true, recovery: { envelope, admission, cacheKey } };
 }
