@@ -451,3 +451,9 @@ NO_PROXY entries. When the environment no longer selects SOCKS, activation
 restores the native fetch; removing a saved field alone does not erase inherited
 process environment variables.
 SOCKS4 is rejected instead of being advertised as a working transport.
+
+`src/cli/start-args.ts` parses `ocx start --socks5 [host:port]` and the mutually
+exclusive `--socks5-off`. The start owner persists only an explicitly requested
+change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
+never echo user-supplied credentials, and status messages redact proxy URLs.
+The parser regression cases live in `tests/cli/start-args.test.ts`.

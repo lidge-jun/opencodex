@@ -598,11 +598,3 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
-
-## Explicit SOCKS5 CLI selection
-
-`src/cli/start-args.ts` parses `ocx start --socks5 [host:port]` and the mutually
-exclusive `--socks5-off`. The start owner persists only an explicitly requested
-change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
-never echo user-supplied credentials, and status messages redact proxy URLs.
-The parser regression cases live in `tests/cli/start-args.test.ts`.
