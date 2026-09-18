@@ -180,7 +180,7 @@ describe("client machine listener", () => {
     expect((await fetch(new URL("/api/machine/status", server.url), { method: "POST" })).status).toBe(404);
   });
 
-  test("requires a GUI session for safe reads and Origin plus CSRF for mutations", async () => {
+  test("allows GUI-session reads but refuses mutations from a credentialless bootstrap", async () => {
     let syncCalls = 0;
     const server = startMachineListener(0, {
       state: connection(),
@@ -207,11 +207,16 @@ describe("client machine listener", () => {
     expect((await fetch(syncUrl, { method: "POST", headers: safeHeaders, body: "{}" })).status).toBe(401);
     expect(syncCalls).toBe(0);
     const mutationHeaders = await guiHeaders(server, true);
-    expect((await fetch(syncUrl, { method: "POST", headers: mutationHeaders, body: "{}" })).status).toBe(200);
-    expect(syncCalls).toBe(1);
+    expect((await fetch(syncUrl, { method: "POST", headers: mutationHeaders, body: "{}" })).status).toBe(403);
+    expect((await fetch(new URL("/api/machine/shim", server.url), {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({ action: "uninstall" }),
+    })).status).toBe(403);
+    expect(syncCalls).toBe(0);
   });
 
-  test("disconnect commits before 202 and schedules standalone recycle while the hub is offline", async () => {
+  test("does not let a bootstrapped GUI session disconnect or recycle the machine", async () => {
     let disconnected = false;
     let recycled = false;
     const server = startMachineListener(0, {
@@ -231,9 +236,9 @@ describe("client machine listener", () => {
       headers: await guiHeaders(server, true),
       body: "{}",
     });
-    expect(response.status).toBe(202);
-    expect(disconnected).toBe(true);
-    expect(recycled).toBe(true);
+    expect(response.status).toBe(403);
+    expect(disconnected).toBe(false);
+    expect(recycled).toBe(false);
   });
 
   test("refuses startup without matching durable connected state", () => {

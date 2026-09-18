@@ -111,6 +111,14 @@ export function startMachineListener(
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
           return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
         }
+        // A loopback dashboard session proves possession, not user presence: any local
+        // process can fetch the dashboard bootstrap and replay its token and CSRF value.
+        // Keep the connected listener useful for status/diagnostics, but never let that
+        // credentialless bootstrap authorize durable machine changes. Those operations
+        // remain available through the explicit CLI commands.
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          return Response.json({ error: "opencodex machine changes require the local CLI" }, { status: 403 });
+        }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);
       }
 
