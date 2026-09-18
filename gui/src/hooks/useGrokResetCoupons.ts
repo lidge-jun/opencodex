@@ -34,7 +34,7 @@ export type GrokCouponEntry =
 
 export interface GrokRedeemOutcome {
   ok: boolean;
-  /** Settled ledger code, or `aborted`/`network` when the request never settled. */
+  /** Settled ledger code, or `aborted` when delivery may have succeeded. */
   code: string;
   replayed: boolean;
 }
@@ -99,11 +99,6 @@ function expiryRank(coupon: GrokResetCoupon): number {
 
 function byExpiry(coupons: GrokResetCoupon[]): GrokResetCoupon[] {
   return coupons.toSorted((a, b) => expiryRank(a) - expiryRank(b));
-}
-
-function wasAborted(error: unknown, signal: AbortSignal): boolean {
-  if (signal.aborted) return true;
-  return Boolean(error && typeof error === "object" && (error as { name?: unknown }).name === "AbortError");
 }
 
 export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
@@ -196,10 +191,10 @@ export function useGrokResetCoupons({ apiBase, accountIds, enabled }: {
       const code = settledCode(data);
       await read(accountId, epoch.current);
       return { ok: code === "redeemed", code, replayed };
-    } catch (error) {
-      // An aborted redemption is an unknown outcome, not a failure: the route may
-      // still be executing it. The caller must stop posting, not retry.
-      return { ok: false, code: wasAborted(error, bounded.signal) ? "aborted" : "network", replayed: false };
+    } catch {
+      // Any transport rejection after dispatch has an unknown outcome: the route
+      // may still be executing it. The caller must stop posting, not retry.
+      return { ok: false, code: "aborted", replayed: false };
     } finally {
       bounded.clear();
     }
