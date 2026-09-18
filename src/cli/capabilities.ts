@@ -709,6 +709,27 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["system", "codex-cli-update", "attest"],
+    summary: "Observe the selected or explicitly named Windows npm Codex installation files without enabling updates.",
+    routes: [],
+    flags: [
+      { name: "--candidate", value: "string", summary: "Absolute npm codex.cmd or package bin/codex.js path; all four paths are all-or-none." },
+      { name: "--npm-prefix", value: "string", summary: "Absolute prefix containing node_modules/@openai/codex." },
+      { name: "--npm-cli", value: "string", summary: "Absolute node_modules/npm/bin/npm-cli.js path." },
+      { name: "--node", value: "string", summary: "Absolute node.exe path; observed, never executed." },
+      { name: "--json", value: "boolean", summary: "Emit the path-free installation identity observation." },
+    ],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.",
+      "Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate: the configured CODEX_CLI_PATH or the first codex on the captured PATH, with an OpenCodex wrapper resolving to its codex.opencodex-real backing. Discovery only proposes paths; the held-handle observation remains the authority.",
+      "Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.",
+      "selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.",
+      "Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.",
+    ],
+  },
+  {
     command: ["system", "codex-restart"],
     summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],

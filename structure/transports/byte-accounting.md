@@ -56,6 +56,14 @@ partial-event, injection/drop, and EOF behavior. Output admission precedes its s
 failed enqueue and cancellation release the reservation without re-entering a disposed rewrite.
 Old/new buffer overlap remains charged against the same translator cap.
 
+Complete SSE blocks extract `data` fields with one indexed pass over the block rather than a
+regular-expression split and intermediate line array. Colonless `data` fields, one optional ASCII
+space after the colon, multiline joining, UTF-8 text, LF/CRLF input, and a trailing lone CR retain
+their event-stream semantics. `src/server/relay.ts` re-exports this canonical extractor instead of
+maintaining a second implementation. Empty byte results across the relay and
+`src/server/sse-frame-buffer.ts` reuse one immutable zero-length view; non-empty frame ownership,
+frame limits, cancellation, terminal detection, and wire bytes are unchanged.
+
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
 Serialized request and buffered-response observations use byte counts without measurement arrays.

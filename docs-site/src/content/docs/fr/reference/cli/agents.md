@@ -272,6 +272,19 @@ ocx system codex-cli-update check --json
 
 Sous Windows, une commande simple capturée comme `CODEX_CLI_PATH=codex`, un chemin distant ou un chemin de périphérique produit plutôt `candidate_path_unavailable`. Le candidat a été capturé, mais son chemin ne convient pas à cette inspection.
 
+#### Observation explicite d’une installation Windows x64
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest` observe en lecture seule une installation npm Windows x64 sélectionnée ou explicitement désignée. Sans options, la commande observe le candidat sélectionné identifié par l’instantané du lanceur de confiance (le `CODEX_CLI_PATH` configuré ou le premier `codex` du PATH capturé), un wrapper opencodex étant résolu vers sa sauvegarde npm renommée `codex.opencodex-real.cmd`. Fournir les quatre chemins absolus remplace la découverte ; celle-ci ne propose que des chemins et l’observation par handles conservés reste l’autorité. `--candidate` désigne le `<prefix>/codex.cmd` npm standard ou `<prefix>/node_modules/@openai/codex/bin/codex.js`. `--npm-cli` doit se terminer par `node_modules/npm/bin/npm-cli.js` et `--node` désigne un `node.exe` explicite. Les applications groupées, les emplacements reconnus de gestionnaires de versions, les shims appartenant à opencodex sans sauvegarde npm et les wrappers personnalisés sont refusés.
+
+Des handles natifs maintiennent les répertoires parents et les fichiers pendant les lectures bornées. Les plateformes non prises en charge, points de réanalyse/junctions, écritures concurrentes, chemins dangereux et fichiers trop volumineux sont refusés. Le rapport fixe ne contient aucun chemin : `status` vaut `observed` ou `refused`, avec `installationIdentityObserved`. `selectionAttested`, `managed` et `applyAllowed` restent `false`. Vérifiez `status` : un refus rapporté peut produire un code de sortie 0.
+
+L’identité ou le condensat décrit les fichiers au moment de l’observation, sans autorisation durable de mise à jour. Cela ne prouve ni le runtime sélectionné, ni l’installateur passé, ni la configuration npm effective, ni l’authenticité des outils. Le Node fourni est seulement observé, pas identifié comme celui que choisirait le lanceur. Aucune cible n’est exécutée ; aucune requête au registre, installation, écriture de configuration ou commande de processus n’a lieu. Le `check` Windows existant ne réalise toujours aucune E/S de fichiers candidats ou de configuration.
+
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
 Inspectez et modifiez en toute sécurité la configuration OpenCodex validée. `show` et `get` masquent les secrets. Importer

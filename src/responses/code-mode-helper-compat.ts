@@ -106,5 +106,5 @@ export function resolveCodeModeHelperName(
   // `tools.apply_patch(...)` JavaScript would be the mis-route this repair exists to avoid.
   if (!declaresCodeModeExec(declaredNames)) return undefined;
   if (typeof argumentsText !== "string" || argumentsText === "") return undefined;
-  return isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText)) ? "apply_patch" : undefined;
+  return isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText, "exec")) ? "apply_patch" : undefined;
 }

@@ -379,6 +379,19 @@ and are never classified as managed.
 
 On Windows, a captured bare command such as `CODEX_CLI_PATH=codex`, a remote path, or a device path reports `candidate_path_unavailable` instead. Those cases have a captured candidate; its path is not eligible for this inspection.
 
+#### Explicit installation observation on Windows x64
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest` is an opt-in, read-only observation of a Windows x64 npm installation. With no options it identifies the selected candidate from the proof-bound launcher snapshot — the configured `CODEX_CLI_PATH` or the first `codex` on the captured PATH, with an OpenCodex wrapper resolving to its renamed `codex.opencodex-real.cmd` npm backing. Supplying all four absolute paths overrides discovery; discovery only proposes paths and the held-handle observation remains the authority. `--candidate` must name the standard npm `<prefix>/codex.cmd` or `<prefix>/node_modules/@openai/codex/bin/codex.js`. `--npm-cli` must end in `node_modules/npm/bin/npm-cli.js`; `--node` names an explicit `node.exe`. App bundles, recognized version-manager layouts, opencodex-owned shims without their npm backing, and custom wrappers are refused.
+
+Native handles hold the ancestor directories and files during bounded reads. Unsupported platforms, reparse points/junctions, conflicting writers, unsafe paths, and oversized files are refused. The fixed report contains no paths: `status` is `observed` or `refused`, with `installationIdentityObserved`; `selectionAttested`, `managed`, and `applyAllowed` remain `false`. Check `status`, not just the process exit code: a reported refusal can exit 0.
+
+An observed identity or digest describes those files during this observation. It is not a durable update permit and does not prove the selected runtime, the past installer, effective npm configuration, or tool authenticity. The supplied Node is observed only, not proven to be the Node a launcher would select. No target is executed; no registry request, installation, configuration write, or process control occurs. The existing Windows `check` command still performs no candidate/configuration filesystem I/O.
+
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
 Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
