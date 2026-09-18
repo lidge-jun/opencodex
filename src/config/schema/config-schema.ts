@@ -59,6 +59,8 @@ import { parseDesktopProfile } from "../../claude/desktop-profile";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
 export const configSchema = z.object({
+  codexNativeSteering: z.boolean().optional().catch(false),
+  codexNativeInjection: z.boolean().optional().catch(false),
   port: z.number().int().min(0).max(65535).default(10100),
   // A malformed hand edit must disable only remote-role behavior, not discard
   // providers or data-plane keys. Live writes are rejected explicitly below.
@@ -180,6 +182,10 @@ export const configSchema = z.object({
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
+  // Presentation-only label for the injected provider. A malformed value degrades to undefined
+  // and the default label is emitted, rather than failing the parse or writing a config Codex
+  // would refuse to load — the provider id routing depends on is never derived from it.
+  codexProviderDisplayName: z.string().trim().min(1).max(128).optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.

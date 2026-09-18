@@ -31,23 +31,54 @@
  */
 
 /** Real child process: PowerShell, a CLI smoke test, an external binary. */
-export const SPAWN_BUDGET_MS = spawnBudgetMs();
+export const SPAWN_BUDGET_MS = 45_000;
 
 /**
- * Windows needs a higher ceiling for the same reason `BULK_DURABLE_IO_BUDGET_MS` does: the leg
- * runs four Bun pools on one runner, and the first child spawned in a file pays a cold start the
- * later ones do not. Run 35118018849 (job 104895935554) measured the first proxy child in
- * `tests/codex-integration/native-profile-startup.test.ts` publishing its port at
- * elapsedMs=50728 against this 45s budget, while the very next spawn in the same file was ready
- * in 1759ms and every other case passed. The wait is intrinsic — the spawned proxy IS the
- * assertion — so 45s was measuring runner contention rather than a hang.
+ * The cold start of the FIRST child in a process, on Windows only.
  *
- * 90s stays a bound rather than an absence of one, and it is gated on Windows so no other lane
- * loses the shorter signal.
+ * This exists because raising `SPAWN_BUDGET_MS` itself does not. 31 test files read that
+ * constant and nine hand it straight to `setDefaultTimeout`, so moving it from 45s to 90s
+ * halved the reporting speed of 339 Windows cases — codex-write-lock contention, the
+ * cross-process history-lock exclusions, the shim process cases — in order to fix one. Several
+ * of those files never spawn anything. Four more multiply it, and one chain of derivations
+ * reached 265s: long enough that a single hang on a Windows shard, which already runs about 25
+ * minutes, approaches the 30-minute job timeout and returns an opaque cancellation instead of a
+ * readable Bun timeout.
+ *
+ * ## Why the number
+ *
+ * Run 35118018849 (job 104895935554) measured the first proxy child in
+ * `tests/codex-integration/native-profile-startup.test.ts` publishing its port at
+ * elapsedMs=50728, while the next spawn in the same file was ready in 1759ms. Most of that
+ * window was the test's own doing: the child published a disposable port number through the
+ * production secret writer, which on Windows runs two `hardenSecretPath(..., required: true)`
+ * passes, each able to spawn PowerShell for SID resolution and several 30s-budgeted `icacls`
+ * calls. That publication is now a plain temp-file rename, so the ceremony is out of the
+ * measured window entirely, and the outlier went with it: across all six Windows shards of run
+ * 35141541461 every readiness wait in that file measured 2.0s to 4.9s, the first child
+ * included. 45s covers that with room to spare.
+ *
+ * This ceiling is kept anyway, for the part of the 50.7s that one run cannot rule out — a
+ * genuinely cold runner rather than ACL work. It costs nothing while the fix holds, because
+ * nothing approaches it. If a breach ever happens the phase timestamps in
+ * `tests/helpers/native-profile-startup-child.ts` name which phase spent the time, and this
+ * constant should be deleted rather than raised.
+ *
+ * ## Ablation
+ *
+ * The wait is intrinsic: the case that consumes this budget proves that a FRESH process gates
+ * native-main admission, so a real second process reaching a real port is the assertion, not
+ * setup for it. And the budget cannot hide a vacuous test, because none of the assertions
+ * depend on it. Ablate the behaviour under test — let `waitForNativeMainStartupGate` open
+ * admission before journal recovery settles — and the first `mainRequest` returns 200 where the
+ * case demands >= 400. That failure lands within milliseconds of readiness at any budget, 45s
+ * or 90s. A child that dies instead of listening is reported by `waitForPort` on
+ * `child.exitCode` without spending the budget at all.
+ *
+ * Consume it exactly once, for the readiness wait of a file's first child. A second consumer
+ * means the cold start is not what is being waited on.
  */
-function spawnBudgetMs(): number {
-  return process.platform === "win32" ? 90_000 : 45_000;
-}
+export const COLD_SPAWN_BUDGET_MS = process.platform === "win32" ? 90_000 : SPAWN_BUDGET_MS;
 
 /** Binds a real server or opens a real socket, including restart-and-reconnect flows. */
 export const SERVER_BUDGET_MS = 30_000;

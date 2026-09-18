@@ -1,5 +1,7 @@
 # Kiro Provider
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -21,6 +23,10 @@ reserves the private completion tool. Meta Muse 64-character MCP aliases live in
 `src/responses/muse-tool-name-alias.ts` and must not import that Kiro helper.
 
 ## Kiro Responses text controls
+
+Kiro shares the Responses freeform restoration boundary in
+`src/responses/apply-patch-envelope.ts`: contractual `input` wrappers are unwrapped, while alternate
+field and outer-fence recovery is limited to unambiguous bare `exec` and `apply_patch` bodies.
 
 Kiro refuses structured output and tolerates every other Responses `text` member. `text.format`
 of type `json_schema` or `json_object` is a contract the CodeWhisperer wire cannot honour, so the

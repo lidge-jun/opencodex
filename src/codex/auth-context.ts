@@ -97,20 +97,60 @@ function requestOwnedMainPinHasQuotaHeadroom(config: OcxConfig): boolean {
 }
 
 /**
- * Every thread keys as ITSELF, never as its parent (#4546, wp8).
+ * Whether a request carrying its OWN main credential still serves on main because the operator
+ * manually pinned it (#3166), split from the surrounding resolution so request preview can ask
+ * the identical question (#4850).
  *
- * The old rule preferred `x-codex-parent-thread-id`, so every child of one parent bound under
- * the RAW parent id -- one shared entry, unrelated to the root's own `app:HMAC(session, thread)`
- * binding -- and a grandchild keyed on its own parent landed on a key nobody had ever bound.
- * A child therefore started cold while its parent was being served warm somewhere, and no
- * child could hold a binding of its own.
+ * Exported for exactly one reason: two copies of this fence is how #4850 happened. Final
+ * authentication honoured the ownership boundary while request preview, computing its fence from
+ * recovery and drain state alone, still handed pool eligibility the default liveness probe and
+ * opened the physical `auth.json` twice per spawn. A predicate one caller can forget is a
+ * predicate the other caller will eventually disagree with.
  *
- * Now a request with a `thread-id` keys as HMAC(session ?? parent, thread). A root is
- * unchanged, a child gets an independent key, and a request naming only a parent rides the
- * parent's lane under HMAC(parent, parent) -- the same one-to-one lane it always had, minus
- * the caller-supplied identifier that used to sit in Pool state. Which requests produce no
- * key at all is unchanged. First placement for a child is what consults the family, through
- * `recordCodexThreadLineage` below and the placement hook in ./routing.
+ * Read-free by construction, which is what makes it usable on the fenced side. Every input is
+ * config, policy, or in-memory runtime state: the pin fields, the paused list, the cached quota
+ * score, and `callerMatchesObservedMain`, which compares HMAC digests against the observed
+ * credential record in `main-account-cache.ts`. Nothing here opens a file.
+ *
+ * `candidate` is the pin before the hard-lock question, because the caller still owes the
+ * pending-binding check that only final authentication can fail closed on.
+ */
+export function requestOwnedMainPinState(
+  headers: Headers,
+  config: OcxConfig,
+  policy: CodexAuthPolicyConfig,
+  requestScopedMainCredential: boolean,
+  fixedAccountId: string | undefined,
+): { candidate: boolean; preserve: boolean } {
+  const candidate = requestScopedMainCredential
+    && fixedAccountId === undefined
+    && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
+    && isEffectiveCodexAccountPinned(config)
+    && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
+    && requestOwnedMainPinHasQuotaHeadroom(config);
+  return {
+    candidate,
+    preserve: candidate && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy)),
+  };
+}
+
+/**
+ * One conversation tree keys as ONE cohort (#4780).
+ *
+ * Upstream keys its prompt cache on something the whole tree shares -- `prompt_cache_key` is the
+ * session id, or `{source}:{parent_thread_id}` for an internal session -- and one `AgentControl`
+ * whose `session_id` is the root thread's id is shared with every sub-agent. While the proxy
+ * keyed per thread, two requests could carry an identical `prompt_cache_key` and be served by
+ * different accounts, so the split member asserted a warm prefix that was deterministically cold
+ * on its account. Nothing failed; the prompt was replayed in full and the tokens burned.
+ *
+ * THIS IS NOT A REVERT OF #4546 wp8. wp8 fixed a different defect -- a child bound under the RAW
+ * parent id, an identity unrelated to the root's own binding, so siblings shared an entry the
+ * root was not on and a grandchild landed on a key nobody had bound. A cohort key has no such
+ * incoherence, because the root's own binding IS the cohort key. What wp8 additionally gave each
+ * thread, a binding of its own, is what this deliberately gives up.
+ *
+ * Which requests produce no key at all is unchanged, through both units.
  *
  * The derivation itself lives in ./lineage so a lineage record's conversation key and the key
  * the thread actually binds under can never drift apart.
@@ -816,19 +856,15 @@ export async function resolveCodexAuthContext(
     throw new CodexReserveUnavailableError();
   }
   const fixedAccountId = reserve ? MAIN_CODEX_ACCOUNT_ID : options.accountId;
-  const requestOwnedMainPinCandidate = requestScopedMainCredential
-    && fixedAccountId === undefined
-    && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
-    && isEffectiveCodexAccountPinned(config)
-    && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
-    && requestOwnedMainPinHasQuotaHeadroom(config);
+  const {
+    candidate: requestOwnedMainPinCandidate,
+    preserve: preserveRequestOwnedMainPin,
+  } = requestOwnedMainPinState(headers, config, policy, requestScopedMainCredential, fixedAccountId);
   // During an owned startup, equality cannot be established until recovery and the
   // memory-only policy binding finish. This read-only fence never probes a foreign home.
   if (policy.codexMainAccountHardLock === true && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
     throw new CodexMainProfileDrainingError();
   }
-  const preserveRequestOwnedMainPin = requestOwnedMainPinCandidate
-    && !(callerMatchesObservedMain(headers) && isMainAccountHardLocked(policy));
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
@@ -1385,6 +1421,7 @@ export function materializeCodexUpstreamAuth(
     if (!stored?.accessToken || !isMainAccountTokenLive()) {
       throw new CodexMainSubstitutionUnavailableError();
     }
+    selected.delete("chatgpt-account-id");
     selected.set("authorization", `Bearer ${stored.accessToken}`);
     if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
     observeSelectedMainCredential(stored, writer);
@@ -1462,6 +1499,7 @@ export async function materializeCodexUpstreamAuthAsync(
     ...(options.nativeMainRefreshDependencies ?? {}),
   });
   if (!stored?.accessToken) throw new CodexMainSubstitutionUnavailableError();
+  selected.delete("chatgpt-account-id");
   selected.set("authorization", `Bearer ${stored.accessToken}`);
   if (stored.chatgptAccountId) selected.set("chatgpt-account-id", stored.chatgptAccountId);
   observeSelectedMainCredential(stored, writer);

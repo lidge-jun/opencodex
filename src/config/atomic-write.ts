@@ -17,6 +17,8 @@ import {
   forgetEphemeralSecretPath,
   hardenSecretPath,
   hardenSecretPathAsync,
+  reattributeHardenedSecretPath,
+  windowsSecretAclReapPendingForPath,
 } from "../lib/windows-secret-acl";
 import {
   renameAtomicFile,
@@ -25,6 +27,26 @@ import {
 import { getConfigDir } from "./paths";
 
 let atomicSequence = 0;
+
+/**
+ * Whether this writer's Windows ACL branch applies.
+ *
+ * Deliberately a local override rather than the ACL module's
+ * `windowsSecretAclApplies()`. That one is flipped by many unrelated suites
+ * through `setPlatformForTests("win32")`, and honouring it here would make every
+ * such suite start running icacls against config writes on a POSIX runner. The
+ * gate a cost fix needs is one only the cost tests can open.
+ */
+let windowsHardeningOverride: boolean | null = null;
+
+function windowsHardeningApplies(): boolean {
+  return windowsHardeningOverride ?? process.platform === "win32";
+}
+
+/** Test seam: drive the Windows hardening branch on a POSIX runner. Null restores. */
+export function setWindowsHardeningForTests(enabled: boolean | null): void {
+  windowsHardeningOverride = enabled;
+}
 
 /** Shared process-wide suffix source for config-owned atomic sibling files. */
 export function nextAtomicTempSequence(): number {
@@ -114,6 +136,32 @@ function assertPrivateTempDescriptor(path: string, descriptor: number): void {
   }
 }
 
+/**
+ * Carry the harden applied to the empty temp across the content write.
+ *
+ * The temp is hardened before it holds a byte, and then `atomicWriteFile` hardens
+ * it again before the rename. The second call used to be a full icacls sequence
+ * rather than a memo hit, because the ACL memo's freshness component is
+ * `ctimeNs` and libuv reports that from the NTFS ChangeTime, which a data write
+ * moves. So every secret write on Windows applied the same three-step ACL twice:
+ * `/grant:r`, `/inheritance:r`, `/remove:g`, plus up to three `/findsid` probes,
+ * all of it to arrive at the ACL the file already had.
+ *
+ * It runs after the descriptor closes, not before, because Windows may not have
+ * published the new ChangeTime to a path query while the handle is still open;
+ * refreshing to a time the next reader will not see would leave the memo missing
+ * and change nothing. What licenses the shortcut is the identity assertion the
+ * caller makes immediately before the close, which proves this path resolves to
+ * the object the ACL was applied to, plus the object comparison inside
+ * `reattributeHardenedSecretPath`, which refuses to move the memo to a different
+ * object. Nothing is skipped on the strength of the pathname alone, and a
+ * refusal costs only the second full harden this is trying to avoid.
+ */
+function carryHardenAcrossContentWrite(path: string): void {
+  if (!windowsHardeningApplies()) return;
+  reattributeHardenedSecretPath(path);
+}
+
 function writePrivateTempFile(
   path: string,
   content: string,
@@ -123,16 +171,24 @@ function writePrivateTempFile(
   const descriptor = openSync(path, "wx", 0o600);
   onCreated();
   try {
-    if (process.platform === "win32") {
+    if (windowsHardeningApplies()) {
       hardenSecretPath(path, { required: true, timeoutMemoKey });
-    } else {
+    }
+    // Keyed on the REAL platform, not the override: on a POSIX host the mode is
+    // the boundary and `assertPrivateTempDescriptor` demands 0o600, which an
+    // ambient umask can otherwise take away from the open above.
+    if (process.platform !== "win32") {
       fchmodSync(descriptor, 0o600);
     }
     assertPrivateTempDescriptor(path, descriptor);
     writeFileSync(descriptor, content, { encoding: "utf-8" });
+    // Second assertion, after the content write: the object this path resolves
+    // to is still the object the ACL was applied to and the one we just wrote.
+    assertPrivateTempDescriptor(path, descriptor);
   } finally {
     closeSync(descriptor);
   }
+  carryHardenAcrossContentWrite(path);
 }
 
 async function writePrivateTempFileAsync(
@@ -144,16 +200,19 @@ async function writePrivateTempFileAsync(
   const descriptor = openSync(path, "wx", 0o600);
   onCreated();
   try {
-    if (process.platform === "win32") {
+    if (windowsHardeningApplies()) {
       await hardenSecretPathAsync(path, { required: true, timeoutMemoKey });
-    } else {
+    }
+    if (process.platform !== "win32") {
       fchmodSync(descriptor, 0o600);
     }
     assertPrivateTempDescriptor(path, descriptor);
     writeFileSync(descriptor, content, { encoding: "utf-8" });
+    assertPrivateTempDescriptor(path, descriptor);
   } finally {
     closeSync(descriptor);
   }
+  carryHardenAcrossContentWrite(path);
 }
 
 export function atomicWriteFile(
@@ -171,10 +230,15 @@ export function atomicWriteFile(
   const effective: AtomicWriteIO = io ?? {
     write: (tempPath, value) => writePrivateTempFile(tempPath, value, path, () => { ownsTemp = true; }),
     harden: tempPath => {
-      try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
-      if (process.platform === "win32") {
+      // No chmod on the Windows branch: there it sets the read-only ATTRIBUTE,
+      // which is not the secret boundary and is not what protects this file, and
+      // its ChangeTime bump is what used to invalidate the harden memo one line
+      // later. On POSIX the mode IS the boundary, so it stays.
+      if (windowsHardeningApplies()) {
         hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path });
+        return;
       }
+      try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
     },
     rename: renameAtomicFile,
     truncate: tempPath => truncateSync(tempPath, 0),
@@ -245,10 +309,12 @@ export async function atomicWriteFileAsync(
   const effective: AtomicWriteAsyncIO = io ?? {
     write: (tempPath, value) => writePrivateTempFileAsync(tempPath, value, path, () => { ownsTemp = true; }),
     harden: async tempPath => {
-      try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
-      if (process.platform === "win32") {
+      // Same reasoning as the synchronous writer above.
+      if (windowsHardeningApplies()) {
         await hardenSecretPathAsync(tempPath, { required: true, timeoutMemoKey: path });
+        return;
       }
+      try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
     },
     rename: renameAtomicFileAsync,
     truncate: target => truncateSync(target, 0),
@@ -258,9 +324,11 @@ export async function atomicWriteFileAsync(
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
+  let tempWasHardenedBeforeContent = false;
   try {
     if (io) ownsTemp = true;
     await effective.write(tmp, content);
+    tempWasHardenedBeforeContent = io === undefined && windowsHardeningApplies();
     await testSeam?.afterTempWrite?.(tmp);
     await effective.harden(tmp);
     hardened = true;
@@ -268,6 +336,13 @@ export async function atomicWriteFileAsync(
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     if (!ownsTemp) throw cause;
+    // The async ACL belt bounds the writer, but it is not evidence that icacls released this
+    // path. Leave the temp in the existing residual state instead of racing an unlink against a
+    // live Windows handle. The default Windows writer hardens before writing secret bytes; a
+    // failure inside that initial harden leaves its still-empty temp behind.
+    if (windowsSecretAclReapPendingForPath(tmp)) {
+      throw new AtomicWriteResidualTempError(tmp, tempWasHardenedBeforeContent, { cause });
+    }
     let scrubbed = false;
     try {
       await effective.truncate(tmp);

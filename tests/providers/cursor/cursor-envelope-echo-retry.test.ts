@@ -7,7 +7,18 @@ import {
   CursorMidstreamEchoObserver,
   CursorRoutingCommentarySniffer,
   MAX_MIDSTREAM_SCAN_LENGTH,
+  stripAssistantEchoedToolEnvelope,
 } from "../../../src/adapters/cursor/envelope-echo";
+import {
+  CURSOR_ENVELOPE_ECHO_REMINT_MAX,
+  clearCursorEnvelopeEchoRemintForTests,
+  clearCursorIncompleteToolRemintForTests,
+  clearCursorThreadContinuityForTests,
+  cursorEnvelopeEchoRemintScopeKey,
+  lookupCursorThreadConversation,
+  recordCursorEnvelopeEchoRemint,
+  recordCursorIncompleteToolRemint,
+} from "../../../src/adapters/cursor/thread-continuity";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
@@ -404,3 +415,100 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(runRequests[1]?.echoRetryContinuationText).toBe(CURSOR_ROUTING_COMMENTARY_RETRY_TEXT);
   });
 });
+
+describe("stripAssistantEchoedToolEnvelope", () => {
+  test("keeps leading commentary and drops the envelope that follows it", () => {
+    expect(stripAssistantEchoedToolEnvelope(
+      "20-24 pages are on the board.\n[Tool Result]\n[tool_result]\nname: Write\noutput:\nwrote it\n",
+    )).toBe("20-24 pages are on the board.");
+  });
+
+  test("keeps a real answer written after the echo", () => {
+    // The whole point of bounding the strip at the blank line: truncating to the end of the
+    // message would have discarded this answer from every later replay.
+    expect(stripAssistantEchoedToolEnvelope(
+      "Checking now.\n[Tool Result]\nname: Read\noutput: 41 rows\n\nThe table has 41 rows.",
+    )).toBe("Checking now.\n\nThe table has 41 rows.");
+  });
+
+  test("does not strip an inline mention of the marker", () => {
+    const source = "The string [Tool Result] appeared in the transcript I reviewed.";
+    expect(stripAssistantEchoedToolEnvelope(source)).toBe(source);
+  });
+
+  test("drops a prefix-only envelope to empty text", () => {
+    expect(stripAssistantEchoedToolEnvelope("[Tool Result]\n[tool_result]\ncall_id: 1\n")).toBe("");
+  });
+});
+
+describe("Cursor midstream envelope-echo remint", () => {
+  test("rotates the conversation after grok-4.6 copies the envelope mid-message", async () => {
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+    const seen: string[] = [];
+    let attempts = 0;
+    const factory = () => ({
+      async *run(request: CursorRunRequest) {
+        seen.push(request.conversationId);
+        attempts += 1;
+        if (attempts === 1) {
+          yield { type: "text", text: "I'll write the import script now.\n" } satisfies CursorServerMessage;
+          yield { type: "text", text: "[Tool Result]\nname: Write\noutput: ok\n" } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+          return;
+        }
+        yield { type: "text", text: "NEXT" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+
+    const threadId = "midstream-echo-remint-thread";
+    const body = {
+      ...toolResultBody("cursor/grok-4.6"),
+      _clientThreadId: threadId,
+      _cursorIdentityScope: "acct-midstream-echo",
+      _cursorConversationId: undefined,
+    } as OcxParsedRequest;
+
+    const first: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => first.push(event));
+    // The echo already reached the client: it is not withheld, only recovered from.
+    expect(first.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join(""))
+      .toContain("[Tool Result]");
+    expect(body._cursorConversationId).toBeDefined();
+    expect(body._cursorConversationId).not.toBe(seen[0]);
+    expect(lookupCursorThreadConversation(threadId, "acct-midstream-echo")).toBe(body._cursorConversationId);
+
+    const second: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => second.push(event));
+    expect(attempts).toBe(2);
+    expect(seen[1]).toBe(body._cursorConversationId);
+    expect(second.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("NEXT");
+
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+  });
+
+  test("the echo allowance is bounded and independent of the incomplete-tool allowance", () => {
+    clearCursorEnvelopeEchoRemintForTests();
+    clearCursorIncompleteToolRemintForTests();
+    const scopeKey = cursorEnvelopeEchoRemintScopeKey("thread-echo-budget", "acct-echo-budget");
+    expect(scopeKey).not.toBeNull();
+
+    // Bounded: an endlessly echoing model must not rotate the conversation on every turn.
+    for (let attempt = 0; attempt < CURSOR_ENVELOPE_ECHO_REMINT_MAX; attempt++) {
+      expect(recordCursorEnvelopeEchoRemint(scopeKey!)).toBe(true);
+    }
+    expect(recordCursorEnvelopeEchoRemint(scopeKey!)).toBe(false);
+
+    // Independent: spending the echo budget leaves incomplete-tool recovery its full allowance,
+    // so a cheap repeated failure cannot starve the rarer structural one.
+    expect(recordCursorIncompleteToolRemint(scopeKey!)).toBe(true);
+
+    clearCursorEnvelopeEchoRemintForTests();
+    clearCursorIncompleteToolRemintForTests();
+  });
+});
+

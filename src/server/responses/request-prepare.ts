@@ -36,6 +36,7 @@ import {
   previewCodexPoolLineage,
   applyCodexAuthContextToProvider,
   hasCallerCodexBearer,
+  requestOwnedMainPinState,
 } from "../../codex/auth-context";
 import {
   copyPreviousResponseReplayProvenance,
@@ -104,7 +105,9 @@ import { hasUnmappedRoutedCustomToolOutput } from "../../responses/custom-tool-c
 import { PROVIDER_OWNED_CONTINUATION_WIRES, resolvedAdapterWire } from "../../responses/continuation-ownership";
 import {
   isCodexReserveHelperUnsupported,
+  isCodexReserveOptInMissing,
   CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE,
+  CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE,
 } from "../../codex/loopback-target";
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
 import { nativeContextLimits } from "../../codex/catalog";
@@ -483,11 +486,37 @@ export async function prepareResponsesRequest(
   const nativeMainReadsForbidden = previewRequestScopedMainCredential
     || nativeMainRecoveryBlocked
     || previewSelectionAdmission?.mainProfileDraining === true;
+  // The liveness answer final authentication gives its own selection options, computed from the
+  // same shared predicate so the two cannot drift apart again (#4850). `fixedAccountId` is
+  // mirrored through `route.codexAccountId` because that is literally what core-auth.ts passes
+  // as `accountId`. A reserve-authorized request is the one input where the two can differ, and
+  // it differs harmlessly: reserve plus a caller bearer is served as main either way, which is
+  // the answer this produces.
+  const previewRequestOwnedMainPin = requestOwnedMainPinState(
+    previewAuthHeaders,
+    config,
+    options.codexAuthPolicy ?? config,
+    previewRequestScopedMainCredential,
+    route.codexAccountId,
+  ).preserve;
   // Deliberately NOT fenced on ownership: final auth derives `nativeMainSelectionOnly` from the
   // drain alone, and adding a term here would diverge from it in the other direction.
   const previewSelectionOptions = {
     nativeMainSelectionOnly: !nativeMainRecoveryBlocked
       && previewSelectionAdmission?.mainProfileDraining === true,
+    // Pool eligibility was the last part of preview still outside the fence (#4850). Without
+    // this seam `codexAccountUnusableReason` takes its default branch into
+    // `isMainAccountCredentialUsable()`, which opens the physical `auth.json` -- twice per
+    // spawn, because subagent fallback re-enters the preview through the callback below.
+    //
+    // Scoped to ownership, and carrying final auth's value rather than a constant, because
+    // preview exists to predict final auth. Under an effective main pin the request really is
+    // served by its own main credential, so main must stay eligible; without the pin final auth
+    // scores main `main_credential_unavailable` and drops it, so preview has to drop it too. A
+    // hardcoded `true` would be wrong in the second case and `false` in the first.
+    isMainAccountTokenLive: previewRequestScopedMainCredential
+      ? () => previewRequestOwnedMainPin
+      : undefined,
     // Preview must reach the same answer as the final resolution, including the uploaded-file
     // retention (#4778): a preview that reported a quota move the request will not make would
     // hand subagent fallback a different account than the one that actually serves.
@@ -711,9 +740,23 @@ export async function prepareResponsesRequest(
                 route,
                 options,
               ).requestScopedMainCredential && hasCallerCodexBearer(recoveryAuthHeaders);
+              // Recovery's own answer to the same question, against the route it may have moved
+              // to. Reconstructing the options without it is what left pool eligibility outside
+              // the fence on the first preview (#4850); recovery re-previews, so it would leave
+              // the same two reads on the one path that runs after decryption.
+              const recoveryRequestOwnedMainPin = requestOwnedMainPinState(
+                recoveryAuthHeaders,
+                config,
+                options.codexAuthPolicy ?? config,
+                recoveryRequestScopedMainCredential,
+                route.codexAccountId,
+              ).preserve;
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
+                isMainAccountTokenLive: recoveryRequestScopedMainCredential
+                  ? () => recoveryRequestOwnedMainPin
+                  : undefined,
                 // #4778, same reason as `previewSelectionOptions` above: this preview decides
                 // which account subagent fallback scores against, and final auth passes the
                 // retention. Recovery is exactly where the two could diverge -- it re-previews
@@ -934,6 +977,27 @@ export async function prepareResponsesRequest(
     && isCodexReserveHelperUnsupported(options.codexAuthPolicy ?? config, route.modelId,
       options.admission, options.visionDescribeTerminal === true)) {
     return formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE);
+  }
+  // #4940: the opt-in is off, so every Reserve affordance in this process is inert -- no catalog
+  // row, no main-credential substitution, no authorization handshake, and no `luna-reserve` header
+  // on the send. Forwarding `gpt-reserve` as an ordinary native model therefore buys nothing but a
+  // 429 "The usage limit has been reached", which names neither the real cause nor the setting the
+  // operator would have to change. Refuse here instead, on the same terms and in the same place as
+  // the helper refusal above: after alias/combo resolution, before auth, host-circuit budget or any
+  // upstream byte.
+  //
+  // Two narrowings beyond the predicate, both about not answering a question this refusal cannot
+  // answer correctly. A terminal vision/search helper is excluded because enabling the opt-in would
+  // not make it work -- it would produce the helper refusal above instead, so telling that caller to
+  // enable the flag is advice that does not hold. Non-native inbound wires are excluded because a
+  // `gpt-reserve` selector reaching us over Chat or Anthropic Messages is an operator-authored
+  // route (a `claudeCode.modelMap` entry, say), not a Codex client that was forced onto Reserve by
+  // its own usage snapshot, and that route keeps whatever behavior it has today.
+  if (inboundWire === "responses"
+    && options.visionDescribeTerminal !== true
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    && isCodexReserveOptInMissing(options.codexAuthPolicy ?? config, route.modelId, options.admission)) {
+    return formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE);
   }
   // Refuse an input that cannot plausibly fit the model context window before spending auth,
   // circuit budget, or upstream bandwidth on a turn the provider will reject anyway (#1412).

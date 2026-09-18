@@ -395,7 +395,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
+opencodex ships 95 built-in presets: 79 key-based, 12 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -428,6 +428,15 @@ token group allows (`gpt-5.5` and `gpt-5.1-codex` are seeded). Register at
 pins the row near the top of the Add provider picker and marks it as a sponsor, and nothing else about
 routing or defaults changes.
 
+**Opper** is the EU-hosted AI gateway from Opper AI (Stockholm): one key (created at
+[platform.opper.ai](https://platform.opper.ai)) and one OpenAI-compatible endpoint in front of 700+
+models from 30+ providers. Bare model ids such as `claude-sonnet-4-6` or `gpt-5.5` are *pools*: Opper
+picks the provider and region per request, so the seeded ids stay valid as routes come and go. A
+`vendor/model` id (`anthropic/claude-sonnet-4-6`, `aws/claude-sonnet-4-6-eu`) pins one route instead.
+The catalogue is discovered live from `/v3/compat/models` with your key; the public list, including
+region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper is also a
+[models.dev](https://models.dev) provider (`opper`), which uses the same bare pool ids.
+
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
@@ -456,6 +465,7 @@ routing or defaults changes.
 | Meta Muse Code (CLI credential) | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -475,6 +485,7 @@ routing or defaults changes.
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| Opper | `https://api.opper.ai/v3/compat` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
@@ -605,6 +616,13 @@ Both modes route to `https://api.orcarouter.ai/v1` and discover the public live 
 whether Codex offers image attachments. Because the catalog itself is public, manual key setup
 reports validation as unknown instead of accepting that response as proof that the key works.
 
+During OrcaRouter browser sign-in (`ocx login orcarouter-oauth`), a successful key-exchange
+response body must be valid UTF-8 JSON no larger than 64 KiB. The request's existing 30-second
+budget covers both the response headers and the full body; oversized or malformed bodies are
+rejected before the key is saved. These limits apply only to the login key exchange, not inference
+request payloads. Scope validation is unchanged: an omitted `scope` is allowed, while an explicitly
+invalid `scope` is rejected.
+
 For a one-origin self-hosted deployment, set the shared origin before the first PKCE login; the saved
 inference URL is derived from the same origin:
 
@@ -706,6 +724,19 @@ keeps only rows whose architecture produces text, excluding embedding and image-
 It preserves slash-containing native ids plus reported context and input-modality metadata, and caps
 discovery at 512 KiB and 512 raw rows. Dedicated deployment hosts are out of scope. Create keys in
 [Nebius Token Factory](https://tokenfactory.nebius.com).
+
+**Crusoe discovery.** The key-based preset uses the `openai-chat` adapter and sends its Bearer key
+only to Crusoe's fixed Serverless Inference host. `/v1/models` rejects unauthenticated requests with
+401, so a successful list response counts as key validation. Discovery preserves slash-delimited
+native ids such as `zai-org/GLM-5.3` and `moonshotai/Kimi-K2.6` exactly as Crusoe returns them and is
+capped at 256 KiB and 256 raw rows. Rows are kept only when they report `is_public: true` and a text or multimodal `architecture.modality`, which excludes account-private deployments and any embedding or media rows. Reasoning models return their thinking in the Chat Completions
+`reasoning` field, which the adapter reads. Only `openai/gpt-oss-120b` accepts a `reasoning_effort`
+ladder (`low`, `medium`, `high`); the other reasoning models treat the field as an on/off toggle, so
+the preset declares no provider-wide effort ladder and no provider-wide parallel tool calls. Rate
+limits apply per project and per model (429 when exceeded, 503 while a shared deployment scales), and
+new accounts start with $5 of free credits. Create a key in the
+[Crusoe Cloud console](https://console.crusoecloud.com) under Intelligence Foundry, Inference.
+
 **DigitalOcean discovery.** The preset uses a model access key against the fixed shared Serverless
 Inference host and intersects the authenticated `/v1/models` response with DigitalOcean's
 docs-backed Chat Completions allowlist. Unknown, Responses-only, embedding, and media-generation

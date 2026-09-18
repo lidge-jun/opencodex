@@ -4,7 +4,8 @@ import { codexAccountLogLabel } from "./account-label";
 import { isCodexAccountPaused } from "./account-pause";
 import { clearCodexAccountPin, pinnedCodexAccountId } from "./account-priority";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
-import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
+import { markAccountNeedsReauth } from "./account-runtime-state";
+import { codexAccountPinDrainReason } from "./routing/pin-drain";
 import { POOL_KEY_CODEX, notePoolRotationFailure } from "./pool-rotation";
 import { getAccountQuota, isRetiredCodexSparkModel } from "./quota";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
@@ -202,6 +203,8 @@ export {
   getEffectiveActiveCodexAccountId,
   isEffectiveCodexAccountPinned,
 } from "./routing/active-account";
+export { codexAccountPinDrainReason } from "./routing/pin-drain";
+export type { CodexPinDrainReason } from "./routing/pin-drain";
 function hasConfiguredPoolAccount(
   config: OcxConfig,
   accountId: string,
@@ -392,7 +395,14 @@ function pickLineageServingAccount(
   selectionOptions?: CodexAccountUsabilityOptions,
   modelId?: string,
 ): { accountId: string; reason: CodexAffinityReason } | null {
-  if (lineage.parentConversationKey !== undefined) {
+  // Cohort keying (#4780) makes a tree share one key, so for a same-session family the parent's
+  // key IS this request's and the lookup below would re-ask a question the caller already
+  // answered by finding no binding entry. What remains is the case cohort keying cannot unify:
+  // a session-less chain whose parent this scope has not recorded, where the keys differ.
+  if (
+    lineage.parentConversationKey !== undefined
+    && lineage.parentConversationKey !== lineage.conversationKey
+  ) {
     const parent = lineageServingAccountId(
       lineage.parentConversationKey, config, now, quotaScope, selectionOptions, modelId,
     );
@@ -455,19 +465,7 @@ function releaseDrainedCodexAccountPin(
 ): void {
   const pinned = pinnedCodexAccountId(config);
   if (pinned === undefined) return;
-  const knownUnavailable = isAccountNeedsReauth(pinned) || isCodexAccountPaused(config, pinned);
-  if (knownUnavailable) {
-    clearCodexAccountPin(config);
-    saveConfigPreservingClaudeCode(config);
-    return;
-  }
-  // Temporary drain deliberately forbids every native-main read. A pin on main
-  // cannot be classified by credential liveness or quota until the fenced profile
-  // is readable. Cached reauth and configured pause state were handled above.
-  if (pinned === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.nativeMainSelectionOnly === true) return;
-  const drained = !isCodexAccountUsable(config, pinned, selectionOptions)
-    || !hasCodexQuotaHeadroom(config, pinned, selectionOptions, now);
-  if (!drained) return;
+  if (codexAccountPinDrainReason(config, pinned, selectionOptions, now) === undefined) return;
   clearCodexAccountPin(config);
   saveConfigPreservingClaudeCode(config);
 }

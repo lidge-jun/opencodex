@@ -4,8 +4,11 @@ import {
   resetAtToMs,
 } from "../quota";
 import { isThirtyDayOnlyCodexPlan } from "../plan";
+import { TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../quota-types";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeGrant } from "./thread-affinity";
+
+export { TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../quota-types";
 
 export const CODEX_DEFAULT_QUOTA_COOLDOWN_MS = 60_000;
 export const CODEX_MAX_QUOTA_COOLDOWN_MS = 24 * 60 * 60_000;
@@ -25,14 +28,6 @@ export const CODEX_MAX_QUOTA_AVOID_MS = 6 * 60 * 60_000;
 /** Minimum gap between probe leases for one cooled-down account. */
 export const CODEX_QUOTA_PROBE_INTERVAL_MS = 5 * 60_000;
 export const CODEX_FAILURE_WINDOW_MS = 5 * 60_000;
-/**
- * How recently a 100% burst reading must have been OBSERVED to exclude an account when it
- * carries no reset timestamp (#3425). Deliberately far tighter than the 6h disk-hydration
- * horizon in `quota.ts`: shorter than any plausible five-hour burst window, so a persisted
- * reading can never strand a recovered account, and long enough that a snapshot taken at
- * admission is still fresh when selection reads it.
- */
-export const TERMINAL_SHORT_WINDOW_FRESHNESS_MS = 5 * 60_000;
 /** How long a transient failure keeps the account out of pool selection. */
 export const CODEX_TRANSIENT_SOFT_AVOID_MS = 30_000;
 export const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [

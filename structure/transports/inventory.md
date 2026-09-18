@@ -1,5 +1,9 @@
 # Transport Inventory
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The existing Responses transport is divided by responsibility in the
 [core module ownership](responses.md#core-module-ownership). This surface retains its existing behavior.
 
@@ -36,7 +40,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | OAuth account failover | `src/oauth/generic-account-failover.ts`, `src/oauth/anthropic-routing.ts` | Reactive pre-output 429 recovery is presence-driven with 2+ eligible accounts. Pool and `oauthAccountFailover` flags govern proactive routing, not the reactive retry: a disabled Anthropic pool recovers through quota ordering rather than its dormant strategy, and a per-provider `enabled` beats the global default in either direction. |
 | OAuth login callback (inbound) | `src/oauth/callback-server.ts` | Every response, including non-callback 404s, closes its connection so a pooled socket cannot deliver a later login to a retired flow on the same callback port. |
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
-| Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts`, `src/providers/registry.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. Provider-scoped hints fill capabilities omitted by live rosters; OpenCode Go's `deepseek-v4.1-flash` keeps its 1,048,576-token context window. Codex quota DTOs suppress retired Spark evidence under the [OpenAI scope contract](../providers/openai-tiers.md#public-provider-contract), retaining ordinary custom windows. |
+| Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts`, `src/providers/registry.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. Provider-scoped hints fill capabilities omitted by live rosters; OpenCode Go's `deepseek-v4.1-flash` keeps its 1,048,576-token context window. The fixed-key Opper preset uses the shared OpenAI Chat adapter at `https://api.opper.ai/v3/compat`, discovers models through its conventional authenticated `/models` path, preserves an older same-named custom destination, and falls back to bare pool ids while passing vendor-prefixed ids through unchanged. Codex quota DTOs suppress retired Spark evidence under the [OpenAI scope contract](../providers/openai-tiers.md#public-provider-contract), retaining ordinary custom windows. |
 
 The registry's first-party `deepseek-flash` row declares native `text` and `image` input, so image
 requests bypass the vision sidecar by default; explicit `noVisionModels` or text-only declarations
@@ -71,12 +75,50 @@ not cap process RSS or the conversation messages accumulated across completed me
 opaque metadata, normal tool passthrough, coalesced-tail accounting, and consumer cancellation on
 both execution paths.
 
+## Bounded response ingestion and OrcaRouter login
+
+`src/lib/bounded-body.ts` owns `readBoundedResponseBytes`: it consumes the original response
+body without cloning or teeing and retains at most the caller's `maxBytes`. An exact-cap body
+requires EOF to succeed; observing an additional byte discards the retained prefix, returns an
+empty byte view with `oversized: true`, and attempts to cancel the reader. The cap measures raw
+bytes exposed by `response.body`, not characters, `Content-Length`, or total process memory.
+The caller supplies the wall-clock deadline through `signal`; an inactivity deadline exists only
+when explicitly requested.
+
+An already-aborted signal attempts to cancel the original body before any reader is attached,
+then rejects with the same reason by identity. An abort during consumption likewise preserves
+the signal reason. Cancellation is best-effort: synchronous throws and rejected cancellation
+promises are observed, and a cancellation that never settles cannot extend the read's deadline.
+After an attached read, cleanup removes the abort listener, cancels any inactivity timer, and
+attempts to release the reader lock. `tests/server/bounded-body.test.ts` covers these paths.
+
+`src/oauth/orcarouter.ts` applies this reader to a successful `POST /api/v1/auth/keys` response
+with a 65,536-byte (64 KiB) ceiling. One 30-second signal, combined with caller cancellation,
+covers both fetching the response headers and consuming the body; no separate body or inactivity
+budget is started. Only a complete body within the cap is decoded with fatal UTF-8 and parsed
+as JSON before key, user identity, and optional scope validation can return credentials.
+
+Oversized bodies fail with a fixed size-limit error. Malformed UTF-8, malformed JSON, and ordinary
+body-read failures share a fixed invalid-JSON error without upstream text or an error cause.
+Body-phase aborts preserve the combined signal's reason by identity; fetch-phase timeout errors
+retain the existing network-error wrapper. Non-success HTTP responses retain status-only errors
+and do not enter this reader. These limits govern login key exchange, not inference payloads or
+other providers' token grants. `tests/providers/orcarouter-provider.test.ts` covers the login
+contract with synthetic responses and local callback fixtures, not live provider authentication.
+
+Other raw-byte consumers of this reader supply their own byte and deadline budgets and inherit the
+same best-effort cancellation behavior. `src/server/responses/fetch-helpers.ts` keeps its own
+transport budgets, so the 64 KiB login ceiling never caps Responses inference payloads. Because a
+rejected body returns no credentials, an oversized, malformed, or aborted key response ends the
+login before credential persistence or dashboard convergence, leaving only the fixed size-limit or
+invalid-JSON message described above.
+
 ## Provider diagnostic outbound safety
 
 Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
 Direct HTTP(S) resolves once and pins the validated address; HTTPS preserves the original Host/SNI
-and always verifies certificates. Proxy-configured requests stay on Bun fetch so HTTP(S)_PROXY,
-ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies successful local DNS answers, but
+and always verifies certificates. HTTP(S)-proxy requests stay on Bun fetch; configured SOCKS5
+requests use the explicit tunnel fetch. Both retain NO_PROXY semantics. The wrapper classifies successful local DNS answers, but
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
@@ -86,17 +128,23 @@ still rejects). The IANA benchmark range (198.18/15 and its IPv4-mapped IPv6 spe
 whenever any outbound proxy applies to the host, because the range itself marks the answer synthetic.
 Mihomo's default IPv6 fake-IP range (fdfe:dcba:9876::/48) is ULA and carries no such mark, so it is
 admitted for fixed canonical destinations under the transparent TUN exception, or when the proxy variable that matches the URL scheme is set (HTTPS_PROXY for https:,
-HTTP_PROXY for http:; ALL_PROXY is not consulted because Bun fetch does not honour it), the host is
-not in NO_PROXY, and the request is then bound to that proxy through Bun's explicit `proxy` option
+HTTP_PROXY for http:; a SOCKS5 ALL_PROXY takes precedence through the configured wrapper), the host is
+not in NO_PROXY, and the request is then bound to that same proxy through the explicit `proxy` option
 rather than environment inference. Both gates live in the outbound wrapper, not in classification:
 `classifyIpv6` and config-time validation (`providerDestinationResolvedError`) never admit the
 ULA, so provider save-time checks are unaffected (#3462).
 
-Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
-does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
+Both paths reject redirects and expose only credential-stripped final-address guidance. The shared
+SOCKS5 fetch also carries ordinary request bodies and response streams, while redirect decisions
+remain with their request owners.
 Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
 redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
 executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
+
+Crusoe model discovery is one fixed canonical destination on this path. It sends a Bearer key only
+to `https://api.inference.crusoecloud.com/v1/models`, rejects redirects, and applies the registry's
+256 KiB response and 256-row ceilings before catalog admission. A same-named custom destination
+does not inherit this policy.
 
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
@@ -152,3 +200,42 @@ Translated audio/file admission follows the [final-adapter input contract](../ad
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+## Model-family-aware OAuth headroom
+
+`src/oauth/account-quota-rank.ts` ranks Antigravity custom windows for the requested
+Gemini or Claude family, including GPT-OSS in the Claude family. An unknown model
+retains all-window ranking; absent matching evidence retains the existing unranked behavior.
+`src/server/responses/request-transport.ts` passes the routed model at initial selection.
+The passthrough, adapter, continuation, sidecar and run-turn execution owners pass
+the same routed model during account rotation, without bypassing their send-budget
+admission or account-snapshot pairing. The forwarding contract is covered in
+`tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
+
+## SOCKS5 dispatch boundary
+
+`src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;
+the compatibility config facade does not own a second activation path.
+`src/server/responses/fetch-helpers.ts` routes the built-in HTTP executor through
+configured outbound fetch, preserving physical-send admission and dispatch override.
+Native WebSocket selection stays on HTTP SSE while SOCKS5 is configured.
+Proxy-selected discovery peers remain unpinnable, and private destinations still
+require explicit private-network permission plus NO_PROXY before direct transport.
+
+The tunnel reader keeps incomplete framing separate from queued socket bytes,
+waits for new input, and caps headers even when the terminating delimiter arrives
+in the same chunk. Cancellation removes the exact queued waiter; socket errors
+remain errors on later reads rather than turning into clean EOF. Buffered body
+reads pause the socket at the local high-water mark, and upload errors are observed
+before the response reader takes ownership. `tests/lib/socks5-fetch.test.ts` covers
+fragmented framing, header limits and explicit-route snapshot preservation.
+Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
+honor them and must not silently downgrade the provider contract.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

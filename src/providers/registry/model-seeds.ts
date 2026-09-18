@@ -437,20 +437,42 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // Coding Plan: the products use different exact allowlists and different base URLs.
 // Evidence: https://help.aliyun.com/en/model-studio/token-plan-personal-overview
 //           https://help.aliyun.com/en/model-studio/token-plan-quickstart
+// 260909 refresh, re-probed against the live gateway (both regions, both tiers):
+// https://github.com/oliver-mee/alibaba-token-plan-wiki (machine-readable catalog).
+// glm-5.3 / glm-5.3-flash removed from both Token Plan catalogs: they exist on Z.AI
+// endpoints but the Token Plan gateway has never served either id (the 260826 seed
+// propagated them across every GLM-carrying catalog; a selected row 404s).
+// The Beijing preset keeps the Personal Edition subset; non-chat ids (audio/image/
+// video families) stay out: they answer only on async endpoints openai-chat cannot
+// reach. deepseek-v4-pro-0813 is callable but NOT listed by /models, which is the
+// reason liveModels must stay false for this provider. deepseek-v4.1-flash is the
+// 260910 DeepSeek rename row: listed on /models on both tiers and regions from 260915,
+// hybrid thinking, vision via user message and tool result, json_object but not
+// json_schema (see noJsonSchemaModels on the entries).
+// Beijing serves the Personal Edition, so this is the Personal-tier roster probed
+// 260909 (a strict subset of Team). deepseek-v4-pro-0813 stays out of the Beijing
+// entry: its callability is only proven on Team keys, and no Personal key has been
+// shown to reach it. The Beijing entry also shares the intl maps, so it carries a
+// few orphan keys (kimi/glm-5/MiniMax rows); harmless, and one map beats two
+// drifting ones.
 export const ALIBABA_TOKEN_PLAN_MODELS = [
-  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-  "glm-5.3", "glm-5.3-flash", "glm-5.2", 
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2",
 ];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
-  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
 ];
 export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "qwen3.8-max": ["text", "image"],
-  "qwen3.7-max": ["text", "image"],
+  "qwen3.8-flash": ["text", "image"],
+  "qwen3.7-max": ["text"],
   "qwen3.7-plus": ["text", "image"],
   "qwen3.6-flash": ["text", "image"],
-  "glm-5.3": ["text"],
-  "glm-5.3-flash": ["text", "image"],
+  "deepseek-v4-pro": ["text"],
+  "deepseek-v4-pro-0813": ["text"],
+  "deepseek-v4-flash-0731": ["text"],
+  // Vision probed on the plan gateway 260915 (user message and tool result, both 200).
+  "deepseek-v4.1-flash": ["text", "image"],
   "glm-5.2": ["text"],
 };
 
@@ -458,15 +480,18 @@ export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 // Multi-vendor lineup distinct from Beijing — includes DeepSeek V4 flash, Kimi K2.7, MiniMax.
 // Evidence: https://www.alibabacloud.com/help/en/model-studio/token-plan-overview
 //           https://qwencloud.com/pricing/token-plan (qwen3.8 metadata)
+// The Team Edition roster (Singapore), verified identical to the CN Team set on 260909.
+// deepseek-v4-pro is restored: it remains callable on the plan gateway (probed 260909,
+// listed on /models on both regions) after being dropped as "retired" upstream.
 export const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
-  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-flash", "deepseek-v3.2",
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v3.2",
   "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
-  "glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
+  "glm-5.2", "glm-5.1", "glm-5",
   "MiniMax-M2.5",
 ];
 export const ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS = [
-  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
 ];
 
 // 260722 Tencent Cloud Coding Plan. The plan's model set is explicitly dynamic; these are the
@@ -543,23 +568,48 @@ export const VOLCENGINE_PLAN_TEXT_ONLY_MODELS = [
   "doubao-seed-2.0-pro",
 ];
 export const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
-  "qwen3.8-max": ["text", "image"],
-  "qwen3.7-max": ["text", "image"],
-  "qwen3.7-plus": ["text", "image"],
+  ...ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
   "qwen3.6-plus": ["text", "image"],
-  "qwen3.6-flash": ["text", "image"],
   "deepseek-v4-flash": ["text"],
   "deepseek-v3.2": ["text"],
   "kimi-k2.7-code": ["text", "image"],
   "kimi-k2.6": ["text", "image"],
   "kimi-k2.5": ["text", "image"],
-  "glm-5.3": ["text"],
-  "glm-5.3-flash": ["text", "image"],
-  "glm-5.2": ["text"],
   "glm-5.1": ["text"],
   "glm-5": ["text"],
   "MiniMax-M2.5": ["text"],
 };
+
+// Shared Token Plan metadata (260909 gateway probes; output ceilings are max_tokens
+// boundary probes: accept at N, reject at N+1).
+export const QWEN38_FAMILY = ["qwen3.8-max", "qwen3.8-flash"];
+export const ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS: Record<string, number> = {
+  "qwen3.8-max": 1_000_000, "qwen3.8-flash": 1_000_000, "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000,
+  "qwen3.6-plus": 1_000_000, "qwen3.6-flash": 1_000_000,
+  "deepseek-v4-pro": 1_000_000, "deepseek-v4-pro-0813": 1_000_000, "deepseek-v4-flash": 1_000_000,
+  "deepseek-v4-flash-0731": 1_000_000, "deepseek-v4.1-flash": 1_000_000, "deepseek-v3.2": 131_072,
+  "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 262_144,
+  "glm-5.2": 1_000_000, "glm-5.1": 202_752, "glm-5": 202_752,
+  "MiniMax-M2.5": 196_608,
+};
+export const ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "qwen3.8-max": 131_072, "qwen3.8-flash": 131_072, "qwen3.7-max": 131_072, "qwen3.7-plus": 131_072,
+  "qwen3.6-plus": 65_536, "qwen3.6-flash": 65_536,
+  "deepseek-v4-pro": 393_216, "deepseek-v4-pro-0813": 393_216, "deepseek-v4-flash": 393_216,
+  "deepseek-v4-flash-0731": 393_216, "deepseek-v4.1-flash": 393_216, "deepseek-v3.2": 65_536,
+  "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 98_304,
+  "glm-5.2": 131_072, "glm-5.1": 128_000, "glm-5": 16_384,
+  "MiniMax-M2.5": 32_768,
+};
+export const ALIBABA_TOKEN_PLAN_NO_VISION = [
+  "qwen3.7-max", "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash",
+  "deepseek-v4-flash-0731", "deepseek-v3.2", "glm-5.2", "glm-5.1", "glm-5", "MiniMax-M2.5",
+];
+export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731",
+  "deepseek-v4.1-flash", "glm-5.2",
+];
 
 // 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
 // entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
@@ -909,4 +959,48 @@ export const CLINE_PASS_MODALITY_KNOWN_MODELS = CLINE_PASS_MODELS.filter(id => i
 export const CLINE_PASS_TEXT_ONLY_MODELS = CLINE_PASS_MODALITY_KNOWN_MODELS.filter(id => !CLINE_PASS_IMAGE_MODELS.has(id));
 export const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   CLINE_PASS_MODALITY_KNOWN_MODELS.map(id => [id, CLINE_PASS_IMAGE_MODELS.has(id) ? ["text", "image"] : ["text"]]),
+);
+
+// Opper seed: bare *pool* names. A pool is every provider Opper serves that model through; Opper
+// picks the route per request. Each name is the `.model` of a `pooled: true` entry in the public
+// catalogue snapshot supplied by the original provider author
+// (https://api.opper.ai/v3/models?limit=2000, captured 2026-09-14); `vendor/model` ids
+// (anthropic/claude-sonnet-4-6) pin one route and stay valid, they are just not seeded.
+export const OPPER_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-opus-5",
+  "gpt-5.5",
+  "gpt-5.4-mini",
+  "gemini-3.8-flash",
+  "deepseek-v4-pro",
+  "kimi-k3",
+  "mistral-large-2512",
+];
+// Smallest value across each pool's members in that snapshot, capped at the lab model's own limit
+// (kimi-k3 output); live discovery owns which models exist.
+export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-5": 1_000_000,
+  "gpt-5.5": 1_050_000,
+  "gpt-5.4-mini": 400_000,
+  "gemini-3.8-flash": 1_048_576,
+  "deepseek-v4-pro": 1_000_000,
+  "kimi-k3": 1_048_576,
+  "mistral-large-2512": 256_000,
+};
+export const OPPER_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  "claude-sonnet-4-6": 64_000,
+  "claude-opus-5": 128_000,
+  "gpt-5.5": 128_000,
+  "gpt-5.4-mini": 128_000,
+  "gemini-3.8-flash": 65_536,
+  "deepseek-v4-pro": 65_536,
+  "kimi-k3": 131_072,
+  "mistral-large-2512": 8_192,
+};
+// Pools whose members do not all accept image input (deepseek-v4-pro: no member does; kimi-k3: the
+// sference route is text-only), so the shared modality set is text.
+export const OPPER_TEXT_ONLY_MODELS = ["deepseek-v4-pro", "kimi-k3"];
+export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );

@@ -13,7 +13,20 @@ try {
     /* best-effort */
   }
 }
-import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
+import {
+  currentExternalCodexModelProvider,
+  restoreNativeCodex,
+  restoreNativeCodexAsync,
+  shouldInjectApiAuthHeader,
+} from "../codex/inject";
+// Straight from the owning modules rather than the facade: these are teardown-reporting
+// helpers, not part of the injection surface, and `inject.ts` sits under a size cap that
+// exists to stop it collecting exactly this kind of passthrough.
+import { readOcxProviderTableBlock } from "../codex/inject/remove";
+import {
+  describeRetainedCodexProviderTable,
+  type RetainedCodexProviderTable,
+} from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
 import {
@@ -30,6 +43,7 @@ import {
   saveConfig,
 } from "../config";
 import {
+  isLikelyOcxProcess,
   readPid,
   readPidFileValue,
   readRuntimePort,
@@ -52,6 +66,7 @@ import {
 import { collectStatus, hubStatusLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
+import { parseStartOptions, StartArgsError } from "./start-args";
 
 import {
   discoverStableProxyForRestart,
@@ -63,7 +78,8 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
+import { redactUrlForLog } from "../lib/redact";
+import { dispatchCommand, decideStartWithLiveOwner } from "./dispatch";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
@@ -119,6 +135,12 @@ function reportShellHookFailure(result: { state: "installed" | "absent" | "faile
   console.warn("   Check ~/.zshrc for the '# opencodex claude-env hook' block.");
 }
 
+function reportRetainedCodexProviderTable(retained: RetainedCodexProviderTable): void {
+  console.log(`   ${describeRetainedCodexProviderTable(retained)}`);
+  console.log("   Retained config lines:");
+  for (const line of retained.lines) console.log(`      ${line}`);
+}
+
 async function refreshOwnedRaycastCatalog(
   config: ReturnType<typeof loadConfig>,
   port: number,
@@ -150,21 +172,13 @@ const head = await runCli(process.argv.slice(2));
 const args = head.args;
 const command = head.command;
 
-function parsePortOption(): number | undefined {
-  if (args.length === 1) return undefined;
-  if (args.length !== 3 || args[1] !== "--port") {
-    console.error("Usage: ocx start [--port <port>]");
+function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
+  try {
+    return parseStartOptions(args.slice(1));
+  } catch (error) {
+    console.error(error instanceof StartArgsError ? error.message : String(error));
     process.exit(1);
   }
-  const portIdx = args.indexOf("--port");
-  if (portIdx === -1) return undefined;
-  const value = args[portIdx + 1];
-  const port = value && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    console.error("Invalid port number");
-    process.exit(1);
-  }
-  return port;
 }
 
 async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
@@ -309,7 +323,26 @@ async function handleStart(options: { block?: boolean } = {}) {
   // already-broken file cannot fence /api/* closed at boot (#2696).
   const present = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (present) assertNotAdminToken(present);
-  const requestedPort = parsePortOption();
+  const startOpts = parseStartCliOptions();
+  if (startOpts.socks5 !== undefined || startOpts.socks5Off) {
+    const proxyConfig = loadConfig();
+    if (startOpts.socks5Off) {
+      if (proxyConfig.proxy && !/^socks5h?:\/\//i.test(proxyConfig.proxy.trim())) {
+        console.error("Cannot use --socks5-off: config.proxy is not a SOCKS5 URL; it was left unchanged.");
+        process.exit(1);
+      }
+      if (proxyConfig.proxy) {
+        delete proxyConfig.proxy;
+        saveConfig(proxyConfig);
+        console.log("Cleared config.proxy (outbound SOCKS5 proxy off).");
+      }
+    } else {
+      proxyConfig.proxy = startOpts.socks5!;
+      saveConfig(proxyConfig);
+      console.log(`Outbound SOCKS5: ${redactUrlForLog(startOpts.socks5!)} (saved to config.proxy)`);
+    }
+  }
+  const requestedPort = startOpts.port;
   // Always probe the configured port, even when both state files are absent. A
   // fallback-port sibling overwrites the pid/runtime records when it starts and
   // removes them on its own shutdown, so their absence proves nothing about the
@@ -799,7 +832,12 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
   let other = false;
   try {
     const result = await restoreNativeCodexAsync();
-    if (result.success) console.log(`↩️  ${result.message}`);
+    if (result.success) {
+      console.log(`↩️  ${result.message}`);
+      if (result.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(result.retainedCodexProviderTable);
+      }
+    }
     else {
       // Codex history is the one restore whose failure leaves the runtime consistent: the
       // manifest is retained and the routed metadata is untouched. Config and catalog are
@@ -810,6 +848,9 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
       // attempted. Reading the states alone cannot tell that apart from an ownership
       // refusal, so the structured reason carries it and the states are still required to
       // agree — a refusal that somehow reports a failed artifact is not this case.
+      // A degraded restore has no refusal reason and reports config as partial, so it cannot
+      // enter this branch: its config obligation was discharged and the stop receipt must be
+      // released rather than preserved.
       const preflightRefused = result.historyPreflightRefusal !== undefined
         && artifacts.config.state === "skipped"
         && artifacts.catalog.state === "skipped"
@@ -900,8 +941,24 @@ async function handleStop() {
   // `inheritedTeardowns` is the inverse case: PREVIOUS stops that left obligations
   // unfinished. Snapshot them BEFORE this run claims anything, so this run's own receipt
   // is never mistaken for one it inherited.
+  //
+  // Ownership is decided by IDENTITY, not by bare liveness. A receipt records a number, and
+  // the OS reuses numbers: once the owner exits, an unrelated process can be handed its PID,
+  // and `isProcessAlive` alone then answers "that stop is still running" for as long as the
+  // new process lives. The receipt is filtered out, so no run ever recovers it, quarantines
+  // it or even mentions it — while both updater gates keep seeing an outstanding obligation
+  // and refuse. That is the permanent fail-closed reported in #4897: no proxy running, a
+  // dead owner, and `ocx update` aborting on `teardown-outstanding` every time.
+  //
+  // Requiring the live PID to be an opencodex process is the narrowing that costs the safety
+  // intent nothing: a stop that really is in flight is still left strictly alone, because its
+  // process is one of ours. Recognizing the receipt as abandoned only admits it to the
+  // recovery loop below, which still has to prove the recorded endpoint is down before
+  // anything is restored.
+  const teardownOwnerStillRunning = (ownerPid: number): boolean =>
+    isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
   const inheritedTeardowns = listPendingTeardowns()
-    .filter(read => isPendingTeardownAbandoned(read, isProcessAlive));
+    .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce) return;
@@ -1357,6 +1414,9 @@ async function handleUninstall() {
     await runStep("native Codex restored", async () => {
       const r = await restoreNativeCodexAsync();
       if (!r.success) throw new Error(r.message);
+      if (r.retainedCodexProviderTable) {
+        reportRetainedCodexProviderTable(r.retainedCodexProviderTable);
+      }
     });
 
     await runStep("Grok Build config restored", () => {
@@ -1503,6 +1563,18 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}${local}`);
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}${local}`);
   console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
+  if (status.json.startup.routingKind === "native") {
+    let retainedProviderTable = false;
+    try {
+      retainedProviderTable = readOcxProviderTableBlock() !== null;
+    } catch {
+      // The routing snapshot owns unreadable-config reporting. A later read race must not
+      // turn this diagnostic command into a teardown failure.
+    }
+    if (retainedProviderTable) {
+      console.log(`   ⚠️  Codex provider table retained${local}: [model_providers.opencodex] remains while root routing is native. Remove with 'ocx restore --remove-codex-provider-table'; tagged conversations will stop opening.`);
+    }
+  }
   console.log(`   Service: ${status.json.service.summary}${local}`);
   console.log(`   ${status.json.codexShim.summary}${local}`);
   console.log(`   Codex runtime: ${status.json.codexRuntime.path}${local}`);

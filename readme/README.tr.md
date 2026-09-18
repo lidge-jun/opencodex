@@ -299,7 +299,7 @@ Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen 
 
 ```bash
 ocx init                       # etkileşimli kurulum (config yazar, Codex'i bağlar, shim önerir)
-ocx start [--port 10100]       # proxy'yi ön planda başlat
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 varsayılanı socks5://127.0.0.1:10808
 ocx stop                       # durdur + yerel Codex'i geri yükle
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # arka plan servisi
 ocx codex-shim install         # `codex` her başladığında proxy'yi isteğe bağlı başlat

@@ -1,5 +1,12 @@
 # Overview
 
+Management provider-validation calls use the [shared relative send-path validation](config.md#provider-relative-send-paths) before persistence.
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+The dashboard's compile-checked locale catalogs include Vietnamese. Locale registration, browser
+detection, Compatibility Lab labels, status descriptions, and locale-sensitive quota formatting
+advance together under the `gui/` catalog parity contract.
+
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -31,7 +38,8 @@ The default install keeps native OpenAI/ChatGPT passthrough working through one 
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two
 credential routes never fall through into one another. Built-in provider presets include Anthropic,
 Google, Azure, Neuralwatt Cloud, Tencent Cloud Coding Plan, SiliconFlow, and separate Volcengine Ark
-pay-as-you-go, Coding Plan, and Agent Plan endpoints. Additional
+pay-as-you-go, Coding Plan, and Agent Plan endpoints. Crusoe Serverless Inference is a fixed-host
+API-key preset with registry-owned authenticated model discovery. Additional
 providers are routed by explicit `provider/model`, provider model lists, or the configured
 `defaultProvider`.
 
@@ -47,7 +55,8 @@ preserves saved user model selections and historical usage. See the bounded
 installed service resolve it the same way (`src/config.ts`). Ownership inside that root is tracked
 by the uninstall manifest in `src/lib/config-ownership.ts`, which starts from a declared path list
 and grows as opencodex claims further paths at runtime — so the manifest, not this table, is what
-bounds uninstall. This table groups the state by purpose; it is not an exhaustive file list, and
+bounds uninstall. Newly generated recovery backups follow the [backup ownership contract](config.md#restore)
+without suppressing recovery when registration is unavailable. This table groups state by purpose; it is not an exhaustive file list, and
 derived files such as `auth.json.pre-multiauth` are covered by the group they belong to.
 
 `$CODEX_HOME` is a separate root with a separate owner, and opencodex writes there too: removing the
@@ -73,6 +82,10 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | `$CODEX_HOME/opencodex-journal.json` | opencodex | Injection journal used by restore to strip only marker-owned values while preserving later user edits. |
 | `$CODEX_HOME/models_cache.json` | Codex, invalidated by opencodex | Cache invalidated after model/catalog changes. |
 | `dist/`, `gui/dist/`, `node_modules/` | generated | Build output/dependencies. |
+
+OrcaRouter login returns credentials for storage only after bounded response ingestion and payload
+validation. The shared reader's cancellation contract and the login-specific byte/deadline limits
+are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 ## Non-negotiable invariants
 
@@ -103,8 +116,18 @@ still cover the rule, which is a judgement only review makes.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the map
   is `scripts/test-layout/layout.json` and `tests/test-layout.test.ts` rejects a test outside its
   domain. Only the two layout guards sit at the root. Source-oracle tests reach the repository
-  through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`.
+  through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. Provider additions register
+  their focused test in both the explicit layout map and its expected-map fixture.
   Enforced by `tests/test-layout.test.ts`.
+
+CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
+scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
+jobs out of the general shards. The manual Windows matrix selects all-file scope and overrides the
+process shape to six files and 480 seconds, so batching changes process size without changing the
+platform suite's file set. Its dedicated batch step sets `OCX_TEST_NO_QUEUE=1`: those sequential
+processes are one logical runner, while each process still installs its own isolated home and test
+guards. The workflow contract and process bounds live in
+[`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
 
 Two invariants are stated here without a binding, and `grace.unboundInvariants` in
 [`manifest.json`](manifest.json) carries the reason for each. They are true statements about the system;
@@ -128,7 +151,7 @@ Listener startup diagnostics follow [the runtime lifecycle contract](runtime.md#
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
 see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
@@ -136,6 +159,8 @@ its defaults and exclusions are owned by [Responses transport](transports/respon
 Raw reasoning content and provider-authored summaries remain distinct on the Responses wire. See [reasoning presentation](providers/chat-compat.md).
 
 Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
+
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
@@ -149,3 +174,7 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).

@@ -22,6 +22,8 @@ import {
   hasHeadroomEvidence,
   isAccountQuotaExhausted,
   rankAccountsByHeadroom,
+  classifyModelFamilyForQuota,
+  type QuotaModelFamily,
 } from "./account-quota-rank";
 import {
   genericPoolKey,
@@ -81,13 +83,14 @@ const health = new Map<string, AccountHealth>();
 /** Provider -> recent eligible-account count. TTL-bounded; never holds credential material. */
 const presence = new Map<string, PresenceEntry>();
 
-const healthKey = (provider: string, accountId: string) => `${provider}\u0000${accountId}`;
+const healthKey = (provider: string, accountId: string, family?: QuotaModelFamily) =>
+  family ? `${provider}\u0000${accountId}\u0000${family}` : `${provider}\u0000${accountId}`;
 
-function isCooled(provider: string, accountId: string, now: number): boolean {
-  const entry = health.get(healthKey(provider, accountId));
+function isCooled(provider: string, accountId: string, now: number, family?: QuotaModelFamily): boolean {
+  const entry = health.get(healthKey(provider, accountId, family));
   if (!entry) return false;
   if (entry.cooldownUntil <= now) {
-    health.delete(healthKey(provider, accountId));
+    health.delete(healthKey(provider, accountId, family));
     return false;
   }
   return true;
@@ -175,11 +178,11 @@ function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, n
 }
 
 /** Accounts that may serve traffic right now: not cooled, not flagged for reauth. */
-export function eligibleFailoverAccounts(providerName: string, now = Date.now()): string[] {
+export function eligibleFailoverAccounts(providerName: string, now = Date.now(), family?: QuotaModelFamily): string[] {
   const set = getAccountSet(providerName);
   if (!set) return [];
   return set.accounts
-    .filter(account => account.needsReauth !== true && !isCooled(providerName, account.id, now))
+    .filter(account => account.needsReauth !== true && !isCooled(providerName, account.id, now, family))
     .map(account => account.id);
 }
 
@@ -230,8 +233,8 @@ function stableGenericRoster(providerName: string): string[] {
  * statement about observed usage, and treating "no observation" as "spent" would evacuate every
  * quota-less provider off its active account on the very first request.
  */
-function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number): boolean {
-  const headroom = accountHeadroomPercent(providerName, accountId);
+function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number, requestedModelId?: string | null): boolean {
+  const headroom = accountHeadroomPercent(providerName, accountId, requestedModelId);
   if (headroom === null) return false;
   return 100 - headroom >= threshold;
 }
@@ -245,15 +248,17 @@ function pickFillFirstGenericAccount(
   providerName: string,
   activeId: string | undefined,
   now: number,
+  requestedModelId?: string | null,
 ): string | null {
   const stableAll = stableGenericRoster(providerName);
   if (stableAll.length < 2) return null;
-  const eligible = new Set(eligibleFailoverAccounts(providerName, now));
+  const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+  const eligible = new Set(eligibleFailoverAccounts(providerName, now, family));
   const stored = config.providers?.[providerName]?.oauthAccountFailover?.autoSwitchThreshold;
   const threshold = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored <= 100
     ? stored
     : DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD;
-  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold)) {
+  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold, requestedModelId)) {
     return null;
   }
   const start = activeId ? stableAll.indexOf(activeId) : -1;
@@ -277,11 +282,17 @@ function pickFillFirstGenericAccount(
  * advance and round-robin would propose the same account forever. This is the same shape
  * `commitAnthropicSelectionRouting` already commits with.
  */
-export function noteGenericPoolSelection(config: OcxConfig, providerName: string, accountId: string): void {
+export function noteGenericPoolSelection(
+  config: OcxConfig,
+  providerName: string,
+  accountId: string,
+  requestedModelId?: string | null,
+): void {
   if (activeGenericStrategy(config, providerName) !== "round-robin") return;
   const poolKey = genericPoolKey(providerName);
   const limit = genericStickyLimit(config, providerName);
-  const picked = pickRoundRobinAccount(poolKey, eligibleFailoverAccounts(providerName), limit);
+  const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+  const picked = pickRoundRobinAccount(poolKey, eligibleFailoverAccounts(providerName, Date.now(), family), limit);
   // The resolver may have admitted a different account than the ring proposed: a removal, a
   // reauth verdict or a manual selection can land during credential resolution. Realign the
   // cursor onto what actually served rather than leaving it on a road not taken.
@@ -302,6 +313,7 @@ export function rotateGenericOAuthAccountOn429(
   failedAccountId: string,
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
+  requestedModelId?: string | null,
 ): string | null {
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
   const set = getAccountSet(providerName);
@@ -314,13 +326,14 @@ export function rotateGenericOAuthAccountOn429(
   // A Retry-After from upstream still wins — it is the server's own instruction.
   const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
   const cooldownMs = exhausted ?? Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
-  health.set(healthKey(providerName, failedAccountId), {
+  const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+  health.set(healthKey(providerName, failedAccountId, family), {
     cooldownUntil: now + cooldownMs,
     cooldownSource: parsed ? "retry-after" : "default",
   });
   sweepExpiredOnWrite(now);
 
-  const eligible = eligibleFailoverAccounts(providerName, now).filter(id => id !== failedAccountId);
+  const eligible = eligibleFailoverAccounts(providerName, now, family).filter(id => id !== failedAccountId);
   if (eligible.length === 0) return null;
   // A rotation means the roster in use just changed; do not answer the next activation question
   // from a count read before the failure.
@@ -359,7 +372,7 @@ export function rotateGenericOAuthAccountOn429(
   }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
-  return rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
+  return rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
 }
 
 /**
@@ -392,6 +405,7 @@ export function preferredInitialAccount(
   config: OcxConfig,
   providerName: string,
   now = Date.now(),
+  requestedModelId?: string | null,
 ): string | null {
   // The PROACTIVE predicate, not the reactive one: this steers a request upstream has not
   // refused, so `oauthAccountFailover.enabled: false` must still be able to refuse it.
@@ -411,7 +425,8 @@ export function preferredInitialAccount(
   // would never reach its own test. Cooldowns and reauth are still honoured inside each pick.
   const strategy = activeGenericStrategy(config, providerName);
   if (strategy === "round-robin") {
-    const eligibleNow = eligibleFailoverAccounts(providerName, now);
+    const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+    const eligibleNow = eligibleFailoverAccounts(providerName, now, family);
     if (eligibleNow.length === 0) return null;
     // PEEK, not pick: this proposal is discardable, and advancing the ring for an account the
     // resolver then rejects would skip a turn for nothing. noteGenericPoolSelection commits.
@@ -423,26 +438,26 @@ export function preferredInitialAccount(
     return picked && picked !== active ? picked : null;
   }
   if (strategy === "fill-first") {
-    const picked = pickFillFirstGenericAccount(config, providerName, active, now);
+    const picked = pickFillFirstGenericAccount(config, providerName, active, now, requestedModelId);
     return picked && picked !== active ? picked : null;
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
   if (activeRow && activeRow.needsReauth !== true
-    && !isCooled(providerName, activeRow.id, now)
-    && !isAccountQuotaExhausted(providerName, activeRow.id)) return null;
+    && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
+    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId)) return null;
 
   // Evidence is required BEFORE eligibility narrows the field. Without this, a provider
   // with no quota data at all could still be redirected: cool the active account with a
   // 429 and the eligible list collapses to one candidate, which any ranking returns
   // unchanged — an answer that looks ranked but was never measured. The no-op guarantee
   // for quota-less providers has to be checked on the full roster.
-  if (!hasHeadroomEvidence(providerName, order)) return null;
+  if (!hasHeadroomEvidence(providerName, order, requestedModelId)) return null;
 
   // Cooldowns are respected here, unlike in the presence count: this picks the account to
   // send to right now, and one inside its 429 window is the single candidate we hold
   // positive evidence against.
-  const eligible = order.filter(id => !isCooled(providerName, id, now));
+  const eligible = order.filter(id => !isCooled(providerName, id, now, classifyModelFamilyForQuota(providerName, requestedModelId)));
   if (eligible.length === 0) return null;
 
   // Start the ring at the active account so an unranked outcome reproduces today's choice.
@@ -451,7 +466,7 @@ export function preferredInitialAccount(
   const candidates = ring.filter(id => eligible.includes(id));
   if (candidates.length === 0) return null;
 
-  const best = rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
+  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
   // Nothing to do when the ranking agrees with the account we would have used anyway.
   //
   // A proposal still needs guarded selection commit after credential resolution: a
@@ -461,12 +476,10 @@ export function preferredInitialAccount(
 
 /** Earliest remaining cooldown, for a client-facing Retry-After when every account is cooled. */
 export function genericFailoverRetryAfterSeconds(providerName: string, now = Date.now()): number | null {
-  const set = getAccountSet(providerName);
-  if (!set) return null;
+  const prefix = `${providerName}\u0000`;
   let earliest: number | null = null;
-  for (const account of set.accounts) {
-    const entry = health.get(healthKey(providerName, account.id));
-    if (!entry || entry.cooldownUntil <= now) continue;
+  for (const [key, entry] of health) {
+    if (!key.startsWith(prefix) || entry.cooldownUntil <= now) continue;
     if (earliest === null || entry.cooldownUntil < earliest) earliest = entry.cooldownUntil;
   }
   return earliest === null ? null : Math.max(1, Math.ceil((earliest - now) / 1000));

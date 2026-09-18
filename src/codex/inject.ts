@@ -40,7 +40,7 @@ import {
   removeJournal,
   writeJournal,
 } from "./journal";
-import { preflightCodexHistoryInjection } from "./history-provider";
+import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -158,16 +158,12 @@ export interface CodexInjectResult {
    */
   historyPreflightFailureReason?: string;
   status?: "skipped";
+  /** Busy write lock, emitted by `codexInjectLockOutcome` and undeclared here until #4809. */
+  retryable?: boolean;
   /** `hub-gated` is the hub-role gate (#4236), distinct from the user's own OFF switch. */
   skippedReason?: "desired_disabled" | "desired_enabled" | "hub-gated";
   nativeSubagentDefaultsWarning?: string;
 }
-
-/**
- * The one history preflight reason that is permanent rather than operational: Codex owns
- * paginated rollout ordinals, so no retry makes the legacy relabel protocol available again.
- */
-const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
 
 class CodexHistoryPreflightRefusal extends Error {}
 let historyArtifactStageForTests: ((stage: string) => void) | undefined;
@@ -373,7 +369,7 @@ async function injectCodexConfigImpl(
     content =
       content.trimEnd() +
       "\n" +
-      buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}));
+      buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName);
     // 3) Keep existing `openai`-tagged threads reaching the proxy (see above). Ownership rules
     // are the Design B ones: a user's own root line is never replaced.
     if (keepRootOverrideAlongsideTable) {
@@ -434,6 +430,7 @@ async function injectCodexConfigImpl(
     catalogPath,
     websocketsEnabled(config ?? {}),
     config?.fastMode,
+    config?.codexProviderDisplayName,
   );
   content = applyEol(content, eol);
 
@@ -496,7 +493,7 @@ async function injectCodexConfigImpl(
    */
   if (hadOcxProviderTableOnDisk && !providerTableMode) {
     content = applyEol(
-      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {})),
+      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName),
       eol,
     );
   }

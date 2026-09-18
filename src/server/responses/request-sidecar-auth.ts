@@ -126,18 +126,26 @@ export async function prepareResponsesSidecarAuth(
     });
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
-    await describeImagesInPlace(
-      parsed,
-      visionPlan,
-      openAiSidecar?.headers ?? requestState.selectedForwardHeaders,
-      options.abortSignal,
-      recordSidecarOutcome,
-      translatorBudget,
-    );
+    try {
+      await describeImagesInPlace(
+        parsed,
+        visionPlan,
+        openAiSidecar?.headers ?? requestState.selectedForwardHeaders,
+        options.abortSignal,
+        recordSidecarOutcome,
+        translatorBudget,
+      );
+    } finally {
+      // Local validation can reject every image before the sidecar fetch records an outcome.
+      // Vision-only turns must hand that unused cooldown probe back; when a fetch did run the
+      // outcome already consumed it, so this generation-bound release is a safe no-op.
+      if (!needsOpenAiSearch) openAiSidecar?.releaseProbeLease?.();
+    }
   } else if (requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName)) {
     // Image capability is not positively proven but no sidecar plan is dispatchable: fail closed.
     // Never forward raw image bytes to an unverified upstream.
     stripImagesInPlace(parsed, translatorBudget);
+    if (!needsOpenAiSearch) openAiSidecar?.releaseProbeLease?.();
   }
 
   return {

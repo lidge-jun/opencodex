@@ -441,3 +441,20 @@
 .codex-main-hard-lock-dialog .modal-desc { text-wrap: pretty; }
 :lang(ko) .codex-main-hard-lock-copy .card-sub,
 :lang(ko) .codex-main-hard-lock-dialog .modal-desc { word-break: keep-all; }
+
+/* Account-pool threshold summary stays with the account workspace. */
+.account-pool-strategy-controls .setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.account-pool-strategy-controls .setting-controls .custom-select {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+.account-pool-threshold-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: normal;
+}

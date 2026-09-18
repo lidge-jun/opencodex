@@ -149,6 +149,19 @@ export async function confirmServiceServing(
 }
 
 /**
+ * The operation, as a noun, for a sentence that has to say it did not complete.
+ *
+ * The verb form reads as an accomplished fact ("service repaired"), which is exactly the
+ * claim that must not be made when the operation threw.
+ */
+const SERVICE_OPERATION_NOUN = {
+  installed: "install",
+  started: "start",
+  repaired: "repair",
+  restarted: "restart",
+} as const;
+
+/**
  * Print the outcome of `install` / `start` / `repair` in terms of what the user cares
  * about — is it serving? — instead of whether the manager accepted the registration.
  *
@@ -156,10 +169,18 @@ export async function confirmServiceServing(
  * worker reads the child's exit status, so a registered-but-silent service now makes it
  * fall back to a direct proxy start rather than reporting a successful update over a
  * dead port.
+ *
+ * `precedingFailure` is the error the operation itself threw, when it threw. The serving
+ * probe still runs — a rollback or a preserve/restart protocol may well have left the
+ * previous job answering, and the operator needs that half of the answer (#4236). But the
+ * two halves have to be ONE sentence. Printing the failure separately and then reaching
+ * the success line here reported both outcomes for the same run and credited work that did
+ * not happen: the registration was kept, not repaired (#4914).
  */
 export async function reportServiceServing(
   verb: "installed" | "started" | "repaired" | "restarted",
   deps: Parameters<typeof confirmServiceServing>[0] = {},
+  precedingFailure?: unknown,
 ): Promise<void> {
   const healthBudgetMs = deps.timeoutMs ?? serviceInstallHealthMs();
   // Timed here rather than reported from the budget. confirmServiceServing knocks once
@@ -171,6 +192,28 @@ export async function reportServiceServing(
   const startedAt = now();
   const serving = await confirmServiceServing({ ...deps, timeoutMs: healthBudgetMs });
   const waitedMs = Math.max(0, now() - startedAt);
+  const failureDetail = precedingFailure === undefined
+    ? null
+    : precedingFailure instanceof Error ? precedingFailure.message : String(precedingFailure);
+  const operation = SERVICE_OPERATION_NOUN[verb];
+  if (failureDetail !== null) {
+    // Serving or not, the operation did not complete, so neither branch may print a
+    // checkmark. What differs is whether anything is answering, which is the fact the
+    // operator acts on next.
+    console.error(
+      serving.ok
+        ? `⚠️  Service ${operation} did not complete: ${failureDetail}\n`
+          + `   A proxy is answering on port ${serving.port}, so the existing registration was kept rather than replaced.\n`
+          + `   The ${operation} did not take effect; rerun it once the reported cause is resolved.\n`
+          + `   Log:       ${serviceLogPath()}`
+        : `❌ Service ${operation} failed: ${failureDetail}\n`
+          + `   No proxy answered on port ${serving.port} after ${Math.round(waitedMs / 1000)}s either.\n`
+          + `   Log:       ${serviceLogPath()}\n`
+          + `   Meanwhile: ocx start   (serves in the foreground)`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   if (serving.ok) {
     console.log(`✅ opencodex service ${verb} and serving on port ${serving.port}.`);
     return;

@@ -1,3 +1,7 @@
+import { createSteeringSettingsNormalizer } from "./native-steering-policy";
+import { nativeResponseControlEligible } from "./native-response-control";
+import { NativeInjectionReplay } from "./native-injection-replay";
+import { NativeSteeringReplay } from "./native-steering-replay";
 import type {
   ResponsesRequestContext,
   ResponsesAdmissionState,
@@ -7,10 +11,11 @@ import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
+import { transientSendCapFor } from "./request-send-budget";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
-import { rememberResponseState } from "../../responses/state";
+import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
 import {
   currentTurnWireToolCatalogBody,
   hasExplicitWireToolCatalog,
@@ -87,11 +92,15 @@ import {
   usesCodexForwardPoolAuth,
   codexWsQuotaObserver,
   isFixedCodexAccount,
-  shouldRetryCodexPoolAccountModel400,
+  codexPoolAccountModel400Denial,
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
   retryCodexPoolOnAlternateAccount,
 } from "./core-codex-account";
+import {
+  clearCodexModelDenialEvidence,
+  recordCodexModelDenialEvidence,
+} from "../../codex/model-entitlements";
 import { readCodexWsStage } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
@@ -101,9 +110,8 @@ import {
   SendBudgetExhaustedError,
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
-  TRANSIENT_RETRY_MAX_ATTEMPTS,
   isNonReplayableResponse,
-  prepareSameTarget429Wait,
+ prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
@@ -111,7 +119,11 @@ import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upst
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
-import { rateLimitRetryPolicyFor, rateLimitRetryDelayMs } from "../../providers/key-failover";
+import {
+  rateLimitRetryPolicyFor,
+  rateLimitRetryDelayMs,
+  transientRetryPolicyFor,
+} from "../../providers/key-failover";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";
@@ -194,6 +206,7 @@ export async function preparePassthroughExchange(
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "workflowRootId"
+    | "sendsUsed"
   >,
 ) {
   const { config, logCtx, options, req } = requestContext;
@@ -251,6 +264,19 @@ export async function preparePassthroughExchange(
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
         rememberResponseState(parsed._rawBody, response, undefined, responseStateOptions(true))
       : undefined;
+    if (options.nativeControl && nativeResponseControlEligible(route.provider, options.nativeControl)
+      && options.inboundTransport === "websocket" && !options.comboAttempt) {
+      const body = parsed._rawBody as Record<string, unknown>;
+      if (options.nativeControl.kind === "steering") {
+        options.nativeControl.normalizeContinuation = createSteeringSettingsNormalizer(parsed, route, config, req.headers);
+      }
+      const Replay = options.nativeControl.kind === "injection" ? NativeInjectionReplay : NativeSteeringReplay;
+      options.nativeControl.replayFactory = () => new Replay(body.input, (input, response) => {
+        if (passthroughRecordEligible && !isBodyNonPersistable(body)) {
+          rememberResponseState({ ...body, input }, response, undefined, responseStateOptions(true));
+        }
+      });
+    }
     if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
         `[responses] previous_response_id ${parsed.previousResponseId} not found in local replay state `
@@ -649,6 +675,33 @@ export async function preparePassthroughExchange(
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     /**
+     * This leg's transient-5xx ladder cap, from the provider's own `transientRetryOn5xx`.
+     *
+     * The lane used to pass `TRANSIENT_RETRY_MAX_ATTEMPTS` at every call site, so an operator who
+     * configured the option on a key-auth `openai-responses` provider changed nothing in either
+     * direction, while the same provider on `openai-chat` was tuned normally. That asymmetry is
+     * #4893. The gate in `transientRetryPolicyFor` returns null for OAuth and forward providers,
+     * so the ChatGPT pool keeps exactly the ladder it has always had.
+     *
+     * Read per call rather than captured once, for two reasons. `route.provider` is reassigned
+     * inside the recovery loop by credential rotation and transport resolution, so a hoisted
+     * policy could outlive the provider row it came from. And the configured value is a total for
+     * the whole request, so it has to be measured against what the request has already sent at
+     * the moment each leg asks.
+     *
+     * Still bounded by the request: every site feeds this to `remainingTransientSendBudget` or
+     * `recoverySendAllowance`, which intersect it with the request-wide base allowance. So a
+     * provider can narrow this request's sends exactly and cannot widen the bound that exists to
+     * stop per-request amplification (#4546).
+     */
+    const transientSendPolicy = () => transientRetryPolicyFor(route.provider);
+    const transientSendAttempts = (): number => transientSendCapFor(
+      transientSendPolicy()?.attempts,
+      sendBudgetState.sendsUsed,
+    );
+    const configuredTransientSendBudgetExhausted = (): boolean =>
+      transientSendPolicy() !== null && transientSendAttempts() === 0;
+    /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *
      * Unconfigured this measures nothing and returns undefined, so an unset proxy behaves
@@ -772,6 +825,9 @@ export async function preparePassthroughExchange(
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -784,7 +840,7 @@ export async function preparePassthroughExchange(
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(adoptObservedResponse);
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -844,14 +900,15 @@ export async function preparePassthroughExchange(
       recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, retryAdapter.name);
       const rebuiltBodyRefusal = refuseOversizedOutboundBody(request);
       if (rebuiltBodyRefusal) return { failed: rebuiltBodyRefusal };
-      // The base allowance is spent first; once it is gone this leg may still draw the one
-      // shared final-recovery reserve, which is what keeps a validated sanitized rebuild
-      // after a 5xx streak alive at four total sends instead of dying at three. Reserved
-      // outside the try so the finally can hand it back if the leg never reached its send.
+      // The base allowance is spent first. An unconfigured provider may then draw the one shared
+      // final-recovery reserve, which keeps a validated sanitized rebuild after a 5xx streak alive
+      // at four total sends instead of dying at three. An explicit provider total cannot widen.
+      // Reserve outside the try so the finally can hand it back if the leg never reaches its send.
       const allowance = recoverySendAllowance(
-        TRANSIENT_RETRY_MAX_ATTEMPTS,
+        transientSendAttempts(),
         recoveryClassFor(recovery),
         `${route.providerName}|${route.modelId}|${recovery}`,
+        { allowFinalRecoveryReserve: transientSendPolicy() === null },
       );
       try {
         return await fetchWithTransientRetry(
@@ -868,6 +925,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, innerRecovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -974,6 +1034,9 @@ export async function preparePassthroughExchange(
           // here on is a genuine transport attempt.
           storedPoolReplayDispatchNotifier(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -1007,7 +1070,7 @@ export async function preparePassthroughExchange(
       // Refused here, before the 401 body is cancelled: once it is gone the request can only
       // answer with a synthetic 502, which would report a proxy budget decision as an upstream
       // fault and throw away the credential evidence the client needs.
-      && !sendBudgetExhausted()
+      && !sendBudgetExhausted(transientSendAttempts())
     ) {
       oauth401ReplayAttempted = true;
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
@@ -1095,6 +1158,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -1105,7 +1171,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1116,13 +1182,13 @@ export async function preparePassthroughExchange(
 
     // Native Responses returns before the generic adapter's OAuth rotation loop. Keep
     // the same quorum, cooldown and request budget here, before any client bytes flow.
-    if (
-      upstreamResponse.status === 429
+   if (
+     upstreamResponse.status === 429
       // Not a provider rate limit when this proxy synthesized it for a refused reset
       // replay; rotating accounts on it would re-send an inference that may already
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
-      && transportState.genericFailoverAccountId
+     && transportState.genericFailoverAccountId
       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
@@ -1138,6 +1204,8 @@ export async function preparePassthroughExchange(
         const nextAccountId = rotateGenericOAuthAccountOn429(
           config, route.providerName, transportState.genericFailoverAccountId,
           upstreamResponse.headers.get("retry-after"),
+          Date.now(),
+          route.modelId,
         );
         let snapshot: OAuthAccessSnapshot | undefined;
         if (nextAccountId) {
@@ -1174,15 +1242,15 @@ export async function preparePassthroughExchange(
     // immediately with no same-key replay. Pre-stream only — nothing has been relayed yet, so
     // the replay is lossless (same invariant as the recovery loop). Forward/OAuth providers
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
-    while (
-      upstreamResponse.status === 429
+   while (
+     upstreamResponse.status === 429
       && !isNonReplayableResponse(upstreamResponse)
-      && rateLimitPolicy !== null
+     && rateLimitPolicy !== null
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429
       // body, so a refusal discovered after the wait can no longer return the real rate-limit
       // answer and would surface a synthetic 502 instead.
-      && !sendBudgetExhausted()
+      && !sendBudgetExhausted(transientSendAttempts())
     ) {
       rateLimitRetries += 1;
       // Release unread body + deliberate wait via the shared same-target helper.
@@ -1217,6 +1285,9 @@ export async function preparePassthroughExchange(
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              nativeControl: nativeResponseControlEligible(route.provider, options.nativeControl) && options.inboundTransport === "websocket" && !options.comboAttempt
+                && responseEffects.plaintextV2AgentMessageToolNames.size === 0
+                ? options.nativeControl : undefined,
               dispatchOverride: oauthDispatch(request),
                 providerName: route.providerName,
                 modelId: route.modelId,
@@ -1227,7 +1298,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1259,11 +1330,25 @@ export async function preparePassthroughExchange(
 
     if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
-      if (await shouldRetryCodexPoolAccountModel400(
+      // A success is the freshest evidence there is about this pair, and it outranks any earlier
+      // refusal: whatever the entitlement was when upstream declined, it is not that now. Both
+      // ids are cleared because the wire model can differ from the routed one.
+      if (upstreamResponse.ok) {
+        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, route.modelId);
+        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, parsed.modelId);
+      }
+      const model400Denial = await codexPoolAccountModel400Denial(
         upstreamResponse,
         route.modelId,
         options.abortSignal,
-      )) {
+        parsed.modelId,
+      );
+      if (model400Denial !== undefined) {
+        // Spend this refusal on more than one retry. It is the account's own authenticated
+        // answer about this model, and the roster cache that selection otherwise reads expires
+        // five minutes after a catalog sync fills it -- so without remembering this, the next
+        // request selects the same account on quota alone and takes the same 400 (#4906).
+        recordCodexModelDenialEvidence(admissionState.authCtx.accountId, model400Denial);
         poolRetryOutcome = 400;
       } else if (!admissionState.authCtx.fixedAccount && await shouldRetryCodexPoolAccountQuota(
         upstreamResponse,
@@ -1333,18 +1418,20 @@ export async function preparePassthroughExchange(
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
     // Responses body still carries opaque state, then rebuild once through the ordinary adapter
     // sanitation path. A second rejection falls through unchanged because the guard stays armed.
-    const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
-      response: upstreamResponse,
-      outboundBody: request.body,
-      adapterName: transportState.adapter.name,
-      parsed,
-      guard: opaqueBlobRecoveryGuard,
-      signal: upstream.signal,
-    }, rebuildAndRefetch);
-    if (opaqueBlobRecovery.kind === "failed") return opaqueBlobRecovery.response;
-    if (opaqueBlobRecovery.kind === "recovered") {
-      upstreamResponse = opaqueBlobRecovery.response;
-      continue passthroughRecovery;
+    if (!configuredTransientSendBudgetExhausted()) {
+      const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
+        response: upstreamResponse,
+        outboundBody: request.body,
+        adapterName: transportState.adapter.name,
+        parsed,
+        guard: opaqueBlobRecoveryGuard,
+        signal: upstream.signal,
+      }, rebuildAndRefetch);
+      if (opaqueBlobRecovery.kind === "failed") return opaqueBlobRecovery.response;
+      if (opaqueBlobRecovery.kind === "recovered") {
+        upstreamResponse = opaqueBlobRecovery.response;
+        continue passthroughRecovery;
+      }
     }
 
     const recoveryContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() ?? "";
@@ -1352,6 +1439,7 @@ export async function preparePassthroughExchange(
       && !!upstreamResponse.body
       && (recoveryContentType.includes("text/event-stream") || (!recoveryContentType && parsed.stream))
       && !opaqueBlobRecoveryGuard.attempted
+      && !configuredTransientSendBudgetExhausted()
       && outboundResponsesBodyCarriesEncryptedFunctionOutput(request.body);
     if (streamedFunctionOutputCandidate) {
       const preflightLog: RequestLogContext = { model: logCtx.model, provider: logCtx.provider };
@@ -1368,19 +1456,21 @@ export async function preparePassthroughExchange(
       if (options.abortSignal?.aborted) return transportFailureResponse(options.abortSignal.reason);
       upstreamResponse = preflight.response;
       if (preflight.kind === "failed") {
-        const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
-          response: upstreamResponse,
-          outboundBody: request.body,
-          adapterName: transportState.adapter.name,
-          parsed,
-          guard: opaqueBlobRecoveryGuard,
-          signal: upstream.signal,
-        }, rebuildAndRefetch);
-        if (streamedOpaqueRecovery.kind === "failed") return streamedOpaqueRecovery.response;
-        if (streamedOpaqueRecovery.kind === "recovered") {
-          resetStreamedOpaqueBlobLogContext(logCtx);
-          upstreamResponse = streamedOpaqueRecovery.response;
-          continue passthroughRecovery;
+        if (!configuredTransientSendBudgetExhausted()) {
+          const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
+            response: upstreamResponse,
+            outboundBody: request.body,
+            adapterName: transportState.adapter.name,
+            parsed,
+            guard: opaqueBlobRecoveryGuard,
+            signal: upstream.signal,
+          }, rebuildAndRefetch);
+          if (streamedOpaqueRecovery.kind === "failed") return streamedOpaqueRecovery.response;
+          if (streamedOpaqueRecovery.kind === "recovered") {
+            resetStreamedOpaqueBlobLogContext(logCtx);
+            upstreamResponse = streamedOpaqueRecovery.response;
+            continue passthroughRecovery;
+          }
         }
         logCtx.upstreamError = preflightLog.upstreamError;
         logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
@@ -1399,6 +1489,7 @@ export async function preparePassthroughExchange(
         upstream.signal,
       );
       if (uploadRejectionBody !== undefined
+        && !configuredTransientSendBudgetExhausted()
         && isTransientConsoleGoUploadRejection({
           status: upstreamResponse.status,
           errorBody: uploadRejectionBody,
@@ -1437,7 +1528,7 @@ export async function preparePassthroughExchange(
             requested: parsed.options.reasoning,
             rejectionText,
           });
-      if (downgrade) {
+      if (downgrade && !configuredTransientSendBudgetExhausted()) {
         reasoningEffortDowngradeGuard.attempted = true;
         parsed.options.reasoning = downgrade.effort;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }

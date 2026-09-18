@@ -7,6 +7,11 @@ third-party client's existing config without taking ownership of the rest of tha
 promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
 and refuses refresh, disable, or restore when the current file cannot be classified safely.
 
+Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
+raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
+The OrcaRouter login ceiling applies to its key exchange; client configuration files retain the
+parsing and ownership rules below.
+
 ## Module Responsibilities
 
 | Module | Responsibility |
@@ -38,6 +43,11 @@ Status and mutation must use the same classifier. A special case added only to a
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
 
+Gajae export and managed refresh share the loopback-only provider builder. It writes the
+non-secret `LOOPBACK_API_KEY_PLACEHOLDER` as `apiKey`, so the client can activate the provider
+without a separately populated environment variable. The managed contribution owns only the
+provider block in `models.yml`; default presets and proxy routing in `config.yml` remain user-owned.
+
 TOML temporal scalars cannot survive the JSON-cloned merge representation with their types
 intact. The common parser refuses documents containing them before either status or mutation
 proceeds, including nested arrays and inline tables. Quoted date strings remain supported.
@@ -66,7 +76,9 @@ exact-ID collisions checked before disabled rows are filtered. Management and CL
 carry the boolean into the shared client serializers. Only true creates an additive `--fast`
 selector, preserving the underlying provider, model ID, modalities, limits, and effort metadata.
 False or missing metadata never causes local inference, so old or disabled remote hubs remain
-authoritative. Existing client configs receive the entries on export or managed refresh.
+authoritative. Existing client configs receive the entries on export or managed refresh. A Dashboard
+save refreshes enabled native clients and already-owned file integrations when the running proxy port
+is available; otherwise the operator refreshes the integration or client catalog explicitly.
 
 ## Model input capability exports
 

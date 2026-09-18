@@ -129,9 +129,11 @@ export async function readBoundedResponseBytes(
 	options: BoundedBytesOptions,
 ): Promise<BoundedBytesResult> {
 	const signal = options.signal;
-	if (signal?.aborted) throw signal.reason;
-
 	const body = response.body;
+	if (signal?.aborted) {
+		if (body) cancelBodyWithoutWaiting(body, signal.reason);
+		throw signal.reason;
+	}
 	if (!body) return { bytes: new Uint8Array(0), oversized: false };
 
 	const reader = body.getReader();

@@ -115,21 +115,48 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.receiptExists).toBe(false);
   });
 
+  test("a paginated degraded restore releases its receipt and exits successfully", async () => {
+    const retained = {
+      reason: "history_paginated_requires_native_writer" as const,
+      lines: ["# Auto-injected by opencodex", "[model_providers.opencodex]"],
+      followUp: "Remove the table explicitly only if tagged conversations may stop opening.",
+    };
+    const restore = {
+      success: true,
+      message: "Native routing restored; provider table retained.",
+      retainedCodexProviderTable: retained,
+      artifacts: {
+        config: { state: "partial", action: "routing-restored-provider-retained", retained },
+        catalog: { state: "ok" },
+        history: { state: "skipped" },
+      },
+    } as unknown as CodexNativeRestoreResult;
+    const outcome = await runParentStop({ receipt: true,
+      response: { success: true, sharedTeardown: "deferred" }, restore });
+    expect(outcome.calls).toMatchObject({ killed: 0, native: 1, grok: 1, cleared: 1 });
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.receiptExists).toBe(false);
+  });
+
   /**
-   * #4718: a refusal that happens BEFORE anything is restored.
+   * #4718, still live after #4812: a refusal that happens BEFORE anything is restored.
    *
-   * A paginated Codex history store makes the preflight refuse ahead of the config half,
-   * so every artifact comes back untouched rather than failed. `handleStop` had no branch
-   * for that shape and fell through to the generic failure, which exited 1 — and the
-   * updater reads 1 as "the proxy would not stop" and aborts with the service already
-   * down. The obligation really is still owed, so the receipt has to stay; what was wrong
-   * was calling it a stop failure.
+   * The paginated-history reason no longer reaches this shape — it takes routing down and
+   * reports `partial`, which the test above pins. Every OTHER preflight reason still
+   * refuses ahead of the config half, so every artifact comes back untouched rather than
+   * failed. `handleStop` had no branch for that shape and fell through to the generic
+   * failure, which exited 1 — and the updater reads 1 as "the proxy would not stop" and
+   * aborts with the service already down. The obligation really is still owed, so the
+   * receipt has to stay; what was wrong was calling it a stop failure.
+   *
+   * This case is easy to lose while narrowing the paginated reason, and losing it would
+   * silently retire exit code 80 along with the updater contract that reads it.
    */
-  test("a history-preflight refusal keeps its receipt and reports the deferred code", async () => {
+  test("a non-paginated preflight refusal keeps its receipt and reports the deferred code", async () => {
     const restore = {
       success: false,
-      message: "Native restore refused: history_paginated_requires_native_writer. Config, catalog, history and provenance were preserved.",
-      historyPreflightRefusal: "history_paginated_requires_native_writer",
+      message: "Native restore refused: history_state_database_missing. Config, catalog, history and provenance were preserved.",
+      historyPreflightRefusal: "history_state_database_missing",
       artifacts: { config: { state: "skipped" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
     } as unknown as CodexNativeRestoreResult;
     const outcome = await runParentStop({ receipt: true,
@@ -163,8 +190,8 @@ describe("parent CLI shared teardown completion", () => {
     // so a run that damaged it must keep failing the stop however it got there.
     const restore = {
       success: false,
-      message: "Native restore refused: history_paginated_requires_native_writer.",
-      historyPreflightRefusal: "history_paginated_requires_native_writer",
+      message: "Native restore refused: history_rollout_record_invalid.",
+      historyPreflightRefusal: "history_rollout_record_invalid",
       artifacts: { config: { state: "failed" }, catalog: { state: "skipped" }, history: { state: "skipped" } },
     } as unknown as CodexNativeRestoreResult;
     const outcome = await runParentStop({ receipt: true,
@@ -246,6 +273,36 @@ describe("performStopTeardown", () => {
     expect(stripped).toBe(1);
     expect(body.sharedTeardown).toBe("performed");
     expect(body.message).toContain("native Codex restored");
+  });
+
+  test("a degraded stop reports the retained provider table without turning success into deferral", async () => {
+    const retained = {
+      reason: "history_paginated_requires_native_writer" as const,
+      lines: ["# Auto-injected by opencodex", "[model_providers.opencodex]"],
+      followUp: "Run the explicit removal command only if tagged conversations may stop opening.",
+    };
+    const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+      ownsReceipt: () => false,
+      restoreNativeCodex: async () => ({
+        ...restoreResult(true),
+        retainedCodexProviderTable: retained,
+        artifacts: {
+          ...restoreResult(true).artifacts,
+          config: {
+            state: "partial",
+            changed: true,
+            action: "routing-restored-provider-retained",
+            message: "routing restored",
+            retained,
+          },
+        },
+      }),
+      stripGrok: () => ({ ok: true, changed: false, message: "clean" }),
+    });
+
+    expect(body).toMatchObject({ success: true, sharedTeardown: "performed" });
+    expect(body.message).toContain("[model_providers.opencodex]");
+    expect(body.message).toContain("history_paginated_requires_native_writer");
   });
 
   test("a receipt-backed deferral touches neither config and says so", async () => {
@@ -618,6 +675,40 @@ describe("pending teardown receipts", () => {
     // A dead owner left the obligation behind: recover it.
     expect(mod.isPendingTeardownAbandoned(live, () => false, 1)).toBe(true);
     expect(mod.isPendingTeardownAbandoned({ state: "missing" }, () => false, 1)).toBe(false);
+  });
+
+  test("a reused owner PID is abandoned, a live opencodex owner is still left alone", async () => {
+    const mod = await import("../../src/config/pending-teardown");
+    const processState = await import("../../src/config/process-state");
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 4242);
+    const live = mod.readPendingTeardown(claimed.nonce);
+
+    // The composition `handleStop` uses. Asserted here against the real predicates rather
+    // than restated, because the whole defect was that the two halves were not composed:
+    // bare liveness reported a recycled PID as a stop still in flight, so the receipt was
+    // filtered out of recovery while both updater gates kept refusing on it (#4897).
+    // Liveness is pinned true so the identity half is what these assertions measure: PID
+    // 4242 is not a real process on this host, and probing it would measure the runner.
+    const ownerStillRunning = (pid: number) => processState.isLikelyOcxProcess(pid);
+
+    processState.setProcessCommandLinePlatformForTests("darwin");
+    try {
+      // NEWLY RECOVERABLE: the owner exited and an unrelated process inherited its number.
+      processState.setProcessCommandLineExecForTests(() => "/usr/sbin/cupsd -l\n");
+      expect(mod.isPendingTeardownAbandoned(live, ownerStillRunning, 1)).toBe(true);
+
+      // STILL REFUSED: an opencodex process really is holding that PID, so this is a stop
+      // in flight and its obligation is not ours to finish. Narrowing the precondition must
+      // not turn the concurrency guard into a no-op.
+      processState.setProcessCommandLineExecForTests(() => "ocx stop\n");
+      expect(mod.isPendingTeardownAbandoned(live, ownerStillRunning, 1)).toBe(false);
+
+      // STILL REFUSED: this process's own receipt is never inherited, whatever the probe says.
+      expect(mod.isPendingTeardownAbandoned(live, ownerStillRunning, 4242)).toBe(false);
+    } finally {
+      processState.setProcessCommandLineExecForTests(null);
+      processState.setProcessCommandLinePlatformForTests(null);
+    }
   });
 
   test("deferralMatchesReceipt needs a well-formed nonce that names a readable receipt", async () => {

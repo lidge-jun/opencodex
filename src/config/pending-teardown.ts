@@ -295,6 +295,14 @@ export function quarantinePendingTeardown(nonce: string): string | null {
  * alone. Only an abandoned obligation is a candidate, and a VALID one still has to prove
  * its endpoint is down before anything is restored — an invalid one never can, which is
  * what {@link quarantinePendingTeardown} exists for.
+ *
+ * `isAlive` must answer "is the OWNER still running", which is not "is this PID alive".
+ * PIDs are reused: after the owner exits its number can be handed to an unrelated process,
+ * and a bare liveness probe then reports the owner as running for as long as that process
+ * lives. The receipt is neither recovered nor quarantined nor reported while both updater
+ * gates keep refusing on it, which is a permanent fail-closed with no way forward (#4897).
+ * `handleStop` therefore passes an identity-aware predicate; do not substitute a bare
+ * `process.kill(pid, 0)` here for cheapness.
  */
 export function isPendingTeardownAbandoned(
   read: PendingTeardownRead | TeardownScanFailure,

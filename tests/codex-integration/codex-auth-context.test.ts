@@ -1,3 +1,4 @@
+import { registerStoredDirectIdentityTests } from "../helpers/stored-direct-identity";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +24,7 @@ import {
   isCodexAuthContextUsable,
   codexPoolAffinityKey,
   resolveCodexAuthContext,
+  releaseCodexAuthContextProbeLease,
   shouldMarkAccountNeedsReauthForCodexAuthFailure,
   stripCodexRuntimeProviderFields,
 } from "../../src/codex/auth-context";
@@ -915,19 +917,19 @@ describe("Codex auth context", () => {
     const resolved = await resolveCodexAuthContext(headers, cfg, "pool");
     expect(resolved).toMatchObject({ kind: "pool", accountId: "pool-a" });
     if (resolved.kind !== "pool") throw new Error("expected pool context");
-    // The parent used to BE the key, so every child of one parent shared a single binding
-    // entry and none of them could hold one of their own. A child now keys as its own
-    // conversation; the parent qualifies placement, not identity.
+    // The parent used to BE the key (#4546 wp8); since #4780 the tree is the binding unit and
+    // the session is the cohort. What matters here is that the key stays opaque, derives from
+    // the session rather than any caller-supplied identifier, and is stable across turns.
     expect(resolved.affinityKey?.startsWith("app:")).toBe(true);
     expect(resolved.affinityKey).not.toContain("canonical-parent-thread");
     expect(resolved.affinityKey).not.toContain("desktop-session-private");
     expect(resolved.affinityKey).not.toContain("desktop-thread-private");
-    // Stable across turns that drop the parent header: the key is the session/thread pair.
+    // Stable across turns that drop the parent header: the cohort is the session.
     expect(resolved.affinityKey).toBe(codexPoolAffinityKey(new Headers({
       "session-id": "desktop-session-private",
       "thread-id": "desktop-thread-private",
     })));
-    // And distinct from the parent's own lane, which is what a parent-only request rides.
+    // And distinct from a session-less parent-only lane, which anchors on the parent instead.
     expect(resolved.affinityKey).not.toBe(codexPoolAffinityKey(new Headers({
       "x-codex-parent-thread-id": "canonical-parent-thread",
     })));
@@ -1660,27 +1662,7 @@ describe("Codex auth context", () => {
   });
 
 
-  test("an admission bearer on main substitutes the stored credential, never forwards it (#1686)", () => {
-    // The caller proved admission with one of OUR secrets. That secret must never leave the
-    // process, so the only acceptable outcome is the stored main credential in its place.
-    const admissionSecret = "ocx_data_localsecret";
-    const storedCredential = liveJwt();
-    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
-      tokens: { access_token: storedCredential, account_id: "stored_main_acc" },
-    }));
-
-    const headers = materializeCodexUpstreamAuth(
-      new Headers({ authorization: `Bearer ${admissionSecret}`, "openai-beta": "responses=experimental" }),
-      { kind: "main", accountId: null },
-      { substituteMainCredential: true },
-    );
-
-    expect(headers.get("authorization")).not.toContain(admissionSecret);
-    expect(headers.get("authorization")).toBe(`Bearer ${storedCredential}`);
-    expect(headers.get("chatgpt-account-id")).toBe("stored_main_acc");
-    // Unrelated forwarded headers still ride along.
-    expect(headers.get("openai-beta")).toBe("responses=experimental");
-  });
+  registerStoredDirectIdentityTests(() => testDir, liveJwt);
 
   test("substitution fails closed when no usable main credential exists (#1686)", () => {
     // Falling through here would forward the admission secret upstream, which is exactly
@@ -1781,9 +1763,22 @@ describe("Codex auth context", () => {
       await expect(resolveCodexAuthContext(headers, config(), "pool"))
         .rejects.toBeInstanceOf(CodexAccountCooldownError);
 
+      // A caller that exits before sending upstream can return its lease; the account then
+      // admits the next paced probe instead of pinning the lease until restart.
+      releaseCodexAuthContextProbeLease(probeCtx);
+      const retryAt = probeAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
+      Date.now = () => retryAt;
+      const replacementProbeCtx = await resolveCodexAuthContext(headers, config(), "pool");
+      const replacementProbeLeaseId = (replacementProbeCtx as { probeLeaseId?: string }).probeLeaseId;
+      expect(replacementProbeLeaseId).toBeTruthy();
+      expect(replacementProbeLeaseId).not.toBe(probeLeaseId);
+
       // The probe succeeds: the account is proven healthy and routes normally again.
-      recordCodexUpstreamOutcome(config(), "pool-a", 200, { now: probeAt + 500, probeLeaseId });
-      Date.now = () => probeAt + 500;
+      recordCodexUpstreamOutcome(config(), "pool-a", 200, {
+        now: retryAt + 500,
+        probeLeaseId: replacementProbeLeaseId,
+      });
+      Date.now = () => retryAt + 500;
       await expect(resolveCodexAuthContext(headers, config(), "pool")).resolves.toMatchObject({
         kind: "pool",
         accountId: "pool-a",

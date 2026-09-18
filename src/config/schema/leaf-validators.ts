@@ -243,6 +243,7 @@ export const providerConfigSchema = z.object({
   chatCompletionsPath: z.string().min(1).optional(),
   statelessResponses: z.boolean().optional(),
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
+  requiresPairedResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
@@ -299,21 +300,7 @@ export const providerConfigSchema = z.object({
 }).passthrough();
 
 
-/**
- * Shared shape check for the two relative send-path overrides. `field` names the
- * offending key so the message stays specific to what the user actually wrote.
- */
-export function providerRelativeSendPathConfigError(field: string, value: string | undefined): string | null {
-  if (value === undefined) return null;
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value) || value.includes("://")) {
-    return `${field} must be a relative path without a URL scheme`;
-  }
-  if (!value.startsWith("/")) return `${field} must start with /`;
-  if (value.includes("?") || value.includes("#")) {
-    return `${field} must not include query strings or fragments`;
-  }
-  return null;
-}
+export { providerRelativeSendPathConfigError } from "../provider-relative-send-path";
 
 /**
  * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model

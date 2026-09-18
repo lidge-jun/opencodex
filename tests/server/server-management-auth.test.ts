@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { clearContextSessionOwnersForTests } from "../../src/codex/context-owner";
 import { resetContextRelayActivationForTests } from "../../src/codex/context-compat";
 import { startServer } from "../../src/server";
@@ -30,6 +31,7 @@ import {
   setPlatformForTests,
   timedOutSecretPathCountForTests,
   hardenSecretDir,
+  flushWindowsSecretAclReapsBeforeRemoval,
 } from "../../src/lib/windows-secret-acl";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -207,6 +209,20 @@ afterEach(async () => {
   // hook moves OPENCODEX_HOME back to the developer's real home a few lines below, so a
   // directory-scoped flush here would settle the wrong tree and leave this one held.
   await flushConfigDirHardeningForTests();
+  // The ACL wrapper has its own watchdog, so its public flight can settle before a killed
+  // icacls.exe reports `exited`. This is a removal barrier, not part of ordinary shutdown: only
+  // the code about to delete this tree waits for the distinct handle-release guarantee.
+  await flushWindowsSecretAclReapsBeforeRemoval(testHome);
+  // And settle any native-main release nobody awaited. `server.stop` awaits its own, but a
+  // startServer that THREW cannot: the rollback fires `void lifecycle.release()` and rethrows,
+  // because startServer is synchronous by contract. That release closes the owner's SQLite lease
+  // and stable lock file, both under CODEX_HOME, which is this very directory.
+  //
+  // This file reaches that path. Two of its cases bind a management ingress on the fixed port
+  // 10101, which nine other test files also use, so a collision on the six-shard Windows leg
+  // turns a passing start into the rollback. That is why the same file and line failed on shard
+  // 1, then 2, then 3 while every other shard passed: the trigger is another shard, not this one.
+  await flushNativeMainStartupReleases();
   resetContextRelayActivationForTests();
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;

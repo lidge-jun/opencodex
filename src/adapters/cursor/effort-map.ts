@@ -38,8 +38,10 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-opus-5-fast": ["low", "medium", "high"],
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "glm-5.2": ["high", "max"],
-  // 260825 live GetUsableModels. gemini-3.6-flash is the only Cursor model exposing `minimal`;
-  // listing it here is also what admits the suffix into CANONICAL_EFFORT_SUFFIXES below.
+  // 260825 live GetUsableModels. gemini-3.6-flash was the first Cursor model exposing
+  // `minimal`; listing a rung here is also what admits the suffix into
+  // CANONICAL_EFFORT_SUFFIXES below. muse-spark-1.3 now carries it too, so `minimal` no
+  // longer depends on this single row.
   "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
   "gemini-3.7-flash": ["low", "medium", "high"],
   // 260903 preemptive: gemini-3.8-flash seeded ahead of Cursor's lineup update, the same way
@@ -91,6 +93,18 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max"],
   "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max"],
   "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
+  // 260916 live GetUsableModels (#4820) advertises muse-spark-1.3 at minimal, low, medium,
+  // high, xhigh AND max. The seed stops at xhigh deliberately.
+  //
+  // Meta publishes minimal..xhigh for Muse Spark and lists no `max` at all
+  // (dev.meta.ai/docs/reasoning), and an independent OpenCode Zen probe of
+  // muse-spark-1.3-contributor-free rejected max with `unknown variant` — both already
+  // recorded on META_MUSE_REASONING_EFFORTS in src/providers/registry/model-seeds.ts.
+  // Cursor advertising a wire id is not evidence that Run accepts it; that is exactly the
+  // advertised-but-not-callable shape CURSOR_KNOWN_UNCALLABLE_MODEL_IDS was created for.
+  // Publishing the rung anyway would invent a capability on two sources' contrary evidence.
+  // Add `max` here once a Cursor Run at max is observed to succeed.
+  "muse-spark-1.3": ["minimal", "low", "medium", "high", "xhigh"],
 };
 
 /** All effort suffixes accepted when matching live Cursor model ids to configured base ids. */

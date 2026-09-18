@@ -59,7 +59,7 @@
       "path": "runtime.md",
       "tier": 1,
       "title": "Runtime",
-      "scope": "Entrypoints, process lifecycle, CLI surface, and provider/adapter selection.",
+      "scope": "Entrypoints, process lifecycle, CLI surface, and the Remote Hub, sideband, and request-compatibility contracts on that path.",
       "documents": [
         "bin/",
         "src/adapters/",
@@ -215,6 +215,22 @@
         "src/adapters/",
         "src/chat/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "providers-and-adapters.md",
+      "tier": 4,
+      "title": "Providers And Adapters",
+      "scope": "Provider and adapter selection, the adapter inventory, live model discovery, and the hosted-search continuation bridge.",
+      "documents": [
+        "src/adapters/",
+        "src/chat/",
+        "src/combos/",
+        "src/oauth/",
+        "src/providers/",
+        "src/responses/",
+        "src/server/",
+        "src/web-search/"
       ]
     },
     {

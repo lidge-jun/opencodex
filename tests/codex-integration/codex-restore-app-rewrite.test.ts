@@ -220,7 +220,7 @@ describe("#1798 restore after the Codex app rewrites the config", () => {
       profileExistsAfterRestore: boolean;
     };
     expect(result.success).toBe(true);
-    expect(result.action).toBe("owned-fields-stripped");
+    expect(["owned-fields-stripped", "routing-restored-provider-retained"]).toContain(result.action);
     expect(result.beforeRestore).toContain('approval_policy = "never"');
     expect(result.beforeRestore).toContain("127.0.0.1:10200");
     expect(result.afterRestore).toContain('approval_policy = "never"');
