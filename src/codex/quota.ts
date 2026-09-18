@@ -256,7 +256,8 @@ function assignCarriedShort(
   const existingShortPercent = existing.shortPercent;
   const preserveBlockingEvidence = policyEvidence
     && finitePercent(existingShortPercent)
-    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT;
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent <= 100;
   if (!preserveBlockingEvidence && shortResetHasElapsed(existing.shortResetAt, now)) return;
   if (existing.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
   if (existing.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
@@ -372,7 +373,8 @@ function mergeAccountQuota(
   const preserveKnownShort = policyEvidence
     && quota.shortPercent === undefined
     && finitePercent(existingShortPercent)
-    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT;
+    && existingShortPercent >= MAIN_ACCOUNT_HARD_LOCK_PERCENT
+    && existingShortPercent <= 100;
   if (snapshotHasShort(quota) && !preserveKnownShort) {
     if (quota.shortPercent !== undefined) {
       next.shortPercent = quota.shortPercent;
