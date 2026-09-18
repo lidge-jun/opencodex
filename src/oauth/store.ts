@@ -732,9 +732,8 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; removeLegacyBackup?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; removeLegacyBackup?: boolean | ((result: T) => boolean) }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
-    if (hadLegacy && !options?.removeLegacyBackup) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
       set,
       accountId: set.activeAccountId,
@@ -742,6 +741,15 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       accountIds: set.accounts.map(account => account.id),
     }]));
     const result = await fn(store);
+    // A destructive mutation that removed nothing must not drop the downgrade
+    // backup: the request was a no-op, so there is no deleted credential to
+    // stop retaining, and the backup is a whole-store copy for every provider.
+    // The decision needs the mutation's result, so it is taken here; `fn` only
+    // edits the in-memory store, and nothing has touched disk yet.
+    const dropLegacyBackup = typeof options?.removeLegacyBackup === "function"
+      ? options.removeLegacyBackup(result)
+      : options?.removeLegacyBackup === true;
+    if (hadLegacy && !dropLegacyBackup) backupLegacyOnce();
     options?.assertBeforePersist?.();
     const changedProviders: string[] = [];
     for (const provider of new Set([...selections.keys(), ...Object.keys(store)])) {
@@ -763,7 +771,7 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       }
     }
     persist(store);
-    if (options?.removeLegacyBackup) removeLegacyBackup();
+    if (dropLegacyBackup) removeLegacyBackup();
     for (const provider of changedProviders) publishAccountSelection(provider, "oauth");
     return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
@@ -907,7 +915,7 @@ export async function removeCredential(provider: string): Promise<"removed" | "n
     }
     set.activeAccountId = set.accounts[0]!.id;
     return "removed" as const;
-  }, [provider], { removeLegacyBackup: true });
+  }, [provider], { removeLegacyBackup: result => result === "removed" });
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,7 +1058,7 @@ export async function removeAccount(provider: string, accountId: string): Promis
     }
     if (set.activeAccountId === accountId) set.activeAccountId = set.accounts[0]!.id;
     return true;
-  }, [provider, accountId], { removeLegacyBackup: true });
+  }, [provider, accountId], { removeLegacyBackup: removed => removed });
   return removed;
 }
 
