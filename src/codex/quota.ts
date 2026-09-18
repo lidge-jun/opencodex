@@ -57,14 +57,13 @@ const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
  * Both units reach storage — `normalizeResetAt` does not scale, and the GUI disambiguates by
  * magnitude at read time — so a comparison written against one assumption is off by 1000x
  * against the other. In the seconds-read-as-milliseconds direction every reading looks like it
- * elapsed in 1970, which is a check that passes its own test and does nothing. Exported so
- * `isTerminalShortWindow` in routing.ts shares this one split instead of repeating the literal.
+ * elapsed in 1970, which is a check that passes its own test and does nothing.
+ *
+ * The split now lives on `./quota-types`, the leaf the dashboard can also import, because the
+ * dashboard was the reader that did not have it (#5045). Re-exported here so the existing
+ * callers of this module keep their import path.
  */
-const RESET_AT_SECONDS_MAX = 10_000_000_000;
-
-export function resetAtToMs(resetAt: number): number {
-  return resetAt < RESET_AT_SECONDS_MAX ? resetAt * 1000 : resetAt;
-}
+export { resetAtToMs } from "./quota-types";
 
 const accountQuota = new Map<string, StoredAccountQuota>();
 const quotaHistory = new CodexQuotaHistory();

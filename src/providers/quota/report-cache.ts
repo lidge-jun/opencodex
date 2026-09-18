@@ -151,6 +151,9 @@ export function providerQuotaFromCodexQuota(
   const projected: CodexCapacityQuota = {
     ...(quota.shortPercent !== undefined ? { fiveHourPercent: quota.shortPercent } : {}),
     ...(quota.shortResetAt !== undefined ? { fiveHourResetAt: quota.shortResetAt } : {}),
+    // Freshness for the reset-less terminal rule. Without it the dashboard evaluates that rule
+    // with no evidence and returns null while routing refuses the same account (#5045).
+    ...(quota.shortObservedAt !== undefined ? { shortObservedAt: quota.shortObservedAt } : {}),
     ...(quota.weeklyPercent !== undefined ? { weeklyPercent: quota.weeklyPercent } : {}),
     ...(quota.weeklyResetAt !== undefined ? { weeklyResetAt: quota.weeklyResetAt } : {}),
     ...(quota.monthlyPercent !== undefined ? { monthlyPercent: quota.monthlyPercent } : {}),
