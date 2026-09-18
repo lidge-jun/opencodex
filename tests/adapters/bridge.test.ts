@@ -1803,6 +1803,121 @@ describe("fallback freeform wrappers stream one stable representation (#5047)", 
       .toEqual({ concatenated: "line1\nline2", done: "line1\nline2", itemInput: "line1\nline2" });
   });
 
+  // #5047 matched the buffer against the compact literals `{"input":"` and `{"code":"`, so a
+  // wrapper carrying the insignificant whitespace `JSON.parse` accepts matched nothing at all:
+  // it streamed as raw JSON and then completed as the unwrapped body. The completion path reads
+  // the text with `JSON.parse`, which does not care how the object is laid out, so the two
+  // disagreed again through a different spelling of the same wrapper.
+  test("a wrapper written with whitespace streams the same value it completes with", async () => {
+    const spacings = [
+      '{ "code": "const x = 1;" }',
+      '{"code" : "const x = 1;"}',
+      '{\n  "code": "const x = 1;"\n}',
+      '{\t"input":\t"const x = 1;"}',
+      '{ "input" : "const x = 1;" }',
+    ];
+    for (const wrapper of spacings) {
+      const view = inputView(await streamExec([wrapper]));
+      expect({ wrapper, ...view })
+        .toEqual({ wrapper, concatenated: "const x = 1;", done: "const x = 1;", itemInput: "const x = 1;" });
+    }
+  });
+
+  test("a spaced wrapper split at every byte boundary never leaks raw JSON", async () => {
+    const wrapper = '{ "code": "a\\nb" }';
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const view = inputView(await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]));
+      expect({ cut, ...view }).toEqual({ cut, concatenated: "a\nb", done: "a\nb", itemInput: "a\nb" });
+    }
+  });
+
+  // `stripMarkdownCodeFence` removes one complete outer fence at completion for `exec` and
+  // `apply_patch`. Streaming the fence bytes first and then completing with the stripped body is
+  // the same rewind the wrapper holds exist to avoid, so a fenced body streams no preview at
+  // all. A closing fence can still be followed by more text that withdraws it, which is why the
+  // hold lasts the whole call rather than releasing when the fence looks complete.
+  test("a fenced body streams no preview rather than bytes the completed item drops", async () => {
+    const fenced = ["```js", "const x = 1;", "```"].join("\n");
+    for (const chunks of [[fenced], [fenced.slice(0, 4), fenced.slice(4)], Array.from(fenced)]) {
+      const view = inputView(await streamExec(chunks));
+      expect(view.done).toBe("const x = 1;");
+      expect(view.itemInput).toBe("const x = 1;");
+      expect(view.concatenated).toBe("");
+    }
+
+    // The same body inside the canonical wrapper: the value is decidable, the fence is not.
+    const wrapped = inputView(await streamExec([JSON.stringify({ input: fenced })]));
+    expect(wrapped).toEqual({ concatenated: "", done: "const x = 1;", itemInput: "const x = 1;" });
+  });
+
+  test("a body that only starts like a fence resumes streaming as soon as it cannot be one", async () => {
+    // One held character, then the buffer can no longer open a fence and streams normally. This
+    // is what keeps the fence hold from swallowing ordinary template-literal JavaScript.
+    const body = "`hello` + world";
+    const view = inputView(await streamExec(Array.from(body)));
+    expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
+  });
+
+  test("every escape JSON defines decodes to the character JSON.parse produces", async () => {
+    // The decoder used to treat any escape it did not list as its own literal suffix, so a valid
+    // backspace streamed as the letter b while the completed item carried U+0008. The routed
+    // passthrough already pins this shape in responses-custom-tool-repair.test.ts.
+    const body = 'a"b\\c/d\be\ff\ng\rh\ti';
+    const view = inputView(await streamExec([JSON.stringify({ input: body })]));
+    expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
+  });
+
+  test("an escape JSON does not define holds instead of inventing a value", async () => {
+    // A wrapper carrying an undefined escape does not parse, so the completed item is the raw
+    // text. Decoding the escape to its own suffix would stream a value nothing else ever carries.
+    const wrapper = '{"input":"a\\qb"}';
+    const view = inputView(await streamExec([wrapper]));
+    expect(view).toEqual({ concatenated: "", done: wrapper, itemInput: wrapper });
+  });
+
+  test("a wrapper that turns invalid after streaming committed stops rather than continuing", async () => {
+    // The valid prefix has already been published when the undefined escape arrives, and no
+    // mechanism can take a delta back. What is guaranteed is that nothing further is invented:
+    // the preview stops at the last decodable character and the completed item carries the raw
+    // text. Holding the whole wrapper instead would mean never streaming any canonical wrapper
+    // progressively, which the test above this one requires.
+    const view = inputView(await streamExec(['{"input":"a', '\\qb"}']));
+    expect(view.concatenated).toBe("a");
+    expect(view.done).toBe('{"input":"a\\qb"}');
+    expect(view.itemInput).toBe('{"input":"a\\qb"}');
+  });
+
+  test("a surrogate pair split across chunks is emitted whole, never as a lone half", async () => {
+    const emoji = "\u{1F600}";
+    const wrapper = '{"input":"x\\ud83d\\ude00y"}';
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const deltas = (await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]))
+        .filter(f => f.event === "response.custom_tool_call_input.delta")
+        .map(f => String(f.data.delta));
+      for (const delta of deltas) {
+        // A delta ending on an unpaired high surrogate is not decodable on its own.
+        const last = delta.charCodeAt(delta.length - 1);
+        expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+      }
+      expect(deltas.join("")).toBe(`x${emoji}y`);
+    }
+  });
+
+  test("a decorated apply_patch envelope streams nothing rather than markers completion rewrites", async () => {
+    // normalizeApplyPatchDelimiters strips the trailing *** from the outer lines of a complete
+    // envelope. Streaming the decorated markers first and completing with the normalized ones is
+    // the same rewind the wrapper and fence holds exist to avoid.
+    const decorated = ["*** Begin Patch ***", "*** Add File: a.txt", "+x", "*** End Patch ***"].join("\n");
+    const normalized = ["*** Begin Patch", "*** Add File: a.txt", "+x", "*** End Patch"].join("\n");
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "apply_patch" } as AdapterEvent,
+      { type: "tool_call_delta", arguments: decorated } as AdapterEvent,
+      { type: "tool_call_end" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]), "model", undefined, new Set(["apply_patch"])));
+    expect(inputView(frames)).toEqual({ concatenated: "", done: normalized, itemInput: normalized });
+  });
+
   test("a stream that dies inside a held wrapper manufactures no tool call", async () => {
     // The held buffer is suppressed output, never content. An aborted turn must not turn it
     // into a completed call, and must not release it as raw JSON either.

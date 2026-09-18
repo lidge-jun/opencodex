@@ -262,6 +262,29 @@ describe("membership oracle", () => {
     expect({ unresolvedNew, missingFromTree, wrongTarget }).toEqual({ unresolvedNew: [], missingFromTree: [], wrongTarget: [] });
   });
 
+  // The regex seeds place a conventionally named file, so a regression test can sit in the tree,
+  // run in CI, and never appear in the authoritative table — which is how these three landed with
+  // their subjects (#5050, #5051, #5055) and stayed invisible to the inventory (#5059). The seeds
+  // are deliberately allowed to carry a brand-new file; what they must not do is carry a merged
+  // regression test indefinitely. Naming them here is the difference between "something resolves
+  // it" and "the table says which domain owns it".
+  test("the merged regression tests are classified explicitly, not by seed", () => {
+    const owners = {
+      "ci-structure-gate.test.ts": "ci-workflows",
+      "responses-code-mode-patch-compile.test.ts": "responses",
+      "gui-codex-usage-score-parity.test.ts": "gui",
+    } as const;
+    const classified = Object.fromEntries(
+      Object.keys(owners).map(name => [name, layout.explicit[name] ?? null]),
+    );
+    expect(classified).toEqual(owners);
+    // The file has to be where its registration says, or the registration is a claim about a
+    // tree that does not exist.
+    const live = new Set(listTestFiles(repoRoot()));
+    const placed = Object.entries(owners).map(([name, domain]) => `tests/${domain}/${name}`);
+    expect(placed.filter(rel => !live.has(rel))).toEqual([]);
+  });
+
   test("the fixture histogram never drops below the inventory in devlog 001 §2.B", () => {
     // 001 is a snapshot of 2026-09-05; files added on dev afterwards join the fixture and
     // raise a domain's count. A count that falls below the snapshot means a file was dropped

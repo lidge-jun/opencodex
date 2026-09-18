@@ -1532,7 +1532,10 @@
     "ws-steering-smoke.test.ts": "responses",
     "combo-authoritative-reset.test.ts": "codex-integration",
     "devin-stated-reset-hardening.test.ts": "providers",
-    "devin-stated-reset-retry.test.ts": "providers"
+    "devin-stated-reset-retry.test.ts": "providers",
+    "ci-structure-gate.test.ts": "ci-workflows",
+    "responses-code-mode-patch-compile.test.ts": "responses",
+    "gui-codex-usage-score-parity.test.ts": "gui"
   },
   "migrated": [
     "adapters",

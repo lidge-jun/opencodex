@@ -453,10 +453,12 @@ describe("antigravity CCA envelope", () => {
       .not.toBe(antigravitySessionId(threaded("hi", "thread-b")));
   });
 
-  // #5033. `_clientThreadId` carries `x-codex-parent-thread-id`, which every parallel child of
-  // one parent presents identically, so anchoring on it alone collapsed concurrent children onto
-  // a single upstream Cloud Code Assist session. `codexConversationIdentity` keys on parent AND
-  // thread for the same reason: a thread id is only unique within its parent.
+  // #5033 / #5058. `_clientThreadId` carries `x-codex-parent-thread-id`, which every parallel
+  // child of one parent presents identically, so anchoring on it alone collapsed concurrent
+  // children onto a single upstream Cloud Code Assist session. #5054 then anchored on the child
+  // alone, which only moved the collision: a thread id is unique WITHIN its parent, so two
+  // parents can each have one of the same id. `codexConversationIdentity` keys on both for this
+  // reason, and so does this anchor now.
   function child(text: string, ownThreadId?: string, parentThreadId?: string): OcxParsedRequest {
     const base = parsed(text) as OcxParsedRequest & { _clientThreadId?: string; _codexOwnThreadId?: string };
     if (parentThreadId) base._clientThreadId = parentThreadId;
@@ -469,6 +471,20 @@ describe("antigravity CCA envelope", () => {
       .not.toBe(antigravitySessionId(child("hi", "child-2", "parent-a")));
   });
 
+  test("#5058: the same child id under two different parents does not collide", () => {
+    // The half #5054 missed. A child id is only unique within its parent, so keying on it alone
+    // relocated the shared session rather than removing it.
+    expect(antigravitySessionId(child("hi", "child-1", "parent-a")))
+      .not.toBe(antigravitySessionId(child("hi", "child-1", "parent-b")));
+  });
+
+  test("#5058: the pair encoding cannot be confused with a different pair", () => {
+    // Injectivity, not merely difference: a separator a Codex id could contain would let
+    // (parent "a", child "b:c") and (parent "a:b", child "c") hash to one session.
+    expect(antigravitySessionId(child("hi", "b:c", "a")))
+      .not.toBe(antigravitySessionId(child("hi", "c", "a:b")));
+  });
+
   test("#5033: a child keeps one session id across its own turns", () => {
     // The property the anchor exists for is unchanged: stable turn to turn even when the first
     // user message is compacted away.
@@ -476,11 +492,16 @@ describe("antigravity CCA envelope", () => {
       .toBe(antigravitySessionId(child("summary of earlier turns", "child-1", "parent-a")));
   });
 
-  test("#5033: a root turn is byte-identical to what it was before", () => {
-    // A root presents `thread-id` equal to its parent id, so nothing moves for it. This is what
-    // bounds the one-time re-anchor to child threads.
-    expect(antigravitySessionId(child("hi", "thread-a", "thread-a")))
-      .toBe(antigravitySessionId(threaded("hi", "thread-a")));
+  test("#5058: a parentless root keeps the anchor it had before #5054", () => {
+    // `src/server/context-history.ts` is explicit that a root uses (session-id=root,
+    // thread-id=root) and does not fabricate a parent key, so a root carries an own thread and no
+    // parent. #5054 gave it an own-thread anchor on that basis and was wrong to.
+    //
+    // Durable Antigravity replay state is keyed by model plus session id, so moving a root's
+    // anchor on upgrade strands every signature stored under the old session. Asserted against
+    // the no-header form rather than a literal: what matters is that the value did not move.
+    expect(antigravitySessionId(child("hi", "root-thread", undefined)))
+      .toBe(antigravitySessionId(threaded("hi", undefined)));
   });
 
   test("#5033: a client that sends no own-thread header is unchanged", () => {
@@ -491,6 +512,14 @@ describe("antigravity CCA envelope", () => {
     expect(antigravitySessionId(child("hi", undefined, "parent-a")))
       .not.toBe(antigravitySessionId(threaded("hi", undefined)));
   });
+
+  test("#5058: a parent/child pair is stable across restart and compaction", () => {
+    // Both ids are Codex's own values rather than a process-random HMAC, so the pair survives a
+    // proxy restart; the compaction half is the #1297 property, re-asserted for the pair form.
+    expect(antigravitySessionId(child("original first message", "child-1", "parent-a")))
+      .toBe(antigravitySessionId(child("a summary of earlier turns", "child-1", "parent-a")));
+  });
+
 
 
   test("#1297: promptCacheKey does not influence the id", () => {
