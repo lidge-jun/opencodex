@@ -429,8 +429,7 @@ function responseBody(
   status: number,
   method: string,
 ): ReadableStream<Uint8Array> | null {
-  const bodyless = method === "HEAD" || status === 204 || status === 304 || (status >= 100 && status < 200);
-  if (bodyless) {
+  if (bodylessResponse(method, status)) {
     reader.dispose();
     socket.setTimeout(0);
     socket.destroy();
@@ -507,6 +506,11 @@ function responseBody(
       socket.destroy();
     },
   });
+}
+
+/** Statuses and methods that carry no response body, whatever the headers say about one. */
+function bodylessResponse(method: string, status: number): boolean {
+  return method === "HEAD" || status === 204 || status === 304 || (status >= 100 && status < 200);
 }
 
 /**
@@ -586,9 +590,14 @@ export async function socks5Fetch(
     while (responseHead.status >= 100 && responseHead.status < 200 && responseHead.status !== 101) {
       responseHead = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, request.signal));
     }
-    // Reject a coding this transport cannot undo before the body stream takes the socket, so
-    // the failure path is the ordinary one below rather than an orphaned reader.
-    const codingFormat = contentCodingFormat(responseHead.headers);
+    // A bodyless response has no coded bytes to undo, so its `content-encoding` describes the
+    // representation it would have sent and must neither be decoded nor refused — a HEAD whose
+    // peer advertises brotli is a correct answer, not an unreadable body. For everything else,
+    // reject a coding this transport cannot undo before the body stream takes the socket, so the
+    // failure path is the ordinary one below rather than an orphaned reader.
+    const codingFormat = bodylessResponse(request.method, responseHead.status)
+      ? undefined
+      : contentCodingFormat(responseHead.headers);
     const body = responseBody(reader, socket, request.signal, responseHead.headers, responseHead.status, request.method);
     const responseHeaders = new Headers(responseHead.headers);
     if (codingFormat !== undefined) {
@@ -596,8 +605,16 @@ export async function socks5Fetch(
       // The declared length describes the coded bytes, not what the caller now reads.
       responseHeaders.delete("content-length");
     }
-    const decodedBody = body !== null && codingFormat !== undefined
-      ? body.pipeThrough(new DecompressionStream(codingFormat))
+    // `DecompressionStream` declares its writable side as `WritableStream<BufferSource>`, and
+    // TypeScript measures `WritableStream` as invariant in its chunk type, so the pair is not
+    // assignable to `ReadableWritablePair<Uint8Array, Uint8Array>` even though every chunk this
+    // body produces is a valid `BufferSource`. The conversion states that relationship and
+    // nothing else; it does not widen what is actually written.
+    const decompressor = codingFormat === undefined
+      ? undefined
+      : new DecompressionStream(codingFormat) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
+    const decodedBody = body !== null && decompressor !== undefined
+      ? body.pipeThrough(decompressor)
       : body;
     request.signal.removeEventListener("abort", onAbort);
     return new Response(decodedBody, {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createServer as createHttpServer } from "node:http";
 import net, { createConnection, createServer as createTcpServer, Socket, type Server as TcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
+import { deflateSync, gzipSync } from "node:zlib";
 import { configuredOutboundFetch, effectiveProxyFor, configureSocks5Fetch } from "../../src/lib/proxy-env";
 import { providerOutboundGet } from "../../src/lib/provider-outbound";
 import { socks5Fetch } from "../../src/lib/socks5-fetch";
@@ -242,7 +243,7 @@ describe("socks5Fetch", () => {
 
     test("a gzip body is decoded and stops advertising a coding it no longer carries", async () => {
       const body = JSON.stringify({ ok: true, note: "compressed" });
-      const { server: target } = codedTarget("gzip", Bun.gzipSync(new TextEncoder().encode(body)));
+      const { server: target } = codedTarget("gzip", gzipSync(Buffer.from(body, "utf8")));
       const proxy = socksProxy();
       const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
       try {
@@ -262,7 +263,10 @@ describe("socks5Fetch", () => {
 
     test("a deflate body is decoded the same way", async () => {
       const body = JSON.stringify({ ok: true });
-      const { server: target } = codedTarget("deflate", Bun.deflateSync(new TextEncoder().encode(body)));
+      // HTTP `deflate` is the zlib container, not raw DEFLATE, and that is what
+      // `DecompressionStream("deflate")` reads. `node:zlib` states the framing explicitly rather
+      // than leaving it to a runtime default.
+      const { server: target } = codedTarget("deflate", deflateSync(Buffer.from(body, "utf8")));
       const proxy = socksProxy();
       const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
       try {
@@ -320,6 +324,98 @@ describe("socks5Fetch", () => {
         expect(chosen.requestHead().toLowerCase()).toContain("accept-encoding: gzip");
       } finally {
         await Promise.all([close(proxy), close(bare.server), close(chosen.server)]);
+      }
+    });
+
+    test("a bodyless response keeps its representation headers and is never decoded", async () => {
+      // A 304 describes the representation it is not sending. Refusing it for naming a coding
+      // this transport cannot decode would reject a correct answer that carries no coded bytes.
+      const target = createTcpServer(socket => {
+        socket.once("error", () => undefined);
+        socket.on("data", chunk => {
+          if (!chunk.toString("latin1").includes("\r\n\r\n")) return;
+          socket.write("HTTP/1.1 304 Not Modified\r\ncontent-encoding: br\r\n\r\n");
+        });
+      });
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/not-modified`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        expect(response.status).toBe(304);
+        expect(response.body).toBeNull();
+        expect(response.headers.get("content-encoding")).toBe("br");
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("a corrupt coded body errors the reader and still releases the socket", async () => {
+      // The decode runs in a transform between the socket stream and the caller. If an error
+      // there did not travel back through the pipe, the source would never cancel and the socket
+      // would outlive the request.
+      let targetConnection: Socket | undefined;
+      const garbage = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x41, 0x42, 0x43]);
+      const target = createTcpServer(socket => {
+        targetConnection = socket;
+        socket.once("error", () => undefined);
+        socket.on("data", chunk => {
+          if (!chunk.toString("latin1").includes("\r\n\r\n")) return;
+          const head = "HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: "
+            + garbage.byteLength + "\r\nconnection: keep-alive\r\n\r\n";
+          socket.write(Buffer.concat([Buffer.from(head, "latin1"), garbage]));
+        });
+      });
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/corrupt-gzip`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        await expect(response.text()).rejects.toThrow();
+        expect(await awaitDestroyed(targetConnection)).toBe(true);
+      } finally {
+        targetConnection?.destroy();
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("cancelling a coded body releases the socket without waiting for the coding to finish", async () => {
+      let targetConnection: Socket | undefined;
+      const payload = gzipSync(Buffer.from("x".repeat(64 * 1024), "utf8"));
+      const target = createTcpServer(socket => {
+        targetConnection = socket;
+        socket.once("error", () => undefined);
+        socket.on("data", chunk => {
+          if (!chunk.toString("latin1").includes("\r\n\r\n")) return;
+          // Declare more than is ever written: the body stays open until the caller cancels.
+          const head = "HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: "
+            + (payload.byteLength + 1024) + "\r\nconnection: keep-alive\r\n\r\n";
+          socket.write(Buffer.concat([Buffer.from(head, "latin1"), payload.subarray(0, 32)]));
+        });
+      });
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/cancel-gzip`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("coded response had no body");
+        const pending = reader.read();
+        await reader.cancel();
+        await Promise.race([pending.catch(() => undefined), Bun.sleep(250)]);
+        expect(await awaitDestroyed(targetConnection)).toBe(true);
+      } finally {
+        targetConnection?.destroy();
+        await Promise.all([close(proxy), close(target)]);
       }
     });
   });

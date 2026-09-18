@@ -1858,6 +1858,54 @@ describe("fallback freeform wrappers stream one stable representation (#5047)", 
     expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
   });
 
+  test("every escape JSON defines decodes to the character JSON.parse produces", async () => {
+    // The decoder used to treat any escape it did not list as its own literal suffix, so a valid
+    // backspace streamed as the letter b while the completed item carried U+0008. The routed
+    // passthrough already pins this shape in responses-custom-tool-repair.test.ts.
+    const body = 'a"b\\c/d\be\ff\ng\rh\ti';
+    const view = inputView(await streamExec([JSON.stringify({ input: body })]));
+    expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
+  });
+
+  test("an escape JSON does not define holds instead of inventing a value", async () => {
+    // A wrapper carrying an undefined escape does not parse, so the completed item is the raw
+    // text. Decoding the escape to its own suffix would stream a value nothing else ever carries.
+    const wrapper = '{"input":"a\\qb"}';
+    const view = inputView(await streamExec([wrapper]));
+    expect(view).toEqual({ concatenated: "", done: wrapper, itemInput: wrapper });
+  });
+
+  test("a surrogate pair split across chunks is emitted whole, never as a lone half", async () => {
+    const emoji = "\u{1F600}";
+    const wrapper = '{"input":"x\\ud83d\\ude00y"}';
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const deltas = (await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]))
+        .filter(f => f.event === "response.custom_tool_call_input.delta")
+        .map(f => String(f.data.delta));
+      for (const delta of deltas) {
+        // A delta ending on an unpaired high surrogate is not decodable on its own.
+        const last = delta.charCodeAt(delta.length - 1);
+        expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+      }
+      expect(deltas.join("")).toBe(`x${emoji}y`);
+    }
+  });
+
+  test("a decorated apply_patch envelope streams nothing rather than markers completion rewrites", async () => {
+    // normalizeApplyPatchDelimiters strips the trailing *** from the outer lines of a complete
+    // envelope. Streaming the decorated markers first and completing with the normalized ones is
+    // the same rewind the wrapper and fence holds exist to avoid.
+    const decorated = ["*** Begin Patch ***", "*** Add File: a.txt", "+x", "*** End Patch ***"].join("\n");
+    const normalized = ["*** Begin Patch", "*** Add File: a.txt", "+x", "*** End Patch"].join("\n");
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "apply_patch" } as AdapterEvent,
+      { type: "tool_call_delta", arguments: decorated } as AdapterEvent,
+      { type: "tool_call_end" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]), "model", undefined, new Set(["apply_patch"])));
+    expect(inputView(frames)).toEqual({ concatenated: "", done: normalized, itemInput: normalized });
+  });
+
   test("a stream that dies inside a held wrapper manufactures no tool call", async () => {
     // The held buffer is suppressed output, never content. An aborted turn must not turn it
     // into a completed call, and must not release it as raw JSON either.
