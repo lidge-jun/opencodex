@@ -149,6 +149,19 @@ until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
 
+A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
+about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
+— are identity probes with a retry budget, because a start that answers "nobody is there" on one
+lost probe deletes this home's pid record and then binds a second listener that takes over the
+records and re-points Codex at itself. `probePortOwner` in `src/server/proxy-liveness.ts` asks the
+busy port directly, on both loopback families, independent of the pid and runtime records; the
+outcome is the pure decision `decideBusyPreferredPort` in `src/cli/dispatch.ts`. An opencodex
+holder is refused with the same message the owner check prints (exit 0 instead under
+`OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
+is reported as such rather than called foreign, because an identity probe cannot distinguish a
+foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
+
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 

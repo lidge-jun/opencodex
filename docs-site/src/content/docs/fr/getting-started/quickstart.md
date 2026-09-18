@@ -46,8 +46,10 @@ Au démarrage, opencodex :
   le catalogue de modèles de Codex**,
 - écoute sur `http://localhost:<port>/v1`.
 
-Si le port demandé est occupé, `ocx start` sélectionne un port libre, l'enregistre dans `runtime-port.json`,
-et met à jour Codex pour utiliser l'écouteur en direct.
+Si le port demandé est occupé, `ocx start` s’arrête et indique ce qui l’occupe : exécutez d’abord
+`ocx stop` si un processus opencodex y répond, ou démarrez sur un port libre avec
+`ocx start --port <port>`. La commande ne change jamais de port d’elle-même : auparavant, ce
+comportement laissait deux proxys en cours d’exécution et redirigeait Codex vers le plus récent.
 
 Vérifiez-le :
 

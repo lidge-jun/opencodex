@@ -313,8 +313,9 @@ ocx v2 <...>                   # multi-agent v1/v2 surface controls
 ocx update [--tag preview]     # update opencodex
 ```
 
-Unpinned starts may pick another free port if the preferred one is busy; an explicit `--port`
-never hops. Full reference: [CLI docs](https://opencodex.me/reference/cli/).
+A start whose preferred port is busy stops and names the holder instead of moving to another port,
+so it can never leave a second proxy running beside the first. Free the port, or name a different
+one with `--port`. Full reference: [CLI docs](https://opencodex.me/reference/cli/).
 
 ### Health and readiness
 

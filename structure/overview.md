@@ -119,6 +119,11 @@ still cover the rule, which is a judgement only review makes.
   through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. Provider additions register
   their focused test in both the explicit layout map and its expected-map fixture.
   Enforced by `tests/test-layout.test.ts`.
+- **INV-START-01** — `ocx start` never answers a busy preferred port by starting on another one. It
+  identifies the holder first and stops either way: refused as a duplicate when an opencodex answers
+  there, reported as an unidentified holder otherwise. A configured `port: 0` still asks the OS for a
+  port, and an explicit `--port` still waits for its pin instead of hopping.
+  Enforced by `tests/cli/cli-dispatch.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

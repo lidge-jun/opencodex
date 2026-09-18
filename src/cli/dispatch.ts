@@ -965,6 +965,60 @@ export function decideStartWithLiveOwner(input: {
   return input.ocxService === "1" ? "service-stay-out" : "refuse";
 }
 
+/** What `chooseListenPort` does when the preferred port stayed busy through prefer-retry. */
+export type BusyPreferredPortDecision =
+  | "hop"
+  | "refuse-live-proxy"
+  | "service-stay-out"
+  | "refuse-unidentified-holder";
+
+/**
+ * Pure decision for a soft `start` whose preferred port is busy and whose only remaining
+ * option is an ephemeral port.
+ *
+ * The hop exists so a first start is not defeated by a port this machine happens to be
+ * using. What it must never be is a silent answer to "someone is already here": a start
+ * that hops takes over this home's pid and runtime-port records and re-points Codex at
+ * itself, so hopping past a live opencodex leaves two proxies running and the editor
+ * talking to the one the user did not mean (#5004). The hop path never asked who held the
+ * port, and `findLiveProxy` returning null — a stale record, a probe that lost a race, a
+ * loopback family split — was enough to reach it.
+ *
+ * So the decision is made from the holder's own answer rather than from this home's
+ * bookkeeping, and both outcomes stop the start. An opencodex answer is the duplicate this
+ * closes. A holder that does not answer as opencodex is deliberately NOT called foreign:
+ * an identity probe returns the same nothing for a foreign server, an unreachable one, and
+ * one that lost a race, so all the start can honestly say is that the port it was told to
+ * use is taken by something it could not identify — and moving to an arbitrary port is the
+ * one response that hides that from the user while re-pointing Codex. An explicit
+ * `--port` never reaches here (`findAvailablePort` refuses the fallback instead), and a
+ * configured port of 0 is a request for an ephemeral port, not a collision.
+ *
+ * Service-wrapper context keeps the semantics `decideStartWithLiveOwner` gives it: a
+ * healthy proxy on the port means the port is served, and the wrapper's
+ * `if %ERRORLEVEL% NEQ 0` loop must see a zero exit rather than respawn every 5 seconds.
+ */
+export function decideBusyPreferredPort(input: {
+  preferredPort: number;
+  selectedPort: number;
+  hardPin: boolean;
+  holderIsOpencodex: boolean;
+  ocxService: string | undefined;
+}): BusyPreferredPortDecision {
+  // Port 0 (or an unusable preference) asked the OS to choose; nothing was taken away.
+  if (input.preferredPort <= 0) return "hop";
+  // The preferred port was obtained — no hop happened, nothing to decide.
+  if (input.selectedPort === input.preferredPort) return "hop";
+  // Defensive: a hard pin cannot reach a different port, and if it ever did, the pin is
+  // the user's explicit instruction and not something to answer with a refusal here.
+  if (input.hardPin) return "hop";
+  if (input.holderIsOpencodex) {
+    // Same sentinel rule as decideStartWithLiveOwner: only the exact "1" is service context.
+    return input.ocxService === "1" ? "service-stay-out" : "refuse-live-proxy";
+  }
+  return "refuse-unidentified-holder";
+}
+
 export function resolveDispatchCommand(command: string | undefined): string | undefined {
   if (command === undefined) return undefined;
   if (Object.prototype.hasOwnProperty.call(commandRunners, command)) return command;

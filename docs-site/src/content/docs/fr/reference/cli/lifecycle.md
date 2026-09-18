@@ -15,7 +15,7 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Démarre le serveur proxy, de préférence sur le port `10100`. Si ce port est occupé, opencodex en choisit un autre qui est disponible et l’enregistre. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
+Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Indiquez un autre port avec `--port`, ou définissez `port: 0` dans la configuration pour demander au système d’exploitation d’en attribuer un. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
 
 `--socks5` (par défaut `127.0.0.1:10808`) enregistre l’URL SOCKS5 dans `config.proxy` et achemine
 les requêtes HTTP(S) sortantes dans un véritable tunnel SOCKS5. `--socks5-off` supprime uniquement
