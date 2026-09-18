@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   clearPoolRotationState,
   genericPoolKey,
@@ -27,6 +27,12 @@ function generation(n: number, oauthAccountKeys: string[]): GenerationContext {
 }
 
 describe("generic pool keys are swept", () => {
+  beforeEach(() => {
+    clearPoolRotationState();
+  });
+  afterEach(() => {
+    clearPoolRotationState();
+  });
   test("genericPoolKey namespaces a provider so it cannot collide with the dedicated kinds", () => {
     expect(genericPoolKey("cursor")).toBe("generic:cursor");
     expect(genericPoolKey("cursor")).not.toBe("codex");

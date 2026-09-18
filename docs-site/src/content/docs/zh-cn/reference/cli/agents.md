@@ -164,7 +164,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 无 - loopback placeholder |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | 非机密的环回占位值 |
 | `dsh` | `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`） | `settings.yaml` | 无 — 非秘密环回 bearer 占位值 |
 | `mcode` | `~/.minimax/config.yaml` (设置后 `MINIMAX_DATA_DIR` 优先，其次是旧的 `MAVIS_DATA_DIR`；相对路径会被拒绝) | `mcode-config.yaml` | 无 — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (设置后 `ZCODE_DATA_DIR` 优先；相对路径会被拒绝) | `config.json` | 无 — loopback placeholder |
@@ -181,7 +181,9 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。`OPENCODEX_GAJAE_API_KEY` 只会从环境中提供 gjc provider 凭据，不能发送远程准入 header，因此生成的 gjc 集成仍仅支持环回。关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
+任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/reference/configuration/#remote-access)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
+
+生成的 gjc 集成使用非机密的本地环回占位值，不需要环境变量。此集成仅支持本地环回，不配置远程准入凭据。
 
 同一份负载会通过 `GET /api/client-config` 提供，并在仪表盘的 API 选项卡中渲染，因此 CLI、API 和 GUI 使用的是同一字节内容。
 
@@ -206,6 +208,19 @@ ocx system codex-cli-update check --json
 `check` 不会向软件包注册表发起请求，只会在限定范围内检查已配置候选项的来源证据，包括经过脱敏的可执行文件位置和所有权证据。受信任的已发布启动器上下文只能验证该候选项快照，并不证明 Codex 已成功运行。由于这条一次性命令绝不会运行 Codex，来自环境变量和持久化记录的候选项仅用于报告（`managed: false`，通常为 `selection_unattested`）；JSON 输出包含 `candidateAvailable`、`candidateVersion` 和 `candidateSource`，且 `selectionAttested` 始终为 `false`。检查已配置候选项需要受信任的已发布启动器上下文；直接使用 Bun 启动或从源码运行时没有这项证明，因此会忽略环境变量和持久化记录中的候选项状态，并可能在 POSIX 系统上报告 `candidate_unavailable`。在 Windows 上，这个首个切片不会对候选路径或配置路径执行任何文件系统 I/O。只有由受信任启动器捕获的绝对环境候选项可以获得应用捆绑或版本管理器的纯词法标签；其他所有 Windows 候选项都会以失败关闭方式处理。由于这个切片完全不读取持久化的选择状态，在未捕获任何环境候选项的 Windows 运行中会报告 `windows_inspection_deferred` 而非 `candidate_unavailable`：该命令无法观测 Codex CLI 是否已安装，因此报告检查被推迟，而不是断言不存在候选项。该命令不会运行 Codex 或软件包管理器，不会修复 shim，不会写入配置或缓存，不会停止进程，也不会安装任何内容。随应用捆绑的候选项、位于已识别版本管理器路径中的候选项、未经验证的独立候选项以及 shim 状态不明确的候选项，都会报告为 `unmanaged` 或 `unknown`，绝不会归类为 `managed`。
 
 在 Windows 上，如果捕获到 `CODEX_CLI_PATH=codex` 这样的裸命令、远程路径或设备路径，则报告 `candidate_path_unavailable`。这些情况下候选项已被捕获，但其路径不适用于此检查。
+
+#### 显式观察 Windows x64 安装
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest` 是可选的只读操作，用于观察所选或明确指定的 Windows x64 npm 安装。不带任何选项时，命令会观察由可信启动器快照识别的所选候选项（已配置的 `CODEX_CLI_PATH` 或所捕获 PATH 中的第一个 `codex`），其中 opencodex 包装脚本会解析到其重命名的 `codex.opencodex-real.cmd` npm 备份。提供全部四个绝对路径可覆盖自动识别；自动识别仅提出路径，持有句柄的观察才是最终依据。`--candidate` 必须是标准 npm `<prefix>/codex.cmd` 或 `<prefix>/node_modules/@openai/codex/bin/codex.js`。`--npm-cli` 必须以 `node_modules/npm/bin/npm-cli.js` 结尾，`--node` 明确指定 `node.exe`。应用捆绑安装、已识别的版本管理器布局、缺少 npm 备份的 opencodex 自有 shim 和自定义包装脚本均会被拒绝。
+
+在有界读取期间，原生句柄保持祖先目录和文件打开。非支持平台、重解析点/junction、冲突的写入者、不安全路径以及超出大小限制的文件均会被拒绝。固定格式的报告不包含路径：`status` 为 `observed` 或 `refused`，并提供 `installationIdentityObserved`；`selectionAttested`、`managed` 和 `applyAllowed` 始终为 `false`。报告拒绝时也可能返回退出码 0，因此应检查 `status`。
+
+标识或摘要仅描述观察时的文件，不是持久的更新许可，也不证明选中的运行时、过去的安装程序、实际 npm 配置或工具真实性。明确指定的 Node 也只是被观察，不证明启动器会选择它。命令不会执行目标、请求包注册表、安装、写入配置或控制进程。现有 Windows `check` 仍不执行候选项或配置的文件系统 I/O。
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

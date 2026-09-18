@@ -1,3 +1,4 @@
+import { config, registerRelativeSendPathTests } from "../helpers/management-relative-send-paths";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -69,23 +70,6 @@ const originalGlobalFetch = globalThis.fetch;
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-validation-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
-function config(hostname?: string): OcxConfig {
-  return {
-    port: 10100,
-    hostname,
-    defaultProvider: "openai",
-    providers: {
-      openai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.example.test/v1",
-        apiKey: "sk-secret-value",
-        headers: { "X-Custom": "provider-secret" },
-        defaultModel: "gpt-test",
-      },
-    },
-  };
-}
-
 const canonicalDirect = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -141,6 +125,8 @@ afterEach(() => {
   clearAccountNeedsReauth("pool-a");
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
+
+registerRelativeSendPathTests(TEST_DIR);
 
 describe("provider quota routing state", () => {
   function quotaConfig(name = "openrouter", baseUrl = "https://openrouter.ai/api/v1"): OcxConfig {

@@ -369,7 +369,7 @@ async function injectCodexConfigImpl(
     content =
       content.trimEnd() +
       "\n" +
-      buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}));
+      buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName);
     // 3) Keep existing `openai`-tagged threads reaching the proxy (see above). Ownership rules
     // are the Design B ones: a user's own root line is never replaced.
     if (keepRootOverrideAlongsideTable) {
@@ -430,6 +430,7 @@ async function injectCodexConfigImpl(
     catalogPath,
     websocketsEnabled(config ?? {}),
     config?.fastMode,
+    config?.codexProviderDisplayName,
   );
   content = applyEol(content, eol);
 
@@ -492,7 +493,7 @@ async function injectCodexConfigImpl(
    */
   if (hadOcxProviderTableOnDisk && !providerTableMode) {
     content = applyEol(
-      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {})),
+      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName),
       eol,
     );
   }

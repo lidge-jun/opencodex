@@ -15,7 +15,8 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 `src/server/audio-transcriptions.ts` owns `POST /v1/audio/transcriptions`, independently of
 Responses and Chat conversion. `src/server/audio-upstream.ts` resolves explicit data-plane keys
 on both listeners and substitutes stored OpenAI credentials. Direct stored-main access claims
-the enclosing admission lease; Pool uses the existing sidecar account resolver. A selected
+the enclosing admission lease and derives its account header only from that stored credential;
+caller-supplied account selection is never retained. Pool uses the existing sidecar account resolver. A selected
 ChatGPT authentication failure never falls through to the paid OpenAI provider.
 
 The bounded multipart input accepts one nonempty file up to 25,000,000 bytes within a 32 MiB
@@ -341,3 +342,5 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.

@@ -340,7 +340,13 @@ export function cursorConversationIdFromClientThread(threadId: string, identityS
 
 /**
  * Resolve the Cursor conversation id for this turn.
- * Priority: force-fresh → isolate helper → remembered → client thread owner → random.
+ * Priority: force-fresh → isolate helper → thread remint override → stored conversation id
+ * → client thread hash → random.
+ *
+ * The remint override must beat a stored `_cursorConversationId`. Only the remint path writes
+ * the thread store (cursor.ts), so a stored id that disagrees with it is the pre-remint value,
+ * and preferring it let a second Responses chain in the same Codex thread keep resuming the
+ * conversation the previous turn just rotated away from.
  * Never use OpenAI Responses `previous_response_id` (resp_*) or shared `prompt_cache_key`
  * (cache-cohort fingerprint, not conversation ownership).
  */
@@ -351,11 +357,16 @@ export function resolveCursorConversationId(
 ): string {
   if (options.forceFreshConversation === true) return generatedCursorConversationId();
   if (parsed._cursorIsolateConversation === true) return generatedCursorConversationId();
-  if (parsed._cursorConversationId) return parsed._cursorConversationId;
   const threadId = cursorClientThreadOwner(parsed);
-  if (threadId) {
+  // A compaction turn carries its own conversation id and must not be pulled onto the parent's
+  // thread override. It is isolated in effect without ever setting the isolate flag, which is why
+  // the override check has to exclude it explicitly rather than rely on that flag.
+  if (threadId && parsed._compactionRequest !== true) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
     if (recovered) return recovered;
+  }
+  if (parsed._cursorConversationId) return parsed._cursorConversationId;
+  if (threadId) {
     return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
   }
   return generatedCursorConversationId();

@@ -24,6 +24,10 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
+Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
+The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
+limited to unambiguous bare `exec` and `apply_patch` calls and does not rewrite foreign grammars.
+
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
 `devlog/_fin/260716_grok_build_hardening/`.
 
@@ -43,11 +47,16 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   on a per-provider FIXED loopback port, so every response it sends closes its connection. A
   retired flow that kept a pooled socket would capture the NEXT login's callback and reject it
   as a state mismatch; see `src/oauth/callback-server.ts`.
+  Provider token-body budgets are separate from this shared callback lifetime. The
+  [OrcaRouter bounded key-exchange contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login)
+  is owned by its login consumer and does not impose that budget on Grok token grants.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
   (`expectedGeneration` → superseded adoption), conditional `needsReauth`, bounded jittered
   retry for transient token-endpoint failures.
+  Newly created legacy-store recovery copies follow the [backup ownership contract](../config.md#restore);
+  an ownership-registration failure (a `false` return or thrown error) warns without discarding downgrade recovery.
 - **Reactive 401 replay:** both the adapter recovery loop and native Responses passthrough branch
   force-refresh once (singleflight, generation-checked) and replay OAuth-backed xAI requests
   exactly once with a re-resolved transport; API-key/BYOK paths are excluded

@@ -184,7 +184,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 없음 - loopback placeholder |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | 비밀이 아닌 루프백용 대체 값 |
 | `dsh` | `$DSH_HOME/settings.yaml`(기본값 `~/.dsh/settings.yaml`) | `settings.yaml` | 없음 — 비밀이 아닌 loopback bearer placeholder |
 | `mcode` | `~/.minimax/config.yaml` (`MINIMAX_DATA_DIR`, 그다음 레거시 `MAVIS_DATA_DIR`가 설정되면 우선. 상대 경로는 거부됩니다) | `mcode-config.yaml` | 없음 — loopback placeholder |
 | `zcode` | `~/.zcode/v2/config.json` (`ZCODE_DATA_DIR`가 설정되면 우선. 상대 경로는 거부됩니다) | `config.json` | 없음 — loopback placeholder |
@@ -201,7 +201,9 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 `ocx export`는 실제 client config를 절대 쓰지 않습니다. 대상 경로는 손으로 병합하라고 출력되며, `--out`은 `--force` 없이 기존 파일을 덮어쓰지 않습니다. config를 바꾸어 덮어쓰면 이미 들어 있던 다른 provider, agent, MCP entry가 사라지기 때문입니다.
 :::
 
-어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. proxy가 loopback을 넘어 바인딩할 때는 해당하는 `OPENCODEX_OPENCODE_API_KEY`, `OPENCODEX_HERMES_API_KEY`, `OPENCODEX_OPENCLAW_API_KEY`를 설정하십시오. `OPENCODEX_GAJAE_API_KEY`는 gjc provider 인증 값을 환경에서 전달하지만 remote admission header를 보낼 수는 없으므로, 생성되는 gjc 통합은 loopback 전용으로 남습니다. admission key가 어떻게 발급되는지는 [Remote access](/reference/configuration/#remote-access)를 보십시오. upstream provider 자체의 key는 완전히 별개의 것으로, 각 [Providers](/guides/providers/)에 맞게 설정합니다.
+어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. 클라이언트의 설정 형식이 지원하고 proxy가 loopback 외부에 바인딩하는 경우에만 참조된 환경변수를 설정하십시오. admission key 발급 방법은 [Remote access](/reference/configuration/#remote-access)를 참조하십시오. upstream provider 자체의 key는 별도로 설정하며, [Providers](/guides/providers/)에서 안내합니다.
+
+생성된 gjc 연동은 비밀이 아닌 로컬 접속용 값을 사용하므로 환경변수가 필요하지 않습니다. 루프백 전용이며 원격 접속 인증은 설정하지 않습니다.
 
 같은 payload는 `GET /api/client-config`로 제공되고 dashboard의 API 탭에도 렌더링되므로, CLI, API, GUI가 모두 같은 바이트를 사용합니다.
 
@@ -229,6 +231,19 @@ ocx system codex-cli-update check --json
 `check`는 패키지 레지스트리를 조회하지 않고, 설정된 설치 후보에 대해 전체 경로를 숨긴 실행 파일 위치와 소유권 근거를 포함한 provenance 정보를 제한된 범위에서 검사합니다. 신뢰할 수 있는 배포 런처 컨텍스트가 인증하는 것은 후보 스냅샷뿐이며, Codex가 성공적으로 실행되었다는 사실은 인증하지 않습니다. 이 단발성 명령은 Codex를 전혀 실행하지 않으므로 환경 또는 저장된 상태에서 얻은 후보는 보고 전용입니다(`managed: false`, 일반적으로 `selection_unattested`). `selectionAttested`는 항상 `false`입니다. JSON 출력에는 `candidateAvailable`, `candidateVersion`, `candidateSource`, `selectionAttested: false`가 포함됩니다. Bun이나 소스에서 직접 실행하면 런처 증거가 없으므로 환경 및 저장된 후보를 무시하고 POSIX에서는 `candidate_unavailable`을 보고할 수 있습니다. Windows에서는 이 첫 조각이 후보 또는 설정 경로의 파일시스템을 전혀 읽지 않습니다. 배포 런처가 증명한 절대 환경 후보에 한해서 앱 번들 또는 버전 관리자라는 어휘적 표지만 보고하며, 그 밖의 Windows 후보는 모두 실패 닫힘 처리합니다. 이 조각은 저장된 선택 상태를 전혀 읽지 않으므로, 환경 후보가 캡처되지 않은 Windows 실행은 `candidate_unavailable`이 아니라 `windows_inspection_deferred`를 보고합니다. 명령이 Codex CLI 설치 여부를 관측할 수 없으므로, 후보가 없다고 단정하는 대신 검사가 연기되었음을 보고합니다. 이 명령은 Codex나 패키지 관리자를 실행하거나 shim을 복구하지 않고, 설정 또는 캐시 상태를 쓰거나 프로세스를 중지하거나 어떤 것도 설치하지 않습니다. 앱에 포함된 후보, 인식된 버전 관리자의 후보, 검증되지 않은 독립 실행형 후보, shim 상태가 모호한 후보는 관리 대상이 아니거나 알 수 없는 것으로 보고되며, 관리 대상으로 분류되지 않습니다.
 
 Windows에서 `CODEX_CLI_PATH=codex` 같은 단순 명령 이름이나 원격 경로·장치 경로가 후보로 캡처되면 `candidate_path_unavailable`을 보고합니다. 후보는 캡처됐지만 해당 경로가 이 검사 대상에 적합하지 않은 경우입니다.
+
+#### Windows x64 설치의 명시적 관측
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest`는 선택되거나 명시한 Windows x64 npm 설치를 읽기 전용으로 관측하는 선택적 명령입니다. 옵션 없이 실행하면 증명된 런처 스냅샷이 식별한 선택 후보(설정된 `CODEX_CLI_PATH` 또는 캡처된 PATH의 첫 `codex`)를 관측하며, opencodex 래퍼는 이름이 바뀐 `codex.opencodex-real.cmd` npm 백업으로 해석합니다. 절대 경로 네 개를 모두 제공하면 자동 식별을 재정의하며, 자동 식별은 경로를 제안할 뿐 핸들 유지 관측이 최종 권위입니다. `--candidate`는 표준 npm `<prefix>/codex.cmd` 또는 `<prefix>/node_modules/@openai/codex/bin/codex.js`여야 합니다. `--npm-cli`는 `node_modules/npm/bin/npm-cli.js`로 끝나야 하고, `--node`에는 `node.exe`를 명시합니다. 앱 번들, 인식된 버전 관리자 경로, npm 백업이 없는 opencodex 소유 shim 및 사용자 지정 래퍼는 거절합니다.
+
+제한된 읽기 동안 네이티브 핸들로 상위 디렉터리와 파일을 유지합니다. 지원하지 않는 플랫폼, 재분석 지점·junction, 충돌하는 쓰기 핸들, 안전하지 않은 경로 및 크기 제한 초과 파일은 거절합니다. 경로를 포함하지 않는 고정 보고서의 `status`는 `observed` 또는 `refused`이며 `installationIdentityObserved`를 제공합니다. `selectionAttested`, `managed`, `applyAllowed`는 항상 `false`입니다. 거절을 보고해도 종료 코드가 0일 수 있으므로 `status`를 확인해야 합니다.
+
+관측한 식별값·해시는 관측 시점의 파일을 설명할 뿐 지속적인 업데이트 허가가 아닙니다. 선택된 런타임, 과거 설치 주체, 실제 npm 설정, 도구 진위를 증명하지 않습니다. 명시한 Node도 관측만 하며 런처가 그 Node를 선택한다는 뜻은 아닙니다. 대상을 실행하거나 레지스트리에 요청하거나 설치·설정 쓰기·프로세스 제어를 하지 않습니다. 기존 Windows `check`의 후보·설정 파일 시스템 I/O 없음 계약은 유지됩니다.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

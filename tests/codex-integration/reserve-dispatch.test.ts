@@ -12,6 +12,11 @@ import { clearAccountQuota } from "../../src/codex/quota";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { clearCodexUpstreamHealth, getCodexUpstreamHealth, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { isMainReserveAuthorizationLive, observeMainReserveRevocation } from "../../src/codex/reserve-availability";
+import {
+  isCodexReserveOptInMissing,
+  isCodexReserveRequestEligible,
+  CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE,
+} from "../../src/codex/loopback-target";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, upstreamHostHealthKey } from "../../src/codex/upstream-host-health";
 import { providerFetch, fetchWithHeaderTimeout } from "../../src/server/responses/fetch-helpers";
 import { handleResponses } from "../../src/server/responses/core";
@@ -26,6 +31,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const accountId = "reserve-dispatch-workspace";
 const accessToken = "reserve-dispatch-owned-fixture";
 const URL = "https://chatgpt.com/backend-api/codex/responses";
+/** A provider the operator aliased Reserve onto: same adapter, deliberately NOT canonical forward. */
+const ALIAS_URL = "https://reserve-optin-alias.example.test/v1/responses";
 const loopbackAdmission = { kind: "loopback", source: "loopback" } as const;
 let home: string;
 let oldHome: string | undefined;
@@ -97,6 +104,10 @@ beforeEach(() => {
       });
     }
     if (request.url === URL || request.url === `${URL}/compact`) {
+      inferenceSends += 1;
+      return inference();
+    }
+    if (request.url === ALIAS_URL) {
       inferenceSends += 1;
       return inference();
     }
@@ -345,5 +356,128 @@ describe("Reserve dispatch-time permission", () => {
     recordCodexUpstreamOutcome(cfg, "__main__", 429, { retryAfter: "3600", fixedAccount: true });
     expect(() => guard(headers())).toThrow(CodexAccountCooldownError);
     expect(inferenceSends).toBe(0);
+  });
+});
+
+/**
+ * #4940. With the opt-in off every Reserve affordance is inert, so `gpt-reserve` used to forward as
+ * an ordinary native model and come back as a bare upstream 429 naming neither the cause nor the
+ * fix. These cases pin both halves: the one shape that is now refused, and the four neighbouring
+ * shapes that must keep forwarding byte for byte.
+ */
+describe("Reserve opt-in admission refusal", () => {
+  const optInOff = (mutate: (cfg: OcxConfig) => void = () => {}): OcxConfig => {
+    const cfg = config();
+    cfg.codexDesktopAuthless = false;
+    mutate(cfg);
+    return cfg;
+  };
+  const body = (model: string) => JSON.stringify({ model, input: [{ role: "user", content: "ping" }], stream: false });
+  const request = (model: string, path = "/v1/responses") => new Request(`http://localhost${path}`, {
+    method: "POST", headers: { ...Object.fromEntries(headers()), "content-type": "application/json" }, body: body(model),
+  });
+  // A message-bearing completion, so a control that reaches the upstream lands on the ordinary
+  // success path instead of whatever the empty-output fixture above would turn into.
+  const completed = (model: string) => () => Response.json({
+    id: "resp_opt_in_fixture", object: "response", status: "completed", created_at: 1, model,
+    output: [{ id: "msg_fixture", type: "message", role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "fixture response", annotations: [] }] }],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  });
+  const forwarded = async (response: Response) => {
+    // The load-bearing claim for every control: the request actually reached the upstream. Asserted
+    // on the send counter rather than on a 200, so the control cannot pass by turning into some
+    // other local refusal that merely is not this one.
+    expect(await response.text()).not.toContain("--desktop-authless");
+    expect(response.status).toBe(200);
+    expect(inferenceSends).toBe(1);
+    expect(usageReads).toBe(0);
+  };
+
+  test("the predicate is the flag-only complement of eligibility and never overlaps it", () => {
+    const loopback = { source: "loopback" } as const;
+    // Reserve asked for on an eligible ingress, with the opt-in as the single missing piece.
+    expect(isCodexReserveOptInMissing({}, "gpt-reserve", loopback)).toBe(true);
+    expect(isCodexReserveOptInMissing({ codexDesktopAuthless: false }, "gpt-reserve", loopback)).toBe(true);
+    // Setting the flag the message names is exactly what converts the refusal into eligibility,
+    // which is what makes naming that one setting an honest answer rather than a guess.
+    expect(isCodexReserveOptInMissing({ codexDesktopAuthless: true }, "gpt-reserve", loopback)).toBe(false);
+    expect(isCodexReserveRequestEligible({ codexDesktopAuthless: true }, loopback)).toBe(true);
+    // The other two ineligibility reasons are claimed by neither predicate, so they still forward.
+    expect(isCodexReserveOptInMissing({ runtimeRole: "client" }, "gpt-reserve", loopback)).toBe(false);
+    for (const source of ["dedicated", "bearer", "x-api-key"] satisfies Array<DataPlaneAdmission["source"]>) {
+      expect(isCodexReserveOptInMissing({}, "gpt-reserve", { source })).toBe(false);
+    }
+    expect(isCodexReserveOptInMissing({}, "gpt-reserve", undefined)).toBe(false);
+    expect(isCodexReserveOptInMissing({}, "gpt-5.6-luna", loopback)).toBe(false);
+    // Mutually exclusive across the whole input space the two predicates share, so a future edit
+    // to either one cannot produce a request that is both eligible for Reserve and refused for it.
+    for (const codexDesktopAuthless of [undefined, false, true]) {
+      for (const runtimeRole of [undefined, "standalone", "hub", "client"] as const) {
+        for (const admission of [undefined, { source: "loopback" }, { source: "dedicated" }] satisfies
+          Array<Pick<DataPlaneAdmission, "source"> | undefined>) {
+          const cfg: Pick<OcxConfig, "codexDesktopAuthless" | "runtimeRole"> = { codexDesktopAuthless, runtimeRole };
+          expect(isCodexReserveOptInMissing(cfg, "gpt-reserve", admission)
+            && isCodexReserveRequestEligible(cfg, admission)).toBe(false);
+        }
+      }
+    }
+  });
+
+  test.each(["responses", "compact"] as const)("%s: the missing opt-in is refused before any upstream byte", async endpoint => {
+    const cfg = optInOff();
+    const response = endpoint === "compact"
+      ? await handleResponsesCompact(request("custom/gpt-reserve", "/v1/responses/compact"), cfg,
+        { model: "", provider: "" }, undefined, loopbackAdmission)
+      : await handleResponses(request("custom/gpt-reserve"), cfg, { model: "", provider: "" },
+        { admission: loopbackAdmission });
+    // A 4xx that cannot be read as the upstream rate limit this refusal exists to replace, and that
+    // carries no retry semantics: there is nothing to wait for, only a setting to change.
+    expect(response.status).toBe(400);
+    expect(response.headers.has("retry-after")).toBe(false);
+    const text = await response.text();
+    expect(JSON.parse(text).error.type).toBe("invalid_request_error");
+    expect(text).toContain("codexDesktopAuthless");
+    expect(text).toContain("ocx system settings --desktop-authless on");
+    expect(text).toContain("not forwarded without");
+    // No account id, no credential, no request body echoed back into the refusal.
+    expect(text).not.toContain(accountId);
+    expect(text).not.toContain(accessToken);
+    expect(text).not.toContain("ping");
+    // Refused before auth, before the host circuit, before the Reserve permission read.
+    expect(inferenceSends).toBe(0);
+    expect(usageReads).toBe(0);
+    expect(getCodexUpstreamHealth("__main__")).toBeNull();
+    expect(getUpstreamHostHealth(upstreamHostHealthKey("custom", "https://chatgpt.com"))).toBeNull();
+  });
+
+  test("a client-role runtime is a different situation and still forwards", async () => {
+    inference = completed("gpt-reserve");
+    await forwarded(await handleResponses(request("custom/gpt-reserve"),
+      optInOff(cfg => { cfg.runtimeRole = "client"; }), { model: "", provider: "" }, { admission: loopbackAdmission }));
+  });
+
+  test("a non-loopback admission source is a different situation and still forwards", async () => {
+    inference = completed("gpt-reserve");
+    await forwarded(await handleResponses(request("custom/gpt-reserve"), optInOff(), { model: "", provider: "" },
+      { admission: { kind: "environment", source: "dedicated" } }));
+  });
+
+  test("an operator-aliased Reserve route off the canonical forward still forwards", async () => {
+    inference = completed("gpt-reserve");
+    const cfg = optInOff(c => {
+      // Kept under the 20-character body the privacy scan treats as token-looking, the same
+      // shape the existing reserve fixtures use (tests/server/reserve-ingress.test.ts).
+      c.providers.alias = { adapter: "openai-responses", authMode: "key", apiKey: "sk-optin-fixture",
+        baseUrl: "https://reserve-optin-alias.example.test/v1" };
+    });
+    await forwarded(await handleResponses(request("alias/gpt-reserve"), cfg, { model: "", provider: "" },
+      { admission: loopbackAdmission }));
+  });
+
+  test("an ordinary model on the same ingress is untouched", async () => {
+    inference = completed("gpt-5.6-luna");
+    await forwarded(await handleResponses(request("custom/gpt-5.6-luna"), optInOff(), { model: "", provider: "" },
+      { admission: loopbackAdmission }));
   });
 });

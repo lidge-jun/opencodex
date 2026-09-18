@@ -86,9 +86,9 @@ async function mount(ui: Parameters<typeof cardProps>[1], state: MainDeviceReaut
   });
 }
 
-test("expired main card shows the device Re-login CTA and starts the flow", async () => {
+test.each(["idle", "cancelled"] as const)("expired main card in %s state shows the device Re-login CTA and starts the flow", async (phase) => {
   const calls = { starts: 0, cancels: 0 };
-  await mount(calls, { phase: "idle" });
+  await mount(calls, { phase });
   // The pause control ships the same class and renders first, so select the CTA by its
   // label the way the cancel test below already does.
   const actions = Array.from(host.querySelectorAll("button.codex-auth-action-btn"));
@@ -108,6 +108,21 @@ test("a pending flow shows the URL and human code and cancel owns the flow", asy
   expect(host.textContent).toContain(DEVICE_CODE);
   const buttons = Array.from(host.querySelectorAll("button.codex-auth-action-btn"));
   const cancel = buttons.find(b => b.textContent?.includes("mainReauthCancel"));
+  expect(cancel).toBeDefined();
+  await act(async () => { (cancel as HTMLButtonElement).click(); });
+  expect(calls.cancels).toBe(1);
+});
+
+test("a retryable cancellation failure is announced without removing cancellation", async () => {
+  const calls = { starts: 0, cancels: 0 };
+  await mount(calls, {
+    phase: "pending", flowId: "f1", verificationUrl: DEVICE_URL,
+    deviceCode: DEVICE_CODE, cancelFailed: true,
+  });
+  const notice = host.querySelector('.codex-main-reauth-pending [role="status"]');
+  expect(notice?.textContent).toBe("codexAuth.mainReauthFailed");
+  const cancel = Array.from(host.querySelectorAll("button.codex-auth-action-btn"))
+    .find(button => button.textContent?.includes("codexAuth.mainReauthCancel"));
   expect(cancel).toBeDefined();
   await act(async () => { (cancel as HTMLButtonElement).click(); });
   expect(calls.cancels).toBe(1);
@@ -166,4 +181,109 @@ test("the hook POSTs an empty body to the dedicated route and polls to success",
   await act(async () => { await captured!.cancel(); });
   expect(captured!.state.phase).toBe("cancelled");
   expect(requests.some(r => r.method === "DELETE")).toBe(true);
+});
+
+test.each([
+  [401, "unauthorized"],
+  [404, "route_not_found"],
+  [500, "unknown_flow"],
+])("a rejected cancellation (%s, %s) retains the flow and can be retried", async (status, code) => {
+  let deleteAttempts = 0;
+  let completed = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/codex-auth/main/reauth-device") && init?.method === "POST") {
+        return Response.json({ flowId: "f1", status: "pending" });
+      }
+      if (init?.method === "DELETE") {
+        deleteAttempts += 1;
+        return deleteAttempts === 1
+          ? Response.json({ code }, { status })
+          : Response.json({ flowId: "f1", status: "succeeded" });
+      }
+      return Response.json({ flowId: "f1", status: "pending", verificationUrl: DEVICE_URL, deviceCode: DEVICE_CODE });
+    },
+  });
+  let captured: ReturnType<typeof useMainDeviceReauth> | null = null;
+  const Probe = () => {
+    const value = useMainDeviceReauth("", () => { completed += 1; });
+    useEffect(() => { captured = value; });
+    return null;
+  };
+  const { createRoot } = await import("react-dom/client");
+  const { createElement } = await import("react");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(createElement(Probe));
+  });
+  await act(async () => {
+    void captured!.start();
+    const deadline = Date.now() + 2000;
+    while (captured!.state.phase !== "pending" && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  });
+
+  await act(async () => { await captured!.cancel(); });
+  expect(captured!.state).toMatchObject({ phase: "pending", flowId: "f1", cancelFailed: true });
+
+  await act(async () => { await captured!.cancel(); });
+  expect(deleteAttempts).toBe(2);
+  expect(captured!.state.phase).toBe("succeeded");
+  expect(completed).toBe(1);
+});
+
+test.each([
+  ["identity_mismatch", "identity_mismatch", 200],
+  ["unknown_failure", "request_failed", 200],
+  ["unknown_flow", "request_failed", 404],
+])("a failed cancellation terminal clears the flow and normalizes %s", async (code, expectedCode, status) => {
+  let deleteAttempts = 0;
+  let completed = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/codex-auth/main/reauth-device") && init?.method === "POST") {
+        return Response.json({ flowId: "f1", status: "pending" });
+      }
+      if (init?.method === "DELETE") {
+        deleteAttempts += 1;
+        return Response.json(status === 404 ? { code } : { flowId: "f1", status: "failed", code }, { status });
+      }
+      return Response.json({ flowId: "f1", status: "pending", verificationUrl: DEVICE_URL, deviceCode: DEVICE_CODE });
+    },
+  });
+  let captured: ReturnType<typeof useMainDeviceReauth> | null = null;
+  const Probe = () => {
+    const value = useMainDeviceReauth("", () => { completed += 1; });
+    useEffect(() => { captured = value; });
+    return null;
+  };
+  const { createRoot } = await import("react-dom/client");
+  const { createElement } = await import("react");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(createElement(Probe));
+  });
+  await act(async () => {
+    void captured!.start();
+    const deadline = Date.now() + 2000;
+    while (captured!.state.phase !== "pending" && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  });
+  expect(captured!.state.phase).toBe("pending");
+
+  await act(async () => { await captured!.cancel(); });
+  expect(captured!.state).toEqual({ phase: "failed", code: expectedCode });
+  expect(completed).toBe(0);
+  expect(deleteAttempts).toBe(1);
+
+  // A terminal failure releases ownership instead of retaining a stale retry.
+  await act(async () => { await captured!.cancel(); });
+  expect(captured!.state.phase).toBe("idle");
+  expect(deleteAttempts).toBe(1);
 });

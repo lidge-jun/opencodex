@@ -13,6 +13,58 @@
  */
 
 const ECHO_MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]"] as const;
+
+function isEchoMarkerLine(line: string): boolean {
+  return (ECHO_MARKERS as readonly string[]).includes(line.replace(/^[ \t]+/, ""));
+}
+
+/**
+ * Drop echoed tool-result envelopes from assistant history before Cursor root replay.
+ *
+ * The prefix sniffer catches an echo that STARTS a turn, but grok-4.6 routinely writes a real
+ * sentence first and pastes the envelope after it. That text has already reached the client and
+ * is stored as assistant output, so replaying it verbatim re-primes the next turn with the very
+ * envelope the model is copying.
+ *
+ * Scope starts AT the marker line and runs to the next blank line, rather than to the end of
+ * the message. The echoed envelope has no terminator we can recognise — we build it as a marker
+ * line plus arbitrary result text (protobuf-request.ts), and the observed copies are not
+ * byte-exact, so matching against the replayed envelope is not available either. Truncating to
+ * the end of the message was the alternative, and it discards a genuine answer whenever the
+ * model resumes after the echo. A blank line is the one boundary the model reliably writes when
+ * it goes back to prose.
+ *
+ * The tradeoff is explicit: an echoed envelope whose pasted result itself contains a blank line
+ * leaves its remainder in replay. That is the safer direction to be wrong in — conversation
+ * remint, not this filter, is the primary defence against a poisoned conversation, and this only
+ * stops the transcript from feeding itself.
+ *
+ * Only whole-line markers count, so prose such as "the string [Tool Result] appeared" survives.
+ */
+export function stripAssistantEchoedToolEnvelope(text: string): string {
+  if (!text || !ECHO_MARKERS.some(marker => text.includes(marker))) return text;
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  let dropped = false;
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    if (!isEchoMarkerLine(line)) {
+      kept.push(line);
+      index += 1;
+      continue;
+    }
+    dropped = true;
+    index += 1;
+    // The envelope body is the contiguous non-blank run after the marker. The blank line that
+    // ends it is left in place, so surviving prose on either side stays separated.
+    while (index < lines.length && (lines[index] ?? "").trim() !== "") index += 1;
+  }
+  if (!dropped) return text;
+  return kept.join(newline).trimEnd();
+}
+
 const MAX_SNIFF_BYTES = 40;
 /** Mid-stream observer: max leading whitespace on a line before matching disarms. */
 const MAX_MIDSTREAM_LINE_INDENT = 128;
@@ -66,8 +118,9 @@ export interface MidstreamEchoFinding {
  * MIDDLE of an agent message — after legitimate leading text — one of them
  * carrying a whitespace-spliced call-id ("fc_x mar-y" instead of "fc_x-y").
  * Deltas at that point have already reached the client, so this observer
- * never throws and never withholds output: it records findings so the
- * adapter can emit a structured diagnostic at turn end. Only fixed marker
+ * never throws and never withholds output. It records findings so the adapter
+ * can emit a structured diagnostic and remint the conversation for the next
+ * turn at turn end. Only fixed marker
  * enums, numeric offsets, and corruption booleans are retained — never
  * content bytes.
  */

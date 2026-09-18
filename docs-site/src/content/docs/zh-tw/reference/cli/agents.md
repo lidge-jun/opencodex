@@ -162,7 +162,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 無——loopback 佔位符 |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | 非機密的回送佔位值 |
 | `dsh` | `$DSH_HOME/settings.yaml`（預設 `~/.dsh/settings.yaml`） | `settings.yaml` | 無——非秘密的 loopback bearer 佔位符 |
 | `mcode` | `~/.minimax/config.yaml` (設定後 `MINIMAX_DATA_DIR` 優先，其次為舊的 `MAVIS_DATA_DIR`；相對路徑會被拒絕) | `mcode-config.yaml` | 無——loopback 佔位符 |
 | `zcode` | `~/.zcode/v2/config.json` (設定後 `ZCODE_DATA_DIR` 優先；相對路徑會被拒絕) | `config.json` | 無——loopback 佔位符 |
@@ -184,7 +184,7 @@ opencode 會插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 與 OMP 的匯出不�
 
 金鑰永不被序列化。設定只帶有文件化的環境變數參考，或非秘密的 loopback 佔位符。loopback 代理（`127.0.0.1`，預設值）完全不需要准入金鑰。只有客戶端 schema 支援、且代理綁定超出 loopback 時，才設定被引用的變數；關於准入金鑰的簽發方式，請見[遠端存取](/zh-tw/reference/configuration/#remote-access)。上游 provider 本身的金鑰是完全不同的事，依[供應商](/zh-tw/guides/providers/)個別設定。
 
-gjc 是例外：`OPENCODEX_GAJAE_API_KEY` 只會從環境提供 provider 憑證，但其 schema 無法傳送遠端准入 header，因此產生的 gjc 整合仍僅支援 loopback。
+產生的 gjc 整合使用非機密的本機回環佔位值，不需要環境變數。此整合僅支援本機回環，不設定遠端存取憑證。
 
 相同的 payload 亦由 `GET /api/client-config` 提供，並在儀表板的 API 分頁渲染，因此 CLI、API 與 GUI 使用相同的位元組。
 
@@ -209,6 +209,19 @@ ocx system codex-cli-update check --json
 `check` 不會向套件 registry 發出請求，只會在限定範圍內檢查設定中的安裝候選項來源證據，包括經過遮罩的可執行檔位置與所有權證據。正式發布的 launcher 所提供的可信內容只會驗證該候選項快照，並不證明 Codex 已成功執行。由於這個單次命令絕不會執行 Codex，來自環境變數與持久化記錄的候選項只供報告（`managed: false`，通常為 `selection_unattested`）；JSON 輸出包含 `candidateAvailable`、`candidateVersion` 與 `candidateSource`，而 `selectionAttested` 維持 `false`。檢查設定中的安裝候選項時，必須有正式發布的 launcher 所提供的可信內容；直接使用 Bun 啟動或從原始碼執行時不具備這項證明，因此會忽略來自環境與持久化記錄的候選項狀態，並可能在 POSIX 系統上報告 `candidate_unavailable`。在 Windows 上，這個首個切片不會對候選路徑或設定路徑執行任何檔案系統 I/O。只有由可信 launcher 擷取的絕對環境候選項可以取得應用程式封裝或版本管理工具的純詞彙標籤；其他所有 Windows 候選項都會以失敗關閉方式處理。由於這個切片完全不會讀取持久化的選擇狀態，在未擷取任何環境候選項的 Windows 執行中會報告 `windows_inspection_deferred` 而非 `candidate_unavailable`：該命令無法觀測 Codex CLI 是否已安裝，因此會報告檢查被延後，而不是斷言候選項不存在。此命令不會執行 Codex 或套件管理工具、不會修復 shim、不會寫入設定或快取、不會停止程序，也不會安裝任何內容。隨應用程式封裝的候選項、位於已識別版本管理工具路徑中的候選項、未經驗證的獨立候選項，以及 shim 狀態不明確的候選項，都會報告為 `unmanaged` 或 `unknown`，絕不會歸類為 `managed`。
 
 在 Windows 上，如果擷取到 `CODEX_CLI_PATH=codex` 這類單純命令名稱、遠端路徑或裝置路徑，則回報 `candidate_path_unavailable`。這些情況已有擷取的候選項，但其路徑不適用於此檢查。
+
+#### 明確觀測 Windows x64 安裝
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest` 是選用的唯讀操作，用於觀測所選或明確指定的 Windows x64 npm 安裝。不帶任何選項時，指令會觀測由可信 launcher 快照識別的所選候選項（已設定的 `CODEX_CLI_PATH` 或所擷取 PATH 中的第一個 `codex`），其中 opencodex 包裝腳本會解析到其重新命名的 `codex.opencodex-real.cmd` npm 備份。提供全部四個絕對路徑可覆寫自動識別；自動識別僅提出路徑，持有控制代碼的觀測才是最終依據。`--candidate` 必須是標準 npm `<prefix>/codex.cmd` 或 `<prefix>/node_modules/@openai/codex/bin/codex.js`。`--npm-cli` 必須以 `node_modules/npm/bin/npm-cli.js` 結尾，`--node` 明確指定 `node.exe`。應用程式封裝、已識別的版本管理工具配置、缺少 npm 備份的 opencodex 自有 shim 與自訂包裝腳本皆會被拒絕。
+
+在有限讀取期間，原生控制代碼保持上層目錄與檔案開啟。未支援的平台、重新剖析點/junction、衝突的寫入者、不安全的路徑及超過大小限制的檔案皆會被拒絕。固定格式報告不含路徑：`status` 為 `observed` 或 `refused`，並提供 `installationIdentityObserved`；`selectionAttested`、`managed` 與 `applyAllowed` 一律為 `false`。回報拒絕時也可能回傳結束代碼 0，因此應檢查 `status`。
+
+識別值或摘要僅描述觀測當下的檔案，不是持續有效的更新許可，也不證明選用的執行階段、過去的安裝程式、實際 npm 設定或工具真實性。明確指定的 Node 也只是被觀測，不能證明啟動器會選用它。命令不會執行目標、請求套件 registry、安裝、寫入設定或控制程序。現有 Windows `check` 仍不執行候選項或設定的檔案系統 I/O。
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
