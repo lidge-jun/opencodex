@@ -1483,7 +1483,7 @@ describe("compact alternate-account attempt (#913)", () => {
       const headers = { "x-codex-parent-thread-id": "compact-routed-handoff-thread" };
       // The remembered route is keyed by the admitted principal, so every call in
       // this scenario authenticates as the same configured client.
-      const admission = { kind: "configured", keyId: "compact-client", source: "dedicated" } as const;
+      const admission = { kind: "configured", keyId: "compact-client", source: "dedicated", contextPrincipalId: "compact-client-principal" } as const;
       const calls: Array<{ model: string; nativeCompact: boolean }> = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === "string"
