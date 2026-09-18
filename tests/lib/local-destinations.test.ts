@@ -182,6 +182,23 @@ describe("localInferenceDestination", () => {
       expect(destination.origin).not.toBe("http://127.0.0.1:10100");
     }
   });
+
+  test("localhost is a name but not a DNS bind, and keeps the address it already had", () => {
+    // RFC 6761 reserves `localhost` to loopback, so a second lookup cannot select a peer off
+    // this machine — which is the only thing the fail-closed branch above exists to prevent.
+    // Rewriting it to 127.0.0.1 would buy no safety and would silently change the origin every
+    // existing loopback install writes into its exported client configuration; the first draft
+    // of this change did exactly that and failed
+    // `ocx claude management discovery destination > a loopback or wildcard install keeps
+    // asking 127.0.0.1 on the public port`.
+    //
+    // Only the management origin can observe this: `localInferenceDestination` answers a
+    // loopback bind from its own earlier branch and never reaches the name check at all.
+    expect(localManagementOrigin(hub({ runtimeRole: "standalone", hostname: "localhost" }), PUBLIC_PORT))
+      .toBe("http://localhost:10100");
+    expect(localInferenceDestination({ hostname: "localhost" }, PUBLIC_PORT).origin)
+      .toBe("http://127.0.0.1:10100");
+  });
 });
 
 describe("localLoopbackInferencePorts", () => {

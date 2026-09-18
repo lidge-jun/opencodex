@@ -68,9 +68,18 @@ export interface LocalInferenceDestination {
  * a different answer. Local integrations therefore use only literal addresses; a DNS bind falls
  * back to loopback and fails closed when the listener does not answer there. Operators who need
  * local integrations on a DNS-bound listener can enable the dedicated loopback listener.
+ *
+ * `localhost` is deliberately NOT treated as a DNS bind here, even though it is a name. It is
+ * reserved to loopback by RFC 6761, so a second lookup cannot select a peer off this machine —
+ * the thing this function exists to prevent. Rewriting it to `127.0.0.1` would buy no safety and
+ * would change what every existing loopback install writes into its exported client
+ * configuration, which is a contract `tests/claude-integration/claude-cli.test.ts` pins.
+ * `isLoopbackHostname` is the existing encoding of "this name is loopback", so the two stay in
+ * agreement by construction rather than by a second list.
  */
 export function localCredentialDestinationHostname(hostname: string | undefined): string {
   const probed = probeHostname(hostname);
+  if (isLoopbackHostname(probed)) return probed;
   const literal = probed.startsWith("[") && probed.endsWith("]")
     ? probed.slice(1, -1)
     : probed;
