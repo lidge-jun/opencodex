@@ -15,7 +15,7 @@ import { CODEX_CONFIG_PATH } from "../paths";
  * the injection-side half of that contract.
  */
 export type InjectedV1SurfaceReconcile =
-  | { ok: true; content: string }
+  | { ok: true; content: string; changed: boolean }
   | { ok: false; message: string };
 
 let toggleForTests: ((enabled: boolean) => void) | undefined;
@@ -40,10 +40,10 @@ export async function reconcileInjectedV1Surface(
   rawContent: string,
 ): Promise<InjectedV1SurfaceReconcile> {
   if (options.validateOnly || config?.multiAgentMode !== "v1") {
-    return { ok: true, content: rawContent };
+    return { ok: true, content: rawContent, changed: false };
   }
   const { isMultiAgentV2Enabled, transitionMultiAgentV2 } = await import("../features");
-  if (!isMultiAgentV2Enabled()) return { ok: true, content: rawContent };
+  if (!isMultiAgentV2Enabled()) return { ok: true, content: rawContent, changed: false };
   let toggle = toggleForTests;
   if (!toggle) {
     const { runCodexFeaturesCommand } = await import("../../cli/v2");
@@ -56,5 +56,5 @@ export async function reconcileInjectedV1Surface(
       message: `Codex config injection refused: could not reconcile the v1 surface with the global multi_agent_v2 feature: ${transition.error}.`,
     };
   }
-  return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8") };
+  return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8"), changed: transition.changed };
 }

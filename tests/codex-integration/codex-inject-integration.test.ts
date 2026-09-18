@@ -1907,4 +1907,37 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).toContain("multi_agent_v2 = false");
     expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
   });
+
+  test("a skipped v1 injection does not run the v2 reconcile or leave the file changed", () => {
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.5"\n\n[features]\nmulti_agent_v2 = true\n', "utf8");
+    // Integration OFF in the OCX config snapshot the write gate reads.
+    writeFileSync(join(ocxHome, "config.json"), JSON.stringify({ clientIntegrations: { codex: false } }));
+    const script = `
+      const fs = require("node:fs");
+      const { join } = require("node:path");
+      const { injectCodexConfig } = require("./src/codex/inject");
+      const { setCodexMultiAgentV2ToggleForTests } = require("./src/codex/inject/multi-agent-v2");
+      const path = join(process.env.CODEX_HOME, "config.toml");
+      let toggles = 0;
+      setCodexMultiAgentV2ToggleForTests(() => { toggles += 1; });
+      const result = await injectCodexConfig(10100, { multiAgentMode: "v1" });
+      console.log(JSON.stringify({ result, toggles }));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8",
+      timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+
+    expect(child.status, child.stderr).toBe(0);
+    const out = JSON.parse(child.stdout);
+    expect(out.result).toMatchObject({ success: true, status: "skipped", skippedReason: "desired_disabled" });
+    // The gate ran before the reconcile: no transition ran and nothing was written.
+    expect(out.toggles).toBe(0);
+    const config = readFileSync(configPath, "utf8");
+    expect(config).toContain("multi_agent_v2 = true");
+    expect(config).not.toContain("openai_base_url");
+  });
 });
