@@ -90,6 +90,58 @@ describe("resolveClientRetryAfter (#507)", () => {
       includeDefault: false,
     })).toBe("9");
   });
+
+  test("reads the reset delay a Cognition-style trailer states in seconds", () => {
+    // Devin cloud error resource_exhausted: "... Your limit will reset in 35
+    // seconds." Previously fell through to the synthetic 2s default, so a
+    // retry fired straight back into the live cap.
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Devin cloud error resource_exhausted: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 35 seconds. (trace ID: 814519e)",
+    })).toBe("35");
+  });
+
+  test("reads a stated reset in minutes and hours, not just seconds", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Your limit will reset in 13 minutes",
+    })).toBe("780");
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "quota window resets in 1 hour",
+    })).toBe("3600");
+  });
+
+  test("a stated reset feeds cooldown metadata too (includeDefault:false)", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Your limit will reset in 35 seconds",
+      includeDefault: false,
+    })).toBe("35");
+  });
+
+  test("reset phrasing without a time unit is not a delay", () => {
+    // "reset in 2026" names a year, not a wait.
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Your limit will reset in 2026",
+    })).toBe(DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC);
+  });
+
+  test("existing phrasings still parse with their original units", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Throttled. Please try again in 7s.",
+    })).toBe("7");
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "retry after 2 minutes",
+    })).toBe("120");
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Retry-After: 30",
+    })).toBe("30");
+  });
 });
 
 describe("formatErrorResponse Retry-After (#507)", () => {

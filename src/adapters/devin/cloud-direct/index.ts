@@ -50,6 +50,13 @@ export {
 } from './chat.js';
 
 export {
+  streamChatEventsWithResetRetry,
+  STATED_RESET_MAX_REPLAYS,
+  STATED_RESET_MAX_WAIT_MS,
+  type StatedResetRetryOptions,
+} from './stated-reset-retry.js';
+
+export {
   mintUserJwt,
   getCachedUserJwt,
   clearCachedUserJwt,
