@@ -60,6 +60,9 @@ import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
 // src/quota/reset-seen-store.ts: the barrel pulls ~154 modules into a hot path.
 import { getConfigDir } from "../config/paths";
+// Type-only, so it is erased before this module has a runtime import graph at all. The
+// config SHAPE is what this file needs; the config loader is what the note above keeps out.
+import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
@@ -468,6 +471,20 @@ export interface SpendReservationLedger {
   prune(now?: number): void;
   /** Whether this send id is already known, and therefore refused. */
   knows(sendId: string): boolean;
+  /**
+   * Replace the live policy.
+   *
+   * Every figure already accounted survives: raising, lowering or clearing a ceiling changes
+   * what is REFUSED from here on and never what was spent. Rebuilding the ledger instead
+   * would replay the journal into a second set of maps while the first still holds this
+   * process's open reservations, and the two would then disagree about what is in flight.
+   */
+  reconfigure(next: SpendReservationPolicy): void;
+  /**
+   * The policy in force. A live read, not a copy: a caller that formats a refusal has to name
+   * the ceiling this ledger would enforce on the NEXT request, not the one it was built with.
+   */
+  readonly policy: SpendReservationPolicy;
   /** Journal writes that failed; a nonzero count means durability is degraded. */
   readonly persistFailures: number;
   /**
@@ -495,13 +512,17 @@ export function createSpendReservationLedger(options: {
    */
   readonly salt?: string;
 } = {}): SpendReservationLedger {
-  const policy = options.policy ?? DEFAULT_SPEND_RESERVATION_POLICY;
+  // Mutable because the ceilings are operator configuration, and configuration is reloadable.
+  // The three bounds below are read through functions for the same reason: a value captured
+  // at construction would answer for the policy this ledger was BUILT with, and an operator
+  // who raised a bound would keep the old one until the process restarted.
+  let policy = options.policy ?? DEFAULT_SPEND_RESERVATION_POLICY;
   const journal = options.journal;
   const now = options.now ?? (() => Date.now());
   const salt = options.salt ?? "";
-  const maxTrackedScopes = policy.maxTrackedScopes ?? DEFAULT_MAX_TRACKED_SCOPES;
-  const maxTrackedSends = policy.maxTrackedSends ?? DEFAULT_MAX_TRACKED_SENDS;
-  const compactAfterRecords = policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
+  const maxTrackedScopes = (): number => policy.maxTrackedScopes ?? DEFAULT_MAX_TRACKED_SCOPES;
+  const maxTrackedSends = (): number => policy.maxTrackedSends ?? DEFAULT_MAX_TRACKED_SENDS;
+  const compactAfterRecords = (): number => policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
   const scopes = new Map<string, ScopeState>();
   const reservations = new Map<string, Reservation>();
   let persistFailures = 0;
@@ -753,7 +774,7 @@ export function createSpendReservationLedger(options: {
    */
   const compact = (at: number): void => {
     const rewrite = journal?.rewrite;
-    if (!journal || !rewrite || recordsOnDisk < compactAfterRecords) return;
+    if (!journal || !rewrite || recordsOnDisk < compactAfterRecords()) return;
     const checkpoint: JournalRecord = {
       v: 1,
       kind: "checkpoint",
@@ -791,12 +812,12 @@ export function createSpendReservationLedger(options: {
   const makeRoom = (refs: readonly ScopeRef[], at: number): SpendDenial | undefined => {
     evictSends(at, false);
     evictScopes(at, false);
-    while (reservations.size >= maxTrackedSends) {
+    while (reservations.size >= maxTrackedSends()) {
       if (evictSends(at, true) === 0) return { reason: "tracking-capacity-exhausted" };
     }
     let fresh = 0;
     for (const ref of refs) if (!scopes.has(scopeKey(ref.scope, ref.alias))) fresh += 1;
-    while (scopes.size + fresh > maxTrackedScopes) {
+    while (scopes.size + fresh > maxTrackedScopes()) {
       if (evictScopes(at, true) === 0) {
         return { reason: "tracking-capacity-exhausted", scope: refs[0]?.scope };
       }
@@ -808,6 +829,7 @@ export function createSpendReservationLedger(options: {
     get persistFailures() { return persistFailures; },
     get corruptRecords() { return corruptRecords; },
     get degraded() { return persistFailures > 0 || corruptRecords > 0; },
+    get policy() { return policy; },
 
     reserve(request: SpendReservationRequest): SpendReservationDecision {
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
@@ -931,10 +953,72 @@ export function createSpendReservationLedger(options: {
       evictSends(at, false);
       evictScopes(at, false);
     },
+
+    reconfigure(next: SpendReservationPolicy): void {
+      policy = next;
+    },
   };
 }
 
 let sharedLedger: SpendReservationLedger | undefined;
+/**
+ * The operator policy in effect. Held beside the ledger rather than inside it because the
+ * ledger is built lazily: a configured ceiling has to be remembered from startup until the
+ * first request that actually reserves, and an install that configures nothing must still
+ * open no journal.
+ */
+let sharedPolicy: SpendReservationPolicy = DEFAULT_SPEND_RESERVATION_POLICY;
+
+/** Whether any scope carries a ceiling -- that is, whether anything at all can be refused. */
+export function spendCeilingsConfigured(policy: SpendReservationPolicy = sharedPolicy): boolean {
+  return policy.root.maxTokens !== undefined
+    || policy.identity.maxTokens !== undefined
+    || policy.pool.maxTokens !== undefined;
+}
+
+/** The policy the process-wide ledger enforces right now. */
+export function sharedSpendPolicy(): SpendReservationPolicy {
+  return sharedPolicy;
+}
+
+const spendScopeLimitFromConfig = (scope: OcxSpendScopeConfig | undefined): SpendScopeLimit =>
+  scope?.maxTokens !== undefined && Number.isFinite(scope.maxTokens) && scope.maxTokens > 0
+    ? { maxTokens: Math.trunc(scope.maxTokens) }
+    : {};
+
+/**
+ * The ledger policy an operator's `spend` section asks for.
+ *
+ * An absent section, an empty one, and one whose every ceiling is absent all produce the
+ * unconfigured default: observe-only accounting that refuses nothing. That equivalence is the
+ * load-bearing part. This ledger is on and journaling by default, so shipping a default
+ * ceiling would start refusing real traffic on the first upgrade that ran this code, against
+ * a number nobody chose. There is deliberately no default figure here at all.
+ */
+export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined): SpendReservationPolicy {
+  const retentionDays = spend?.retentionDays;
+  return {
+    root: spendScopeLimitFromConfig(spend?.root),
+    identity: spendScopeLimitFromConfig(spend?.identity),
+    pool: spendScopeLimitFromConfig(spend?.pool),
+    retentionMs: retentionDays !== undefined && Number.isFinite(retentionDays) && retentionDays > 0
+      ? Math.trunc(retentionDays) * 24 * 60 * 60_000
+      : DEFAULT_SPEND_RESERVATION_POLICY.retentionMs,
+  };
+}
+
+/**
+ * Apply an operator policy to the process-wide ledger.
+ *
+ * Startup calls this with the loaded config, and a reload may call it again: the ledger keeps
+ * every figure it has already accounted, so changing a ceiling changes what is refused from
+ * here on and never what was spent. It does not CREATE the ledger -- an install that
+ * configures no ceiling must not open a journal merely because the server started.
+ */
+export function configureSharedSpendLedger(policy: SpendReservationPolicy): void {
+  sharedPolicy = policy;
+  sharedLedger?.reconfigure(policy);
+}
 
 /**
  * Process-wide ledger backed by the journal under OPENCODEX_HOME. Created lazily so
@@ -947,6 +1031,7 @@ export function sharedSpendLedger(): SpendReservationLedger {
     sharedLedger = createSpendReservationLedger({
       journal: createFileSpendJournal(join(home, SPEND_LEDGER_JOURNAL_FILENAME)),
       salt: loadOrCreateSpendLedgerSalt(join(home, SPEND_LEDGER_SALT_FILENAME)),
+      policy: sharedPolicy,
     });
   }
   return sharedLedger;
@@ -955,4 +1040,5 @@ export function sharedSpendLedger(): SpendReservationLedger {
 /** Test seam. Production never discards the ledger: that would reset a spent budget. */
 export function resetSharedSpendLedgerForTest(): void {
   sharedLedger = undefined;
+  sharedPolicy = DEFAULT_SPEND_RESERVATION_POLICY;
 }

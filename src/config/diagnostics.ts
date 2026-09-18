@@ -34,6 +34,7 @@ import {
   malformedQuotaResetNotifyWarning,
   malformedCatalogAutoRefreshWarning,
   malformedCodexPoolWarning,
+  malformedSpendWarning,
   rawConfigRecord,
   malformedNativeSubagentFields,
   malformedNativeSubagentFieldWarning,
@@ -58,6 +59,7 @@ import {
   quotaResetNotifySchema,
   remoteGuiConfigSchema,
   runtimeRoleSchema,
+  spendSchema,
 } from "./schema/leaf-validators";
 
 export type ConfigDiagnostics = {
@@ -122,6 +124,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (catalogRefreshWarning) warnings.push(catalogRefreshWarning);
   const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
   if (codexPoolWarning) warnings.push(codexPoolWarning);
+  const spendWarning = malformedSpendWarning(rawParsed);
+  if (spendWarning) warnings.push(spendWarning);
   const plaintextWarning = malformedPlaintextV2AgentMessagesWarning(rawParsed);
   if (plaintextWarning) warnings.push(plaintextWarning);
   if (syncDisabledReason) {
@@ -293,6 +297,22 @@ function catalogAutoRefreshError(value: unknown): string | null {
   const issue = result.error.issues[0];
   const field = issue?.path.join(".");
   return `schema_invalid: catalogAutoRefresh${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+/**
+ * The read path degrades a malformed spend section to undefined, which means no ceiling is
+ * enforced. Reject it on write so `ocx config set` cannot store a budget that reads back as
+ * configured and refuses nothing -- a ceiling that is not enforced looks identical to one
+ * nothing has reached.
+ */
+function spendError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "spend") || raw.spend === undefined) return null;
+  const result = spendSchema.safeParse(raw.spend);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: spend${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
 }
 
 /**
@@ -551,6 +571,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
     ?? catalogAutoRefreshError(value)
+    ?? spendError(value)
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)

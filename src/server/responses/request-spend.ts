@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import { sharedSpendLedger, type SpendReservationLedger } from "../../lib/spend-reservation-ledger";
-import type { RequestLogContext } from "../request-log";
+import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
+import { recordWorkflowRefusalEvent, workflowDenialSummary } from "../../lib/workflow-budget";
 
 /** The terminal usage a request reported, in the only two fields the ledger books. */
 export interface TerminalSpendUsage {
@@ -42,7 +43,7 @@ export function createRequestSpendTracker(
   logCtx: Pick<
     RequestLogContext,
     "provider" | "accountLogLabel" | "usageLogInputTokens" | "spendOutputCeilingTokens"
-  >,
+  > & Partial<Pick<RequestLogContext, "localTerminalReason" | "terminalSource" | "errorCode">>,
   rootId: string | undefined,
   injected?: SpendReservationLedger,
 ): RequestSpendTracker {
@@ -86,12 +87,25 @@ export function createRequestSpendTracker(
       });
       if (!decision.reserved) {
         refusals += 1;
+        const denial = decision.denial;
         // Only an operator's configured ceiling refuses a dispatch. Every other denial --
         // capacity, durability, a journal this process could not prove complete -- means the
         // ledger cannot ACCOUNT for this send, which is not a reason to refuse one. An
         // unconfigured install keeps the count caps it already had and is not newly refused,
         // and a degraded ledger must not become an outage.
-        return decision.denial.reason !== "spend-limit-exceeded";
+        if (denial.reason !== "spend-limit-exceeded") return true;
+        // This send is refused, and the dispatch path that asked will report an exhausted send
+        // budget -- from there, that is all it can see. The row is where an operator actually
+        // looks, so the ceiling is named on it here: a locally assigned code wins in
+        // addFinalRequestLog, so the request that CROSSED the ceiling reads as a spend refusal
+        // rather than as the ordinary budget exhaustion it would otherwise be indistinguishable
+        // from. The event ring gets the same pair so /api/workflow-budget agrees with the row.
+        const detail = { scope: denial.scope, limit: denial.limit, projected: denial.projected };
+        const summary = workflowDenialSummary("workflow-spend-exhausted", detail);
+        markLocalRequestLogRefusal(logCtx, summary.code);
+        logCtx.errorCode = summary.code;
+        recordWorkflowRefusalEvent(rootId, "workflow-spend-exhausted", Date.now(), detail);
+        return false;
       }
       live.push(sendId);
       confirmOlderSends();

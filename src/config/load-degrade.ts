@@ -33,6 +33,7 @@ import {
   remoteGuiConfigSchema,
   retryOn429PolicySchema,
   runtimeRoleSchema,
+  spendSchema,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
@@ -634,6 +635,20 @@ export function malformedCatalogAutoRefreshWarning(rawParsed: unknown): string |
   if (result.success) return null;
   const field = result.error.issues[0]?.path.join(".");
   return `catalogAutoRefresh${field ? `.${field}` : ""} ignored: invalid catalog auto-refresh configuration`;
+}
+
+/**
+ * The same silent-in-the-wrong-direction failure, and the most expensive instance of it here:
+ * a dropped spend section means the ceilings are not enforced, and an unenforced ceiling is
+ * indistinguishable from one nothing has reached. The operator finds out from the bill.
+ */
+export function malformedSpendWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "spend")) return null;
+  const result = spendSchema.safeParse(raw.spend);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `spend${field ? `.${field}` : ""} ignored: invalid spend ceiling configuration, so no token ceiling is enforced`;
 }
 
 /**

@@ -854,7 +854,13 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
  * Mark a refusal this proxy synthesized locally. Sets origin to `synthetic` and a
  * distinct local reason so the request log cannot be read as an upstream overload.
  */
-export function markLocalRequestLogRefusal(logCtx: RequestLogContext, reason: string): void {
+// Typed by the two fields it writes rather than by the whole context: the durable-spend tracker
+// has to mark a row from a narrow view of it, and widening that view to the full context there
+// would pull the entire log shape into a module that touches two of its fields.
+export function markLocalRequestLogRefusal(
+  logCtx: Pick<RequestLogContext, "localTerminalReason" | "terminalSource">,
+  reason: string,
+): void {
   logCtx.localTerminalReason = reason;
   logCtx.terminalSource = "synthetic";
 }

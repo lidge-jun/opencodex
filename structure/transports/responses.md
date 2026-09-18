@@ -983,7 +983,29 @@ booking, the settlement split, the refund, a ceiling that refuses a dispatch rat
 describing it afterwards, and the restart.
 
 The default policy still sets no token ceiling on any scope, so an unconfigured install accounts
-and reports without refusing. The operator configuration path for those limits is not wired yet.
+and reports without refusing. An operator turns enforcement on with the `spend` section in
+config.json, which `src/lib/spend-reservation-ledger.ts` resolves through
+`spendPolicyFromConfig` and applies with `configureSharedSpendLedger` at startup. There is no
+default figure and there deliberately never will be: this ledger is on and journaling by
+default, so a shipped ceiling would start refusing real traffic on the first upgrade that ran
+it, against a number nobody chose. Absent, empty and all-scopes-absent sections are the same
+thing -- observe only.
+
+Applying a policy to a ledger that already exists reconfigures it rather than rebuilding it.
+Every figure already accounted survives, so raising, lowering or clearing a ceiling changes what
+is refused from here on and never what was spent. A rebuild would replay the journal into a
+second set of maps while the first still held this process's open reservations, and the two
+would then disagree about what is in flight.
+
+With a ceiling configured, three places can refuse and they are ordered cheapest first. HTTP
+admission refuses a root scope that is ALREADY spent, before the body is parsed, because that
+question needs no token count; the pre-dispatch check in `createResponsesSendBudget` asks the
+same question beside the existing send-count one; and the reservation itself refuses the send
+that would CROSS a ceiling, which is the only one of the three that can see the identity and
+pool scopes, since neither is known until routing picks an account. Count caps and token
+ceilings are an intersection: a request passes only when every count and every ceiling admits
+it, a count denial is decided before any reservation is booked, and a token denial before any
+count is charged, so neither leaves the other's accounting to unwind.
 
 ## What a spent budget tells the client
 

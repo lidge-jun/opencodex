@@ -840,3 +840,32 @@ export const catalogAutoRefreshSchema = z.object({
   enabled: z.boolean().optional(),
   intervalMinutes: z.number().int().min(0).max(1440).optional(),
 }).strict();
+
+/**
+ * One spend scope's ceiling.
+ *
+ * `.strict()` for the usual reason and one sharper one. Elsewhere a silently ignored key
+ * leaves a feature off that the operator believed was on; here it leaves a BUDGET off, and a
+ * budget nobody is enforcing looks exactly like a budget nobody has exceeded. That is #2106 --
+ * an undeclared option accepted, persisted, and then read as its default -- aimed at spend.
+ *
+ * Only positive integers: 0 would read as "no tokens at all" and refuse every request under
+ * the scope, which is never what writing a budget means. An operator who wants no ceiling
+ * removes the key.
+ */
+const spendScopeSchema = z.object({
+  maxTokens: z.number().int().positive().optional(),
+}).strict();
+
+/**
+ * Durable spend ceilings (#4546).
+ *
+ * Absent, empty, and all-scopes-absent are the same thing: observe-only accounting. There is
+ * no default ceiling anywhere in this section, deliberately.
+ */
+export const spendSchema = z.object({
+  root: spendScopeSchema.optional(),
+  identity: spendScopeSchema.optional(),
+  pool: spendScopeSchema.optional(),
+  retentionDays: z.number().int().min(1).max(365).optional(),
+}).strict();
