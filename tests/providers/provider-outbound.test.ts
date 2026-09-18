@@ -207,6 +207,95 @@ describe("provider outbound GET transport", () => {
     }
   });
 
+  test("scheme-mismatched proxy variables keep the DNS-pinned transport", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      for (const { url, proxyKey } of [
+        { url: "http://provider.example/v1/models", proxyKey: "HTTPS_PROXY" },
+        { url: "https://provider.example/v1/models", proxyKey: "HTTP_PROXY" },
+      ] as const) {
+        for (const key of proxyKeys) delete process.env[key];
+        process.env[proxyKey] = "http://127.0.0.1:9";
+        const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+        const resolveOptions: { allowBenchmarkAddresses?: boolean }[] = [];
+        const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+        dependencies.resolveAddresses = mock(async (_url: string, options?: { allowBenchmarkAddresses?: boolean }) => {
+          resolveOptions.push({ allowBenchmarkAddresses: options?.allowBenchmarkAddresses });
+          return {
+            hostname: "provider.example",
+            addresses: [{ address: "93.184.216.34", family: 4 }],
+            privateNetwork: false,
+          };
+        }) as ProviderOutboundDependencies["resolveAddresses"];
+
+        const response = await providerOutboundGet(
+          "custom",
+          { baseUrl: new URL(url).origin + "/v1" },
+          url,
+          {},
+          dependencies,
+        );
+
+        expect(response.status).toBe(204);
+        expect(captured.address).toBe("93.184.216.34");
+        expect(resolveOptions).toEqual([{ allowBenchmarkAddresses: false }]);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a NO_PROXY match keeps the request on the DNS-pinned transport", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    process.env.NO_PROXY = "provider.example";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+      const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+
+      const response = await providerOutboundGet(
+        "custom",
+        { baseUrl: "https://provider.example/v1" },
+        "https://provider.example/v1/models",
+        {},
+        dependencies,
+      );
+
+      expect(response.status).toBe(204);
+      expect(captured.address).toBe("93.184.216.34");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a scheme-mismatched proxy variable does not demand NO_PROXY for private providers", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTP_PROXY = "http://127.0.0.1:9";
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response(null, { status: 200 }), {
+      privateNetwork: true,
+      address: "192.168.1.50",
+    });
+
+    const response = await providerOutboundGet(
+      "ollama-lan",
+      { baseUrl: "https://ollama.lan:11434/v1", allowPrivateNetwork: true },
+      "https://ollama.lan:11434/v1/models",
+      {},
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(captured.address).toBe("192.168.1.50");
+  });
+
   test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
