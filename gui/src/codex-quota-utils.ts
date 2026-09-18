@@ -50,16 +50,6 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
       };
   if (!isThirtyDayOnlyPlan(plan)) return normalized;
   return {
-    // The burst window survives the Free/Go projection. It is upstream-enforced independently
-    // of which longer window governs a plan — `isCodexQuotaExhausted` counts it on EVERY plan —
-    // so dropping it here left the score with no governing window AND no terminal evidence,
-    // and the warning returned "no opinion" for an account routing was already refusing (#5045).
-    // The weekly window is still dropped, which is what this projection exists to do.
-    ...(normalized.fiveHourPercent !== undefined ? { fiveHourPercent: normalized.fiveHourPercent } : {}),
-    ...(normalized.fiveHourResetAt !== undefined ? { fiveHourResetAt: normalized.fiveHourResetAt } : {}),
-    ...(normalized.shortPercent !== undefined ? { shortPercent: normalized.shortPercent } : {}),
-    ...(normalized.shortResetAt !== undefined ? { shortResetAt: normalized.shortResetAt } : {}),
-    ...(normalized.shortObservedAt !== undefined ? { shortObservedAt: normalized.shortObservedAt } : {}),
     ...(normalized.monthlyPercent !== undefined ? { monthlyPercent: normalized.monthlyPercent } : {}),
     ...(normalized.monthlyResetAt !== undefined ? { monthlyResetAt: normalized.monthlyResetAt } : {}),
     ...(normalized.creditsUsd !== undefined ? { creditsUsd: normalized.creditsUsd } : {}),

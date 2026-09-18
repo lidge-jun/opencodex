@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { computeCodexUsageScore as guiScore, normalizeQuotaForPlan } from "../../gui/src/codex-quota-utils";
+import { computeCodexUsageScore as guiScore } from "../../gui/src/codex-quota-utils";
 import type { AccountQuota } from "../../gui/src/codex-quota-utils";
 import { computeCodexUsageScore as routerScore } from "../../src/codex/routing/cooldown-math";
+import { providerQuotaFromCodexQuota } from "../../src/providers/quota/report-cache";
 import { CODEX_UNKNOWN_USAGE_SCORE } from "../../src/codex/quota";
 import { TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../../src/codex/quota-types";
 
@@ -74,19 +75,16 @@ describe("account-switch warning agrees with routing (#5045)", () => {
     expectSame({ monthlyPercent: 90, updatedAt: NOW }, "plus");
   });
 
-  test("the Free/Go projection keeps the evidence its own score needs", () => {
-    // Free/Go has no weekly window, which is what this projection exists to drop. The burst
-    // window is upstream-enforced on every plan, so dropping it too left the dashboard with no
-    // governing window AND no terminal evidence for an account the router was refusing.
-    const stored: AccountQuota = {
-      weeklyPercent: 50,
-      shortPercent: 100,
-      shortObservedAt: NOW - 1_000,
-      updatedAt: NOW,
-    };
-    const projected = normalizeQuotaForPlan(stored, "free");
-    expect(projected?.weeklyPercent).toBeUndefined();
-    expect(guiScore(projected, "free", NOW)).toBe(100);
-    expect(guiScore(projected, "free", NOW)).toBe(routerScore(asRouterQuota(stored), "free", NOW));
+  test("the DTO the dashboard receives carries the freshness the rule needs", () => {
+    // The warning scores whatever `providerQuotaFromCodexQuota` delivered. That projection
+    // mapped short -> fiveHour but dropped `shortObservedAt`, so a reset-less terminal reading
+    // arrived with no freshness evidence and the dashboard returned "no opinion" for an account
+    // the router was already refusing. The two are compared on the SAME stored snapshot, one
+    // through the DTO and one directly, which is the shape of the divergence.
+    const stored = { shortPercent: 100, shortObservedAt: NOW - 1_000, updatedAt: NOW };
+    const dto = providerQuotaFromCodexQuota(stored);
+    expect(dto?.shortObservedAt).toBe(NOW - 1_000);
+    expect(guiScore(dto as AccountQuota, null, NOW)).toBe(100);
+    expect(guiScore(dto as AccountQuota, null, NOW)).toBe(routerScore(stored, null, NOW));
   });
 });
