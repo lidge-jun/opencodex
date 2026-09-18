@@ -87,9 +87,9 @@ describe("3-state multi-agent mode", () => {
       opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
       multi_agent_version: "v2",
     };
-    // An untrusted slashed row must not key the baseline by its post-slash part:
-    // "external/gpt-5.6-sol" is not the native "gpt-5.6-sol" row, so its preserved
-    // pin survives instead of being rewritten to the baseline's "v1".
+    // An untrusted slashed row is routed, not native, so default mode clears its stale pin
+    // rather than keying the baseline by its post-slash part. The clear also proves the row
+    // never adopted the native "gpt-5.6-sol" row's baseline "v1".
     const foreignRouted = {
       ...template(),
       slug: "external/gpt-5.6-sol",
@@ -105,7 +105,7 @@ describe("3-state multi-agent mode", () => {
     );
     expect(merged.find(e => e.slug === "team/gpt-5.6-sol")?.multi_agent_version).toBe("v1");
     expect(merged.find(e => e.slug === "team/gpt-5.5")?.multi_agent_version).toBeUndefined();
-    expect(merged.find(e => e.slug === "external/gpt-5.6-sol")?.multi_agent_version).toBe("v2");
+    expect(merged.find(e => e.slug === "external/gpt-5.6-sol")?.multi_agent_version).toBeUndefined();
 
     // The baseline extractor itself never indexes slashed rows, so account-bound
     // or routed rows inside a backup cannot alias a bare native slug.
