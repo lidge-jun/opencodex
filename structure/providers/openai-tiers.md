@@ -7,6 +7,10 @@ Explicit Codex CLI installation observation does not identify an account, attest
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
 
+[Orca-linked pool accounts](../codex-home.md#orca-source-owned-account-import) use the current
+source access token and leave refresh ownership with Orca. They enter the pool validation-pending;
+import deduplicates by ChatGPT account ID, including shared-workspace IDs.
+
 This current contract supersedes the provider-identity and account-selection sections of
 `devlog/_fin/260717_openai_hardening`; that archived unit remains historical evidence for the
 earlier three-tier implementation. The replacement contract and its verification evidence live in
@@ -269,9 +273,11 @@ future or missing deadlines remain carried, and explicit incoming short readings
 This stops partial weekly/Spark or credits-only refreshes from renewing obsolete Spark-derived
 5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
 
-The separately retained main-policy snapshot preserves omitted short evidence even after its
-reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
-existing short usage reading or release its hard lock; a fresh short reading can replace it.
+The separately retained main-policy snapshot preserves omitted blocking short evidence even after
+its reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
+existing blocking short usage reading or release its hard lock; a fresh short reading can replace
+it. Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking
+weekly reading.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only

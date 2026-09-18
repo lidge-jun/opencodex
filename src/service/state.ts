@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
+import { resolveCodexSqliteHome } from "../codex/paths";
 import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
 import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
@@ -218,6 +219,8 @@ export interface ServiceInstallState {
   version: 1 | 2;
   codexHome: string;
   opencodexHome: string;
+  /** Effective Codex SQLite home used by this service's history integration. */
+  codexSqliteHome?: string;
   /** Baked at install; lets status flag paths gone stale after npm prefix/nvm moves. */
   bunPath?: string;
   cliPath?: string;
@@ -241,7 +244,7 @@ export function parseServiceInstallState(value: unknown): ServiceInstallState | 
   if (state.version !== 1 && state.version !== 2) return null;
   if (typeof state.codexHome !== "string" || state.codexHome.length === 0) return null;
   if (typeof state.opencodexHome !== "string" || state.opencodexHome.length === 0) return null;
-  for (const key of ["bunPath", "cliPath", "launcherPath", "winswVersion", "winswSha256"] as const) {
+  for (const key of ["codexSqliteHome", "bunPath", "cliPath", "launcherPath", "winswVersion", "winswSha256"] as const) {
     if (state[key] !== undefined && (typeof state[key] !== "string" || state[key].length === 0)) return null;
   }
   if (state.version === 1) {
@@ -254,10 +257,12 @@ export function parseServiceInstallState(value: unknown): ServiceInstallState | 
 
 export function writeServiceInstallState(backend: ServiceBackend = "scheduler", launcherPath?: string | null): void {
   const { bun, cli } = cliEntry();
+  const codexHome = currentCodexHome();
   const state: ServiceInstallState = {
     version: 2,
-    codexHome: currentCodexHome(),
+    codexHome,
     opencodexHome: currentOpenCodexHome(),
+    codexSqliteHome: resolveCodexSqliteHome({ codexHome }),
     bunPath: bun,
     cliPath: cli,
     ...(launcherPath ? { launcherPath } : {}),

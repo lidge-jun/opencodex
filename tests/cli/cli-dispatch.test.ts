@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CLI_COMMANDS } from "../../src/cli/registry";
-import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideStartWithLiveOwner, selectDefaultGuiUrl } from "../../src/cli/dispatch";
+import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideBusyPreferredPort, decideStartWithLiveOwner, selectDefaultGuiUrl } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import type { OcxConfig } from "../../src/types";
 import { runGuiCommand } from "../../src/cli/gui";
@@ -351,6 +351,79 @@ describe("start probes the configured port before shadowing it (source-level)", 
     // A truthy-but-not-true default would silently probe for callers that pass
     // nothing, which is a different behavior than the one asserted above.
     expect(cliSource).toContain("options.probeConfiguredPort === true");
+  });
+});
+
+/**
+ * #5004. The pre-bind owner check is not the last chance to notice a live proxy: when it
+ * answers "nothing is there" — a stale record, a probe that lost a race, a Windows loopback
+ * family split — the start walked on to `chooseListenPort`, found the port busy, and hopped.
+ * The hopped instance takes over this home's pid/runtime records and re-points Codex at
+ * itself, so the reporter was left with two proxies and an editor talking to the wrong one.
+ *
+ * The decision is a pure function so the matrix runs here at runtime; the source oracle
+ * below pins that `chooseListenPort` asks the port before it walks away from it.
+ */
+describe("a busy preferred port never becomes a second proxy (#5004)", () => {
+  // INV-START-01 (structure/overview.md).
+  const cliSource = readFileSync(repoPath("src/cli/index.ts"), "utf8");
+
+  test("the busy-preferred-port decision matrix", () => {
+    // The exact reported shape: preferred 58285 held by a live proxy, ephemeral 62254 free.
+    const reported = { preferredPort: 58285, selectedPort: 62254, hardPin: false, ocxService: undefined };
+
+    expect(decideBusyPreferredPort({ ...reported, holderIsOpencodex: true })).toBe("refuse-live-proxy");
+    // An unidentified holder stops the start too: hopping re-points Codex either way, and a
+    // silent probe is not proof that the port is free for the taking.
+    expect(decideBusyPreferredPort({ ...reported, holderIsOpencodex: false })).toBe("refuse-unidentified-holder");
+    // The service wrapper keeps the stay-out contract decideStartWithLiveOwner gives it.
+    expect(decideBusyPreferredPort({ ...reported, holderIsOpencodex: true, ocxService: "1" })).toBe("service-stay-out");
+    // Only the exact "1" sentinel is service context.
+    expect(decideBusyPreferredPort({ ...reported, holderIsOpencodex: true, ocxService: "0" })).toBe("refuse-live-proxy");
+    expect(decideBusyPreferredPort({ ...reported, holderIsOpencodex: false, ocxService: "1" })).toBe("refuse-unidentified-holder");
+    // No hop happened — the preferred port was obtained.
+    expect(decideBusyPreferredPort({ ...reported, selectedPort: 58285, holderIsOpencodex: true })).toBe("hop");
+    // `port: 0` asks the OS for a port; nothing was taken from anybody.
+    expect(decideBusyPreferredPort({ ...reported, preferredPort: 0, holderIsOpencodex: false })).toBe("hop");
+    // An explicit `--port` is the user's own instruction and never reaches the fallback:
+    // findAvailablePort throws PortUnavailableError for a hard pin instead of hopping.
+    expect(decideBusyPreferredPort({ ...reported, hardPin: true, holderIsOpencodex: true })).toBe("hop");
+  });
+
+  test("chooseListenPort asks who holds the port before it accepts a different one", () => {
+    const at = cliSource.indexOf("async function chooseListenPort(");
+    expect(at).toBeGreaterThan(-1);
+    const end = cliSource.indexOf("async function findProxyOwnerBeforeJournalRecovery(");
+    expect(end).toBeGreaterThan(at);
+    const fn = cliSource.slice(at, end);
+
+    const probeAt = fn.indexOf("await probePortOwner(");
+    const decisionAt = fn.indexOf("decideBusyPreferredPort({");
+    const hopLogAt = fn.indexOf("is busy; starting opencodex on");
+    expect(probeAt).toBeGreaterThan(-1);
+    expect(decisionAt).toBeGreaterThan(probeAt);
+    // The hop message is downstream of the decision, so no path can print it without one.
+    expect(hopLogAt).toBeGreaterThan(decisionAt);
+    // One 750ms probe is what produced the duplicate; the guard spends the larger budget.
+    expect(fn).toContain("START_OWNERSHIP_LIVENESS");
+
+    // Both refusals end the process, and the refusal a user sees is the one they already
+    // know from the owner path.
+    expect(fn).toMatch(/decision === "refuse-live-proxy"[\s\S]{0,400}?process\.exit\(1\)/);
+    expect(fn).toContain("Use 'ocx stop' first.");
+    expect(fn).toMatch(/decision === "refuse-unidentified-holder"[\s\S]{0,700}?process\.exit\(1\)/);
+    // The wrapper's `if %ERRORLEVEL% NEQ 0` loop still terminates on a served port.
+    expect(fn).toMatch(/decision === "service-stay-out"[\s\S]{0,500}?process\.exit\(0\)/);
+  });
+
+  test("the pre-bind owner probe spends the same budget before it deletes state", () => {
+    const at = cliSource.indexOf("async function findProxyOwnerBeforeJournalRecovery(");
+    expect(at).toBeGreaterThan(-1);
+    const fn = cliSource.slice(at, at + 1400);
+    expect(fn).toContain("await findLiveProxy(START_OWNERSHIP_LIVENESS)");
+    // A negative answer here removes this home's pid record. That is the other half of why
+    // one unanswered probe must not be enough.
+    expect(fn).toContain("removePidIfValueIs(pidSnapshot)");
   });
 });
 

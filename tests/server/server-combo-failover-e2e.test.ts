@@ -38,6 +38,7 @@ import { startServer } from "../../src/server";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { heldResponse } from "../helpers/held-response";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -3460,14 +3461,10 @@ describe("server combo failover 030 activation matrix", () => {
 
   test("connect cancellation wins with 499, no backup, warning, or cooldown", async () => {
     let bHits = 0;
-    const aStarted = deferred();
-    const a = serve(() => {
-      aStarted.resolve();
-      return new Promise<Response>(() => {});
-    });
+    const a = heldResponse(serve);
     const b = serve(() => { bHits += 1; return chatSuccess("must not run"); });
     const config = comboConfig({
-      a: provider("openai-chat", baseUrl(a), "key-a"),
+      a: provider("openai-chat", baseUrl(a.server), "key-a"),
       b: provider("openai-chat", baseUrl(b), "key-b"),
     });
     const abort = new AbortController();
@@ -3476,9 +3473,9 @@ describe("server combo failover 030 activation matrix", () => {
     console.warn = (...args: unknown[]) => { warnings.push(args); };
     try {
       const pending = postLogged(config, {}, { abortSignal: abort.signal });
-      await aStarted.promise;
+      await within(a.started, 10_000);
       abort.abort(new DOMException("client closed", "AbortError"));
-      const response = await pending;
+      const response = await within(pending, 10_000);
       expect(response.status).toBe(499);
       expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
       await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "openai-chat" });
@@ -3486,6 +3483,8 @@ describe("server combo failover 030 activation matrix", () => {
       expect(warnings.some(row => String(row[0]).includes("[combo]"))).toBe(false);
       expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
     } finally {
+      abort.abort();
+      a.release();
       console.warn = originalWarn;
     }
   });

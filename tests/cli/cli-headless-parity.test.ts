@@ -387,6 +387,10 @@ describe("headless GUI parity CLI", () => {
       // `ocx integration native` verb would duplicate existing commands rather
       // than add a capability. Listed so the sweep stays exhaustive.
       ["/api/native-integrations", "(none — GUI-only)"],
+      // #3417: the dashboard's native main login disclosure reads and writes the same
+      // routes as `ocx account main` — list/doctor, register, switch and recover — so the
+      // GUI surface adds no endpoint the headless CLI cannot already reach.
+      ["/api/native-main-profiles", "ocx account main"],
       ["/api/debug", "ocx debug/observe"],
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],

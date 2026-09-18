@@ -28,6 +28,7 @@ export interface AdapterEventPreflight {
   stream: AsyncIterable<AdapterEvent>;
   error?: Extract<AdapterEvent, { type: "error" }>;
   empty: boolean;
+  replayUnsafe: boolean;
 }
 
 async function* replay(
@@ -51,10 +52,12 @@ export async function preflightAdapterEvents(
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
+  let replayUnsafe = false;
   while (true) {
     const next = await iterator.next();
-    if (next.done) return { stream: replay(buffered, iterator), empty: true };
+    if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
     if (next.value.type === "heartbeat") {
+      replayUnsafe ||= next.value.replayUnsafe === true;
       buffered.push(next.value);
       if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
       continue;
@@ -62,9 +65,9 @@ export async function preflightAdapterEvents(
     buffered.push(next.value);
     if (next.value.type === "error") {
       await iterator.return?.();
-      return { stream: replay(buffered, iterator), error: next.value, empty: false };
+      return { stream: replay(buffered, iterator), error: next.value, empty: false, replayUnsafe };
     }
-    return { stream: replay(buffered, iterator), empty: false };
+    return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
   }
 }
 
@@ -90,7 +93,17 @@ export function createAdapterEventQueue(opts?: {
   const coalesceIntoTail = (event: AdapterEvent): boolean => {
     const tail = queued[queued.length - 1];
     if (!tail) return false;
-    if (event.type === "heartbeat") return tail.type === "heartbeat";
+    if (event.type === "heartbeat") {
+      if (tail.type !== "heartbeat") return false;
+      // Heartbeats carry no ordering between themselves, but the replay-unsafe
+      // marker is not ordering — it is a latch. Dropping the incoming event
+      // would discard the only record that Cursor already performed a local
+      // side effect, and preflight would then permit an OAuth replay of it.
+      if (event.replayUnsafe === true && tail.replayUnsafe !== true) {
+        queued[queued.length - 1] = { type: "heartbeat", replayUnsafe: true };
+      }
+      return true;
+    }
     if (event.type === "text_delta" && tail.type === "text_delta" && tail.phase === event.phase) {
       if (tail.text.length + event.text.length > COALESCE_MAX_CHUNK_LENGTH) return false;
       queued[queued.length - 1] = { type: "text_delta", text: tail.text + event.text, phase: tail.phase };

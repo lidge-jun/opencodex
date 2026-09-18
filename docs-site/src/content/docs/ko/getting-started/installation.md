@@ -80,7 +80,7 @@ opencodex 상태 파일은 `$OPENCODEX_HOME`(기본값 `~/.opencodex`) 아래에
 | --- | --- |
 | `$OPENCODEX_HOME/config.json` | 프로바이더, 기본 프로바이더, 포트, 옵션. |
 | `$OPENCODEX_HOME/ocx.pid` | 실행 중인 프록시의 PID(단일 인스턴스 가드). |
-| `$OPENCODEX_HOME/runtime-port.json` | 자동으로 고른 대체 포트를 포함한 현재 PID, 호스트명, 포트. |
+| `$OPENCODEX_HOME/runtime-port.json` | 현재 PID, 호스트명, 포트. `config.port`가 `0`이면 OS가 할당한 포트도 포함합니다. |
 | `$OPENCODEX_HOME/auth.json` | 저장된 OAuth 자격 증명(`ocx login` 시). |
 | `$OPENCODEX_HOME/catalog-backup*.json` | opencodex가 수정하기 전에 만든 Codex 모델 카탈로그 백업. |
 | `$CODEX_HOME/config.toml` | 로컬 전용 구성에서는 opencodex가 관리하는 루트 `openai_base_url`을 추가합니다. 로컬이 아닌 주소에 바인딩할 때는 Codex가 API 인증 헤더를 보낼 수 있도록 `model_provider = "opencodex"`와 `[model_providers.opencodex]`를 사용합니다. |

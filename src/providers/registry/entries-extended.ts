@@ -98,6 +98,10 @@ import {
   DIGITALOCEAN_CHAT_COMPLETION_MODELS,
   SCALEWAY_SERVERLESS_CHAT_MODELS,
   SCALEWAY_MODEL_INPUT_MODALITIES,
+  OPPER_MODELS,
+  OPPER_MODEL_CONTEXT_WINDOWS,
+  OPPER_MODEL_MAX_OUTPUT_TOKENS,
+  OPPER_MODEL_INPUT_MODALITIES,
 } from "./model-seeds";
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
@@ -802,6 +806,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(ALIBABA_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, QWEN38_REASONING_EFFORTS])),
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekThinkingEffortsFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash-0731": deepseekThinkingEffortsFor("deepseek-v4-flash-0731"),
@@ -847,6 +852,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, QWEN38_REASONING_EFFORTS])),
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
+      "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekThinkingEffortsFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash": deepseekThinkingEffortsFor("deepseek-v4-flash"),
@@ -1023,6 +1029,30 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
+  {
+    // Opper: EU-hosted AI gateway (Opper AI AB, Stockholm). One OpenAI-compatible endpoint and one
+    // key in front of 30+ upstream providers. Seeded ids are Opper *pools* (bare names such as
+    // `claude-sonnet-4-6`): the gateway chooses the provider/region per request, and a
+    // `vendor/model` id (`anthropic/claude-sonnet-4-6`, `aws/claude-sonnet-4-6-eu`) pins one route.
+    // The original provider author reported on 2026-09-08 that GET /v3/compat/models answers 401
+    // without a key, so the default discovery URL doubles as key validation. Windows, output caps
+    // and modalities live in model-seeds.ts (smallest value / shared modality across each pool's
+    // members); live discovery owns which models exist.
+    id: "opper",
+    label: "Opper",
+    adapter: "openai-chat",
+    baseUrl: "https://api.opper.ai/v3/compat",
+    authKind: "key",
+    dashboardUrl: "https://platform.opper.ai",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "claude-sonnet-4-6",
+    models: OPPER_MODELS,
+    modelContextWindows: OPPER_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: OPPER_MODEL_MAX_OUTPUT_TOKENS,
+    modelInputModalities: OPPER_MODEL_INPUT_MODALITIES,
+    note: "EU-hosted AI gateway: one OpenAI-compatible endpoint and one key in front of 30+ providers. Bare model ids are pools (claude-sonnet-4-6, gpt-5.5) and Opper picks the route per request; vendor/model ids (anthropic/claude-sonnet-4-6) pin one provider. The catalogue is discovered live from /v3/compat/models with your key; the public list is at opper.ai/models. Token rates are the model providers' rates with no markup; Opper charges a 3% fee when you buy credits.",
+  },
   {
     id: "opencode-free",
     label: "OpenCode Free",

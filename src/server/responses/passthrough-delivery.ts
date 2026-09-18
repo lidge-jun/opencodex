@@ -30,7 +30,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
-import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant } from "../../codex/auth-context";
+import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant, releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { consumeComboFailure } from "./core-combo-failure";
 import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
@@ -413,6 +413,10 @@ export async function deliverPassthroughResponse(
             const result = checkOutboundBodySize(continuationBody, config.maxUpstreamBodyBytes);
             return result.admitted ? undefined : describeOutboundBodyRefusal(result);
           },
+          // Resolution can acquire the account's sole cooldown-recovery probe before the routed
+          // provider reveals whether it will request search. Hand an unused lease back on every
+          // terminal path; after an executed search, the outcome recorder has already settled it.
+          onFinalize: () => releaseCodexAuthContextProbeLease(openAiSidecar?.authContext),
           signal: upstream.signal,
         })
         : upstreamResponse.body;

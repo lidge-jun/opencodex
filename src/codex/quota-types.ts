@@ -1,4 +1,6 @@
 /** Quota wire/storage shapes. This leaf must not import credential or config owners. */
+export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 99;
+
 /**
  * How recently a 100% burst reading must have been observed to exclude an account when it
  * carries no reset timestamp (#3425). This is deliberately far tighter than the disk-hydration

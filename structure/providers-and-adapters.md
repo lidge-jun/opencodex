@@ -112,7 +112,7 @@ position before the next turn's first leg is dispatched, recording exactly the t
 turn show the destination one consistent conversation. The rewrite runs only for a provider with
 `webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different destination, or a
 `call_id` the body already carries — leaves the replayed item untouched. Re-running the search or
-synthesizing result text is not a permitted recovery.
+synthesizing result text is not a permitted recovery. The bridge finalizes request-scoped OpenAI sidecar authority on completion, failure, and client cancellation — cancellation releases immediately rather than waiting on an abandoned upstream read — so a recovery probe lease no search consumed is always returned.
 `tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes

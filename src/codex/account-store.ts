@@ -1,3 +1,4 @@
+import { readOrcaAuthSource } from "./orca-auth-source";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, readFileSync, mkdirSync, openSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -52,11 +53,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isCredential(value: unknown): value is CodexAccountCredentials {
+  const hasNoSource = isObject(value)
+    && value.sourceAuthPath === undefined
+    && value.sourceSubject === undefined;
+  const hasCompleteSource = isObject(value)
+    && typeof value.sourceAuthPath === "string"
+    && value.sourceAuthPath.length > 0
+    && typeof value.sourceSubject === "string"
+    && value.sourceSubject.length > 0;
   return isObject(value)
     && typeof value.accessToken === "string"
     && typeof value.refreshToken === "string"
     && typeof value.expiresAt === "number"
-    && typeof value.chatgptAccountId === "string";
+    && typeof value.chatgptAccountId === "string"
+    && (hasNoSource || hasCompleteSource);
 }
 
 function isCredentialRecord(value: unknown): value is CodexAccountCredentialRecord {
@@ -78,6 +88,7 @@ export function refreshGrantFingerprintForToken(refreshToken: string): string {
 }
 
 function recordGrantFingerprint(record: CodexAccountCredentialRecord): string | undefined {
+  if (record.credential?.sourceAuthPath) return undefined;
   return record.refreshGrantFingerprint ?? (
     record.credential ? refreshGrantFingerprintForToken(record.credential.refreshToken) : undefined
   );
@@ -426,7 +437,7 @@ export function commitRefreshedCodexCredentialWithAliases(
   return withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
-    if (!current || current.generation !== generation || current.deletedAt != null || !current.credential) {
+    if (!current || current.generation !== generation || current.deletedAt != null || !current.credential || current.credential.sourceAuthPath) {
       return { committed: false, propagatedAliases: [] };
     }
     const priorCredential = current.credential;
@@ -458,7 +469,7 @@ export function commitRefreshedCodexCredentialWithAliases(
       && priorCredential.chatgptAccountId === cred.chatgptAccountId
     ) {
       for (const [aliasId, alias] of Object.entries(store)) {
-        if (aliasId === id || alias.deletedAt != null || !alias.credential) continue;
+        if (aliasId === id || alias.deletedAt != null || !alias.credential || alias.credential.sourceAuthPath) continue;
         if (recordGrantFingerprint(alias) !== priorFingerprint) continue;
         if (alias.credential.accessToken !== priorCredential.accessToken) continue;
         if (alias.credential.expiresAt !== priorCredential.expiresAt) continue;
@@ -776,7 +787,7 @@ function findFreshCredentialForGrant(
   // require both ids to be present and exactly equal rather than inferring identity from the grant.
   if (!expectedChatgptAccountId) return null;
   for (const [candidateId, candidate] of Object.entries(records)) {
-    if (candidateId === excludeId || candidate.deletedAt != null || !candidate.credential) continue;
+    if (candidateId === excludeId || candidate.deletedAt != null || !candidate.credential || candidate.credential.sourceAuthPath) continue;
     if (recordGrantFingerprint(candidate) !== refreshGrantFingerprint) continue;
     if (!candidate.credential.chatgptAccountId) continue;
     if (candidate.credential.chatgptAccountId !== expectedChatgptAccountId) continue;
@@ -967,6 +978,57 @@ export async function getValidCodexToken(
   };
 }
 
+/** Source credentials never join refresh flights or spend a refresh grant, including after 401. */
+function resolveOrcaSourceToken(id: string, forced?: ForcedRefreshFence): CodexRefreshResult {
+  const initial = readCodexAccountRecord(id);
+  const initialCredential = initial?.credential;
+  if (!initial || initial.deletedAt != null || !initialCredential?.sourceAuthPath || !initialCredential.sourceSubject) {
+    throw new CodexCredentialGenerationConflictError();
+  }
+  const sourceCredential = readOrcaAuthSource(initialCredential.sourceAuthPath);
+  if (sourceCredential.chatgptAccountId !== initialCredential.chatgptAccountId
+    || sourceCredential.sourceSubject !== initialCredential.sourceSubject) {
+    throw new Error("Orca credential identity changed; reimport the account explicitly.");
+  }
+  if (sourceCredential.accessToken === initialCredential.accessToken
+    && sourceCredential.expiresAt === initialCredential.expiresAt) {
+    if (forced?.rejectedAccessToken === sourceCredential.accessToken) {
+      throw new Error("Orca bearer was rejected; update the account in Orca and retry.");
+    }
+    return { accessToken: sourceCredential.accessToken, chatgptAccountId: sourceCredential.chatgptAccountId,
+      generation: initial.generation, provenance: "external-replacement" };
+  }
+
+  return withCredentialMutationLockSync(() => {
+    const store = loadCodexAccountRecordStore();
+    const record = store[id];
+    const prior = record?.credential;
+    if (!record || record.deletedAt != null || !prior?.sourceAuthPath || !prior.sourceSubject) {
+      throw new CodexCredentialGenerationConflictError();
+    }
+    if (record.generation !== initial.generation) throw new CodexCredentialGenerationConflictError();
+    const credential = readOrcaAuthSource(prior.sourceAuthPath);
+    if (credential.chatgptAccountId !== prior.chatgptAccountId || credential.sourceSubject !== prior.sourceSubject) {
+      throw new Error("Orca credential identity changed; reimport the account explicitly.");
+    }
+    if (credential.accessToken !== prior.accessToken || credential.expiresAt !== prior.expiresAt) {
+      store[id] = {
+        credential, generation: record.generation + 1, replacedAt: Date.now(),
+        // The source identity was checked above. Retire old-generation writers without
+        // splitting this same account's retained quota history on every source rotation.
+        quotaHistoryIdentity: record.quotaHistoryIdentity,
+        ...preservedValidationMetadata(record),
+      };
+      persistCredentialMutation(store);
+    }
+    if (forced?.rejectedAccessToken === credential.accessToken) {
+      throw new Error("Orca bearer was rejected; update the account in Orca and retry.");
+    }
+    return { accessToken: credential.accessToken, chatgptAccountId: credential.chatgptAccountId,
+      generation: store[id]!.generation, provenance: "external-replacement" };
+  });
+}
+
 async function resolveCodexToken(
   id: string,
   forced?: ForcedRefreshFence,
@@ -976,6 +1038,7 @@ async function resolveCodexToken(
   const record = readCodexAccountRecord(id);
   const cred = record?.deletedAt == null ? record?.credential : undefined;
   if (!record || !cred) throw new CodexCredentialUnavailableError();
+  if (cred.sourceAuthPath) return resolveOrcaSourceToken(id, forced);
   const refreshGrantFingerprint = recordGrantFingerprint(record);
   if (!refreshGrantFingerprint) throw new CodexCredentialUnavailableError();
 
@@ -1005,6 +1068,7 @@ async function resolveCodexToken(
       const refreshed = await awaitOwnCancellation(existing.promise, callerSignal);
       const current = readCodexAccountRecord(id);
       const currentCred = current?.deletedAt == null ? current?.credential : undefined;
+      if (currentCred?.sourceAuthPath) return resolveOrcaSourceToken(id, forced);
       // The flight owner already committed this credential, and it is the one stored
       // for this account: adopt the stored state instead of CAS-writing the identical
       // bytes, which would bump the generation a second time and invalidate the
@@ -1126,6 +1190,7 @@ async function resolveCodexToken(
     const lockedRecord = readCodexAccountRecord(id);
     const lockedCred = lockedRecord?.deletedAt == null ? lockedRecord?.credential : undefined;
     if (!lockedRecord || !lockedCred) throw new CodexCredentialGenerationConflictError();
+    if (lockedCred.sourceAuthPath) return resolveOrcaSourceToken(id, forced);
     const startGeneration = lockedRecord.generation;
     const lockedRefreshGrantFingerprint = recordGrantFingerprint(lockedRecord);
     if (lockedRefreshGrantFingerprint !== refreshGrantFingerprint) {

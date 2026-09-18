@@ -69,6 +69,22 @@ export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> =
   attempts: 3,
 };
 
+/**
+ * Probe budget for a decision whose wrong answer starts a DUPLICATE proxy (#5004).
+ *
+ * `start` used the 750ms single-attempt default for both the pre-bind owner probe and
+ * (implicitly) the busy-port question behind the ephemeral hop. On Windows that answered
+ * "nothing is listening" for a proxy the previous command had just refused to shadow, and
+ * the hop then spawned a second instance that took over this home's pid/runtime records
+ * and re-pointed Codex at itself. A single unanswered probe is not evidence of absence
+ * when the failure mode is a duplicate instance, so the start path borrows the numbers
+ * the stop path already uses for the mirror-image decision.
+ */
+export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
+  timeoutMs: 1500,
+  attempts: 3,
+};
+
 export interface LiveProxy {
   pid: number | null;
   port: number;
@@ -275,6 +291,52 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
       ...(identity.version === undefined ? {} : { version: identity.version }),
       ...(identity.role === undefined ? {} : { role: identity.role }),
     };
+  }
+  return null;
+}
+
+/**
+ * Loopback addresses to ask about a port whose holder must be identified before a
+ * decision that is destructive when it answers "nobody".
+ *
+ * A listener and a probe can disagree about what "loopback" means, and on Windows they
+ * do. `startServer` canonicalizes a `localhost` bind to 127.0.0.1 precisely because
+ * Windows resolves the name IPv6-first (src/server/index.ts), while `probeHostname`
+ * hands the literal name back and leaves the family choice to the resolver. A probe that
+ * lands on `::1` while the listener holds `127.0.0.1` reports an empty port that another
+ * process is demonstrably serving. Both literal addresses are therefore asked, cheapest
+ * question first: the extra one costs a refused connection, and skipping it costs a
+ * duplicate proxy.
+ *
+ * A non-loopback bind (a LAN address, a named host) gets exactly one candidate — the
+ * address it was configured with. Guessing another interface for it would answer a
+ * different question than the caller asked.
+ */
+export function loopbackProbeHosts(hostname: string | undefined): string[] {
+  const primary = probeHostname(hostname);
+  if (primary === "127.0.0.1" || /^localhost$/i.test(primary)) return ["127.0.0.1", "[::1]"];
+  if (primary === "[::1]") return ["[::1]", "127.0.0.1"];
+  return [primary];
+}
+
+/**
+ * Identity-checked answer to "who holds this exact port", independent of the pid file
+ * and the runtime-port record.
+ *
+ * `findLiveProxy` answers "is a proxy of this home alive", and it can only do that from
+ * recorded state plus the configured port. This answers the narrower question a start
+ * has to ask before it walks away from a busy port: an opencodex listening THERE, right
+ * now, whatever this home's records say about it. Returns null only after every
+ * candidate address has failed the identity check with the caller's full probe budget.
+ */
+export async function probePortOwner(
+  port: number,
+  opts: { hostname?: string } = {},
+  io: LivenessIo = {},
+): Promise<{ pid: number | null; hostname: string; version?: string; role?: string } | null> {
+  for (const hostname of loopbackProbeHosts(opts.hostname)) {
+    const identity = await proxyIdentityAt(port, { hostname }, io);
+    if (identity) return { ...identity, hostname };
   }
   return null;
 }

@@ -301,8 +301,8 @@ ocx v2 <...>                   # 多代理 v1/v2 介面控制
 ocx update [--tag preview]     # 更新 opencodex
 ```
 
-未釘選連接埠的啟動，在偏好連接埠被占用時可能改選其他空閒連接埠；明確的 `--port`
-絕不會跳號。完整參考：[CLI 文件](https://opencodex.me/zh-tw/reference/cli/)。
+偏好的連接埠被占用時，啟動會停止並指出占用者，而不會改用其他連接埠，因此絕不會在第一個代理旁留下另一個
+執行中的代理。請釋放該連接埠，或用 `--port` 指定其他連接埠。完整參考：[CLI 文件](https://opencodex.me/zh-tw/reference/cli/)。
 
 ### 健康狀態與就緒
 

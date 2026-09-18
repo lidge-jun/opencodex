@@ -856,9 +856,13 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     // across the whole matrix (tests/cli/cli-dispatch.test.ts). This oracle pins the
     // exits that the decision routes to: stay-out exits 0, the conflict exits 1.
     expect(cliSource).toMatch(/decideStartWithLiveOwner\(\{/);
-    const stayOut = cliSource.match(/decision === "service-stay-out"[\s\S]{0,800}?process\.exit\(0\)/);
+    // Anchored at the owner branch. `chooseListenPort` carries its own stay-out/refusal pair
+    // for the busy-port guard (#5004) and it sits EARLIER in the file, so an unanchored match
+    // would quietly move to that one and stop asserting anything about this branch.
+    const ownerBranch = cliSource.slice(cliSource.indexOf("decideStartWithLiveOwner({"));
+    const stayOut = ownerBranch.match(/decision === "service-stay-out"[\s\S]{0,800}?process\.exit\(0\)/);
     expect(stayOut, "the service stay-out decision must exit 0 when the port is already served").not.toBeNull();
-    const nonService = cliSource.match(/Proxy already running[\s\S]{0,300}?process\.exit\(1\)/);
+    const nonService = ownerBranch.match(/Proxy already running[\s\S]{0,300}?process\.exit\(1\)/);
     expect(nonService, "non-service refusal keeps the exit 1 conflict error").not.toBeNull();
   });
 

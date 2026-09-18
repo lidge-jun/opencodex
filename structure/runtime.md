@@ -77,6 +77,10 @@ past installer identity or tool authenticity. No package-registry request, insta
 config write or process control occurs. Existing Windows `check` retains zero candidate/config
 filesystem I/O. A reported refusal can exit 0; consumers inspect `status`.
 
+The local account CLI and pool credential resolver share the
+[Orca source-owned import contract](codex-home.md#orca-source-owned-account-import): importing
+does not perform OAuth, and runtime credential resolution rereads the owned source.
+
 ## Entrypoints
 
 | Path | Responsibility |
@@ -144,6 +148,19 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+
+A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
+about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
+— are identity probes with a retry budget, because a start that answers "nobody is there" on one
+lost probe deletes this home's pid record and then binds a second listener that takes over the
+records and re-points Codex at itself. `probePortOwner` in `src/server/proxy-liveness.ts` asks the
+busy port directly, on both loopback families, independent of the pid and runtime records; the
+outcome is the pure decision `decideBusyPreferredPort` in `src/cli/dispatch.ts`. An opencodex
+holder is refused with the same message the owner check prints (exit 0 instead under
+`OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
+is reported as such rather than called foreign, because an identity probe cannot distinguish a
+foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
 
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
@@ -280,7 +297,7 @@ A withheld token carries its own cause into the reported `reason` through
 `resolveHubState`'s `withheldTokenReason`, so a changed connection, a missing token file, and a
 fingerprint mismatch are named separately rather than all reported as a missing data key.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in
@@ -356,7 +373,7 @@ Cline CLI joins the existing export/client integration registries. Explicit CLI 
 Config JSON preserves the boolean; only literal true activates the role-changing transform.
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
-Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged.
+Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.

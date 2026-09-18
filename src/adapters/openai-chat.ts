@@ -23,6 +23,7 @@ import {
   type InvalidToolCallDiagnostic,
 } from "./openai-chat/tool-call-validation";
 import {
+  createReasoningDetailSnapshotTracker,
   invalidChoicesEvent,
   invalidToolCallsEvent,
   reasoningDetailSegmentsFrom,
@@ -385,7 +386,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // full text-so-far, so deltas are derived by prefix-diffing per segment key.
       // A piece that does not extend the previous snapshot is appended whole, which
       // keeps incremental senders parseable on the same path.
-      const reasoningDetailSnapshots = new Map<string, string>();
+      const reasoningDetailTracker = createReasoningDetailSnapshotTracker(budget);
       // Gate on the routed model, not list length: a mixed openai-chat provider
       // can list MiniMax ids without putting every sibling on MiniMax semantics.
       const reasoningDetailsOptIn = modelInList(provider.reasoningDetailsModels, lastRequestedModelId ?? "");
@@ -448,15 +449,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           const detailSegments = reasoningDetailsOptIn ? reasoningDetailSegmentsFrom(delta) : [];
           if (detailSegments.length > 0) {
             for (const segment of detailSegments) {
-              const prev = reasoningDetailSnapshots.get(segment.key) ?? "";
-              if (segment.text === prev) continue;
-              if (segment.text.startsWith(prev)) {
-                reasoningDetailSnapshots.set(segment.key, segment.text);
-                yield { type: "reasoning_raw_delta", text: segment.text.slice(prev.length) };
-              } else {
-                reasoningDetailSnapshots.set(segment.key, prev + segment.text);
-                yield { type: "reasoning_raw_delta", text: segment.text };
-              }
+              const reasoningDelta = reasoningDetailTracker.ingest(segment);
+              if (reasoningDelta !== null) yield { type: "reasoning_raw_delta", text: reasoningDelta };
             }
           } else {
             const reasoningText = reasoningTextFrom(delta);
@@ -692,6 +686,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         throw error;
       } finally {
         budget.releaseRetained(bufferBytes, { kind: "live_transient" });
+        reasoningDetailTracker.release();
         closeToolCalls();
         reader.releaseLock();
       }

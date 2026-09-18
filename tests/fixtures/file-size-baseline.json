@@ -41,7 +41,7 @@
     "tests/codex-integration/codex-reset-credit-recovery.test.ts": 2135,
     "tests/codex-integration/codex-routing.test.ts": 3443,
     "tests/codex-integration/codex-shim.test.ts": 2388,
-    "tests/codex-integration/codex-v2-gate.test.ts": 2069,
+    "tests/codex-integration/codex-v2-gate.test.ts": 2111,
     "tests/providers/cursor/cursor-blob.test.ts": 3657,
     "tests/providers/kiro/kiro-adapter.test.ts": 2050,
     "tests/providers/kiro/kiro-stream.test.ts": 2258,

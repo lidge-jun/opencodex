@@ -186,7 +186,8 @@ interface ClientIntegrationSyncOutcome {
 export async function syncEnabledClientIntegrations(
   port: number | undefined,
   config: OcxConfig,
-  deps: Pick<ManagementContext["deps"], "fetchAllModels" | "writeDesktop3pConfig"> = {},
+  deps: Pick<ManagementContext["deps"],
+    "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
   if (port === undefined) return [];
   const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
@@ -235,7 +236,8 @@ export async function syncEnabledClientIntegrations(
   }
 
   const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
-  out.push(...await refreshOwnedCatalogIntegrations({
+  const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
+  out.push(...await refreshOwned({
     models: async () => {
       const { loadExportModels } = await import("./model-rows");
       return loadExportModels(config);
@@ -324,6 +326,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means off, same convention: the GUI renders a plain switch without
       // needing to know that `undefined` and `false` mean the same thing here.
       ultraFastTier: config.ultraFastTier === true,
+      // Absent means on by default: the GUI renders a switch enabled unless explicit false.
+      fastRows: config.fastRows !== false,
       codexMainAccountHardLock: config.codexMainAccountHardLock === true,
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       // Absent means the historical auto-open, so the GUI can render the toggle
@@ -425,6 +429,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexQuotaAutoRefresh?: unknown;
       oauthOpenBrowser?: unknown;
       ultraFastTier?: unknown;
+      fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
@@ -436,10 +441,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexQuotaAutoRefresh === undefined
       && body.oauthOpenBrowser === undefined
       && body.ultraFastTier === undefined
+      && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -456,6 +462,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.ultraFastTier !== undefined && typeof body.ultraFastTier !== "boolean") {
       return jsonResponse({ error: "ultraFastTier boolean is required" }, 400);
+    }
+    if (body.fastRows !== undefined && typeof body.fastRows !== "boolean") {
+      return jsonResponse({ error: "fastRows boolean is required" }, 400);
     }
     if (body.codexMainAccountHardLock !== undefined && typeof body.codexMainAccountHardLock !== "boolean") {
       return jsonResponse({ error: "codexMainAccountHardLock boolean is required" }, 400);
@@ -512,6 +521,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasOauthOpenBrowser: Object.hasOwn(config, "oauthOpenBrowser"),
       ultraFastTier: config.ultraFastTier,
       hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
+      fastRows: config.fastRows,
+      hasFastRows: Object.hasOwn(config, "fastRows"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
@@ -523,6 +534,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     let pickerIsEnabled = pickerWasEnabled;
     const authlessWasEnabled = config.codexDesktopAuthless === true;
     const clientCompactionWasEnabled = config.codexClientCompaction === true;
+    const fastRowsWasEnabled = config.fastRows !== false;
     try {
       if (typeof body.codexAutoStart === "boolean") {
         config.codexAutoStart = body.codexAutoStart;
@@ -550,6 +562,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // default, and a written `false` would survive as a decision nobody made.
       if (body.ultraFastTier === true) config.ultraFastTier = true;
       else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
+      if (body.fastRows === false) config.fastRows = false;
+      else if (body.fastRows === true) deleteConfigTopLevelKey(config, "fastRows");
       if (body.codexMainAccountHardLock === true) config.codexMainAccountHardLock = true;
       else if (body.codexMainAccountHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
@@ -592,6 +606,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasUltraFastTier) {
         config.ultraFastTier = previousSettings.ultraFastTier;
       } else deleteConfigTopLevelKey(config, "ultraFastTier");
+      if (previousSettings.hasFastRows) {
+        config.fastRows = previousSettings.fastRows;
+      } else deleteConfigTopLevelKey(config, "fastRows");
       if (previousSettings.hasCodexMainAccountHardLock) {
         config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
       } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
@@ -609,6 +626,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     const authlessIsEnabled = config.codexDesktopAuthless === true;
     const clientCompactionIsEnabled = config.codexClientCompaction === true;
+    const fastRowsIsEnabled = config.fastRows !== false;
+    const fastRowsChanged = fastRowsWasEnabled !== fastRowsIsEnabled;
     const desktopSwitchesChanged = authlessWasEnabled !== authlessIsEnabled
       || clientCompactionWasEnabled !== clientCompactionIsEnabled;
     // Catalog convergence is not config injection, and the comment that used to sit here said
@@ -616,9 +635,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // injector, which is why flipping either switch left `config.toml` in its old shape until
     // a separate `ocx sync` (#4809). Both halves are needed when a Desktop switch changes; a
     // picker-only update still refreshes just the catalog.
-    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged
+    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged || fastRowsChanged
       ? await convergeCodexCatalog()
       : undefined;
+    if (fastRowsChanged) {
+      const { readRuntimePort } = await import("../../config/process-state");
+      const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
+      await syncEnabledClientIntegrations(runtime?.port, config, deps);
+    }
     // Injection second, matching `syncModelsToCodex`: the injected `model_catalog_json` should
     // point at a catalog that has already settled. And it runs here rather than inside the save
     // because coordinated Codex writes acquire the Codex write lock N before the config mutation
@@ -641,6 +665,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexQuotaAutoRefresh: quotaAutoRefreshSettings(config),
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       catalogRefreshPending,
+      fastRows: config.fastRows !== false,
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
