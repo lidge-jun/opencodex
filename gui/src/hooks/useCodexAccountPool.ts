@@ -184,7 +184,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const loadGenerationRef = useRef(0);
   // Set by switchAccount so a background load already in flight cannot roll the active
   // id back to a value the server had not yet committed when that request was issued.
-  const pendingActiveIdRef = useRef<{ id: string | null } | null>(null);
+  const pendingActiveIdRef = useRef<{ id: string | null; staleReadsRemaining: number } | null>(null);
   const observersRef = useRef<Set<CodexAccountLoadObserver> | null>(null);
   if (observersRef.current === null) observersRef.current = new Set();
   // Last /active payload an actual read returned. Surfaces that mount after a
@@ -292,8 +292,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
           if (loadGenerationRef.current === generation) {
             const serverActiveId = active.activeCodexAccountId ?? null;
             const pending = pendingActiveIdRef.current;
-            if (pending && serverActiveId !== pending.id) {
-              // Stale read: keep the accepted value and let the next load reconcile.
+            if (pending && pending.staleReadsRemaining > 0 && serverActiveId !== pending.id) {
+              // Allow one eventually-consistent response to preserve the accepted value,
+              // but ensure a repeated mismatch can reconcile legitimate routing changes.
+              pending.staleReadsRemaining -= 1;
             } else {
               pendingActiveIdRef.current = null;
               nextActiveId = serverActiveId;
@@ -415,7 +417,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       if (!response.ok) throw new Error("account switch failed");
       const result = await response.json().catch(() => ({})) as { activeCodexAccountId?: string | null };
       const selectedId = result.activeCodexAccountId ?? id;
-      pendingActiveIdRef.current = { id: selectedId ?? null };
+      pendingActiveIdRef.current = {
+        id: selectedId ?? null,
+        staleReadsRemaining: 1,
+      };
       setActiveId(selectedId ?? null);
       // A manual selection pins its target until the account drains or routing moves off
       // it. The badge follows the id, not /active's `pinned` boolean, so a same-tier
@@ -468,7 +473,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       )));
       if (Object.prototype.hasOwnProperty.call(result, "activeCodexAccountId")) {
         const nextActiveId = result.activeCodexAccountId ?? null;
-        pendingActiveIdRef.current = { id: nextActiveId };
+        pendingActiveIdRef.current = {
+          id: nextActiveId,
+          staleReadsRemaining: 1,
+        };
         setActiveId(nextActiveId);
       }
       // Deliberately NOT cross-gated against the switch and order writes, even though
@@ -551,7 +559,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       )));
       if (Object.prototype.hasOwnProperty.call(result, "activeCodexAccountId")) {
         const nextActiveId = result.activeCodexAccountId ?? null;
-        pendingActiveIdRef.current = { id: nextActiveId };
+        pendingActiveIdRef.current = {
+          id: nextActiveId,
+          staleReadsRemaining: 1,
+        };
         setActiveId(nextActiveId);
       }
       // Conditional for the same reason as the single-account pause above: clearing

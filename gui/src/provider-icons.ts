@@ -66,6 +66,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   baseten: "baseten.svg",
   bizrouter: "bizrouter.svg",
   cerebras: "cerebras.svg",
+  crusoe: "crusoe.svg",
   deepinfra: "deepinfra.svg",
   digitalocean: "digitalocean.svg",
   featherless: "featherless.svg",

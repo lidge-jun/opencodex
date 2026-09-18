@@ -288,7 +288,7 @@ Qwen Cloud, Qoder Global과 CN (공식 PAT + CLI), SiliconFlow 등이 더 있습
 
 ```bash
 ocx init                       # 대화형 설정 (config 작성, Codex 연결, shim 제안)
-ocx start [--port 10100]       # 포그라운드에서 프록시 시작
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 기본값은 socks5://127.0.0.1:10808
 ocx stop                       # 중지 + 네이티브 Codex 복원
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # 백그라운드 서비스
 ocx codex-shim install         # `codex`가 뜰 때마다 프록시를 필요 시 시작

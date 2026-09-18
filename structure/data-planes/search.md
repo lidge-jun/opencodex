@@ -1,7 +1,7 @@
 # Search Data Plane
 
 The opt-in key-auth Responses hosted-search bridge follows the
-[continuation binding contract](../runtime.md#hosted-search-continuation-binding).
+[continuation binding contract](../providers-and-adapters.md#hosted-search-continuation-binding).
 
 ## Serving the relay without ChatGPT auth
 

@@ -13,6 +13,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 import { formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { ownRecordValue } from "../own-record-value";
 import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
@@ -115,7 +116,6 @@ function parseContextWindowDraft(raw: string): number | null | undefined {
   const value = Number(normalized);
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
-
 
 /** #2465 per-provider model-preset view, as `GET /api/model-presets` returns it. */
 interface ModelPresetView {
@@ -816,16 +816,16 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       setContextError(t("models.contextInvalid"));
       return;
     }
-    const modelWindows: Record<string, number | null> = {};
+    const modelWindows: Record<string, number | null> = Object.create(null); // null prototype: a "__proto__" model ID must store an entry, not invoke the inherited setter
     for (const modelId of contextTouchedModels) {
-      const draft = contextModelDrafts[modelId] ?? "";
+      const draft = ownRecordValue(contextModelDrafts, modelId) ?? "";
       const parsed = parseContextWindowDraft(draft);
       if (parsed === undefined) {
         setContextError(t("models.contextInvalid"));
         return;
       }
       // Compare VALUES, not text. Retyping 64000 as "64,000" is not a change.
-      if (parsed === (contextSnapshot.modelContextWindows[modelId] ?? null)) continue;
+      if (parsed === (ownRecordValue(contextSnapshot.modelContextWindows, modelId) ?? null)) continue;
       modelWindows[modelId] = parsed;
     }
     const defaultChanged = contextDefaultTouched
@@ -2285,7 +2285,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                     <input
                       className="input"
                       inputMode="numeric"
-                      value={contextModelDrafts[contextModelId] ?? ""}
+                      value={ownRecordValue(contextModelDrafts, contextModelId) ?? ""}
                       onChange={event => {
                         setContextModelDrafts(current => ({
                           ...current,

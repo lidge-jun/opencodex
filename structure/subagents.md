@@ -361,7 +361,7 @@ Final-route summary visibility is recomputed after fallback from the original Re
 
 `src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
@@ -383,6 +383,10 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+
+That shared rule includes the Crusoe registry entry's five explicit text-and-image model ids;
+subagent eligibility consumes the same derived metadata as the main catalog and does not infer
+vision support from a provider-wide multimodal label.
 
 [Anthropic seed image metadata](runtime.md#capability-aware-image-admission) supplies missing capability evidence; subagent selection and eligibility rules remain unchanged.
 

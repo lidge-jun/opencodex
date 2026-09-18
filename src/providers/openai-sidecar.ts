@@ -32,6 +32,8 @@ export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandid
   authContext: CodexAuthContext;
   headers: Headers;
   recordOutcome?: (outcome: CodexUpstreamOutcome) => void;
+  /** Hand back an acquired recovery probe when no sidecar request reached upstream. */
+  releaseProbeLease?: () => void;
 }
 
 /**
@@ -189,6 +191,7 @@ export async function resolveFirstUsableOpenAiSidecar(
             ...(authContext.kind === "pool" ? { credentialGeneration: authContext.generation } : {}),
           },
         ),
+        releaseProbeLease: () => releaseCodexAuthContextProbeLease(authContext),
       };
     }
     if (candidate.accountMode === "direct") {
@@ -237,6 +240,7 @@ export async function resolveFirstUsableOpenAiSidecar(
               ...(authContext.kind === "pool" ? { credentialGeneration: authContext.generation } : {}),
             },
           ),
+          releaseProbeLease: () => releaseCodexAuthContextProbeLease(authContext),
         }
         : {}),
     };
