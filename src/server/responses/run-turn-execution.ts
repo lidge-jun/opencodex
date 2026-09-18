@@ -38,6 +38,7 @@ import {
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
+import { diagnoseAdapterEvents } from "./stream-diagnostics";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesRunTurn(
@@ -67,6 +68,8 @@ export async function executeResponsesRunTurn(
     | "resolveSelectionAdapter"
     | "adapter"
     | "noteRoutedAttemptSend"
+    | "noteDiagnosticAttemptSend"
+    | "streamDiagnostic"
     | "bindKeyUsageFromBridge"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
@@ -146,7 +149,11 @@ export async function executeResponsesRunTurn(
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
-        transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
+        transportState.noteDiagnosticAttemptSend(
+          logCtx.usageLogInputTokens,
+          recovery,
+          transportState.runTurnAdapter.name,
+        );
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -376,7 +383,13 @@ export async function executeResponsesRunTurn(
           console.warn(emptyCompletionNotice(route.providerName, route.modelId));
         });
       const sseStream = bridgeToResponsesSSE(
-        guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        diagnoseAdapterEvents(
+          guardedSource,
+          () => transportState.runTurnAdapter.name,
+          transportState.streamDiagnostic,
+          logCtx,
+        ),
+        parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           cancelResponseCompletion();
           runTurnAbort.abort();
@@ -393,6 +406,7 @@ export async function executeResponsesRunTurn(
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
+          ...(transportState.streamDiagnostic ? { diagnostic: transportState.streamDiagnostic.context } : {}),
           // grok-build's strict decoder dies on the typed response.heartbeat frame; its
           // eventsource layer tolerates comment keep-alives. Codex needs the opposite.
           ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),

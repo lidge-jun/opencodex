@@ -20,6 +20,7 @@ import {
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { diagnoseAdapterEvents } from "./stream-diagnostics";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -32,7 +33,7 @@ export async function deliverAdapterResponse(
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
-  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge">,
+  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge" | "streamDiagnostic">,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
     ResponsesEffects,
@@ -79,7 +80,13 @@ export async function deliverAdapterResponse(
           upstreamResponse,
           upstream.signal,
           bodyInactivityMs,
-          response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
+        response =>
+          diagnoseAdapterEvents(
+            transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
+            () => transportState.activeAdapter.name,
+            transportState.streamDiagnostic,
+            logCtx,
+          ),
         );
       } catch (error) {
         if (error instanceof ResponseBodyInactivityError) {
@@ -128,6 +135,7 @@ export async function deliverAdapterResponse(
       toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         ...(routedCompaction ? { compaction: true } : {}),
+        ...(transportState.streamDiagnostic ? { diagnostic: transportState.streamDiagnostic.context } : {}),
         // Same grok-surface split as the runTurn branch above.
         ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
         onUsage: usage => {

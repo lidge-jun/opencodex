@@ -65,6 +65,7 @@ import {
 } from "../request-log";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
+import { createStreamDiagnostic, type StreamDiagnostic } from "./stream-diagnostics";
 
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
@@ -252,6 +253,21 @@ export async function prepareResponsesTransport(
   const noteRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind): void => {
     if (usesApiKeyAccount(route.provider)) pendingKeySend = { estimate, recovery };
     else noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
+  };
+  // Opt-in structural stream diagnostics shared by the adapter, continuation,
+  // sidecar, and bridge stages of this request. Created once so every stage
+  // appends to a single sequence; undefined unless provider debug is on.
+  const streamDiagnostic: StreamDiagnostic | undefined = createStreamDiagnostic(route.providerName);
+  const noteDiagnosticAttemptSend = (
+    estimate: number | undefined,
+    recovery?: AttemptRecoveryKind,
+    adapterName?: string,
+  ): void => {
+    noteRoutedAttemptSend(estimate, recovery);
+    if (!streamDiagnostic) return;
+    streamDiagnostic.context.attempt = logCtx.activeAttempt?.ordinal;
+    streamDiagnostic.context.recovery = recovery;
+    if (adapterName) streamDiagnostic.context.adapterName = adapterName;
   };
   const commitKeyAttemptSend = (): void => {
     if (!usesApiKeyAccount(route.provider)) return;
@@ -796,6 +812,8 @@ export async function prepareResponsesTransport(
     refreshRunTurnAdapter,
     oauthDispatch,
     noteRoutedAttemptSend,
+    noteDiagnosticAttemptSend,
+    streamDiagnostic,
     commitKeyAttemptSend,
     bindKeyUsageFromBridge,
     anthropicSessionKey,

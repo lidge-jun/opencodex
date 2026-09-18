@@ -32,6 +32,7 @@ import {
 import { redactSecretString } from "../../lib/redact";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
+import { diagnoseAdapterEvents } from "./stream-diagnostics";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   rotateAnthropicAccountOn429,
@@ -86,6 +87,8 @@ export function createAdapterContinuations(
     | "applyFailoverSnapshot"
     | "replayOAuthCredentialSnapshot"
     | "noteRoutedAttemptSend"
+    | "streamDiagnostic"
+    | "noteDiagnosticAttemptSend"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   sendBudgetState: Pick<
@@ -196,7 +199,11 @@ export function createAdapterContinuations(
       const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
       try {
         if (transportState.activeAdapter.fetchResponse) {
-          transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
+          transportState.noteDiagnosticAttemptSend(
+            continuationEstimate,
+            replayKind,
+            transportState.activeAdapter.name,
+          );
           await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
           return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
@@ -221,7 +228,11 @@ export function createAdapterContinuations(
           : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
-            transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
+            transportState.noteDiagnosticAttemptSend(
+              continuationEstimate,
+              recovery ?? replayKind,
+              transportState.activeAdapter.name,
+            );
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
               applyUpstreamRecoveryInit({
@@ -534,7 +545,13 @@ export function createAdapterContinuations(
           response,
           upstream.signal,
           bodyInactivityMs,
-          guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata),
+          guarded =>
+            diagnoseAdapterEvents(
+              transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata),
+              () => transportState.activeAdapter.name,
+              transportState.streamDiagnostic,
+              logCtx,
+            ),
         );
       } else if (transportState.activeAdapter.parseResponse) {
         yield* await readResponseBodyWithInactivity(

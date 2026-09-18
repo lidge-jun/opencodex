@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -13,8 +13,11 @@ import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translat
 const realParseStreamWithProgress = parseStreamWithProgress;
 let useRealProgressStream = false;
 let fulfillCallCount = 0;
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests } from "../../src/lib/debug-settings";
 
 const PREV_HOME = process.env.OPENCODEX_HOME;
+const PREV_DEBUG = process.env.OCX_DEBUG;
 let runWithImageBridgeProduction: typeof import("../../src/images/loop")["runWithImageBridge"];
 let clampImageMaxRounds: typeof import("../../src/images/loop")["clampImageMaxRounds"];
 let DEFAULT_MAX_ROUNDS: typeof import("../../src/images/loop")["DEFAULT_MAX_ROUNDS"];
@@ -59,6 +62,12 @@ function runWithImageBridge(
   });
 }
 afterAll(() => { if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = PREV_HOME; mock.restore(); });
+afterEach(() => {
+  resetDebugSettingsForTests();
+  resetDebugLogBufferForTests();
+  if (PREV_DEBUG === undefined) delete process.env.OCX_DEBUG;
+  else process.env.OCX_DEBUG = PREV_DEBUG;
+});
 
 // --- Mock adapter: yields canned events per iteration from a queue ---
 let streamQueue: AdapterEvent[][] = [];
@@ -325,6 +334,27 @@ describe("runWithImageBridge", () => {
     } finally {
       await origin.stop(true);
       await target.stop(true);
+    }
+  });
+
+  test("routed image streams carry adapter and bridge diagnostics", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      streamQueue = [[{ type: "text_delta", text: "image diagnostic secret" }, { type: "done" }]];
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: mockAdapter,
+        plan,
+        diagnostic: { requestId: "image-diagnostic", adapterName: "test" },
+      });
+      await response.text();
+      const lines = getDebugLogEntries().map(entry => entry.line);
+      expect(lines.some(line => line.includes('"stage":"adapter"') && line.includes('"eventType":"text_delta"'))).toBe(true);
+      expect(lines.some(line => line.includes('"stage":"bridge"') && line.includes('"eventType":"text_delta"'))).toBe(true);
+      expect(lines.every(line => !line.includes("image diagnostic secret"))).toBe(true);
+    } finally {
+      error.mockRestore();
     }
   });
 
@@ -1048,6 +1078,31 @@ describe("runWithImageBridge — runTurn adapter", () => {
     const response = await runWithImageBridge({ parsed: makeParsed(), adapter: runTurnAdapter, plan });
     const sse = await response.text();
     expect(sse).toContain("hello from runTurn");
+  });
+
+  test("runTurn collected events carry adapter-stage diagnostics", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: {
+          ...mockAdapter,
+          runTurn: async (_parsed, _incoming, emit) => {
+            emit({ type: "text_delta", text: "runturn diagnostic secret" });
+            emit({ type: "done" });
+          },
+        },
+        plan,
+        diagnostic: { requestId: "image-runturn-diagnostic", adapterName: "test" },
+      });
+      await response.text();
+      const lines = getDebugLogEntries().map(entry => entry.line);
+      expect(lines.some(line => line.includes('"stage":"adapter"') && line.includes('"eventType":"text_delta"'))).toBe(true);
+      expect(lines.every(line => !line.includes("runturn diagnostic secret"))).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   test("runTurn adapter → error event surfaces as upstream failure", async () => {
