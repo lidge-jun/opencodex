@@ -21,7 +21,8 @@
  *   loopback listener enabled   → `127.0.0.1:<effective listener port>`, no credential
  *   loopback/absent `hostname`  → `127.0.0.1:<public port>`, no credential
  *   wildcard `hostname`         → `127.0.0.1:<public port>`, ADMISSION CREDENTIAL REQUIRED
- *   anything else               → `<probeHostname(hostname)>:<public port>`, credential REQUIRED
+ *   literal non-loopback IP     → `<probeHostname(hostname)>:<public port>`, credential REQUIRED
+ *   DNS bind name               → `127.0.0.1:<public port>`, credential REQUIRED (fail closed)
  *
  * A wildcard bind does answer on 127.0.0.1, which is why its origin stays loopback, but the
  * public listener demands data-plane admission regardless of which address received the
@@ -36,6 +37,7 @@
  * token: no exported client configuration may carry management authority (reviewer constraint
  * on #4236).
  */
+import { isIP } from "node:net";
 import { effectiveLoopbackListenerPort, isLoopbackHostname, isWildcardHostname, shouldInjectApiAuthHeader } from "../codex/loopback-target";
 import { probeHostname } from "../server/proxy-liveness";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "./service-secrets";
@@ -57,6 +59,22 @@ export interface LocalInferenceDestination {
    * destination that answers 401.
    */
   requiresAdmissionToken: boolean;
+}
+
+/**
+ * Turn a bind setting into an address that is safe to combine with local credentials.
+ *
+ * Bun resolves a DNS bind name when the listener starts, but a later client lookup can receive
+ * a different answer. Local integrations therefore use only literal addresses; a DNS bind falls
+ * back to loopback and fails closed when the listener does not answer there. Operators who need
+ * local integrations on a DNS-bound listener can enable the dedicated loopback listener.
+ */
+export function localCredentialDestinationHostname(hostname: string | undefined): string {
+  const probed = probeHostname(hostname);
+  const literal = probed.startsWith("[") && probed.endsWith("]")
+    ? probed.slice(1, -1)
+    : probed;
+  return isIP(literal) !== 0 ? probed : "127.0.0.1";
 }
 
 /**
@@ -85,7 +103,7 @@ export function localInferenceDestination(
   // literal; `shouldInjectApiAuthHeader` is the existing encoding of "this bind demands a
   // data-plane credential", so the two stay in agreement by construction.
   return {
-    origin: `http://${probeHostname(hostname)}:${publicPort}`,
+    origin: `http://${localCredentialDestinationHostname(hostname)}:${publicPort}`,
     port: publicPort,
     requiresAdmissionToken: shouldInjectApiAuthHeader(config),
   };
@@ -146,8 +164,8 @@ const ADMISSION_TOKEN_SHAPE = /^[A-Za-z0-9._~+/=-]{8,4096}$/;
  *
  * A hub's management ingress is loopback-only and exists precisely so the operator's own
  * machine has a management address when the proxy listener is bound elsewhere. Everything else
- * keeps dialing the public listener on the bind address it can actually reach — `probeHostname`
- * turns a wildcard bind into 127.0.0.1 and brackets a bare IPv6 literal.
+ * keeps dialing a literal public bind address it can actually reach. DNS bind names fail closed
+ * to loopback because resolving them again could select a different peer after startup.
  *
  * The caller still supplies the management credential. Never write that credential into an
  * exported client configuration.
@@ -158,5 +176,5 @@ export function localManagementOrigin(
 ): string {
   const ingress = config?.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
   if (ingress?.enabled) return `http://127.0.0.1:${ingress.port}`;
-  return `http://${probeHostname(config?.hostname)}:${publicPort}`;
+  return `http://${localCredentialDestinationHostname(config?.hostname)}:${publicPort}`;
 }

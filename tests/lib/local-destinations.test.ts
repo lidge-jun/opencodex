@@ -159,6 +159,29 @@ describe("localInferenceDestination", () => {
         .toEqual({ hostname, origin: "http://127.0.0.1:10100", requires: true });
     }
   });
+
+  test("a DNS bind name fails closed to loopback for credential-bearing destinations", () => {
+    // Bun resolves the bind name once at listen time; a later client lookup can get a different
+    // answer, so a credential-bearing local destination must never re-resolve it. The data-plane
+    // credential stays required — the destination degrades to a socket that refuses rather than
+    // one that leaks the token to a rebound peer.
+    const destination = localInferenceDestination({ hostname: "mutable-bind.example" }, PUBLIC_PORT);
+    expect(destination).toEqual({
+      origin: "http://127.0.0.1:10100",
+      port: PUBLIC_PORT,
+      requiresAdmissionToken: true,
+    });
+  });
+
+  test("literal non-loopback IPs still compose a credential-bearing bind destination", () => {
+    // The fail-closed branch is only for names: a literal tailnet or LAN bind keeps its exact
+    // address, because a literal cannot be re-resolved to a different peer after startup.
+    for (const hostname of [TAILNET, "192.168.7.7", "fd7a:115c:a1e0::1", "[fd7a:115c:a1e0::1]"]) {
+      const destination = localInferenceDestination({ hostname }, PUBLIC_PORT);
+      expect(destination.requiresAdmissionToken).toBe(true);
+      expect(destination.origin).not.toBe("http://127.0.0.1:10100");
+    }
+  });
 });
 
 describe("localLoopbackInferencePorts", () => {
@@ -276,5 +299,13 @@ describe("localManagementOrigin", () => {
       expect({ hostname, origin: localInferenceDestination(config, PUBLIC_PORT).origin })
         .toEqual({ hostname, origin: expected });
     }
+  });
+
+  test("a DNS bind name fails closed to loopback rather than re-resolving for the credential", () => {
+    // The management origin carries the same credential boundary as inference: a name the
+    // client would re-resolve can point at a different peer after startup, so only literal
+    // bind addresses may compose a credential-bearing destination.
+    const config = hub({ runtimeRole: "standalone", hostname: "mutable-bind.example" });
+    expect(localManagementOrigin(config, PUBLIC_PORT)).toBe("http://127.0.0.1:10100");
   });
 });
