@@ -286,7 +286,13 @@ describe("Reserve dispatch-time permission", () => {
 
   for (const endpoint of ["responses", "compact"] as const) {
     for (const firstFailure of ["reset", "502"] as const) {
-      test(`${endpoint}: ${firstFailure} then revoked proof maps to429 without a second inference or health mutation`, async () => {
+      // A received 502 proves the request reached the origin and was answered, so a revocation
+      // observed afterwards is authoritative and maps to the local 429. A connection reset proves
+      // nothing: the inference may already have run, so the ambiguous-reset verdict wins and the
+      // client is not told to retry. Both therefore answer 429, and the distinct codes are what
+      // separate them: the revocation names the reserve, the reset names the refused replay.
+      // Neither case may send a second inference or mutate health.
+      test(`${endpoint}: ${firstFailure} then revoked proof is terminal without a second inference or health mutation`, async () => {
         inference = () => {
           // Permission changes after the first real attempt, before the retry wrapper dispatches.
           revoke();
@@ -300,8 +306,13 @@ describe("Reserve dispatch-time permission", () => {
         const response = endpoint === "compact"
           ? await handleResponsesCompact(request, config(), { model: "", provider: "" }, undefined, loopbackAdmission)
           : await handleResponses(request, config(), { model: "", provider: "" }, { admission: loopbackAdmission });
-        expect(response.status).toBe(429);
-        expect(await response.text()).toContain("Reserve is unavailable");
+        if (firstFailure === "reset") {
+          expect(response.status).toBe(429);
+          expect(await response.text()).toContain("upstream_reset_replay_refused");
+        } else {
+          expect(response.status).toBe(429);
+          expect(await response.text()).toContain("Reserve is unavailable");
+        }
         expect(inferenceSends).toBe(1);
         expect(usageReads).toBe(1);
         expect(getCodexUpstreamHealth("__main__")).toBeNull();

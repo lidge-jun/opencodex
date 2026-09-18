@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { clearContextSessionOwnersForTests } from "../../src/codex/context-owner";
 import { resetContextRelayActivationForTests } from "../../src/codex/context-compat";
 import { startServer } from "../../src/server";
@@ -189,7 +190,23 @@ beforeEach(() => {
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Settle every in-flight config-directory harden before anything here removes a directory.
+  //
+  // `hardenConfigDir()` spawns `icacls.exe`, which holds the directory open until it exits, and
+  // Windows file locking is mandatory: removing that tree while the child lives returns EPERM no
+  // matter how long the caller waits. Windows shard 1/6 of run 35108652486 proved the waiting is
+  // not the answer -- it exhausted the full 15s exponential budget and still threw
+  // `EPERM: operation not permitted, rm .../tmp/ocx-management-auth-fDchUb` out of this hook.
+  // #4789 filed the same failure at this same line when the budget was 2.5s, and raising it to
+  // 15s in #4796 bought six times the wait and changed nothing, because the handle was never
+  // going to close on its own schedule. The process that started the child has to wait for it.
+  //
+  // The all-directories variant is the required one. `server.stop` already flushes, but through
+  // `flushConfigDirHardening()`, which defaults to `getConfigDir()` read at stop time -- and this
+  // hook moves OPENCODEX_HOME back to the developer's real home a few lines below, so a
+  // directory-scoped flush here would settle the wrong tree and leave this one held.
+  await flushConfigDirHardeningForTests();
   resetContextRelayActivationForTests();
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;

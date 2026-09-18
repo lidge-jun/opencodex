@@ -39,6 +39,7 @@ import {
   canonicalizeCodexHome,
 } from "../../src/codex/codex-write-lock";
 import {
+  resolveCodexCatalogSerializationDatabasePath,
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../../src/codex/user-identity";
@@ -70,6 +71,35 @@ type StartedServer = {
   stdout: Promise<string>;
   stderr: Promise<string>;
 };
+
+type CapturedChildStream = {
+  completed: Promise<string>;
+  snapshot: () => string;
+  closed: () => boolean;
+};
+
+/** Drain a child pipe while retaining the bytes already emitted before EOF. */
+function captureChildStream(stream: ReadableStream<Uint8Array>): CapturedChildStream {
+  let text = "";
+  let closed = false;
+  const completed = (async () => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      text += decoder.decode();
+      return text;
+    } finally {
+      closed = true;
+      reader.releaseLock();
+    }
+  })();
+  return { completed, snapshot: () => text, closed: () => closed };
+}
 
 /** A byte manifest: paths plus bytes, not mtimes or parsed JSON. */
 function manifest(root: string): Record<string, string> {
@@ -130,6 +160,8 @@ class Fixture {
   readonly managementToken = "composed-admin-token";
   readonly lockPath: string;
   readonly lockAllowlist: string[];
+  readonly catalogLockPath: string;
+  readonly catalogLockAllowlist: string[];
   readonly serviceManagerEnv: Record<string, string>;
   readonly serviceManagerPreloadPath: string | undefined;
   readonly powerShellCacheEnv: Record<string, string> = {};
@@ -168,9 +200,18 @@ class Fixture {
       rmSync(this.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       throw error;
     }
-    this.lockPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(this.codex));
+    const identity = resolveEffectiveUserIdentity();
+    const canonicalCodexHome = realpathSync.native(this.codex);
+    this.lockPath = resolveCodexCoordinatorDatabasePath(identity, canonicalCodexHome);
     this.lockAllowlist = [this.lockPath, `${this.lockPath}-journal`, `${this.lockPath}-wal`, `${this.lockPath}-shm`];
-    for (const path of this.lockAllowlist) {
+    this.catalogLockPath = resolveCodexCatalogSerializationDatabasePath(identity, canonicalCodexHome);
+    this.catalogLockAllowlist = [
+      this.catalogLockPath,
+      `${this.catalogLockPath}-journal`,
+      `${this.catalogLockPath}-wal`,
+      `${this.catalogLockPath}-shm`,
+    ];
+    for (const path of [...this.lockAllowlist, ...this.catalogLockAllowlist]) {
       if (existsSync(path)) throw new Error(`lock preflight found pre-existing case path: ${path}`);
     }
     writeFileSync(join(this.codex, "config.toml"), 'model = "gpt-5"\n');
@@ -260,23 +301,35 @@ class Fixture {
 
   async start(): Promise<StartedServer> {
     const child = this.spawnCli(["start"]);
+    const pidPath = join(this.ocx, "ocx.pid");
     const runtimePath = join(this.ocx, "runtime-port.json");
-    // Capture the child's streams while we wait. Without this, a start that dies for a
-    // concrete reason — a throw, a port bind refusal, a missing artifact — surfaces only as
-    // "timed out waiting for runtime-port record", which is the symptom and never the cause.
-    // That is exactly how the Windows failures read for two CI rounds.
-    const stderr = new Response(child.stderr).text();
-    const stdout = new Response(child.stdout).text();
+    // Run 35093667426 waited the full 45 s Windows watchdog with the child alive, but
+    // Response(stream).text() reported only "still open": it cannot reveal bytes until EOF.
+    // Healthy controls in 35054231781 and 35098735960 finished this whole case in ~14 s, so
+    // preserve the budget and expose the child's actual progress plus its two startup records.
+    const stderr = captureChildStream(child.stderr);
+    const stdout = captureChildStream(child.stdout);
     const diagnose = async (label: string): Promise<never> => {
       const exited = child.exitCode ?? (await Promise.race([
         child.exited,
         new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
       ]));
-      const [err, out] = await Promise.all([
-        Promise.race([stderr, new Promise<string>(resolve => setTimeout(() => resolve("<stderr still open>"), 500))]),
-        Promise.race([stdout, new Promise<string>(resolve => setTimeout(() => resolve("<stdout still open>"), 500))]),
-      ]);
-      throw new Error(`${label}; child exit=${String(exited)}\n--- stderr ---\n${err.slice(-4000)}\n--- stdout ---\n${out.slice(-2000)}`);
+      let pidRecord = existsSync(pidPath) ? "present(unreadable)" : "missing";
+      try { pidRecord = `present(${readFileSync(pidPath, "utf8").trim()})`; } catch { /* diagnostic only */ }
+      let runtimeRecord = existsSync(runtimePath) ? "present(unreadable)" : "missing";
+      try {
+        const record = JSON.parse(readFileSync(runtimePath, "utf8")) as Partial<RuntimeRecord>;
+        runtimeRecord = `present(pid=${String(record.pid)}, port=${String(record.port)}, matches-child=${record.pid === child.pid})`;
+      } catch { /* diagnostic only; never print the record's attestation secret */ }
+      const streamText = (capture: CapturedChildStream, limit: number) => {
+        const value = capture.snapshot().slice(-limit);
+        return value || `<${capture.closed() ? "closed" : "open"}; no output captured>`;
+      };
+      throw new Error(
+        `${label}; child exit=${String(exited)}; pid-record=${pidRecord}; runtime-record=${runtimeRecord}`
+        + `\n--- stderr (${stderr.closed() ? "closed" : "open"}) ---\n${streamText(stderr, 4000)}`
+        + `\n--- stdout (${stdout.closed() ? "closed" : "open"}) ---\n${streamText(stdout, 2000)}`,
+      );
     };
     const runtime = await waitFor(() => {
       if (!existsSync(runtimePath)) return null;
@@ -297,9 +350,9 @@ class Fixture {
       } catch {
         return null;
       }
-    }, "child /healthz");
+    }, "child /healthz").catch(() => diagnose("timed out waiting for child /healthz"));
     expect(health).toMatchObject({ pid: child.pid, port: runtime.port });
-    return { process: child, runtime, stdout, stderr };
+    return { process: child, runtime, stdout: stdout.completed, stderr: stderr.completed };
   }
 
   async stop(server: StartedServer): Promise<void> {
@@ -368,9 +421,13 @@ class Fixture {
     }
     // Re-resolve before the limited four-name removal: never glob or inspect a
     // shared runtime namespace beyond the exact identities this case created.
-    const checked = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(this.codex));
+    const identity = resolveEffectiveUserIdentity();
+    const canonicalCodexHome = realpathSync.native(this.codex);
+    const checked = resolveCodexCoordinatorDatabasePath(identity, canonicalCodexHome);
     if (checked !== this.lockPath) throw new Error("lock teardown identity changed");
-    for (const path of this.lockAllowlist) {
+    const checkedCatalog = resolveCodexCatalogSerializationDatabasePath(identity, canonicalCodexHome);
+    if (checkedCatalog !== this.catalogLockPath) throw new Error("catalog lock teardown identity changed");
+    for (const path of [...this.lockAllowlist, ...this.catalogLockAllowlist]) {
       if (existsSync(path)) unlinkSync(path);
     }
     removeTreeWithRetry(this.root);
@@ -449,6 +506,10 @@ describe("WP13 composed toggle acceptance", () => {
     const before = manifest(fx.codex);
     const server = await fx.start();
     try {
+      // OFF must short-circuit before K. On Windows, merely resolving K starts separate
+      // SID and LocalAppData PowerShell children with 30 s budgets each; run 35093667426
+      // exceeded healthy controls by 33.8 s before the runtime-port watchdog fired at 45 s.
+      expect(existsSync(fx.catalogLockPath)).toBe(false);
       expect(manifest(fx.codex)).toEqual(before);
       for (const argv of [["ensure"], ["restore"]]) {
         const result = await fx.runCli(argv);

@@ -102,6 +102,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   TRANSIENT_RETRY_MAX_ATTEMPTS,
+  isNonReplayableResponse,
   prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
@@ -348,10 +349,13 @@ export async function preparePassthroughExchange(
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
-    // `buildToolBridgeMaps` creates a bare alias only when the caller selected exactly one
-    // namespaced tool through a bare tool_choice. Restore that request-bounded identity before
-    // authorization checks instead of admitting the bare name into the declared set: for `exec`,
-    // the latter would also authorize the unrelated code-mode helper names.
+    // `buildToolBridgeMaps` adds each eligible bare alias to `declaredToolNames` and `toolNsMap`
+    // (one authorized identity claims the bare name). `refreshUndeclaredToolGuard` normally copies
+    // those entries into `declaredWireToolNames`, but passthrough restoration runs before the
+    // undeclared-tool guard, so restore that request-bounded identity here, before authorization
+    // checks. `exec` uses separate handling: its bridge alias is copied into the declared set only
+    // when the client itself declared bare `exec`, because otherwise code-mode normalization could
+    // authorize the unrelated code-mode helper names.
     const authorizedBareNamespaceToolAliases: RoutedNamespaceToolAliases = new Map(
       [...toolBridgeMaps.toolNsMap].flatMap(([alias, identity]) =>
         alias === identity.name
@@ -1114,6 +1118,10 @@ export async function preparePassthroughExchange(
     // the same quorum, cooldown and request budget here, before any client bytes flow.
     if (
       upstreamResponse.status === 429
+      // Not a provider rate limit when this proxy synthesized it for a refused reset
+      // replay; rotating accounts on it would re-send an inference that may already
+      // have run and would cool down an account that refused nothing.
+      && !isNonReplayableResponse(upstreamResponse)
       && transportState.genericFailoverAccountId
       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
       && isGenericOAuthFailoverEnabled(config, route.providerName)
@@ -1168,6 +1176,7 @@ export async function preparePassthroughExchange(
     // keep their pool logic below (rateLimitRetryPolicyFor returns null for them).
     while (
       upstreamResponse.status === 429
+      && !isNonReplayableResponse(upstreamResponse)
       && rateLimitPolicy !== null
       && rateLimitRetries < rateLimitPolicy.attempts
       // Checked here rather than inside the helper: prepareSameTarget429Wait releases the 429

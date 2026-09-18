@@ -31,7 +31,23 @@
  */
 
 /** Real child process: PowerShell, a CLI smoke test, an external binary. */
-export const SPAWN_BUDGET_MS = 45_000;
+export const SPAWN_BUDGET_MS = spawnBudgetMs();
+
+/**
+ * Windows needs a higher ceiling for the same reason `BULK_DURABLE_IO_BUDGET_MS` does: the leg
+ * runs four Bun pools on one runner, and the first child spawned in a file pays a cold start the
+ * later ones do not. Run 35118018849 (job 104895935554) measured the first proxy child in
+ * `tests/codex-integration/native-profile-startup.test.ts` publishing its port at
+ * elapsedMs=50728 against this 45s budget, while the very next spawn in the same file was ready
+ * in 1759ms and every other case passed. The wait is intrinsic — the spawned proxy IS the
+ * assertion — so 45s was measuring runner contention rather than a hang.
+ *
+ * 90s stays a bound rather than an absence of one, and it is gated on Windows so no other lane
+ * loses the shorter signal.
+ */
+function spawnBudgetMs(): number {
+  return process.platform === "win32" ? 90_000 : 45_000;
+}
 
 /** Binds a real server or opens a real socket, including restart-and-reconnect flows. */
 export const SERVER_BUDGET_MS = 30_000;
