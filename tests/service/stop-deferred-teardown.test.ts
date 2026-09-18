@@ -677,6 +677,40 @@ describe("pending teardown receipts", () => {
     expect(mod.isPendingTeardownAbandoned({ state: "missing" }, () => false, 1)).toBe(false);
   });
 
+  test("a reused owner PID is abandoned, a live opencodex owner is still left alone", async () => {
+    const mod = await import("../../src/config/pending-teardown");
+    const processState = await import("../../src/config/process-state");
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 4242);
+    const live = mod.readPendingTeardown(claimed.nonce);
+
+    // The composition `handleStop` uses. Asserted here against the real predicates rather
+    // than restated, because the whole defect was that the two halves were not composed:
+    // bare liveness reported a recycled PID as a stop still in flight, so the receipt was
+    // filtered out of recovery while both updater gates kept refusing on it (#4897).
+    // Liveness is pinned true so the identity half is what these assertions measure: PID
+    // 4242 is not a real process on this host, and probing it would measure the runner.
+    const ownerStillRunning = (pid: number) => processState.isLikelyOcxProcess(pid);
+
+    processState.setProcessCommandLinePlatformForTests("darwin");
+    try {
+      // NEWLY RECOVERABLE: the owner exited and an unrelated process inherited its number.
+      processState.setProcessCommandLineExecForTests(() => "/usr/sbin/cupsd -l\n");
+      expect(mod.isPendingTeardownAbandoned(live, ownerStillRunning, 1)).toBe(true);
+
+      // STILL REFUSED: an opencodex process really is holding that PID, so this is a stop
+      // in flight and its obligation is not ours to finish. Narrowing the precondition must
+      // not turn the concurrency guard into a no-op.
+      processState.setProcessCommandLineExecForTests(() => "ocx stop\n");
+      expect(mod.isPendingTeardownAbandoned(live, ownerStillRunning, 1)).toBe(false);
+
+      // STILL REFUSED: this process's own receipt is never inherited, whatever the probe says.
+      expect(mod.isPendingTeardownAbandoned(live, ownerStillRunning, 4242)).toBe(false);
+    } finally {
+      processState.setProcessCommandLineExecForTests(null);
+      processState.setProcessCommandLinePlatformForTests(null);
+    }
+  });
+
   test("deferralMatchesReceipt needs a well-formed nonce that names a readable receipt", async () => {
     const mod = await import("../../src/config/pending-teardown");
     const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 7);

@@ -43,6 +43,7 @@ import {
   saveConfig,
 } from "../config";
 import {
+  isLikelyOcxProcess,
   readPid,
   readPidFileValue,
   readRuntimePort,
@@ -927,8 +928,24 @@ async function handleStop() {
   // `inheritedTeardowns` is the inverse case: PREVIOUS stops that left obligations
   // unfinished. Snapshot them BEFORE this run claims anything, so this run's own receipt
   // is never mistaken for one it inherited.
+  //
+  // Ownership is decided by IDENTITY, not by bare liveness. A receipt records a number, and
+  // the OS reuses numbers: once the owner exits, an unrelated process can be handed its PID,
+  // and `isProcessAlive` alone then answers "that stop is still running" for as long as the
+  // new process lives. The receipt is filtered out, so no run ever recovers it, quarantines
+  // it or even mentions it — while both updater gates keep seeing an outstanding obligation
+  // and refuse. That is the permanent fail-closed reported in #4897: no proxy running, a
+  // dead owner, and `ocx update` aborting on `teardown-outstanding` every time.
+  //
+  // Requiring the live PID to be an opencodex process is the narrowing that costs the safety
+  // intent nothing: a stop that really is in flight is still left strictly alone, because its
+  // process is one of ours. Recognizing the receipt as abandoned only admits it to the
+  // recovery loop below, which still has to prove the recorded endpoint is down before
+  // anything is restored.
+  const teardownOwnerStillRunning = (ownerPid: number): boolean =>
+    isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
   const inheritedTeardowns = listPendingTeardowns()
-    .filter(read => isPendingTeardownAbandoned(read, isProcessAlive));
+    .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce) return;

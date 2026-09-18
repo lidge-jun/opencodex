@@ -114,7 +114,11 @@ import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
-import { isCodexReserveRequestEligible } from "../../codex/loopback-target";
+import {
+  isCodexReserveOptInMissing,
+  isCodexReserveRequestEligible,
+  CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE,
+} from "../../codex/loopback-target";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { decideTier, tierValueAfterDecision } from "../../providers/fastwire";
 import { fastPolicyForModel } from "../../providers/service-tier";
@@ -632,6 +636,20 @@ export async function handleResponsesCompact(
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
+  // #4940, and the same refusal the ordinary Responses path makes in request-prepare.ts. Compact has
+  // to repeat it rather than inherit it: the native branch below dispatches straight to
+  // `/responses/compact` and only the routed fallback replays through handleResponses, so relying on
+  // that one seam would leave the native compact turn forwarding a Reserve model the opt-in has made
+  // unservable. Composed from the same three facts, in the same order, as `customReserveForward`
+  // further down, and placed before the virtual-model rewrite so it reads the model the caller
+  // actually selected -- and before auth, host-circuit admission, or any upstream byte.
+  //
+  // No terminal-helper or inbound-wire qualifier is needed here the way it is on the ordinary path:
+  // this endpoint is the native Codex compaction wire, and a vision/search helper never reaches it.
+  if (isCodexReserveOptInMissing(config, selectedModelId, admission)
+    && isCanonicalOpenAiForwardProvider(route.provider)) {
+    return formatErrorResponse(400, "invalid_request_error", CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE);
+  }
   const virtual = resolveOpenAiCompactModel(route.providerName, selectedModelId);
   if (virtual) {
     route.modelId = virtual.wireModelId;
