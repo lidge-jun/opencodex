@@ -195,33 +195,54 @@ const DEFAULT_DEPS: DevinProviderMergeStartupDeps = {
  * the snapshot is taken strictly before the save, and a backup failure throws
  * rather than writing without a rollback point.
  *
- * The auth half is deliberately detached. `startServer` is synchronous — an
- * `await` in the boot window would suspend the composition root — and
+ * Both destination slots are inspected before either account-bound file is
+ * changed. The auth write itself is deliberately detached. `startServer` is
+ * synchronous — an `await` in the boot window would suspend the composition root — and
  * `mutateStore` is async-only, so the rekey is fired after its snapshot and
- * its outcome is logged when it lands. That is safe here: the credential is
- * valid under either slot name while the `devin-cli` alias exists, a conflict
- * refuses by design, and a failed rekey simply retries on the next boot.
+ * its outcome is logged when it lands. A late concurrent conflict refuses by
+ * design, and a failed rekey simply retries on the next boot.
  */
 export function runDevinProviderMergeStartupMigration(
   config: OcxConfig,
   deps: DevinProviderMergeStartupDeps = DEFAULT_DEPS,
 ): OcxConfig {
   const projection = deps.project(config);
-  // Warnings are emitted even on a no-op: the collision case IS the warning.
+  const hasSourceConfig = config.providers?.[FROM_ID] !== undefined;
+  const hasSourceAuth = deps.hasAuthSlot(FROM_ID);
+  const hasDestinationAuth = deps.hasAuthSlot(TO_ID);
+
+  // A configured provider and its credentials are one account-bound unit. Do
+  // not move either half if the config projection refused, or if the target
+  // credential slot could belong to another account.
+  if (hasSourceConfig && (!projection.changed || hasDestinationAuth)) {
+    // Projection warnings still matter on a no-op: a config collision is the warning.
+    for (const warning of projection.warnings) console.warn(`[devin-provider-merge] ${warning}`);
+    if (projection.changed && hasDestinationAuth) {
+      console.warn(
+        `[devin-provider-merge] auth.json already has a "${TO_ID}" credential slot; `
+        + `provider "${FROM_ID}" and both credential slots were left untouched. Remove the `
+        + "unused destination credential manually, then restart.",
+      );
+    }
+    return config;
+  }
+
   for (const warning of projection.warnings) console.warn(`[devin-provider-merge] ${warning}`);
+
   let result = config;
   if (projection.changed) {
+    // Snapshot both account-bound files before changing either one.
+    if (hasSourceAuth) deps.backupAuth();
     deps.backupConfig();
     deps.save(projection.config);
     result = projection.config;
   }
 
-  // The auth rekey runs even when the config half refused or had nothing to
-  // do: a `devin-cli` credential slot is orphaned state regardless of whether
-  // a provider row still points at it, and the conflict check inside the
-  // rekey is the same refuse-on-occupied rule the config half applies.
-  if (!deps.hasAuthSlot(FROM_ID)) return result;
-  deps.backupAuth();
+  // With no legacy config row, a `devin-cli` credential slot is orphaned and
+  // can still be rekeyed under the helper's refuse-on-occupied rule. A refused
+  // config migration returned above so its account-bound slot stays put.
+  if (!hasSourceAuth) return result;
+  if (!projection.changed) deps.backupAuth();
   void deps.rekey(FROM_ID, TO_ID).then(outcome => {
     if (outcome === "conflict") {
       console.warn(

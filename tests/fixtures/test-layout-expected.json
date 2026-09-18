@@ -1,4 +1,5 @@
 {
+  "server-combo-held-response.test.ts": "server",
   "key-attribution.test.ts": "usage",
   "provider-send-path-import.test.ts": "server",
   "socks5-fetch.test.ts": "lib",
@@ -399,7 +400,7 @@
   "codex-transition-state-race.test.ts": "codex-integration",
   "codex-transition-state.test.ts": "codex-integration",
   "codex-user-identity.test.ts": "codex-integration",
-  "codex-v2-gate-pristine-pins.test.ts": "codex-integration",
+  "codex-catalog-ladders.test.ts": "codex-integration",
   "codex-v2-gate.test.ts": "codex-integration",
   "codex-warmup.test.ts": "codex-integration",
   "codex-websocket-registry.test.ts": "codex-integration",
@@ -747,7 +748,7 @@
   "management-integration-journal-delete.test.ts": "server",
   "management-integration-routes.test.ts": "server",
   "management-origin-tls.test.ts": "server",
-  "management-provider-post-candidate.test.ts": "server",
+  "management-provider-pinsless-validation.test.ts": "server",
   "management-provider-proto-override.test.ts": "server",
   "management-provider-validation.test.ts": "server",
   "management-route-registry.test.ts": "server",

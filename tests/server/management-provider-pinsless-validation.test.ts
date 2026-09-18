@@ -1,27 +1,26 @@
 /**
- * Split out of management-provider-validation.test.ts because that file sits at its file-size
- * ratchet cap; the case itself is unchanged.
+ * The pins-less provider POST validation case, held in a sibling file.
+ *
+ * Split out of management-provider-validation.test.ts for the reason recorded in
+ * d3ca5522db and #4908: that file sits at its file-size ratchet cap and the cap only
+ * ever moves downward, so a case added after it was set fails the ratchet for every
+ * later pull request. The case is unchanged apart from its own temp directory.
  */
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
-import { config } from "../helpers/management-relative-send-paths";
+import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
+import { config } from "../helpers/management-relative-send-paths";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import * as destinationPolicy from "../../src/lib/destination-policy";
-import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
 
 setDefaultTimeout(60_000);
 
-const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const previousOpencodexHome = process.env.OPENCODEX_HOME;
-const originalGlobalFetch = globalThis.fetch;
-const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-post-candidate-"));
-let isolatedCodexHome: IsolatedCodexHome | null = null;
+const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-pinsless-"));
 
 const canonicalDirect = {
   adapter: "openai-responses",
@@ -36,26 +35,7 @@ function poolProviders(): OcxConfig["providers"] {
   };
 }
 
-beforeEach(() => {
-  isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
-});
-
-afterEach(() => {
-  globalThis.fetch = originalGlobalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-});
-
 describe("provider management validation", () => {
-  // A pins-less POST used to skip validateConfigCandidate entirely, so a provider
-  // field the management boundary does not check (apiKeyPoolStrategy is an
-  // editor-owned enum) could persist a schema-invalid candidate. The candidate
-  // draft is now validated for every completed POST before live adoption.
   test("provider POST validates a pins-less candidate before live adoption", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });

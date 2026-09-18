@@ -612,6 +612,11 @@ describe("provider management validation", () => {
     }
   });
 
+  // A pins-less POST used to skip validateConfigCandidate entirely, so a provider
+  // field the management boundary does not check (apiKeyPoolStrategy is an
+  // editor-owned enum) could persist a schema-invalid candidate. The candidate
+  // draft is now validated for every completed POST before live adoption.
+
   test("provider PATCH sets, clears, and rejects annotateEmptyToolOutputs", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
