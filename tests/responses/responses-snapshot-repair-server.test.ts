@@ -6,7 +6,10 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
-import { createGrokResponsesControlFrameBlockRewrite } from "../../src/server/grok-responses-control-frame";
+import {
+  createGrokResponsesControlFrameBlockRewrite,
+  createGrokResponsesCreatedAtBlockRewrite,
+} from "../../src/server/grok-responses-control-frame";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -173,6 +176,13 @@ for (const controlType of ["codex.rate_limits", "codex.response.metadata"]) {
     });
   });
 }
+
+test("Grok receives integer response timestamps from Responses streams", () => {
+  const block = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_float_timestamp\",\"created_at\":1789740485.0}}";
+  expect(createGrokResponsesCreatedAtBlockRewrite()(block)).toEqual([
+    "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_float_timestamp\",\"created_at\":1789740485}}",
+  ]);
+});
 
 describe("responsesSnapshotRepair through /v1/responses", () => {
   test.skipIf(process.platform !== "darwin")(
