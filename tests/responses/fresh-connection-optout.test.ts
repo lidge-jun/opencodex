@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { wantsFreshConnection, providerFetch } from "../../src/server/responses/fetch-helpers";
 import { saveCredential } from "../../src/oauth/store";
+import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { handleResponses } from "../../src/server/responses";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -267,6 +268,7 @@ describe("providerFetch fresh connection dispatch", () => {
  */
 describe("the OAuth dispatch boundary", () => {
   test("a provider-scoped transport selected at dispatch receives the fresh-connection policy", async () => {
+    const freshHost = new URL(XAI_GROK_CLI_BASE_URL).hostname;
     const home = mkdtempSync(join(tmpdir(), "ocx-fresh-connection-oauth-"));
     const nativeFetch = globalThis.fetch;
     const previousHosts = process.env.OCX_FRESH_CONNECTION_HOSTS;
@@ -274,7 +276,7 @@ describe("the OAuth dispatch boundary", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.OPENCODEX_HOME = home;
     process.env.CODEX_HOME = home;
-    process.env.OCX_FRESH_CONNECTION_HOSTS = "cli-chat-proxy.grok.com";
+    process.env.OCX_FRESH_CONNECTION_HOSTS = freshHost;
     const sends: Array<{ url: string; init?: RequestInit }> = [];
 
     try {
@@ -315,17 +317,18 @@ describe("the OAuth dispatch boundary", () => {
       );
 
       expect(response.status).toBe(200);
-      const inference = sends.filter(send => send.url.endsWith("/chat/completions"));
-      expect(inference).toHaveLength(1);
-      const [send] = inference;
-      // The provider transport rewrote the destination, which is the host the operator named.
-      expect(new URL(send.url).hostname).toBe("cli-chat-proxy.grok.com");
-      const headers = new Headers(send.init?.headers);
-      expect(headers.get("Connection")).toBe("close");
-      expect((send.init as { keepalive?: boolean } | undefined)?.keepalive).toBe(false);
-      // And the provider's own implementation still ran: only the xAI wrapper pins this header,
-      // so wrapping the selected fetch did not replace it with the generic executor.
-      expect(headers.get("x-grok-req-id")).toBeTruthy();
+      // Asserted on the host rather than a path, and on the mapped list rather than a filtered
+      // one, so a destination change reports the addresses it observed instead of an empty length.
+      expect(sends.map(send => new URL(send.url).hostname)).toContain(freshHost);
+      const policed = sends.filter(send => new URL(send.url).hostname === freshHost);
+      for (const send of policed) {
+        const headers = new Headers(send.init?.headers);
+        expect(headers.get("Connection")).toBe("close");
+        expect((send.init as { keepalive?: boolean } | undefined)?.keepalive).toBe(false);
+        // And the provider's own implementation still ran: only the xAI wrapper pins this header,
+        // so wrapping the selected fetch did not replace it with the generic executor.
+        expect(headers.get("x-grok-req-id")).toBeTruthy();
+      }
     } finally {
       globalThis.fetch = nativeFetch;
       if (previousHosts === undefined) delete process.env.OCX_FRESH_CONNECTION_HOSTS;
