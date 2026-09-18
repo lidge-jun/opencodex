@@ -42,12 +42,18 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.models).toContain("deepseek-v4-flash-0731");
     // DeepSeek's 260910 rename row: listed on /models from 260915 on both tiers.
     expect(entry!.models).toContain("deepseek-v4.1-flash");
-    // GLM-5.3 and GLM-5.3-flash exist on Z.AI endpoints but NOT on Token Plan: the
-    // 260826 seed commit propagated them across every GLM-carrying catalog. Either
-    // row 404s here (probed 260907 and 260909, both regions and both tiers).
-    expect(entry!.models).not.toContain("glm-5.3");
+    // GLM-5.3 joined the plan gateway on 260917: listed on /models for global
+    // Team, global Personal, and CN Team, and callable on a Personal key (probed
+    // 260918), so it is restored to both Token Plan rosters.
+    expect(entry!.models).toContain("glm-5.3");
+    expect(entry!.modelReasoningEfforts?.["glm-5.3"]).toEqual(["low", "high", "max"]);
+    expect(entry!.modelContextWindows?.["glm-5.3"]).toBe(1_000_000);
+    expect(entry!.modelMaxOutputTokens?.["glm-5.3"]).toBe(131_072);
+    expect(entry!.modelInputModalities?.["glm-5.3"]).toEqual(["text"]);
+    expect(entry!.preserveReasoningContentModels).toContain("glm-5.3");
+    // GLM-5.3-flash remains a phantom: still never served by the Token Plan gateway.
     expect(entry!.models).not.toContain("glm-5.3-flash");
-    expect(entry!.models!.length).toBe(19);
+    expect(entry!.models!.length).toBe(20);
   });
 
   test("MiniMax case-insensitive normalization is set", () => {
@@ -170,11 +176,12 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.promptCacheKey).toBe(true);
     const cn = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan");
     expect(cn!.promptCacheKey).toBe(true);
-    // Beijing roster pinned exactly (Personal Edition subset), including phantom absence.
+    // Beijing roster pinned exactly (Personal Edition subset; glm-5.3 Personal-
+    // entitled from its 260917 first listing, probed callable on a Personal key).
     const cnModels = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan")!.models;
     expect(cnModels).toEqual([
       "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-      "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2",
+      "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
     ]);
     // The 260910 DeepSeek rename row is wired: vision-capable, effort ladder, and the
     // json_schema downgrade the plan gateway needs (probed 260915).
@@ -186,7 +193,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(v41.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_000_000);
     expect(v41.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
     expect(v41.noVisionModels).not.toContain("deepseek-v4.1-flash");
-    expect(cnModels).not.toContain("glm-5.3");
+    expect(cnModels).toContain("glm-5.3");
     expect(cnModels).not.toContain("glm-5.3-flash");
     // providerConfigSeed and enrichProviderFromRegistry are the two paths that carry
     // the flag from the registry into a live provider config.
