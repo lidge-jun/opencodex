@@ -144,6 +144,26 @@ describe("run-turn adapter event queue", () => {
     expect(await queue.collect()).toEqual([heartbeat]);
   });
 
+  test("heartbeat coalescing latches a later replay-unsafe marker", async () => {
+    const queue = createAdapterEventQueue();
+
+    queue.push(heartbeat);
+    queue.push({ type: "heartbeat", replayUnsafe: true });
+    queue.close();
+
+    expect(await queue.collect()).toEqual([{ type: "heartbeat", replayUnsafe: true }]);
+  });
+
+  test("heartbeat coalescing does not clear an existing replay-unsafe marker", async () => {
+    const queue = createAdapterEventQueue();
+
+    queue.push({ type: "heartbeat", replayUnsafe: true });
+    queue.push(heartbeat);
+    queue.close();
+
+    expect(await queue.collect()).toEqual([{ type: "heartbeat", replayUnsafe: true }]);
+  });
+
   test("a tool event breaks text coalescing on both sides", async () => {
     const queue = createAdapterEventQueue();
 
