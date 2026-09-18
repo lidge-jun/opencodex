@@ -45,9 +45,20 @@ modules merely because those imports existed in the pre-split `responses.ts` mon
 
 `OCX_FRESH_CONNECTION_HOSTS` accepts comma-separated hostnames whose outbound HTTP sends bypass
 keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts and their subdomains
-match case-insensitively. The helper applies this policy at the final executor boundary, after a
-dispatch override has selected or rebuilt the destination, so matching follows the URL sent on the
-wire rather than the URL supplied before credential revalidation.
+match case-insensitively. `sendWithConnectionPolicy` applies the policy around the fetch that
+performs the physical send, after a dispatch override has selected or rebuilt the destination, so
+matching follows the URL sent on the wire rather than the URL supplied before credential
+revalidation.
+
+The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
+`route.provider.fetch` at send time, because reselection can install a different provider transport
+after the wrapper was built, and then calls that implementation instead of the executor. Both
+production overrides do this -- `oauthDispatch` in `request-transport.ts` and the native Chat
+key-revalidation override in `chat-native.ts` -- so both wrap the selected implementation rather
+than choosing between policy and provider transport. Reporting the executor as the boundary while
+the code let a provider-scoped transport past it is what #4992 recorded, and it is why a
+regression for this policy has to enter through `handleResponses` rather than through a
+hand-written override that cooperates by calling the executor it was handed.
 
 ### Semantic progress ownership
 

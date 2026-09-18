@@ -143,6 +143,28 @@ Compare the diagnostic on the same machine and account under the two network
 modes. A successful TUN test alone does not identify why the service's HTTP proxy
 path failed, and does not establish a general fix.
 
+## Connection reuse for specific upstream hosts
+
+Some upstreams keep a connection open after they have stopped serving it. The next request reuses
+that pooled socket and fails without reaching the provider. `OCX_FRESH_CONNECTION_HOSTS` names the
+hosts that should never reuse a pooled connection, as an environment variable rather than a config
+field, so it can be applied to one machine without editing shared configuration:
+
+```bash
+OCX_FRESH_CONNECTION_HOSTS="api.example.com, relay.example.net" ocx start
+```
+
+The value is a comma-separated list of hostnames. Matching is case-insensitive, covers each named
+host and its subdomains, and ignores leading dots, so `.example.com` and `example.com` both match
+`api.example.com`. Do not include a scheme, port or path. An unset or empty variable leaves the
+default connection behavior unchanged.
+
+A matching send carries `Connection: close` and is dispatched with keep-alive disabled. The
+decision is made against the address actually used on the wire, so it still applies when a provider
+transport rewrites the destination after credential selection. Per-request latency rises slightly
+for those hosts, since each request pays a fresh TCP and TLS handshake; name only the hosts that
+need it.
+
 ## Remote access
 
 The default `127.0.0.1` bind is loopback-only. A non-loopback address such as `0.0.0.0` or a tailnet

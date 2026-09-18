@@ -41,7 +41,7 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { providerFetch } from "./fetch-helpers";
+import { providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeaders, hasPassiveAccountQuota } from "../../providers/quota";
@@ -405,8 +405,10 @@ export async function prepareResponsesTransport(
             && sentHeaders?.get("authorization") === `Bearer ${snapshot.accessToken}`
             && !sentHeaders?.has("x-api-key");
           // Reselection can choose a provider override instead of the supplied executor.
+          // Either way the send crosses the physical boundary, so the connection policy is
+          // applied around whichever implementation was just selected (#4992).
           commitKeyAttemptSend();
-          const response = await fetchImpl(destination, { ...dispatchInit, redirect: "manual" });
+          const response = await sendWithConnectionPolicy(fetchImpl, destination, { ...dispatchInit, redirect: "manual" });
           if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
