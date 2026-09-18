@@ -115,7 +115,12 @@ describe("compact handoff route admission namespacing", () => {
         models: ["gpt-5.6-sol"],
       };
       const headers = { "x-codex-parent-thread-id": "compact-handoff-admission-thread" };
-      const owner = { kind: "configured", keyId: "compact-client", source: "dedicated" } as const;
+      const owner = {
+        kind: "configured",
+        keyId: "compact-client",
+        source: "dedicated",
+        contextPrincipalId: "principal-owner",
+      } as const;
       const calls: Array<{ model: string; nativeCompact: boolean }> = [];
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === "string"
@@ -156,7 +161,10 @@ describe("compact handoff route admission namespacing", () => {
       // A different admitted principal re-sending the same lane header must not
       // claim it: every attempt stays on the requested model's native compact.
       for (const intruder of [
-        { kind: "configured", keyId: "different-client", source: "dedicated" },
+        // Same key id, rotated secret. Admission mints a new principal, and this
+        // is precisely the pair a keyId-derived key would have collapsed.
+        { kind: "configured", keyId: "compact-client", source: "dedicated", contextPrincipalId: "principal-rotated" },
+        // Authenticated but carrying no minted principal: ineligible, not pooled.
         { kind: "environment", source: "bearer" },
         { kind: "loopback", source: "loopback" },
         undefined,

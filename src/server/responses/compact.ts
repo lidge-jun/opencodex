@@ -225,8 +225,13 @@ function pruneCompactHandoffRoutes(now: number): void {
 function compactHandoffRouteKey(req: Request, admission: DataPlaneAdmission | undefined): string | null {
   const lane = sessionLaneIdFromRequest(req.headers);
   if (!lane || !admission || admission.kind === "loopback") return null;
-  const principal = contextPrincipalIdOf(admission)
-    ?? (admission.kind === "configured" ? `configured:${admission.keyId}` : "environment");
+  // Fail closed rather than substituting a weaker identity. `keyId` survives a
+  // rotation and every identity-less environment admission would collapse into
+  // one bucket, which is the collision this key exists to prevent. Production
+  // admission always mints `contextPrincipalId` for configured and environment
+  // holders, so no real authenticated caller loses the route.
+  const principal = contextPrincipalIdOf(admission);
+  if (!principal) return null;
   return `${principal}\u0000${lane}`;
 }
 
