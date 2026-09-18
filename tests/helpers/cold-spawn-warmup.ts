@@ -126,8 +126,13 @@ export function moduleGraphSpecifiers(source: string, resolveDir: string): strin
   // from a hoisted import prologue rather than a whole file, and a fragment whose only statement is
   // a top-level `await import(...)` is otherwise ambiguous enough to be read as a script, where
   // top-level await is an error. The marker changes nothing the scan reports.
+  //
+  // The shebang has to come off first. A CLI entry begins with one, and a shebang is only valid on
+  // the first line: prepending the marker to `src/cli/index.ts` moved it to line 2 and the scan
+  // died with a syntax error instead of warming anything (run 35318878762, shards test 2/4 and
+  // windows 8/9). It carries no import, so dropping it loses nothing.
   const scanned = transpiler
-    .scanImports(transpiler.transformSync(`export {};\n${source}`))
+    .scanImports(transpiler.transformSync(`export {};\n${withoutShebang(source)}`))
     .map(entry => entry.path);
   const repositorySpecifiers = [...new Set(scanned)].filter(
     specifier => specifier.startsWith(".") || isAbsolute(specifier),
@@ -135,6 +140,12 @@ export function moduleGraphSpecifiers(source: string, resolveDir: string): strin
   return repositorySpecifiers.map(
     specifier => (isAbsolute(specifier) ? specifier : resolve(resolveDir, specifier)),
   );
+}
+
+function withoutShebang(source: string): string {
+  if (!source.startsWith("#!")) return source;
+  const firstLineEnd = source.indexOf("\n");
+  return firstLineEnd === -1 ? "" : source.slice(firstLineEnd + 1);
 }
 
 export type ColdSpawnWarmup = Readonly<{
@@ -203,7 +214,7 @@ function runModuleGraphWarmup(options: ColdSpawnWarmup, deadlineMs: number): voi
   }
 
   const startedAt = performance.now();
-  const result = Bun.spawnSync([process.execPath, "--eval", warmupScript(specifiers)], {
+  const result = Bun.spawnSync([process.execPath, "--eval", warmupScript(specifiers, deadlineMs)], {
     cwd,
     env: { ...process.env, ...options.env },
     stdout: "pipe",
@@ -238,18 +249,35 @@ function requireEntry(options: ColdSpawnWarmup): string {
 
 const WARMUP_REPORT_PREFIX = "ocx-cold-spawn-warmup:";
 
+/** Margin for the child to print its report before the parent's deadline kills it. */
+const WARMUP_REPORT_RESERVE_MS = 3_000;
+
 /**
  * Each import is attempted on its own so one module that will not load in isolation reports its own
  * name instead of hiding the rest. `process.exit` is deliberate: a warmed module may hold a live
  * timer or handle, and the point of this child is to have loaded, not to shut down cleanly.
+ *
+ * The child also keeps its own budget, a few seconds inside the deadline that would kill it, so one
+ * module that never settles at import cannot consume the whole warm-up and turn a slow file red. It
+ * stops and reports what it got, which leaves the bound under test exactly where it already was.
  */
-function warmupScript(specifiers: readonly string[]): string {
+function warmupScript(specifiers: readonly string[], deadlineMs: number): string {
   return [
     `const specifiers = ${JSON.stringify(specifiers)};`,
+    `const budgetEndsAt = Date.now() + ${Math.max(1_000, deadlineMs - WARMUP_REPORT_RESERVE_MS)};`,
     "const failures = [];",
     "let loaded = 0;",
     "for (const specifier of specifiers) {",
-    "  try { await import(specifier); loaded += 1; }",
+    "  const remaining = budgetEndsAt - Date.now();",
+    "  if (remaining <= 0) { failures.push(specifier + \": warm-up budget exhausted\"); continue; }",
+    "  try {",
+    "    const settled = await Promise.race([",
+    "      import(specifier).then(() => \"loaded\"),",
+    "      Bun.sleep(remaining).then(() => \"unsettled\"),",
+    "    ]);",
+    "    if (settled === \"loaded\") loaded += 1;",
+    "    else failures.push(specifier + \": did not settle within the warm-up budget\");",
+    "  }",
     "  catch (error) { failures.push(specifier + \": \" + String(error && error.message)); }",
     "}",
     `console.log(${JSON.stringify(WARMUP_REPORT_PREFIX)} + JSON.stringify({ loaded, failures }));`,

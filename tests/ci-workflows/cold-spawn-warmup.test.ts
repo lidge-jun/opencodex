@@ -176,6 +176,17 @@ describe("the warmed graph is read from the child, not named by hand", () => {
       .toEqual([join(resolveDir, "src/codex/catalog/sync.ts")]);
   });
 
+  test("a CLI entry's shebang does not stop the scan", () => {
+    // src/cli/index.ts opens with one, and a shebang is valid only on the first line. Establishing
+    // module context in front of it produced a syntax error and warmed nothing at all, which is the
+    // failure mode this whole helper exists to make impossible.
+    expect(moduleGraphSpecifiers('#!/usr/bin/env bun\nimport "./src/cli/status";', resolveDir))
+      .toEqual([join(resolveDir, "src/cli/status")]);
+    const entry = repoPath("src", "cli", "index.ts");
+    expect(moduleGraphSpecifiers(readFileSync(entry, "utf8"), repoPath("src", "cli")).length)
+      .toBeGreaterThan(20);
+  });
+
   test("a real child entry resolves to real repository modules", () => {
     const entry = repoPath("tests", "helpers", "codex-write-lock-child.ts");
     const specifiers = moduleGraphSpecifiers(readFileSync(entry, "utf8"), repoPath("tests", "helpers"));
