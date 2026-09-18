@@ -244,22 +244,21 @@ describe("resolver", () => {
 describe("membership oracle", () => {
   const layout = loadLayout();
 
-  test("the live tree and the fixture agree entry by entry", () => {
+  test("the live tree and both authoritative inventories agree entry by entry", () => {
     // The explicit map and the fixture are two copies of the same table; they must be identical
     // so a file added to one side cannot silently ride on the regex seeds.
     expect(layout.explicit).toEqual(EXPECTED);
     const live = listTestFiles(repoRoot()).map(rel => basename(rel)).filter(name => !layout.keepAtRoot.includes(name));
     const liveSet = new Set(live);
     const missingFromTree = Object.keys(EXPECTED).filter(name => !liveSet.has(name)).sort();
-    // A file the fixture does not know yet (added on dev after the snapshot) is fine as long as
-    // the regex seeds place it: that is the whole point of the seeds. It is only an error when
-    // nothing resolves it, or when the map and the fixture disagree about a file both know.
-    const unresolvedNew = live.filter(name => !(name in EXPECTED) && resolveTarget(layout, name) === null).sort();
+    // Regex seeds help the mover suggest a domain, but a tracked test still needs an explicit
+    // inventory entry. Otherwise a broad seed can hide a missing ownership record.
+    const missingFromInventory = live.filter(name => !(name in EXPECTED)).sort();
     const wrongTarget = live
       .filter(name => name in EXPECTED && resolveTarget(layout, name) !== EXPECTED[name])
       .map(name => `${name}: ${resolveTarget(layout, name)} != ${EXPECTED[name]}`)
       .sort();
-    expect({ unresolvedNew, missingFromTree, wrongTarget }).toEqual({ unresolvedNew: [], missingFromTree: [], wrongTarget: [] });
+    expect({ missingFromInventory, missingFromTree, wrongTarget }).toEqual({ missingFromInventory: [], missingFromTree: [], wrongTarget: [] });
   });
 
   test("the fixture histogram never drops below the inventory in devlog 001 §2.B", () => {

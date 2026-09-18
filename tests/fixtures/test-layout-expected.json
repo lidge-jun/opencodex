@@ -1363,5 +1363,20 @@
   "ws-steering-smoke.test.ts": "responses",
   "combo-authoritative-reset.test.ts": "codex-integration",
   "devin-stated-reset-hardening.test.ts": "providers",
-  "devin-stated-reset-retry.test.ts": "providers"
+  "devin-stated-reset-retry.test.ts": "providers",
+  "chat-native-lenient-finish.test.ts": "responses",
+  "ci-concurrency-groups.test.ts": "ci-workflows",
+  "ci-structure-gate.test.ts": "ci-workflows",
+  "cli-effort.test.ts": "cli",
+  "command-code-fakeip-discovery.test.ts": "providers",
+  "desktop-app-restart-posix.test.ts": "clients",
+  "desktop-restart-handoff.test.ts": "clients",
+  "gui-codex-usage-score-parity.test.ts": "gui",
+  "meta-muse-device.test.ts": "providers",
+  "meta-muse-login-order.test.ts": "providers",
+  "muse-key-quota.test.ts": "providers",
+  "repo-import-resolution.test.ts": "ci-workflows",
+  "responses-code-mode-patch-compile.test.ts": "responses",
+  "retry-delay-hardening.test.ts": "server",
+  "service-start-environment.test.ts": "service"
 }
