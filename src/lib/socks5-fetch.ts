@@ -321,6 +321,11 @@ function requestHeaders(request: Request, target: URL): { text: string; chunked:
   const headers = new Headers(request.headers);
   if (!headers.has("host")) headers.set("host", target.host);
   if (!headers.has("connection")) headers.set("connection", "close");
+  // This transport assembles the body itself, so a content-coding it did not ask for becomes
+  // its own problem to undo. Ask for none by default and leave an explicit caller choice
+  // alone: `fetchWithHeaderTimeout` selects identity for some streaming calls and preserves a
+  // caller's selection elsewhere, and silently overriding that would make the two disagree.
+  if (!headers.has("accept-encoding")) headers.set("accept-encoding", "identity");
   const chunked = request.body !== null
     && !headers.has("content-length")
     && !headers.has("transfer-encoding");
@@ -504,6 +509,28 @@ function responseBody(
   });
 }
 
+/**
+ * Undo the content-coding this transport has to undo itself.
+ *
+ * `fetch` decodes content-codings below the Response constructor. This one assembles the body
+ * from a raw socket, so `new Response(body, { headers })` hands the compressed bytes straight
+ * to whatever reads them: `response.json()` throws SyntaxError on the gzip magic number and an
+ * SSE reader sees noise instead of frames. The request asks for `identity`, so a coded
+ * response means an upstream ignored that; gzip and deflate are undone here, and any other
+ * coding fails closed rather than surfacing bytes no caller can parse.
+ *
+ * No decompressed-size ceiling is imposed. The identity path has no total-size bound either —
+ * it cannot, because a long-lived SSE stream is legitimately unbounded — and a ceiling on only
+ * the coded path would fail responses that succeed uncompressed.
+ */
+function contentCodingFormat(headers: Headers): "gzip" | "deflate" | undefined {
+  const coding = (headers.get("content-encoding") ?? "").trim().toLowerCase();
+  if (coding === "" || coding === "identity") return undefined;
+  if (coding === "gzip" || coding === "x-gzip") return "gzip";
+  if (coding === "deflate") return "deflate";
+  throw new Socks5FetchError("SOCKS5 upstream returned an unsupported content-encoding: " + coding);
+}
+
 export async function socks5Fetch(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -559,12 +586,24 @@ export async function socks5Fetch(
     while (responseHead.status >= 100 && responseHead.status < 200 && responseHead.status !== 101) {
       responseHead = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, request.signal));
     }
+    // Reject a coding this transport cannot undo before the body stream takes the socket, so
+    // the failure path is the ordinary one below rather than an orphaned reader.
+    const codingFormat = contentCodingFormat(responseHead.headers);
     const body = responseBody(reader, socket, request.signal, responseHead.headers, responseHead.status, request.method);
+    const responseHeaders = new Headers(responseHead.headers);
+    if (codingFormat !== undefined) {
+      responseHeaders.delete("content-encoding");
+      // The declared length describes the coded bytes, not what the caller now reads.
+      responseHeaders.delete("content-length");
+    }
+    const decodedBody = body !== null && codingFormat !== undefined
+      ? body.pipeThrough(new DecompressionStream(codingFormat))
+      : body;
     request.signal.removeEventListener("abort", onAbort);
-    return new Response(body, {
+    return new Response(decodedBody, {
       status: responseHead.status,
       statusText: responseHead.statusText,
-      headers: responseHead.headers,
+      headers: responseHeaders,
     });
   } catch (error) {
     request.signal.removeEventListener("abort", onAbort);

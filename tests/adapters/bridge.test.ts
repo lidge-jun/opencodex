@@ -1803,6 +1803,61 @@ describe("fallback freeform wrappers stream one stable representation (#5047)", 
       .toEqual({ concatenated: "line1\nline2", done: "line1\nline2", itemInput: "line1\nline2" });
   });
 
+  // #5047 matched the buffer against the compact literals `{"input":"` and `{"code":"`, so a
+  // wrapper carrying the insignificant whitespace `JSON.parse` accepts matched nothing at all:
+  // it streamed as raw JSON and then completed as the unwrapped body. The completion path reads
+  // the text with `JSON.parse`, which does not care how the object is laid out, so the two
+  // disagreed again through a different spelling of the same wrapper.
+  test("a wrapper written with whitespace streams the same value it completes with", async () => {
+    const spacings = [
+      '{ "code": "const x = 1;" }',
+      '{"code" : "const x = 1;"}',
+      '{\n  "code": "const x = 1;"\n}',
+      '{\t"input":\t"const x = 1;"}',
+      '{ "input" : "const x = 1;" }',
+    ];
+    for (const wrapper of spacings) {
+      const view = inputView(await streamExec([wrapper]));
+      expect({ wrapper, ...view })
+        .toEqual({ wrapper, concatenated: "const x = 1;", done: "const x = 1;", itemInput: "const x = 1;" });
+    }
+  });
+
+  test("a spaced wrapper split at every byte boundary never leaks raw JSON", async () => {
+    const wrapper = '{ "code": "a\\nb" }';
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const view = inputView(await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]));
+      expect({ cut, ...view }).toEqual({ cut, concatenated: "a\nb", done: "a\nb", itemInput: "a\nb" });
+    }
+  });
+
+  // `stripMarkdownCodeFence` removes one complete outer fence at completion for `exec` and
+  // `apply_patch`. Streaming the fence bytes first and then completing with the stripped body is
+  // the same rewind the wrapper holds exist to avoid, so a fenced body streams no preview at
+  // all. A closing fence can still be followed by more text that withdraws it, which is why the
+  // hold lasts the whole call rather than releasing when the fence looks complete.
+  test("a fenced body streams no preview rather than bytes the completed item drops", async () => {
+    const fenced = ["```js", "const x = 1;", "```"].join("\n");
+    for (const chunks of [[fenced], [fenced.slice(0, 4), fenced.slice(4)], Array.from(fenced)]) {
+      const view = inputView(await streamExec(chunks));
+      expect(view.done).toBe("const x = 1;");
+      expect(view.itemInput).toBe("const x = 1;");
+      expect(view.concatenated).toBe("");
+    }
+
+    // The same body inside the canonical wrapper: the value is decidable, the fence is not.
+    const wrapped = inputView(await streamExec([JSON.stringify({ input: fenced })]));
+    expect(wrapped).toEqual({ concatenated: "", done: "const x = 1;", itemInput: "const x = 1;" });
+  });
+
+  test("a body that only starts like a fence resumes streaming as soon as it cannot be one", async () => {
+    // One held character, then the buffer can no longer open a fence and streams normally. This
+    // is what keeps the fence hold from swallowing ordinary template-literal JavaScript.
+    const body = "`hello` + world";
+    const view = inputView(await streamExec(Array.from(body)));
+    expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
+  });
+
   test("a stream that dies inside a held wrapper manufactures no tool call", async () => {
     // The held buffer is suppressed output, never content. An aborted turn must not turn it
     // into a completed call, and must not release it as raw JSON either.

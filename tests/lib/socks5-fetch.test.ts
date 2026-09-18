@@ -52,6 +52,22 @@ async function close(server: TcpServer | ReturnType<typeof createHttpServer>): P
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
 
+/**
+ * Wait for a socket to be observably destroyed, under a bounded deadline.
+ *
+ * The fixed `Bun.sleep(50)` this replaces asserted that close propagation is observable within
+ * fifty milliseconds, which is a claim about machine load rather than about the transport. It
+ * failed in the unsharded macOS control lane, where the whole suite shares one process (#4997),
+ * while passing in every sharded lane. The contract is that `finish()` destroys the socket, not
+ * that it does so inside any particular window, so this waits for the state the contract
+ * promises and fails only when it never arrives.
+ */
+async function awaitDestroyed(socket: Socket | undefined, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (socket?.destroyed !== true && Date.now() < deadline) await Bun.sleep(5);
+  return socket?.destroyed === true;
+}
+
 function socksProxy(options: {
   username?: string;
   password?: string;
@@ -167,8 +183,7 @@ describe("socks5Fetch", () => {
         `socks5://127.0.0.1:${proxyPort}`,
       );
       expect(await response.text()).toBe("ok");
-      await Bun.sleep(50);
-      expect(targetConnection?.destroyed).toBe(true);
+      expect(await awaitDestroyed(targetConnection)).toBe(true);
     } finally {
       targetConnection?.destroy();
       await Promise.all([close(proxy), close(target)]);
@@ -194,12 +209,119 @@ describe("socks5Fetch", () => {
         `socks5://127.0.0.1:${proxyPort}`,
       );
       expect(await response.text()).toBe("");
-      await Bun.sleep(50);
-      expect(targetConnection?.destroyed).toBe(true);
+      expect(await awaitDestroyed(targetConnection)).toBe(true);
     } finally {
       targetConnection?.destroy();
       await Promise.all([close(proxy), close(target)]);
     }
+  });
+
+  // A content-coding is undone by `fetch` below the Response constructor. This transport builds
+  // the body from a raw socket, so before this was handled `new Response(body, { headers })`
+  // surfaced the compressed bytes unchanged: `.json()` threw SyntaxError on the gzip magic
+  // number and an SSE reader saw noise. These pin the decode, the headers that stop describing
+  // the coded bytes, and the refusal to hand over a coding this transport cannot undo.
+  describe("content-coding", () => {
+    function codedTarget(coding: string, payload: Uint8Array) {
+      let requestText = "";
+      const server = createTcpServer(socket => {
+        socket.once("error", () => undefined);
+        let request = Buffer.alloc(0);
+        socket.on("data", chunk => {
+          request = Buffer.concat([request, chunk]);
+          requestText = request.toString("latin1");
+          if (!requestText.includes("\r\n\r\n")) return;
+          const head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-encoding: "
+            + coding
+            + "\r\ncontent-length: " + payload.byteLength + "\r\n\r\n";
+          socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload)]));
+        });
+      });
+      return { server, requestHead: () => requestText };
+    }
+
+    test("a gzip body is decoded and stops advertising a coding it no longer carries", async () => {
+      const body = JSON.stringify({ ok: true, note: "compressed" });
+      const { server: target } = codedTarget("gzip", Bun.gzipSync(new TextEncoder().encode(body)));
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/gzip`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        expect(response.headers.get("content-encoding")).toBeNull();
+        // The declared length counted the coded bytes; keeping it would misdescribe the body.
+        expect(response.headers.get("content-length")).toBeNull();
+        expect(await response.json()).toEqual({ ok: true, note: "compressed" });
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("a deflate body is decoded the same way", async () => {
+      const body = JSON.stringify({ ok: true });
+      const { server: target } = codedTarget("deflate", Bun.deflateSync(new TextEncoder().encode(body)));
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/deflate`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        expect(await response.json()).toEqual({ ok: true });
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("a coding this transport cannot undo fails closed instead of surfacing coded bytes", async () => {
+      // Brotli is not a format `DecompressionStream` implements. Returning the bytes anyway is
+      // the behavior being removed: the caller would get a SyntaxError from its own parser with
+      // nothing naming the cause.
+      const { server: target } = codedTarget("br", new TextEncoder().encode("not really brotli"));
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        await expect(socks5Fetch(
+          `http://provider.invalid:${targetPort}/brotli`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        )).rejects.toThrow(/unsupported content-encoding: br/);
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("the request asks for identity and keeps an explicit caller choice", async () => {
+      const payload = new TextEncoder().encode("{}");
+      const bare = codedTarget("identity", payload);
+      const chosen = codedTarget("identity", payload);
+      const proxy = socksProxy();
+      const [barePort, chosenPort, proxyPort] = await Promise.all([
+        listen(bare.server),
+        listen(chosen.server),
+        listen(proxy),
+      ]);
+      try {
+        await socks5Fetch(
+          `http://provider.invalid:${barePort}/default`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        expect(bare.requestHead().toLowerCase()).toContain("accept-encoding: identity");
+        await socks5Fetch(
+          `http://provider.invalid:${chosenPort}/explicit`,
+          { headers: { "accept-encoding": "gzip" } },
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        expect(chosen.requestHead().toLowerCase()).toContain("accept-encoding: gzip");
+      } finally {
+        await Promise.all([close(proxy), close(bare.server), close(chosen.server)]);
+      }
+    });
   });
 
   test("rejects a request stuck in body backpressure when the socket errors", async () => {
@@ -408,9 +530,8 @@ describe("socks5Fetch", () => {
       await Bun.sleep(50);
       await reader.cancel();
       await Promise.race([pending.catch(() => undefined), Bun.sleep(250)]);
-      await Bun.sleep(50);
       if (!clientSocket) throw new Error("SOCKS5 client socket was not captured");
-      expect(clientSocket.destroyed).toBe(true);
+      expect(await awaitDestroyed(clientSocket)).toBe(true);
       expect(clientSocket.listenerCount("data")).toBe(0);
       expect(clientSocket.listenerCount("error")).toBe(0);
       expect(clientSocket.listenerCount("close")).toBe(0);
@@ -463,8 +584,7 @@ describe("socks5Fetch", () => {
         Bun.sleep(1_000).then(() => "timed out"),
       ]);
       expect(outcome).toBeInstanceOf(Error);
-      await Bun.sleep(50);
-      expect(clientSocket.destroyed).toBe(true);
+      expect(await awaitDestroyed(clientSocket)).toBe(true);
       expect(clientSocket.listenerCount("data")).toBe(0);
       expect(clientSocket.listenerCount("error")).toBe(0);
       expect(clientSocket.listenerCount("close")).toBe(0);

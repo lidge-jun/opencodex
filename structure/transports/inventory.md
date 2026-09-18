@@ -240,4 +240,11 @@ fragmented framing, header limits and explicit-route snapshot preservation.
 Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
 honor them and must not silently downgrade the provider contract.
 
+Content-coding is this transport's own obligation. `fetch` decodes a coded body below the
+Response constructor; this tunnel assembles the body from a socket, so a response wrapped with
+its upstream headers hands the coded bytes to whatever parses them. The request therefore asks
+for `identity` unless the caller chose an `accept-encoding` itself, a `gzip` or `deflate`
+response is decoded and stops advertising the coding and the coded length, and any other coding
+is refused by name rather than surfaced as bytes no caller can read.
+
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

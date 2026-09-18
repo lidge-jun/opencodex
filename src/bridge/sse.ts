@@ -157,40 +157,52 @@ export function bridgeToResponsesSSE(
   // (`response.custom_tool_call_input.delta` — codex-rs uses it for UI preview only;
   // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
   // buffers get their string value progressively unescaped; anything else streams raw.
-  const FREEFORM_WRAP_PREFIX = '{"input":"';
-  /** `{"key":"` for every wrapper this tool name accepts. Keys are distinct, so order is free. */
-  const freeformWrapPrefixes = (toolName: string): string[] => [
-    FREEFORM_WRAP_PREFIX,
-    ...freeformFallbackKeys(toolName).map(key => `{"${key}":"`),
-  ];
+  const JSON_WHITESPACE = new Set([" ", "\t", "\n", "\r"]);
+  type WrapperOpening =
+    | { state: "none" }
+    | { state: "prefix" }
+    | { state: "open"; valueStart: number };
   /**
-   * The value to stream so far, or `null` to HOLD because nothing can be decided yet.
+   * Where the string value of `{"<key>":"` begins, tolerating the insignificant whitespace
+   * `JSON.parse` accepts.
    *
-   * `input` is decidable from its prefix: `unwrapFreeformToolInput` returns it whenever the
-   * key is present, whatever else the object carries, so its value can be unescaped
-   * progressively and never retracted.
-   *
-   * A fallback key is not. It only unwraps when it is the SINGLE string field, and a second
-   * key can still arrive — so a value emitted early would have to be taken back. That is the
-   * rewind this holds instead: stream nothing until the object closes, then publish the one
-   * repaired body. The routed passthrough in `responses-custom-tool-repair.ts` already holds
-   * any object prefix for the same reason (#5047).
+   * The earlier form of this compared the buffer against the compact literal `{"key":"`, so a
+   * wrapper written with spaces or newlines matched no prefix at all, streamed as raw JSON
+   * deltas and then completed as the unwrapped body. That is the same delta/completion
+   * disagreement #5047 closed for compact wrappers, reached through a different spelling:
+   * `unwrapFreeformToolInput` reads the completed text with `JSON.parse`, which does not care
+   * how the object is laid out, so neither can the streaming side.
    */
-  const freeformPartialInput = (args: string, toolName: string): string | null => {
-    const prefixes = freeformWrapPrefixes(toolName);
-    // Still an ambiguous prefix of some wrapper: which wrapper, if any, is not known yet.
-    if (prefixes.some(prefix => prefix.startsWith(args))) return null;
-    if (!args.startsWith(FREEFORM_WRAP_PREFIX)) {
-      if (!prefixes.some(prefix => args.startsWith(prefix))) return args;
-      // Committed to a fallback wrapper. Undecidable until the object is complete.
-      try {
-        JSON.parse(args);
-      } catch {
-        return null;
+  const wrapperOpening = (args: string, key: string): WrapperOpening => {
+    let index = 0;
+    for (const token of ["{", `"${key}"`, ":", '"']) {
+      while (index < args.length && JSON_WHITESPACE.has(args[index]!)) index++;
+      if (index >= args.length) return { state: "prefix" };
+      for (const expected of token) {
+        if (index >= args.length) return { state: "prefix" };
+        if (args[index] !== expected) return { state: "none" };
+        index++;
       }
-      return unwrapFreeformToolInput(args, toolName);
     }
-    const body = args.slice(FREEFORM_WRAP_PREFIX.length);
+    return { state: "open", valueStart: index };
+  };
+  /**
+   * Whether a body could still grow into one complete outer Markdown fence.
+   *
+   * `stripMarkdownCodeFence` removes such a fence at completion for exactly the two tools that
+   * own the grammar, so a fenced body's streamed bytes and its completed input disagree unless
+   * the stream holds. A buffer that does not open with a fence can never acquire one, so
+   * ordinary bodies are unaffected; a buffer that does keeps its preview suppressed for the
+   * whole call, because a closing fence can still be followed by more text that withdraws it.
+   */
+  const mayBecomeFencedBody = (text: string, toolName: string): boolean => {
+    if (toolName !== "exec" && toolName !== "apply_patch") return false;
+    const head = text.trimStart();
+    if (head === "") return true;
+    return head.startsWith("```") || "```".startsWith(head);
+  };
+  /** The decoded prefix of a JSON string body, stopping at the first byte it cannot resolve. */
+  const decodeJsonStringPrefix = (body: string): string => {
     let out = "";
     for (let i = 0; i < body.length; i++) {
       const c = body[i];
@@ -210,6 +222,40 @@ export function bridgeToResponsesSSE(
       } else out += c;
     }
     return out;
+  };
+  /**
+   * The value to stream so far, or `null` to HOLD because nothing can be decided yet.
+   *
+   * `input` is decidable from its prefix: `unwrapFreeformToolInput` returns it whenever the
+   * key is present, whatever else the object carries, so its value can be unescaped
+   * progressively and never retracted.
+   *
+   * A fallback key is not. It only unwraps when it is the SINGLE string field, and a second
+   * key can still arrive — so a value emitted early would have to be taken back. That is the
+   * rewind this holds instead: stream nothing until the object closes, then publish the one
+   * repaired body. The routed passthrough in `responses-custom-tool-repair.ts` already holds
+   * any object prefix for the same reason (#5047).
+   */
+  const freeformPartialInput = (args: string, toolName: string): string | null => {
+    const openings = ["input", ...freeformFallbackKeys(toolName)]
+      .map(key => ({ key, opening: wrapperOpening(args, key) }));
+    const canonical = openings[0]!.opening;
+    if (canonical.state === "open") {
+      const decoded = decodeJsonStringPrefix(args.slice(canonical.valueStart));
+      return mayBecomeFencedBody(decoded, toolName) ? null : decoded;
+    }
+    if (openings.some(entry => entry.opening.state === "open")) {
+      // Committed to a fallback wrapper. Undecidable until the object is complete.
+      try {
+        JSON.parse(args);
+      } catch {
+        return null;
+      }
+      return unwrapFreeformToolInput(args, toolName);
+    }
+    // Still an ambiguous prefix of some wrapper: which wrapper, if any, is not known yet.
+    if (openings.some(entry => entry.opening.state === "prefix")) return null;
+    return mayBecomeFencedBody(args, toolName) ? null : args;
   };
   // tool_search_call carries arguments as a JSON object ({query, limit}); parse the model's arg string.
   const parseArgsObj = (args: string): Record<string, unknown> => {
