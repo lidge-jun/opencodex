@@ -1212,7 +1212,14 @@ export function createPassthroughWebSearchBridgeStream(
     },
     cancel(reason) {
       cancelled = true;
-      void iterator.return?.(reason).finally(finalize);
+      // Release request-scoped authority immediately. An async generator cannot
+      // process a queued return() while its active next() is blocked on an
+      // upstream read, so deferring finalize until that settles would hold the
+      // sidecar probe lease for as long as the abandoned upstream leg does.
+      // Optional chaining would also skip finalize entirely for an iterator
+      // with no return method.
+      finalize();
+      void iterator.return?.(reason);
     },
   });
 }
