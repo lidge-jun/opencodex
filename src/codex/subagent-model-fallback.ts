@@ -909,6 +909,100 @@ export function scanCodexAgentRolesWithTomlModelFallback(codexHome = CODEX_HOME)
   return listCodexAgentRoles(codexHome).filter(role => hasCodexAgentModelFallbackField(role, codexHome));
 }
 
+const TOML_MODEL_KEY = /^\s*(?:model|"model"|'model')\s*=/;
+
+/**
+ * TOML-aware read of the root `model` pin, or null when there is none.
+ *
+ * Distinct from {@link readCodexAgentModel}, which matches one exact unindented double-quoted
+ * line. That is fine for resolving a fallback chain opencodex itself wrote, but it is the wrong
+ * question for a diagnostic: the file being judged was written by somebody else, so `model = 'x'`,
+ * an indented key, or a trailing comment are all valid TOML that Codex honours and that a
+ * stricter matcher would report as unpinned.
+ *
+ * It shares the scanner used for `model_fallback` for the reason that matters here: an imported
+ * role file keeps its instructions in a multiline string, and that string contains the very words
+ * this scan looks for. A line matcher would read a key out of prose.
+ *
+ * Table context is not tracked, matching the `model_fallback` parse. A `model` key under a later
+ * table header would be read as the root pin; Codex role files are flat in practice, and for a
+ * warning the conservative direction is to stay quiet.
+ */
+function parseTomlModelPin(content: string): string | null {
+  const lines = content.split(/\r?\n/);
+  const state: TomlScanState = { inMultilineString: null, arrayDepth: 0 };
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (state.inMultilineString) {
+      const end = findTomlMultilineStringEnd(line, 0, state.inMultilineString[0]!);
+      if (end === -1) continue;
+      state.inMultilineString = null;
+      scanTomlLine(line.slice(end + 3), state);
+      continue;
+    }
+    if (state.arrayDepth === 0) {
+      const key = line.match(TOML_MODEL_KEY);
+      if (key) {
+        const rest = `${line.slice(key[0].length)}\n${lines.slice(i + 1).join("\n")}`;
+        let at = 0;
+        while (at < rest.length && (rest[at] === " " || rest[at] === "\t")) at += 1;
+        if (rest[at] !== '"' && rest[at] !== "'") return null;
+        const value = parseTomlStringAt(rest, at)?.value.trim() ?? "";
+        return value === "" ? null : value;
+      }
+    }
+    scanTomlLine(line, state);
+  }
+  return null;
+}
+
+/** Filename prefix opencodex gives the Claude agents it generates. */
+const OPENCODEX_DERIVED_ROLE_PREFIX = "ocx-";
+
+/**
+ * Body markers that survive the Codex desktop external-agent import.
+ *
+ * The import carries the generated Claude agent's instructions across, so both the provenance
+ * marker and the routing directive end up inside the role TOML. `ocx-route:` is matched without
+ * its `<!--` comment prefix on purpose: the same import text-replaces "Claude Code" with "Codex"
+ * inside that body, so anything around the directive should be assumed rewritten.
+ */
+const OPENCODEX_DERIVED_ROLE_MARKERS = ["generated-by: opencodex", "ocx-route:"] as const;
+
+/**
+ * Roles that look opencodex-derived but pin no model, so Codex runs them on the parent model.
+ *
+ * opencodex does not write Codex role TOMLs. These arrive when the Codex desktop external-agent
+ * import converts `~/.claude/agents/ocx-*.md` into `$CODEX_HOME/agents/ocx-*.toml`, dropping the
+ * `model:` frontmatter because a `claude-ocx-native--` id is not a Codex model and keeping only the
+ * instructions. The surviving `ocx-route` directive cannot make up the difference: it is honoured
+ * only on the Claude `/v1/messages` path and is inert on `/v1/responses`. So the role file names
+ * one model while every spawn runs on another, which is invisible until someone diffs
+ * `session_meta.agent_role` against `turn_context.model` (#4790).
+ *
+ * Detection is a heuristic for a warning, deliberately not an ownership claim. Nothing here
+ * authorizes writing to, repairing, or removing these files, and the marker-based ownership rules
+ * that govern the files opencodex does write are unchanged.
+ */
+export function scanOpencodexDerivedCodexAgentRolesWithoutModelPin(codexHome = CODEX_HOME): string[] {
+  const findings: string[] = [];
+  for (const role of listCodexAgentRoles(codexHome)) {
+    let content: string;
+    try {
+      content = readFileSync(join(codexHome, "agents", `${role}.toml`), "utf8");
+    } catch {
+      // An unreadable file is not evidence of a missing pin.
+      continue;
+    }
+    const derived = role.startsWith(OPENCODEX_DERIVED_ROLE_PREFIX)
+      || OPENCODEX_DERIVED_ROLE_MARKERS.some(marker => content.includes(marker));
+    if (!derived) continue;
+    if (parseTomlModelPin(content) !== null) continue;
+    findings.push(role);
+  }
+  return findings.sort();
+}
+
 export function listCodexAgentRoles(codexHome = CODEX_HOME): string[] {
   const dir = join(codexHome, "agents");
   if (!existsSync(dir)) return [];

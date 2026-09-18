@@ -44,6 +44,28 @@ describe("discovered model pricing classification (#3666)", () => {
     expect(discoveredPricingStatus({ id: "half2", pricing: { prompt: "1e-6", completion: "0" } })).toBe("paid");
   });
 
+  test("auxiliary charges prevent a model from classifying free", () => {
+    expect(discoveredPricingStatus({
+      id: "request-charge",
+      pricing: { prompt: "0", completion: "0", request: "0.05" },
+    })).toBe("paid");
+    expect(discoveredPricingStatus({
+      id: "free-all-dimensions",
+      pricing: { prompt: "0", completion: "0", request: 0, image: "0", web_search: "0.0" },
+    })).toBe("free");
+  });
+
+  test("unsupported auxiliary pricing stays unknown rather than classifying free", () => {
+    expect(discoveredPricingStatus({
+      id: "unsupported-charge",
+      pricing: { prompt: 0, completion: 0, request: { amount: "0.05" } },
+    })).toBe("unknown");
+    expect(discoveredPricingStatus({
+      id: "invalid-auxiliary",
+      pricing: { prompt: 0, completion: 0, image: -1 },
+    })).toBe("unknown");
+  });
+
   test("a provider that publishes no pricing is unknown, and the hint field is absent", () => {
     expect(discoveredPricingStatus({ id: "llama3.2" })).toBe("unknown");
     // Absent rather than present-and-"unknown": catalogHintsFromModelsApiItem's contract is that

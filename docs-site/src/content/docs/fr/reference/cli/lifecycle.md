@@ -13,13 +13,21 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ## Cycle de vie du proxy
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 Démarre le serveur proxy, de préférence sur le port `10100`. Si ce port est occupé, opencodex en choisit un autre qui est disponible et l’enregistre. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
+
+`--socks5` (par défaut `127.0.0.1:10808`) enregistre l’URL SOCKS5 dans `config.proxy` et achemine
+les requêtes HTTP(S) sortantes dans un véritable tunnel SOCKS5. `--socks5-off` supprime uniquement
+le proxy SOCKS5 enregistré et ne supprime pas un proxy HTTP. La valeur reste après `ocx update`,
+car elle est stockée dans la configuration. L’URL peut contenir un nom d’utilisateur et un mot de
+passe, mais les journaux de démarrage les masquent.
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -194,10 +202,10 @@ Une confirmation UAC peut être nécessaire. Une priorité déjà normale ou hau
 
 | Sous-commande | Action |
 | --- | --- |
-| aucune | Installe et démarre le service s’il est absent ; sinon, actualise et redémarre le service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
+| aucune | Installe et démarre le service s’il est absent ; sinon, applique `repair` au service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
 | `install` | Crée et démarre le service. L’enregistrement exige une élévation sous Windows. |
-| `repair` | Actualise sur place un service installé et le redémarre. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
-| `restart` | Alias de `repair`. |
+| `repair` | Actualise sur place un service installé. Sous macOS, le gestionnaire n’est rechargé que lorsque quelque chose a changé : une tâche saine et inchangée continue donc de s’exécuter et la réparation n’est pas une interruption. Sous Linux et Windows, le service est redémarré ; une définition Task Scheduler Windows saine est réutilisée, tandis qu’une définition obsolète peut être réenregistrée et nécessiter une élévation. |
+| `restart` | La même actualisation, avec un redémarrage garanti sur toutes les plateformes. Sous macOS, une tâche inchangée déjà chargée est relancée (kickstart) sur place. N’est pas un alias de `repair`. |
 | `start` | Démarre un service installé. |
 | `stop` | Arrête le service et rétablit le fonctionnement natif de Codex. |
 | `status` | Affiche les diagnostics du service et du proxy, ainsi que les chemins des journaux. |

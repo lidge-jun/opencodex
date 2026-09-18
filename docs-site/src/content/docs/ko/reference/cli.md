@@ -19,6 +19,8 @@ opencodex CLI는 `ocx`입니다. 첫 번째 명령 이름으로 분기하며, `s
 
 `ocx system codex-cli-update check`는 실행 중인 프록시가 없어도 되며 패키지 레지스트리를 조회하지 않습니다. 설정된 설치 후보에 대해 전체 경로를 숨긴 실행 파일 위치와 소유권 근거를 포함한 provenance 메타데이터를 제한된 범위에서 검사합니다. 신뢰할 수 있는 배포 런처 컨텍스트가 인증하는 것은 후보 스냅샷뿐이며, Codex가 성공적으로 실행되었다는 사실은 인증하지 않습니다. 이 단발성 명령은 Codex를 전혀 실행하지 않으므로 환경 또는 저장된 상태에서 얻은 후보는 보고 전용입니다(`managed: false`, 일반적으로 `selection_unattested`). `selectionAttested`는 항상 `false`입니다. JSON 출력에는 `candidateAvailable`, `candidateVersion`, `candidateSource`, `selectionAttested: false`가 포함됩니다. Bun이나 소스에서 직접 실행하면 런처 증거가 없으므로 환경 및 저장된 후보를 무시하고 POSIX에서는 `candidate_unavailable`, Windows에서는 `windows_inspection_deferred`을 보고할 수 있습니다. Windows에서는 이 첫 조각이 후보 또는 설정 경로의 파일시스템을 전혀 읽지 않습니다. 배포 런처가 증명한 절대 환경 후보에 한해서 앱 번들 또는 버전 관리자라는 어휘적 표지만 보고하며, 그 밖의 Windows 후보는 모두 실패 닫힘 처리합니다. 이 명령은 소프트웨어를 설치하거나 복구하지 않고, Codex나 npm을 실행하지 않으며, 실행 중인 프로세스를 제어하거나 설정 또는 캐시 상태를 쓰지 않습니다.
 
+Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참조하세요. 명시적 경로 없이 증명에 바인딩된 런처 스냅샷이 식별한 선택 후보를 관측하며, 업데이트 권한이나 런타임 선택을 증명하지 않습니다.
+
 뜻이 분명하면 `list`나 `status`가 기본입니다. 구조화된 스냅샷은 `--json`을, 스트리밍 요청 로그 피드는 `ocx observe logs --follow --jsonl`을 사용합니다. 테마, 언어, 내비게이션처럼 순수하게 시각적인 브라우저 상태에는 CLI 대응이 없습니다. Cloudflare Tunnel 설정은 이 명령 집합 밖입니다.
 
 ## 종료 코드와 확인
