@@ -86,7 +86,7 @@ export interface CodexCliUpdatePlan {
   /** True when the pre-update shim was `matched`, i.e. this install owns a live shim. */
   readonly shimEligible: boolean;
   readonly session: CodexCliUpdateSession;
-  /** Exactly the argv apply would run, for the operator to read before approving it. */
+  /** Indicative install argv for the operator to read before approving; apply actually runs `npm pack`, verifies the bound sha512, and installs the verified tarball. */
   readonly command: readonly string[] | null;
 }
 
