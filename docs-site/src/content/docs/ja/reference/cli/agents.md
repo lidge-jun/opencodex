@@ -202,6 +202,19 @@ ocx system codex-cli-update check --json
 
 Windows で `CODEX_CLI_PATH=codex` のような単純なコマンド名、リモートパス、デバイスパスが候補としてキャプチャされた場合は、`candidate_path_unavailable` を報告します。候補は取得されていますが、そのパスはこの検査の対象になりません。
 
+#### Windows x64 インストールの明示的な観測
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest` は、選択済みまたは明示した Windows x64 の npm インストールを読み取り専用で観測する任意の操作です。オプションなしでは、証明済みランチャースナップショットが特定した選択候補（設定済み `CODEX_CLI_PATH` または取り込み PATH 上の最初の `codex`）を観測し、opencodex ラッパーは名前を変えた `codex.opencodex-real.cmd` npm バックアップに解決します。4 個の絶対パスをすべて指定すると検出を上書きします。検出はパスを提案するだけで、ハンドル保持による観測が最終的な権威です。`--candidate` は標準 npm の `<prefix>/codex.cmd` または `<prefix>/node_modules/@openai/codex/bin/codex.js` を指定します。`--npm-cli` は `node_modules/npm/bin/npm-cli.js` で終わり、`--node` は明示的な `node.exe` を指定します。アプリのバンドル、認識済みバージョン管理ツールの配置、npm バックアップのない opencodex 所有の shim、独自ラッパーは拒否されます。
+
+制限付き読み取り中、ネイティブハンドルで親ディレクトリとファイルを保持します。未対応プラットフォーム、再解析ポイント・junction、競合する書き込み、安全でないパス、上限を超えるファイルは拒否されます。固定形式のレポートにパスは含まれません。`status` は `observed` または `refused` で、`installationIdentityObserved` を返します。`selectionAttested`、`managed`、`applyAllowed` は常に `false` です。拒否の報告でも終了コード 0 になり得るため、`status` を確認してください。
+
+識別値やダイジェストは観測時点のファイルを表し、持続的な更新許可ではありません。選択されたランタイム、過去のインストーラー、実効 npm 設定、ツールの真正性は証明しません。指定した Node も観測するだけで、ランチャーが選ぶ Node だとは証明しません。対象の実行、レジストリ要求、インストール、設定の書き込み、プロセス制御は行いません。既存の Windows `check` は引き続き候補・設定のファイルシステム I/O を行いません。
+
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
 検証された OpenCodex 設定を検査し、安全に変更します。 `show` および `get` はシークレットをマスクします。インポートは書き込む前に検証され、`--yes` が必要です。

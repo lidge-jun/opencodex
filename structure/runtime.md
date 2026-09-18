@@ -55,6 +55,28 @@ The prefilter is only an optimization, not final process-membership authority.
 `tests/clients/desktop-app-restart.test.ts` covers both mixed-slash directions through the adapter and runs the real PowerShell filter against synthetic CIM rows on Windows.
 `tests/clients/desktop-app-restart-posix.test.ts` keeps the POSIX separator contract covered; uid-dependent macOS/Linux cases skip on Windows.
 
+## Explicit Codex CLI installation observation
+
+`src/cli/codex-cli-update.ts` dispatches the opt-in Windows x64 `attest` operation to
+`src/codex/cli-installation-identity.ts`. With no options, `src/codex/cli-installation-targets.ts`
+derives the four inputs from the proof-bound launcher snapshot: the configured candidate or
+the first codex on the captured PATH, an OpenCodex wrapper resolving to its renamed npm
+backing, the npm prefix layout, and the Node/npm toolchain beside the resolved node.exe.
+Configured values containing a path separator must be drive-absolute; otherwise derivation
+refuses with `candidate_unavailable` instead of substituting a different PATH candidate. Bare
+command names and the unset default continue to resolve only through the captured PATH.
+Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
+remain accepted as an all-or-none override. Only the
+standard npm command shim or direct Codex package entry is accepted. The native reader in
+`src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
+rejects reparse points, conflicting writers and unsupported paths/platforms. Its path-free
+report binds file identities and bytes to this observation, not a durable update permission.
+`installationIdentityObserved` can be true; `selectionAttested`, `managed` and `applyAllowed`
+remain false. Supplied Node identity does not prove launcher selection, effective npm config,
+past installer identity or tool authenticity. No package-registry request, installation,
+config write or process control occurs. Existing Windows `check` retains zero candidate/config
+filesystem I/O. A reported refusal can exit 0; consumers inspect `status`.
+
 ## Entrypoints
 
 | Path | Responsibility |
@@ -72,6 +94,7 @@ The prefilter is only an optimization, not final process-membership authority.
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
 | `src/server/ports.ts` | Owns bind availability and ephemeral-port selection. Temporary probes dispose accepted peers and wait for listener close before reporting success. |
 | `src/cli/status.ts` / `src/cli/status-probes.ts` | Status snapshot assembly and the shared read-only health/stale-process probes used by status and doctor. Probe evidence keeps recorded-port choice, before/after snapshots and per-call timer cleanup together. |
+| `src/cli/doctor.ts` | Read-only environment diagnostics. Sections print through `console.log`; each is a `collect*` helper above `runDoctor` so it is testable without the command. Only a `FAIL`-level condition records a doctor failure — a degraded-but-working install must not break a green pipeline. `collectDefaultModelExposure` compares Codex's root `model` pin against the exposed set, which it READS rather than recomputes: the running proxy's `/v1/models` when one answers, otherwise the on-disk catalog's `visibility: "list"` slugs. It reports exposed, not exposed, or undeterminable, and never the second when it could not read either surface. |
 | `src/router.ts` | Provider/model selection before adapter dispatch. Policy execution and ordinary management dry-run share effective-provider capability evidence; unresolved, missing, and disabled providers are excluded before scoring. |
 | `src/providers/api-key-selection-capture.ts` | Pure request-owned snapshot of the configured key entry, reference, and revision. The router and stateful selection module share this leaf with type-only dependencies; `api-key-selection.ts` retains the compatibility export and owns persisted selection changes and route resolution. |
 | `src/types.ts` | Shared config, parsed request, adapter, and event types. |
@@ -156,6 +179,20 @@ Callers must not replace the latter with the former merely to avoid the Windows 
 probe. Expected-PID and snapshot removal helpers are the TOCTOU boundary when a replacement proxy
 can write new state during a probe.
 
+Ownership of a pending-teardown receipt is decided by that same identity rule. The receipt records
+the PID that accepted the obligation, and `handleStop` treats an owner as still running only when
+the live PID is verifiably an opencodex process (`isProcessAlive` composed with
+`isLikelyOcxProcess`). Bare liveness is not sufficient and is a regression here: the OS reuses PID
+numbers, so once the owner exits an unrelated process can inherit its number, and a cheap probe
+then reports the stop as still in flight for as long as that process lives. The receipt is filtered
+out of the recovery loop and is never recovered, quarantined, or even mentioned, while both updater
+gates keep seeing an outstanding obligation — a permanent fail-closed `teardown-outstanding` abort
+with no proxy running and a dead owner (#4897). `isLikelyOcxProcess` asks the broader question than
+`verifyPidIdentity`, without the `start` verb, because a receipt owner is an `ocx stop` or the
+`ocx update` worker that drove it rather than the proxy. Recognizing a receipt as abandoned only
+admits it to recovery; a valid receipt must still prove its recorded endpoint is down before
+anything is restored, and the package launcher still decides nothing itself.
+
 Port reclamation must honor a rejected OCX verifier result even for a PID captured before stop or
 update. A rejected live holder prevents both termination and TCP-row deletion for that scan; later
 scans may proceed if verification succeeds or the holder exits. The allowlist narrows termination
@@ -208,6 +245,10 @@ cancelled. If the adapter generator ends without an explicit done/error event, t
 On `error` / incomplete / stall / EOF — and when assembled non-freeform tool arguments fail to parse —
 an open tool call is cancelled as `status: "incomplete"` without `function_call_arguments.done`, so
 the client never sees a completed call ahead of `response.failed` / `response.incomplete`.
+At the freeform boundary, `src/responses/apply-patch-envelope.ts` unwraps the contractual `input`
+field for every tool. Only bare `exec` and `apply_patch` calls may recover one recognized alternate
+body field or remove one complete outer Markdown fence; ambiguous alternate fields and every other
+freeform grammar pass through unchanged.
 
 The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
@@ -405,7 +446,10 @@ fingerprint mismatch are named separately rather than all reported as a missing 
 Codex display-cache expiry, retained main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in
+[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
+their bounded cache.
 
 Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, using its enrolled data key and checking connection/token ownership before and after the read. It reports hub/client scope and never substitutes local totals on failure. Standalone commands retain their management endpoint.
 

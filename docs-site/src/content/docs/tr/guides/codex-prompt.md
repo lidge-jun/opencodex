@@ -45,8 +45,11 @@ olduğunu belirtir:
   nedenle katmanın gönderecek bir şeyi yoktur. İletişim kutusu yolu belirtir.
 - **Okuduğumuz turda hiçbir şey göndermedi.** Katmanlar yalnızca değiştiklerinde
   yeniden gönderilir, dolayısıyla değişmemiş bir katman tek bir örnekte yer almaz.
-- **Okunabilir listenin dışında taşınır.** Temel istem farklı bir alan üzerinden
-  gönderilir ve burada yazdırılamaz.
+- **Temel istem model kataloğundan okunur.** Codex onu okunabilir listenin dışından
+  gönderir; bu nedenle iletişim kutusu, seçili modelin katalog kaydından ya da
+  ayarladıysanız `model_instructions_file` ile belirtilen dosyadan okur. Katalogda
+  yalnızca genişletilmemiş bir şablon varsa, bu metin Codex'in gönderdiği metin
+  olmadığı için gösterilmediği belirtilir.
 - **İstem okunamadı.** İnceleme bu makinede başarısız oldu.
 
 Okuma, kontrol panelinin çalıştığı dizinden değil, genel Codex ana dizininizden

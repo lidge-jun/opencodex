@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
 import { probeUncleanExitState } from "./status";
-import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { maskAccountId } from "../lib/privacy";
@@ -26,7 +26,11 @@ import { withNativeMainSharedClaim } from "../codex/native-main-claim";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
-import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-model-fallback";
+import {
+  scanCodexAgentRolesWithTomlModelFallback,
+  scanOpencodexDerivedCodexAgentRolesWithoutModelPin,
+} from "../codex/subagent-model-fallback";
+import { readCatalog, readCodexCatalogPath, readConfiguredDefaultModel } from "../codex/catalog/parsing";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
@@ -1040,6 +1044,161 @@ export function chatgptPublicEndpointHint(
   return "ChatGPT-family requests use the public ChatGPT endpoint through this proxy, in both Pool and Direct modes. Eligible streaming turns dial the ChatGPT websocket transport (the same responses_websockets lane Codex CLI defaults to) and fall back to SSE over HTTP when a turn is not eligible - an unsupported Bun runtime, an oversized create frame, or a proxy route that cannot carry the socket - and local provider pacing can hold a request before it is dispatched at all. This hint classifies configuration only and measures nothing, so upstream queueing is one possible contributor to a slow first output: compare actual transport, pacing, network, and provider observations before concluding. service_tier=priority is a request preference: this backend can echo service_tier \"default\" even on turns it scheduled as priority (#2558), so the echoed response tier in request logs stays an observation with confirmation \"assumed\" and cannot confirm or deny the granted tier.";
 }
 
+/**
+ * Bound for the doctor-side `/v1/models` read (#4646). A diagnostic must not hang on a proxy
+ * that is listening but wedged mid-gather; when the read does not land in time the on-disk
+ * catalog answers instead, and if that is unreadable too the verdict is "could not determine"
+ * rather than a guess.
+ */
+const EXPOSED_MODELS_TIMEOUT_MS = 8000;
+
+/**
+ * Whether Codex's pinned default model is one this proxy exposes (#4646).
+ *
+ * Three states, not two. Reporting "not exposed" when the exposed set could not be read would
+ * be a fabricated failure on exactly the installs least able to check it (proxy down, catalog
+ * never synced), so an unreadable set is its own verdict.
+ */
+export type DefaultModelExposureStatus = "not_configured" | "exposed" | "not_exposed" | "undeterminable";
+
+export interface DefaultModelExposure {
+  status: DefaultModelExposureStatus;
+  /** The configured pin, or null when Codex's config.toml has no root `model`. */
+  model: string | null;
+  /** Which surface answered; null when neither could be read. */
+  source: "proxy" | "catalog" | null;
+  detail: string;
+  action?: string;
+}
+
+/** Exactly the catalog's own `RawEntry` shape, so an on-disk row needs no conversion. */
+type CatalogVisibilityRow = Record<string, unknown>;
+
+export interface DefaultModelExposureDeps {
+  readConfiguredModelFn?: () => string | null;
+  /** The live proxy doctor already resolved, or null/absent when none is running. */
+  live?: LiveProxy | null;
+  fetchFn?: typeof fetch;
+  readCatalogModelsFn?: () => readonly CatalogVisibilityRow[] | null;
+}
+
+/**
+ * Ids the running proxy advertises, or null when the read did not produce a usable answer.
+ *
+ * Null is deliberately indistinguishable across transport failure, a non-200, and a malformed
+ * body, because every one of them means the same thing to the caller: this surface did not
+ * answer, ask the next one. The 401 case is real rather than theoretical — `/v1/models` requires
+ * data-plane admission on a non-loopback bind (`isApiAuthRequired`), and doctor deliberately
+ * holds no data-plane key, so a remote-bound proxy always falls through to the catalog.
+ */
+async function fetchExposedModelIds(live: LiveProxy, fetchFn: typeof fetch): Promise<Set<string> | null> {
+  try {
+    const res = await fetchFn(`http://${probeHostname(live.hostname)}:${live.port}/v1/models`, {
+      signal: AbortSignal.timeout(EXPOSED_MODELS_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = await res.json() as { data?: unknown };
+    if (!Array.isArray(body?.data)) return null;
+    const ids = new Set<string>();
+    for (const row of body.data) {
+      const id = (row as { id?: unknown } | null)?.id;
+      if (typeof id === "string" && id.length > 0) ids.add(id);
+    }
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
+/** Picker-visible catalog slugs, or null when the catalog is absent or unparseable. */
+function catalogExposedModelIds(rows: readonly CatalogVisibilityRow[] | null): Set<string> | null {
+  if (rows === null) return null;
+  const ids = new Set<string>();
+  for (const row of rows) {
+    // `visibility: "hide"` rows are retained on purpose (see the native-toggle contract in
+    // structure/catalog.md); they are exactly the rows a pin must not resolve to.
+    if (!row || row.visibility !== "list") continue;
+    const slug = row.slug;
+    if (typeof slug === "string" && slug.length > 0) ids.add(slug);
+  }
+  return ids;
+}
+
+function defaultCatalogModels(): readonly CatalogVisibilityRow[] | null {
+  const models = readCatalog(readCodexCatalogPath())?.models;
+  return Array.isArray(models) ? models : null;
+}
+
+/**
+ * Compare Codex's root `model` pin against the models this install actually exposes (#4646).
+ *
+ * The exposed set is read, never recomputed. Reproducing the live assembly in the CLI would mean
+ * duplicating an entitlements snapshot, a provider gather and account-selector expansion, and the
+ * duplicate would drift — the same failure `formatStartupRoutingDetail` and `computeVersionSkew`
+ * were extracted to prevent. So the running proxy answers when there is one, the on-disk catalog
+ * answers otherwise, and neither is reconstructed here.
+ *
+ * Both surfaces are consulted before any negative verdict. They name a routed row through the
+ * same `<provider>/<id>` slug space, but they are built by different code at different times, so
+ * requiring both to disagree is what keeps an encoding or staleness difference from being
+ * reported to the operator as a broken pin.
+ */
+export async function collectDefaultModelExposure(
+  deps: DefaultModelExposureDeps = {},
+): Promise<DefaultModelExposure> {
+  const configured = (deps.readConfiguredModelFn ?? readConfiguredDefaultModel)();
+  const model = typeof configured === "string" ? configured.trim() : "";
+  if (!model) {
+    return {
+      status: "not_configured",
+      model: null,
+      source: null,
+      detail: "Codex config.toml pins no root `model`, so Codex picks from the exposed catalog",
+    };
+  }
+
+  const live = deps.live ?? null;
+  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? fetch) : null;
+  const catalogIds = catalogExposedModelIds((deps.readCatalogModelsFn ?? defaultCatalogModels)());
+  if (proxyIds === null && catalogIds === null) {
+    return {
+      status: "undeterminable",
+      model,
+      source: null,
+      detail: `could not read the exposed model set, so Codex \`model = "${model}"\` was not checked`,
+      action: "Start the proxy with 'ocx start', or run 'ocx sync' to write the Codex catalog, then re-run 'ocx doctor'",
+    };
+  }
+
+  const source = proxyIds !== null ? "proxy" as const : "catalog" as const;
+  // `source` reports which surface produced the verdict, so a match names the surface that
+  // matched rather than the one we happened to read first.
+  const matched = proxyIds?.has(model) === true
+    ? "proxy" as const
+    : catalogIds?.has(model) === true ? "catalog" as const : null;
+  if (matched !== null) {
+    return {
+      status: "exposed",
+      model,
+      source: matched,
+      detail: `Codex \`model = "${model}"\` is exposed by this install`,
+    };
+  }
+  // Name only the surfaces that actually answered: claiming a check that did not happen is the
+  // same defect as claiming an exposure verdict we could not reach.
+  const checked = [
+    ...(proxyIds !== null ? ["the running proxy's /v1/models"] : []),
+    ...(catalogIds !== null ? ["the on-disk Codex catalog"] : []),
+  ].join(" and ");
+  return {
+    status: "not_exposed",
+    model,
+    source,
+    detail: `Codex \`model = "${model}"\` is NOT exposed by this install (checked ${checked}), so every new Codex session starts on a model this proxy does not serve`,
+    action: "Expose that model (enable it in the dashboard or drop it from 'disabledModels') and run 'ocx sync', or pin an exposed id as 'model' in CODEX_HOME/config.toml",
+  };
+}
+
 export async function runDoctor(args: string[] = []): Promise<void> {
   if (args.includes("--fix-codex-runtime")) {
     const resolved = resolveCodexRuntime();
@@ -1325,6 +1484,26 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     console.log(line);
   }
 
+  // Adjacent to the section above because both read Codex's config.toml, and an operator
+  // debugging "Codex config" wants the pinned model checked in the same place.
+  console.log("\nCodex default model exposure");
+  const defaultModelExposure = await collectDefaultModelExposure({ live });
+  if (defaultModelExposure.status === "not_exposed") {
+    console.log(`  !!     ${defaultModelExposure.detail}`);
+    console.log(`         Action: ${defaultModelExposure.action}`);
+  } else if (defaultModelExposure.status === "undeterminable") {
+    // Not `!!`: nothing is known to be wrong. The one thing this must never do is report an
+    // unread set as a broken pin.
+    console.log(`  --     ${defaultModelExposure.detail}`);
+    console.log(`         Action: ${defaultModelExposure.action}`);
+  } else {
+    console.log(`  ok     ${defaultModelExposure.detail}`);
+  }
+  // Deliberately no `recordDoctorFailure()` and no `process.exitCode` write. A pin that is not
+  // exposed is a degraded install, not an unusable one — the operator can still pick another
+  // model in the session — and the rule above reserves FAIL for an unusable surface so a warning
+  // cannot break a legitimately green pipeline.
+
   console.log("\nCodex agent role files");
   const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(resolveCodexHomeDirImpl());
   if (tomlFallbackRoles.length === 0) {
@@ -1332,6 +1511,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   } else {
     console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
     console.log("        Codex >= 0.146 rejects that field as unknown and skips the whole role. Move the chains to opencodex config `subagentModelFallbackByModel` (keyed by primary model) and remove the field from the TOML files.");
+  }
+  // opencodex does not write these files; the Codex desktop external-agent import does, and it
+  // drops the model pin on the way in. Observe-only: doctor never repairs or removes them.
+  const unpinnedDerivedRoles = scanOpencodexDerivedCodexAgentRolesWithoutModelPin(resolveCodexHomeDirImpl());
+  if (unpinnedDerivedRoles.length === 0) {
+    console.log("  ok     every opencodex-derived role file in $CODEX_HOME/agents/*.toml pins a model");
+  } else {
+    console.log(`  [WARN] ${unpinnedDerivedRoles.length} opencodex-derived role file${unpinnedDerivedRoles.length === 1 ? "" : "s"} without a \`model\` pin: ${unpinnedDerivedRoles.map(role => `${role}.toml`).join(", ")}`);
+    console.log("        Codex runs these roles on the parent model, so a spawn records one role and another model. The `ocx-route` directive in the file cannot pin them: it is honoured only on the Claude Code `/v1/messages` path and is inert on `/v1/responses`.");
+    console.log("        Add `model = \"<id>\"` to each file, or remove them. They usually come from the Codex desktop external-agent import of ~/.claude/agents/ocx-*.md; set `[desktop] external-agent-import-sync-item-types` with `SUBAGENTS = false` to stop it recreating them.");
   }
 
   const dual = collectWslDualInstall();
@@ -1397,6 +1586,12 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     hints.push(`${row.detail}. Set ${row.envName} in the shell that starts the proxy, or store a literal key in config (value hidden here).`);
   }
   if (codexEnvKeyReadiness) hints.push(`${codexEnvKeyReadiness.detail}. ${codexEnvKeyReadiness.action}.`);
+  // Only the negative verdict becomes a hint. "Could not determine" is usually just a proxy that
+  // is not running, which `proxyDownRestartHint` already reports; repeating it here would put a
+  // second line in the hint list for one fact.
+  if (defaultModelExposure.status === "not_exposed") {
+    hints.push(`${defaultModelExposure.detail}. ${defaultModelExposure.action}.`);
+  }
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
   const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (!startup.rebootSafe) {

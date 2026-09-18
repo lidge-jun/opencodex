@@ -43,7 +43,7 @@ export const GENERATED_PATHS = [
 
 /**
  * Translation catalogues. Hand-written, and exempt for a different reason: they grow by one
- * line per UI string in nine locales at once, so a cap would block every new string in the
+ * line per UI string in ten locales at once, so a cap would block every new string in the
  * GUI rather than any oversized module. gui/src/i18n/en.ts describes itself as the TKey
  * source of truth; nothing generates these.
  */
@@ -55,6 +55,7 @@ export const I18N_CATALOG_PATHS = [
   "gui/src/i18n/ko.ts",
   "gui/src/i18n/ru.ts",
   "gui/src/i18n/tr.ts",
+  "gui/src/i18n/vi.ts",
   "gui/src/i18n/zh.ts",
   "gui/src/i18n/zh-TW.ts",
 ] as const;

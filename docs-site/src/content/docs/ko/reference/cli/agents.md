@@ -232,6 +232,19 @@ ocx system codex-cli-update check --json
 
 Windows에서 `CODEX_CLI_PATH=codex` 같은 단순 명령 이름이나 원격 경로·장치 경로가 후보로 캡처되면 `candidate_path_unavailable`을 보고합니다. 후보는 캡처됐지만 해당 경로가 이 검사 대상에 적합하지 않은 경우입니다.
 
+#### Windows x64 설치의 명시적 관측
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest`는 선택되거나 명시한 Windows x64 npm 설치를 읽기 전용으로 관측하는 선택적 명령입니다. 옵션 없이 실행하면 증명된 런처 스냅샷이 식별한 선택 후보(설정된 `CODEX_CLI_PATH` 또는 캡처된 PATH의 첫 `codex`)를 관측하며, opencodex 래퍼는 이름이 바뀐 `codex.opencodex-real.cmd` npm 백업으로 해석합니다. 절대 경로 네 개를 모두 제공하면 자동 식별을 재정의하며, 자동 식별은 경로를 제안할 뿐 핸들 유지 관측이 최종 권위입니다. `--candidate`는 표준 npm `<prefix>/codex.cmd` 또는 `<prefix>/node_modules/@openai/codex/bin/codex.js`여야 합니다. `--npm-cli`는 `node_modules/npm/bin/npm-cli.js`로 끝나야 하고, `--node`에는 `node.exe`를 명시합니다. 앱 번들, 인식된 버전 관리자 경로, npm 백업이 없는 opencodex 소유 shim 및 사용자 지정 래퍼는 거절합니다.
+
+제한된 읽기 동안 네이티브 핸들로 상위 디렉터리와 파일을 유지합니다. 지원하지 않는 플랫폼, 재분석 지점·junction, 충돌하는 쓰기 핸들, 안전하지 않은 경로 및 크기 제한 초과 파일은 거절합니다. 경로를 포함하지 않는 고정 보고서의 `status`는 `observed` 또는 `refused`이며 `installationIdentityObserved`를 제공합니다. `selectionAttested`, `managed`, `applyAllowed`는 항상 `false`입니다. 거절을 보고해도 종료 코드가 0일 수 있으므로 `status`를 확인해야 합니다.
+
+관측한 식별값·해시는 관측 시점의 파일을 설명할 뿐 지속적인 업데이트 허가가 아닙니다. 선택된 런타임, 과거 설치 주체, 실제 npm 설정, 도구 진위를 증명하지 않습니다. 명시한 Node도 관측만 하며 런처가 그 Node를 선택한다는 뜻은 아닙니다. 대상을 실행하거나 레지스트리에 요청하거나 설치·설정 쓰기·프로세스 제어를 하지 않습니다. 기존 Windows `check`의 후보·설정 파일 시스템 I/O 없음 계약은 유지됩니다.
+
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 
 검증된 OpenCodex configuration을 검사하고 안전하게 수정합니다. `show`와 `get`은 비밀 값을 가립니다. import는 쓰기 전에 검증하며 `--yes`가 필요합니다.

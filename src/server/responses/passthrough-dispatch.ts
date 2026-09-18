@@ -694,10 +694,13 @@ export async function preparePassthroughExchange(
      * provider can narrow this request's sends exactly and cannot widen the bound that exists to
      * stop per-request amplification (#4546).
      */
+    const transientSendPolicy = () => transientRetryPolicyFor(route.provider);
     const transientSendAttempts = (): number => transientSendCapFor(
-      transientRetryPolicyFor(route.provider)?.attempts,
+      transientSendPolicy()?.attempts,
       sendBudgetState.sendsUsed,
     );
+    const configuredTransientSendBudgetExhausted = (): boolean =>
+      transientSendPolicy() !== null && transientSendAttempts() === 0;
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *
@@ -897,14 +900,15 @@ export async function preparePassthroughExchange(
       recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, retryAdapter.name);
       const rebuiltBodyRefusal = refuseOversizedOutboundBody(request);
       if (rebuiltBodyRefusal) return { failed: rebuiltBodyRefusal };
-      // The base allowance is spent first; once it is gone this leg may still draw the one
-      // shared final-recovery reserve, which is what keeps a validated sanitized rebuild
-      // after a 5xx streak alive at four total sends instead of dying at three. Reserved
-      // outside the try so the finally can hand it back if the leg never reached its send.
+      // The base allowance is spent first. An unconfigured provider may then draw the one shared
+      // final-recovery reserve, which keeps a validated sanitized rebuild after a 5xx streak alive
+      // at four total sends instead of dying at three. An explicit provider total cannot widen.
+      // Reserve outside the try so the finally can hand it back if the leg never reaches its send.
       const allowance = recoverySendAllowance(
         transientSendAttempts(),
         recoveryClassFor(recovery),
         `${route.providerName}|${route.modelId}|${recovery}`,
+        { allowFinalRecoveryReserve: transientSendPolicy() === null },
       );
       try {
         return await fetchWithTransientRetry(
@@ -1414,18 +1418,20 @@ export async function preparePassthroughExchange(
     // eviction, or an older transcript). Inspect only a bounded clone of a 4xx whose exact outbound
     // Responses body still carries opaque state, then rebuild once through the ordinary adapter
     // sanitation path. A second rejection falls through unchanged because the guard stays armed.
-    const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
-      response: upstreamResponse,
-      outboundBody: request.body,
-      adapterName: transportState.adapter.name,
-      parsed,
-      guard: opaqueBlobRecoveryGuard,
-      signal: upstream.signal,
-    }, rebuildAndRefetch);
-    if (opaqueBlobRecovery.kind === "failed") return opaqueBlobRecovery.response;
-    if (opaqueBlobRecovery.kind === "recovered") {
-      upstreamResponse = opaqueBlobRecovery.response;
-      continue passthroughRecovery;
+    if (!configuredTransientSendBudgetExhausted()) {
+      const opaqueBlobRecovery = await attemptOpaqueBlobRecovery({
+        response: upstreamResponse,
+        outboundBody: request.body,
+        adapterName: transportState.adapter.name,
+        parsed,
+        guard: opaqueBlobRecoveryGuard,
+        signal: upstream.signal,
+      }, rebuildAndRefetch);
+      if (opaqueBlobRecovery.kind === "failed") return opaqueBlobRecovery.response;
+      if (opaqueBlobRecovery.kind === "recovered") {
+        upstreamResponse = opaqueBlobRecovery.response;
+        continue passthroughRecovery;
+      }
     }
 
     const recoveryContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() ?? "";
@@ -1433,6 +1439,7 @@ export async function preparePassthroughExchange(
       && !!upstreamResponse.body
       && (recoveryContentType.includes("text/event-stream") || (!recoveryContentType && parsed.stream))
       && !opaqueBlobRecoveryGuard.attempted
+      && !configuredTransientSendBudgetExhausted()
       && outboundResponsesBodyCarriesEncryptedFunctionOutput(request.body);
     if (streamedFunctionOutputCandidate) {
       const preflightLog: RequestLogContext = { model: logCtx.model, provider: logCtx.provider };
@@ -1449,19 +1456,21 @@ export async function preparePassthroughExchange(
       if (options.abortSignal?.aborted) return transportFailureResponse(options.abortSignal.reason);
       upstreamResponse = preflight.response;
       if (preflight.kind === "failed") {
-        const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
-          response: upstreamResponse,
-          outboundBody: request.body,
-          adapterName: transportState.adapter.name,
-          parsed,
-          guard: opaqueBlobRecoveryGuard,
-          signal: upstream.signal,
-        }, rebuildAndRefetch);
-        if (streamedOpaqueRecovery.kind === "failed") return streamedOpaqueRecovery.response;
-        if (streamedOpaqueRecovery.kind === "recovered") {
-          resetStreamedOpaqueBlobLogContext(logCtx);
-          upstreamResponse = streamedOpaqueRecovery.response;
-          continue passthroughRecovery;
+        if (!configuredTransientSendBudgetExhausted()) {
+          const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
+            response: upstreamResponse,
+            outboundBody: request.body,
+            adapterName: transportState.adapter.name,
+            parsed,
+            guard: opaqueBlobRecoveryGuard,
+            signal: upstream.signal,
+          }, rebuildAndRefetch);
+          if (streamedOpaqueRecovery.kind === "failed") return streamedOpaqueRecovery.response;
+          if (streamedOpaqueRecovery.kind === "recovered") {
+            resetStreamedOpaqueBlobLogContext(logCtx);
+            upstreamResponse = streamedOpaqueRecovery.response;
+            continue passthroughRecovery;
+          }
         }
         logCtx.upstreamError = preflightLog.upstreamError;
         logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
@@ -1480,6 +1489,7 @@ export async function preparePassthroughExchange(
         upstream.signal,
       );
       if (uploadRejectionBody !== undefined
+        && !configuredTransientSendBudgetExhausted()
         && isTransientConsoleGoUploadRejection({
           status: upstreamResponse.status,
           errorBody: uploadRejectionBody,
@@ -1518,7 +1528,7 @@ export async function preparePassthroughExchange(
             requested: parsed.options.reasoning,
             rejectionText,
           });
-      if (downgrade) {
+      if (downgrade && !configuredTransientSendBudgetExhausted()) {
         reasoningEffortDowngradeGuard.attempted = true;
         parsed.options.reasoning = downgrade.effort;
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
