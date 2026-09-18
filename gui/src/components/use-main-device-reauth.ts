@@ -182,7 +182,8 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         if (!isCurrent() || flowRef.current !== flowId) return;
         if (!res.ok) {
           // Ownership continues from the Cancel click, including while DELETE
-          // is unresolved. Never offer a replacement POST during that window.
+          // is unresolved. Never offer a replacement POST during that window,
+          // and keep the existing poll cadence so a later terminal status remains observable.
           const cancellationRequested = cancellationRequestedFlowRef.current === flowId;
           setState(current => {
             if (!isCurrent() || flowRef.current !== flowId) return current;
@@ -191,35 +192,36 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
               ? current
               : { phase: "failed", code: failureCode(dto.code) };
           });
-          return;
-        }
-        lastUrl = allowedVerificationUrl(dto.verificationUrl) || lastUrl;
-        lastCode = humanCode(dto.deviceCode) || lastCode;
-        if (dto.status === "pending" || dto.status === "committing") {
-          const pendingState: CancellableState = {
-            phase: dto.status,
-            flowId,
-            verificationUrl: lastUrl,
-            deviceCode: lastCode,
-          };
-          lastCancellableStateRef.current = pendingState;
-          setState(current => (current.phase === "pending" || current.phase === "committing")
-            && current.flowId === flowId && current.cancelFailed
-            ? { ...pendingState, cancelFailed: true }
-            : pendingState);
-        } else if (dto.status === "succeeded") {
-          flowRef.current = null;
-          setState({ phase: "succeeded" });
-          onCompleted();
-          return;
-        } else if (dto.status === "cancelled") {
-          flowRef.current = null;
-          setState({ phase: "cancelled" });
-          return;
-        } else if (dto.status === "failed") {
-          flowRef.current = null;
-          setState({ phase: "failed", code: failureCode(dto.code) });
-          return;
+          if (!cancellationRequested) return;
+        } else {
+          lastUrl = allowedVerificationUrl(dto.verificationUrl) || lastUrl;
+          lastCode = humanCode(dto.deviceCode) || lastCode;
+          if (dto.status === "pending" || dto.status === "committing") {
+            const pendingState: CancellableState = {
+              phase: dto.status,
+              flowId,
+              verificationUrl: lastUrl,
+              deviceCode: lastCode,
+            };
+            lastCancellableStateRef.current = pendingState;
+            setState(current => (current.phase === "pending" || current.phase === "committing")
+              && current.flowId === flowId && current.cancelFailed
+              ? { ...pendingState, cancelFailed: true }
+              : pendingState);
+          } else if (dto.status === "succeeded") {
+            flowRef.current = null;
+            setState({ phase: "succeeded" });
+            onCompleted();
+            return;
+          } else if (dto.status === "cancelled") {
+            flowRef.current = null;
+            setState({ phase: "cancelled" });
+            return;
+          } else if (dto.status === "failed") {
+            flowRef.current = null;
+            setState({ phase: "failed", code: failureCode(dto.code) });
+            return;
+          }
         }
       } catch {
         if (!isCurrent() || flowRef.current !== flowId) return;

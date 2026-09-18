@@ -888,3 +888,61 @@ describe("probeReadiness adversarial contract (never counts ready)", () => {
     expect(probe).toBeNull();
   });
 });
+
+/**
+ * #4662: the connected-client machine listener binds `config.port ?? 10100` — the same address
+ * the standalone proxy would — and answers /healthz as opencodex with an extra `role: "client"`.
+ * That role was parsed away here, so every management-backed `ocx` subcommand on a connected
+ * client resolved a base URL pointing at a listener that serves only /api/machine/*, and died on
+ * its opaque `{"error":"not_found","method":…,"path":…}` 404.
+ *
+ * Carrying the role is the whole liveness-side fix. Liveness itself must keep ACCEPTING the
+ * client role: `ocx stop` and orphan cleanup act on whichever of our processes holds the port,
+ * and a predicate that rejected the client would make them blind to a real one.
+ */
+describe("client-role discrimination (#4662)", () => {
+  const CLIENT = { service: "opencodex", version: "2.6.17", role: "client", uptime: 3, pid: 4242, port: 10100 };
+
+  test("a client-role body is still live: stop and orphan cleanup must find that process", () => {
+    expect(isOpencodexHealthz(CLIENT)).toBe(true);
+  });
+
+  test("proxyIdentityAt carries the reported role", async () => {
+    const identity = await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz(CLIENT)) as typeof fetch });
+    expect(identity).toEqual({ pid: 4242, version: "2.6.17", role: "client" });
+  });
+
+  test("a standalone body has no role at all, rather than a coerced one", async () => {
+    const identity = await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz(OURS)) as typeof fetch });
+    expect(identity).toEqual({ pid: 4242, version: "2.6.17" });
+    expect(identity && "role" in identity).toBe(false);
+  });
+
+  test("a non-string role is absent, not coerced (same guard as pid and version)", async () => {
+    const identity = await proxyIdentityAt(10100, {}, {
+      fetchFn: (async () => healthz({ ...OURS, role: 7 })) as typeof fetch,
+    });
+    expect(identity).toEqual({ pid: 4242, version: "2.6.17" });
+  });
+
+  test("findLiveProxy reports the role on the runtime-record path", async () => {
+    const live = await findLiveProxy({
+      readPidFn: () => 4242,
+      readRuntimeFn: pid => (pid === 4242 ? { port: 10100 } : null),
+      configFn: () => ({ port: 10100 }),
+      fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
+    });
+    expect(live).toEqual({ pid: 4242, port: 10100, source: "runtime", version: "2.6.17", role: "client" });
+  });
+
+  test("findLiveProxy reports the role on the configured-port path", async () => {
+    const live = await findLiveProxy({
+      readPidFn: () => null,
+      readRuntimeFn: () => null,
+      configFn: () => ({ port: 10100 }),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
+    });
+    expect(live).toEqual({ pid: 4242, port: 10100, hostname: undefined, source: "config", version: "2.6.17", role: "client" });
+  });
+});

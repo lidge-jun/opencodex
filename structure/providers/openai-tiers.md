@@ -333,6 +333,22 @@ newer statement wins. Ordinary round-robin movement inside the capped tier does 
 Without that last rule a pin made before any order existed, which is just an ordinary account switch,
 would outrank every order set afterwards for as long as the account kept headroom.
 
+Whether a pin is about to be released is one predicate, `codexAccountPinDrainReason` in
+`src/codex/routing/pin-drain.ts`, and the surface that accepts a pin evaluates it rather than
+keeping a second copy. It lives beside selection rather than in `routing.ts` for the same reason
+`routing/cache-affinity.ts` does: two callers ask it and must answer identically, one acting on
+the answer and one reporting it.
+
+`PUT /api/codex-auth/active` still accepts a pin on a drained account -- a usage reading is a
+preference and can be stale, so refusing would turn a proactive threshold into a hard capacity limit
+-- but it reports `pinDrained` with a `pinDrainReason` of `needs_reauth`, `paused`, `unusable` or
+`quota_threshold` when the next resolve would drop what it just recorded. The fields are absent when
+the pin survives, so a client that does not know them reads no drain. Without this the route answered
+a bare 200 and the operator watched an accepted selection be ignored one request later, which is the
+contradiction reported in #4521. Reauth and pause are classified before the native-main fence,
+because a selection-only caller makes every later classification answer "no drain" and a pin on a
+signed-out main would otherwise read as durable.
+
 Only an actual selection pins. Clearing the active account states that no account is chosen, so it
 releases the pin instead of recording one against the `__main__` fallback that the same handler uses
 for its paused check. A pin no effective active account matches is invisible — `pinned` compares the

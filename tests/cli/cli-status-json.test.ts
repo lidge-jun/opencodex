@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
@@ -30,7 +30,86 @@ function runStatusJson(opencodexHome: string) {
   });
 }
 
+async function withStatusVersionFixture<T>(
+  proxyVersion: string | undefined,
+  prefix: string,
+  work: (fixture: { home: string; codexHome: string }) => Promise<T>,
+): Promise<T> {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  const codexHome = join(home, "codex");
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    // Explicit CODEX_HOME must exist before the CLI imports codex/paths.ts.
+    mkdirSync(codexHome, { recursive: true });
+    server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request) {
+        return new URL(request.url).pathname === "/healthz"
+          ? Response.json({ service: "opencodex", status: "ok", version: proxyVersion, uptime: 1 })
+          : new Response("not found", { status: 404 });
+      },
+    });
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      ...getDefaultConfig(), port: server.port, hostname: "127.0.0.1", codexAutoStart: false,
+    }));
+    return await work({ home, codexHome });
+  } finally {
+    try {
+      await server?.stop(true);
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  }
+}
+
+async function runTimedStatus(
+  home: string,
+  codexHome: string,
+  json: boolean,
+  deadlineMs: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean; elapsedMs: number }> {
+  const startedAt = performance.now();
+  const child = Bun.spawn([process.execPath, cliPath, "status", ...(json ? ["--json"] : [])], {
+    cwd: repoRoot,
+    env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome },
+    stdout: "pipe", stderr: "pipe",
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, deadlineMs);
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    return { stdout, stderr, exitCode, timedOut, elapsedMs: performance.now() - startedAt };
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+}
+
 describe("status version skew projection", () => {
+  beforeAll(async () => {
+    if (process.platform !== "win32") return;
+    await withStatusVersionFixture(packageVersion(), "ocx-status-skew-cold-", async ({ home, codexHome }) => {
+      // Consume the one cold full-CLI status path before the 15s behavior assertions begin.
+      // Keep this bounded and observable: a failed warmup is a setup failure, never a retry.
+      // The 45s hook reserves removeTreeWithRetry's existing 15s Windows cleanup bound plus 5s
+      // to reap the child, leaving 25s for the cold status invocation itself.
+      const result = await runTimedStatus(home, codexHome, true, 25_000);
+      console.log(`[status-version-skew] coldSetup format=json elapsedMs=${result.elapsedMs.toFixed(0)}`);
+      expect(result.timedOut).toBe(false);
+      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.schemaVersion).toBe(1);
+      expect(parsed.proxy.health.ok).toBe(true);
+      expect(parsed.versionSkew.proxyVersion).toBe(packageVersion());
+    });
+  }, SPAWN_BUDGET_MS);
+
   test.each([
     ["0.0.1", "the running proxy is older"],
     ["999999.0.0", "this ocx on PATH is older"],
@@ -41,70 +120,34 @@ describe("status version skew projection", () => {
     ["0.0.0", null],
     [undefined, null],
   ] as const)("projects proxy %s in JSON and human output", async (proxyVersion, expected) => {
-    const home = mkdtempSync(join(tmpdir(), "ocx-status-skew-"));
-    const codexHome = join(home, "codex");
-    let server: ReturnType<typeof Bun.serve> | undefined;
-    try {
-      // Explicit CODEX_HOME must exist before the CLI imports codex/paths.ts.
-      mkdirSync(codexHome, { recursive: true });
-      server = Bun.serve({
-        hostname: "127.0.0.1", port: 0,
-        fetch(request) {
-          return new URL(request.url).pathname === "/healthz"
-            ? Response.json({ service: "opencodex", status: "ok", version: proxyVersion, uptime: 1 })
-            : new Response("not found", { status: 404 });
-        },
-      });
-      writeFileSync(join(home, "config.json"), JSON.stringify({
-        ...getDefaultConfig(), port: server.port, hostname: "127.0.0.1", codexAutoStart: false,
-      }));
+    await withStatusVersionFixture(proxyVersion, "ocx-status-skew-", async ({ home, codexHome }) => {
       for (const json of [true, false]) {
         // Async child execution lets the fixture answer the real identity/health probes.
-        const child = Bun.spawn([process.execPath, cliPath, "status", ...(json ? ["--json"] : [])], {
-          cwd: repoRoot,
-          env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: codexHome },
-          stdout: "pipe", stderr: "pipe",
-        });
-        let timedOut = false;
-        const timer = setTimeout(() => {
-          timedOut = true;
-          child.kill("SIGKILL");
-        }, INTERNAL_DEADLINE_MS);
-        try {
-          const [stdout, stderr, exitCode] = await Promise.all([
-            new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-          ]);
-          expect(timedOut).toBe(false);
-          // Preserve both gates while surfacing the child error when startup fails.
-          expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-          if (json) {
-            const parsed = JSON.parse(stdout);
-            expect(parsed.schemaVersion).toBe(1);
-            expect(Object.keys(parsed.versionSkew).sort()).toEqual(["cliVersion", "proxyVersion", "skewed", "warning"]);
-            expect(parsed.versionSkew.cliVersion).toBe(packageVersion());
-            expect(parsed.versionSkew.proxyVersion).toBe(proxyVersion ?? null);
-            expect(parsed.versionSkew.skewed).toBe(expected !== null);
-            if (expected === null) expect(parsed.versionSkew.warning).toBeNull();
-            else expect(parsed.versionSkew.warning).toContain(expected);
-          } else if (expected === null) {
-            expect(stdout).not.toContain("does not match the running proxy");
-          } else {
-            expect(stdout).toContain(expected);
-          }
-        } finally {
-          clearTimeout(timer);
-          if (child.exitCode === null) child.kill("SIGKILL");
-          await child.exited;
+        const result = await runTimedStatus(home, codexHome, json, INTERNAL_DEADLINE_MS);
+        console.log(
+          `[status-version-skew] proxy=${proxyVersion ?? "undefined"} `
+          + `format=${json ? "json" : "human"} elapsedMs=${result.elapsedMs.toFixed(0)}`,
+        );
+        expect(result.timedOut).toBe(false);
+        // Preserve both gates while surfacing the child error when startup fails.
+        expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+        if (json) {
+          const parsed = JSON.parse(result.stdout);
+          expect(parsed.schemaVersion).toBe(1);
+          expect(Object.keys(parsed.versionSkew).sort()).toEqual(["cliVersion", "proxyVersion", "skewed", "warning"]);
+          expect(parsed.versionSkew.cliVersion).toBe(packageVersion());
+          expect(parsed.versionSkew.proxyVersion).toBe(proxyVersion ?? null);
+          expect(parsed.versionSkew.skewed).toBe(expected !== null);
+          if (expected === null) expect(parsed.versionSkew.warning).toBeNull();
+          else expect(parsed.versionSkew.warning).toContain(expected);
+        } else if (expected === null) {
+          expect(result.stdout).not.toContain("does not match the running proxy");
+        } else {
+          expect(result.stdout).toContain(expected);
         }
       }
       expect(existsSync(join(home, "ocx.pid"))).toBe(false);
-    } finally {
-      try {
-        await server?.stop(true);
-      } finally {
-        removeTreeWithRetry(home);
-      }
-    }
+    });
   }, SPAWN_BUDGET_MS);
 });
 
