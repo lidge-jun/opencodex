@@ -61,6 +61,12 @@ export function setStateDbPreflightOpenFailureForTests(hook: typeof openFailureF
  * `history_injection_preflight_unavailable`, and `ocx sync` refuses on every attempt with no
  * way forward (#4943).
  *
+ * bun:sqlite can defer that failure past construction: when the store needs shared memory it does
+ * not have, CANTOPEN surfaces on the first statement that touches the schema rather than at
+ * construction. The fallback decision below therefore materializes one read-only statement
+ * itself; otherwise the failure escapes the `try` that chooses between the two opens and lands
+ * in the preflight's catch-all.
+ *
  * So the fallback is admitted only in the state where the absent sidecars are what make an
  * immutable read exact rather than stale: no `-wal` and no `-shm` on disk means no writer is
  * attached and no committed content sits outside the main database, so the main file IS the
@@ -73,7 +79,17 @@ export function openCodexStateForPreflight(resolvedPath: string): Database {
   try {
     const forced = openFailureForTests?.(resolvedPath);
     if (forced) throw forced;
-    return new Database(resolvedPath, { readonly: true });
+    const db = new Database(resolvedPath, { readonly: true });
+    try {
+      // Touches the schema so a deferred CANTOPEN on a cleanly-closed WAL store is raised here,
+      // where the fallback can decide on it. A live WAL store answers here exactly as it would
+      // for the preflight's own queries.
+      db.query("PRAGMA schema_version").get();
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   } catch (error) {
     if (!isStateDbCantOpenError(error)) throw error;
     if (existsSync(`${resolvedPath}-wal`) || existsSync(`${resolvedPath}-shm`)) throw error;
