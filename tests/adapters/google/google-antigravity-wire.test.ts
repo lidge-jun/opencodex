@@ -453,6 +453,46 @@ describe("antigravity CCA envelope", () => {
       .not.toBe(antigravitySessionId(threaded("hi", "thread-b")));
   });
 
+  // #5033. `_clientThreadId` carries `x-codex-parent-thread-id`, which every parallel child of
+  // one parent presents identically, so anchoring on it alone collapsed concurrent children onto
+  // a single upstream Cloud Code Assist session. `codexConversationIdentity` keys on parent AND
+  // thread for the same reason: a thread id is only unique within its parent.
+  function child(text: string, ownThreadId?: string, parentThreadId?: string): OcxParsedRequest {
+    const base = parsed(text) as OcxParsedRequest & { _clientThreadId?: string; _codexOwnThreadId?: string };
+    if (parentThreadId) base._clientThreadId = parentThreadId;
+    if (ownThreadId) base._codexOwnThreadId = ownThreadId;
+    return base;
+  }
+
+  test("#5033: parallel children of one parent get distinct session ids", () => {
+    expect(antigravitySessionId(child("hi", "child-1", "parent-a")))
+      .not.toBe(antigravitySessionId(child("hi", "child-2", "parent-a")));
+  });
+
+  test("#5033: a child keeps one session id across its own turns", () => {
+    // The property the anchor exists for is unchanged: stable turn to turn even when the first
+    // user message is compacted away.
+    expect(antigravitySessionId(child("original first message", "child-1", "parent-a")))
+      .toBe(antigravitySessionId(child("summary of earlier turns", "child-1", "parent-a")));
+  });
+
+  test("#5033: a root turn is byte-identical to what it was before", () => {
+    // A root presents `thread-id` equal to its parent id, so nothing moves for it. This is what
+    // bounds the one-time re-anchor to child threads.
+    expect(antigravitySessionId(child("hi", "thread-a", "thread-a")))
+      .toBe(antigravitySessionId(threaded("hi", "thread-a")));
+  });
+
+  test("#5033: a client that sends no own-thread header is unchanged", () => {
+    // Some clients send only the parent header; they keep the previous anchor rather than
+    // falling through to the unstable first-user-text one.
+    expect(antigravitySessionId(child("hi", undefined, "parent-a")))
+      .toBe(antigravitySessionId(threaded("hi", "parent-a")));
+    expect(antigravitySessionId(child("hi", undefined, "parent-a")))
+      .not.toBe(antigravitySessionId(threaded("hi", undefined)));
+  });
+
+
   test("#1297: promptCacheKey does not influence the id", () => {
     // Deliberately not the anchor: it is arbitrary Responses input and is shared
     // across conversations for some clients, so it identifies a cache cohort.
