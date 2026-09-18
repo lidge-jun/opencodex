@@ -888,6 +888,11 @@ because its replay is the next loop iteration. `run-turn-execution.ts` always ha
 down, because a runTurn adapter is by definition the layer that sends. The passthrough ladder keeps
 the shape it already had: reserve with `countedExternally: true` and pass the permit to the rebuild.
 
+An explicit provider `transientRetryOn5xx.attempts` value is the exact physical-send total for that
+request. Once spent, a passthrough rebuild receives no final-recovery reserve and returns the
+original upstream response. The guarded profile's shared reserve remains available only when the
+provider leaves that transient policy unconfigured; its existing hop-permit settlement is unchanged.
+
 What must not happen is a ladder that charges and then returns through a path that neither confirms
 nor releases. That is not a lost send; it is a send the request never made, spending an allowance a
 later recovery in the same request then cannot have. `tests/lib/execution-budget-permits.test.ts`
