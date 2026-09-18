@@ -1,6 +1,6 @@
 # OpenAI Provider Account Modes
 
-Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
+Management provider-validation calls use the [shared relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
@@ -73,19 +73,44 @@ support them.
 
 > Decision record: [ADR-0084](../decisions/ADR-0084-public-provider-contract.md)
 
-Pool affinity keys every Codex V2 thread as itself. A request carrying `thread-id` maps to an
-opaque `app:HMAC(session-id ?? x-codex-parent-thread-id, thread-id)` under a random process-local
-key, so a root is keyed exactly as before while each child holds an independent binding instead of
-collapsing onto the raw parent id shared by all its siblings. A request naming only
-`x-codex-parent-thread-id` rides that parent's own lane as `app:HMAC(parent, parent)`: one parent
-id still maps to exactly one lane, and no caller-supplied identifier reaches Pool state. Which
-requests bind at all is unchanged -- a bare `thread-id` with neither a session nor a parent has no
-family anchor and stays unbound. Components are trimmed and bounded at 512 bytes, missing or
+Pool affinity keys a Codex V2 conversation TREE as one cohort. The binding unit is the cohort the
+client already declares, because upstream keys its prompt cache the same way: `prompt_cache_key`
+is `responses_metadata.session_id`, or `{source}:{parent_thread_id}` for an internal session, and
+one `AgentControl` whose `session_id` is the root thread's id is shared with every sub-agent
+spawned from that root. Two requests carrying the same `prompt_cache_key` are therefore served by
+the same account. While the key was per thread, a tree could split across accounts while every
+member kept sending one cache key, so the split member asserted a warm prefix that was
+deterministically cold on its account: no failure, only a full prompt replay and the token spend
+(#4780).
+
+A request carrying `session-id` maps to an opaque `app:HMAC(session, session)` under a random
+process-local key, and every root, child and grandchild of that tree resolves to it. Without a
+session the cohort is read from the parent's lineage record, falling back to
+`app:HMAC(parent, parent)` when this scope has not seen that parent -- which is the same key that
+parent derives for itself, so a chain of parent-only turns converges rather than splitting at
+every depth. No caller-supplied identifier reaches Pool state. Which requests bind at all is
+unchanged -- a bare `thread-id` with neither a session nor a parent has no family anchor and
+stays unbound. Components are trimmed and bounded at 512 bytes, missing or
 oversized values stay unbound, raw identifiers and durable hashes are never stored, and
 account-qualified selectors skip both lookup and mutation. Selection, subagent fallback preview,
 and terminal outcome accounting carry the same key so route planning cannot preview one account
 and authenticate another. A transient-failure streak does not delete the live binding that
 actually selected the account; the request is served by another account while the binding is kept.
+
+**Cohort keying is not a revert of #4546 wp8, and reading it as one will flip it straight back.**
+wp8 fixed a different defect: a child bound under the RAW parent id, an identity unrelated to the
+root's own `app:HMAC(session, thread)` binding, so siblings shared an entry the root was not on
+and a grandchild keying on its own parent landed on a key nobody had ever bound. A cohort key
+cannot produce that incoherence, because the root's own binding IS the cohort key -- there is one
+identity for the tree rather than two competing ones, and the grandchild-orphan property is pinned
+as a test rather than left as an argument. What wp8 additionally gave each thread, a binding of
+its own, is what #4780 deliberately gives up.
+
+The cost is explicit: a tree gains cache locality and loses per-thread placement independence. All
+members share one binding, so a fan-out cannot spread across accounts, and when that account is
+exhausted or retired the whole tree moves together. That is correct for cache affinity and it is
+a behaviour change, not a refinement. It also interacts with the send-budget and placement work
+#4546 introduced, since a tree is now one binding for accounting as well as for routing.
 
 `src/codex/lineage.ts` owns that derivation and records the family relation behind it: each
 thread's own conversation key, its immediate parent's thread id, and the transitive root, so a
@@ -93,15 +118,15 @@ grandchild resolves to the same root as its parent. Records are held per authent
 HMAC of the caller's Authorization under the same process-local key), and bounded in both
 dimensions -- idle TTL and an LRU cap on records per scope, and an LRU cap on scopes.
 
-First placement is the only routing decision that consults lineage. A thread that has never bound
-starts on the account CURRENTLY serving its parent, which includes a live transient detour rather
-than the parent's stale home, then on a compatible sibling's current serving account, then on
-ordinary cold placement. An ineligible or dead family account contributes nothing, because a stale
-home is worse than no hint. The child then holds an ordinary binding of its own: a later move of
-the parent does not drag it, and the hint does not move the shared active-account cursor. The same
-module exposes the root lookup other layers use for cost attribution and a lineage-backed
-worker/interactive answer; admission's header-only classification is unchanged and does not yet
-read it.
+First placement is largely subsumed by cohort keying: a member of a tree any other member has
+already bound resolves to that same binding, so there is nothing to place. `pickLineageServingAccount`
+remains for the one case cohort keying cannot unify -- a session-less chain whose parent this scope
+has not recorded -- and is gated on the parent's key actually differing from the request's own, so
+it never re-asks a question the binding lookup already answered. An ineligible or dead family
+account still contributes nothing, because a stale home is worse than no hint, and the hint does
+not move the shared active-account cursor. The same module exposes the root lookup other layers
+use for cost attribution and a lineage-backed worker/interactive answer; admission's header-only
+classification is unchanged and does not yet read it.
 
 > Decision record: [ADR-0085](../decisions/ADR-0085-public-provider-contract.md)
 
@@ -308,6 +333,22 @@ newer statement wins. Ordinary round-robin movement inside the capped tier does 
 Without that last rule a pin made before any order existed, which is just an ordinary account switch,
 would outrank every order set afterwards for as long as the account kept headroom.
 
+Whether a pin is about to be released is one predicate, `codexAccountPinDrainReason` in
+`src/codex/routing/pin-drain.ts`, and the surface that accepts a pin evaluates it rather than
+keeping a second copy. It lives beside selection rather than in `routing.ts` for the same reason
+`routing/cache-affinity.ts` does: two callers ask it and must answer identically, one acting on
+the answer and one reporting it.
+
+`PUT /api/codex-auth/active` still accepts a pin on a drained account -- a usage reading is a
+preference and can be stale, so refusing would turn a proactive threshold into a hard capacity limit
+-- but it reports `pinDrained` with a `pinDrainReason` of `needs_reauth`, `paused`, `unusable` or
+`quota_threshold` when the next resolve would drop what it just recorded. The fields are absent when
+the pin survives, so a client that does not know them reads no drain. Without this the route answered
+a bare 200 and the operator watched an accepted selection be ignored one request later, which is the
+contradiction reported in #4521. Reauth and pause are classified before the native-main fence,
+because a selection-only caller makes every later classification answer "no drain" and a pin on a
+signed-out main would otherwise read as durable.
+
 Only an actual selection pins. Clearing the active account states that no account is chosen, so it
 releases the pin instead of recording one against the `__main__` fallback that the same handler uses
 for its paused check. A pin no effective active account matches is invisible — `pinned` compares the
@@ -501,7 +542,9 @@ sidecar candidate and cannot hide a failed Codex credential with separately bill
 
 `src/server/audio-upstream.ts` uses the same selection for standalone transcription. Explicit
 native Direct auth remains caller-owned; proxy-key-only Direct claims stored main before
-materialization. `src/providers/openai-sidecar.ts` releases quota-probe ownership on every
+materialization, replacing both bearer and account identity exclusively from that credential.
+Both synchronous and asynchronous stored-main substitution in `src/codex/auth-context.ts` remove a caller account header before copying the stored identity; an absent stored account ID leaves no account header. Caller-owned native Direct authentication retains its existing passthrough behavior.
+`src/providers/openai-sidecar.ts` releases quota-probe ownership on every
 materialization or usability failure before transferring a resolved context to its caller.
 Audio reports one terminal upstream outcome after validating the response body; redirects remain
 neutral and client/shutdown cancellation does not manufacture an account failure.

@@ -303,11 +303,11 @@ export function rateLimitRetryPolicyFor(
 
 /**
  * Normalize a provider's `transientRetryOn5xx` policy, or return null when it is absent,
- * explicitly disabled, not key-auth, or not the `openai-chat` adapter.
+ * explicitly disabled, not key-auth, or not an adapter this policy governs.
  *
- * The adapter gate is part of the accepted scope, not incidental: this first version covers
- * key-auth `openai-chat` only, and without an explicit check any generic key-auth adapter
- * could opt in. Auth mode follows the same fail-closed rule as `rateLimitRetryPolicyFor` —
+ * The adapter gate is part of the accepted scope, not incidental: it names the adapters whose
+ * lanes actually read this policy, so no generic key-auth adapter can opt in by accident.
+ * Auth mode follows the same fail-closed rule as `rateLimitRetryPolicyFor` —
  * explicit `key` or the documented omitted default, never OAuth, forward, local, or an
  * unknown value.
  */
@@ -316,7 +316,14 @@ export function transientRetryPolicyFor(
 ): Required<TransientRetryPolicy> | null {
   const policy = provider.transientRetryOn5xx;
   if (!policy || policy.enabled === false) return null;
-  if (provider.adapter !== "openai-chat") return null;
+  // Both adapters this policy governs. The first version covered chat only, which left a
+  // key-auth Responses provider unable to tune its ladder in either direction, because the
+  // Responses passthrough lane hard-coded TRANSIENT_RETRY_MAX_ATTEMPTS (#4893). Widening this
+  // gate is necessary and not sufficient: the lane also has to call this function, which it
+  // now does. Still an explicit list, so no generic key-auth adapter opts in by accident, and
+  // the auth check below keeps the ChatGPT forward pool out -- those providers are
+  // `authMode: "forward"` and keep the default ladder they have always had.
+  if (provider.adapter !== "openai-chat" && provider.adapter !== "openai-responses") return null;
   if (provider.authMode !== undefined && provider.authMode !== "key") return null;
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,

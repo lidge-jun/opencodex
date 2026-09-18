@@ -255,12 +255,19 @@ export function readCodexCatalogPath(): string {
   return activeDefaultCatalogPath();
 }
 
-/** Resolve the configured catalog without consulting ambient CODEX_HOME again. */
-export function readCodexCatalogPathForHome(codexHome: string): string {
+/**
+ * Resolve the configured catalog without consulting ambient CODEX_HOME again.
+ *
+ * `configText` is for a caller that has already read that same `config.toml` under
+ * its own constraints - the prompt-text probe reads it bounded, on the request
+ * thread - so resolving the catalog does not cost a second, unbounded read of the
+ * file the caller is holding. Omitting it keeps the original behaviour.
+ */
+export function readCodexCatalogPathForHome(codexHome: string, configText?: string): string {
   try {
     const configPath = join(codexHome, "config.toml");
-    if (existsSync(configPath)) {
-      const toml = readFileSync(configPath, "utf-8");
+    if (configText !== undefined || existsSync(configPath)) {
+      const toml = configText ?? readFileSync(configPath, "utf-8");
       const path = readRootTomlString(toml, "model_catalog_json");
       if (path) return resolve(codexHome, path);
     }
@@ -279,6 +286,30 @@ export function readConfiguredAutoReviewModel(): string | null {
     if (existsSync(configPath)) {
       const toml = readFileSync(configPath, "utf-8");
       return readRootTomlString(toml, "auto_review_model");
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Read the root `model` pin from Codex's config.toml (issue #4646).
+ *
+ * Codex starts every new session on this id, and nothing in opencodex checks that the id is one
+ * the proxy actually exposes: the pin lives in Codex's config, while exposure is decided here by
+ * `disabledModels`, provider `selectedModels`, and account entitlements. When the two disagree
+ * every turn fails and no surface says why, which is what the `ocx doctor` section added for
+ * #4646 reports.
+ *
+ * Read-only, and deliberately the same shape and the same swallow-and-return-null error policy as
+ * `readConfiguredAutoReviewModel` above: a diagnostic must degrade to "unknown" on an unreadable
+ * or absent config rather than throw out of the surface that called it.
+ */
+export function readConfiguredDefaultModel(): string | null {
+  try {
+    const configPath = activeCodexConfigPath();
+    if (existsSync(configPath)) {
+      const toml = readFileSync(configPath, "utf-8");
+      return readRootTomlString(toml, "model");
     }
   } catch { /* ignore */ }
   return null;

@@ -815,6 +815,10 @@ If the new OAuth credential's authenticated usage lookup confirms an exhausted 5
 
 Background revalidation is separate and off by default. It requires Token Guardian, the `openai` provider's `proactive` refresh policy, and `tokenGuardian.codexWarmupEnabled`. It skips accounts awaiting deferred registration validation.
 
+### Cancelling main-account device reauthentication
+
+When cancelling main-account device reauthentication, a temporary DELETE or network failure, or a response with an unknown or nonterminal status, keeps the active flow and the cancellation-failure indication so cancellation can be retried. Status polling normally continues so a login that completes can still be detected. If a retryable cancellation failure overlaps a non-2xx GET status response while the flow is `pending` or `committing`, either response order preserves cancellation retry on that same flow, with its last server-provided device code, verification URL, and phase. The GET HTTP failure still stops polling, but cancellation can be retried without starting a second login POST. A terminal `failed` response releases the flow and displays the normalized failure reason; only `succeeded` reports login success. A confirmed `cancelled` response releases the flow so a new device login can be started. A definitive HTTP 404 response with code `unknown_flow` also releases the expired flow ID so a new device login can be started, but does not report a successful login or confirmed cancellation. Late POST, GET, or DELETE responses from an earlier flow cannot change the new flow or report login success for it.
+
 ### Why an account stopped serving requests
 
 When an account leaves pool selection, the reason travels with the decision instead of being recomputed for display, so a surface can never report an account healthy while routing is dropping it. `GET /api/codex-auth/accounts` carries `reauthReason` next to `needsReauth` on each account: `missing_credential` for a credential that was never stored, `refresh_failed` for a credential refresh that keeps failing, and `quota_unauthorized` when the usage lookup itself was rejected.

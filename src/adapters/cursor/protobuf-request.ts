@@ -6,6 +6,7 @@ import { namespacedToolName } from "../../types";
 import type { CursorRunRequest } from "./types";
 import { decodeCursorCallId } from "./call-id";
 import { cursorNeedsExternalToolContinuation, isCursorExternalWireModel } from "./discovery";
+import { stripAssistantEchoedToolEnvelope } from "./envelope-echo";
 import { normalizeCursorToolResultText } from "./tool-result-normalize";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import {
@@ -208,11 +209,13 @@ function assistantRootText(
   message: Extract<OcxMessage, { role: "assistant" }>,
   includeThinking: boolean,
 ): string {
-  if (typeof message.content === "string") return message.content;
-  return message.content
-    .map(part => (part.type === "text" ? part.text : includeThinking && part.type === "thinking" ? part.thinking : undefined))
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .join("\n");
+  const raw = typeof message.content === "string"
+    ? message.content
+    : message.content
+      .map(part => (part.type === "text" ? part.text : includeThinking && part.type === "thinking" ? part.thinking : undefined))
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .join("\n");
+  return stripAssistantEchoedToolEnvelope(raw);
 }
 
 // Cursor builds the actual model prompt from rootPromptMessagesJson (turns[] is UI/display metadata),
