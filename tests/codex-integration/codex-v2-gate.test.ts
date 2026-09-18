@@ -2095,13 +2095,17 @@ describe("3-state multi-agent mode", () => {
     // user- or provider-preserved pin newer than our bundled snapshot. It was not
     // stamped by us, so default mode must not delete it.
     const liveNative = { ...template(), slug: "custom-native", display_name: "Custom Native", multi_agent_version: "v2" };
+    // A routed row is never in the bare-native baseline, so its absence proves
+    // nothing; default mode still clears its stale pin.
+    const staleRouted = { ...template(), slug: "provider/model", display_name: "Routed", multi_agent_version: "v1" };
     const merged = mergeCatalogEntriesForSync(
-      [liveNative as never],
+      [liveNative as never, staleRouted as never],
       [], new Map(), [], false, new Set(), null, new Set(), new Set(), "default",
       new Set(), false, true, [], new Set(), new Set(), undefined, false,
       new Map([["gpt-5.6-sol", "v2"]]),
     );
     expect(merged.find(e => e.slug === "custom-native")?.multi_agent_version).toBe("v2");
+    expect(merged.find(e => e.slug === "provider/model")?.multi_agent_version).toBeUndefined();
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
