@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
-import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { createTestTranslatorBudget as createTranslatorBudget } from "../helpers/translator-budget";
 import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import { routeModel } from "../../src/router";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -235,6 +235,63 @@ describe("MiniMax split reasoning", () => {
     for await (const event of adapterFor(route.provider, route.modelId).parseStream(stream, budget)) events.push(event);
 
     expect(events).toEqual([expect.objectContaining({ type: "error", code: "translation_buffer_limit" })]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("rejects reasoning detail ids over 1024 UTF-8 bytes", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const chunk = { choices: [{ delta: { reasoning_details: [{ id: "é".repeat(513), text: "thinking" }] } }] };
+    const stream = new Response(`data: ${JSON.stringify(chunk)}\n\n`);
+    const budget = createTranslatorBudget();
+    const events = [];
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(stream, budget)) events.push(event);
+    expect(events).toEqual([expect.objectContaining({ type: "error", code: "translation_buffer_limit" })]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("accepts exactly 1024 distinct reasoning detail segment keys", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < 1024; index++) {
+          const chunk = { choices: [{ delta: { reasoning_details: [{ id: `segment-${index}`, text: "x" }] } }] };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const budget = createTranslatorBudget();
+    const events = [];
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(new Response(stream), budget)) {
+      events.push(event);
+    }
+    expect(events.filter(e => e.type === "reasoning_raw_delta")).toHaveLength(1024);
+    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("rejects the 1025th distinct reasoning detail segment key", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < 1025; index++) {
+          const chunk = { choices: [{ delta: { reasoning_details: [{ id: `segment-${index}`, text: "x" }] } }] };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        }
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    const budget = createTranslatorBudget();
+    const events = [];
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(new Response(stream), budget)) {
+      events.push(event);
+    }
+    expect(events.filter(e => e.type === "reasoning_raw_delta")).toHaveLength(1024);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit" });
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
