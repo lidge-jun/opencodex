@@ -567,7 +567,7 @@
     "codex-transition-state-race.test.ts": "codex-integration",
     "codex-transition-state.test.ts": "codex-integration",
     "codex-user-identity.test.ts": "codex-integration",
-    "codex-v2-gate-baseline-pins.test.ts": "codex-integration",
+    "codex-catalog-ladders.test.ts": "codex-integration",
     "codex-v2-gate.test.ts": "codex-integration",
     "codex-warmup.test.ts": "codex-integration",
     "codex-websocket-registry.test.ts": "codex-integration",
