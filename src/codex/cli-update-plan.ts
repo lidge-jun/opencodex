@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
@@ -94,7 +97,7 @@ export type CodexCliUpdateApplyStatus =
   | "ambiguous"
   | "refused";
 
-export type CodexCliUpdateApplyRefusal = CodexCliUpdateRefusal | "plan_stale" | "plan_unknown";
+export type CodexCliUpdateApplyRefusal = CodexCliUpdateRefusal | "plan_stale" | "plan_unknown" | "integrity_mismatch";
 
 export interface CodexCliUpdateApplyResult {
   readonly schemaVersion: typeof CODEX_CLI_UPDATE_SCHEMA_VERSION;
@@ -112,6 +115,8 @@ export interface CodexCliUpdateApplyResult {
 export interface CodexCliUpdateInstallerResult {
   /** `null` for a spawn failure or timeout, mirroring `spawnSync` status. */
   readonly exitCode: number | null;
+  /** True when the fetched artifact's sha512 did not match the plan-bound integrity. */
+  readonly integrityMismatch?: boolean;
 }
 
 export interface CodexCliUpdateShimRestoreResult {
@@ -129,7 +134,7 @@ export interface CodexCliUpdatePlanDeps {
 }
 
 export interface CodexCliUpdateApplyDeps extends CodexCliUpdatePlanDeps {
-  readonly runInstaller?: (version: string) => CodexCliUpdateInstallerResult;
+  readonly runInstaller?: (version: string, expectedIntegrity: string | null) => CodexCliUpdateInstallerResult;
   readonly restoreShim?: () => Promise<CodexCliUpdateShimRestoreResult>;
 }
 
@@ -238,17 +243,57 @@ export function resolveCodexCliUpdateTarget(
   return Object.freeze({ kind: "resolved" as const, version, integrity });
 }
 
-function defaultRunInstaller(version: string): CodexCliUpdateInstallerResult {
-  const target = npmTarget(["install", "-g", `${CODEX_CLI_PACKAGE}@${version}`]);
-  if (!target) return Object.freeze({ exitCode: null });
-  const run = spawnSync(target.bin, target.args, {
-    encoding: "utf8",
-    timeout: INSTALL_TIMEOUT_MS,
-    windowsHide: true,
-    stdio: "inherit",
-    ...target.options,
-  });
-  return Object.freeze({ exitCode: run.status });
+/**
+ * Install exactly `version`, verifying the fetched tarball against the plan-bound
+ * sha512 SRI first. `npm install <pkg>@<version>` re-resolves registry metadata at
+ * install time, so a registry or proxy answering differently after the plan check
+ * would go unnoticed. `npm pack` fetches the same tarball the install would use, the
+ * digest is compared with the planned integrity, and only the verified local file is
+ * installed. A mismatch fails closed before anything is written.
+ */
+function defaultRunInstaller(version: string, expectedIntegrity: string | null): CodexCliUpdateInstallerResult {
+  if (!expectedIntegrity) {
+    const target = npmTarget(["install", "-g", `${CODEX_CLI_PACKAGE}@${version}`]);
+    if (!target) return Object.freeze({ exitCode: null });
+    const run = spawnSync(target.bin, target.args, {
+      encoding: "utf8",
+      timeout: INSTALL_TIMEOUT_MS,
+      windowsHide: true,
+      stdio: "inherit",
+      ...target.options,
+    });
+    return Object.freeze({ exitCode: run.status });
+  }
+  const stage = mkdtempSync(join(tmpdir(), "ocx-codex-cli-update-"));
+  try {
+    const pack = npmTarget(["pack", `${CODEX_CLI_PACKAGE}@${version}`, "--pack-destination", stage]);
+    if (!pack) return Object.freeze({ exitCode: null });
+    const packRun = spawnSync(pack.bin, pack.args, {
+      encoding: "utf8",
+      timeout: INSTALL_TIMEOUT_MS,
+      windowsHide: true,
+      stdio: "inherit",
+      ...pack.options,
+    });
+    if (packRun.status !== 0) return Object.freeze({ exitCode: packRun.status });
+    const tarballs = readdirSync(stage).filter(name => name.endsWith(".tgz"));
+    if (tarballs.length !== 1) return Object.freeze({ exitCode: null });
+    const tarball = join(stage, tarballs[0]!);
+    const actual = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
+    if (actual !== expectedIntegrity) return Object.freeze({ exitCode: null, integrityMismatch: true });
+    const install = npmTarget(["install", "-g", tarball]);
+    if (!install) return Object.freeze({ exitCode: null });
+    const run = spawnSync(install.bin, install.args, {
+      encoding: "utf8",
+      timeout: INSTALL_TIMEOUT_MS,
+      windowsHide: true,
+      stdio: "inherit",
+      ...install.options,
+    });
+    return Object.freeze({ exitCode: run.status });
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 async function defaultRestoreShim(): Promise<CodexCliUpdateShimRestoreResult> {
@@ -413,7 +458,9 @@ export async function applyCodexCliUpdatePlan(
 
   const targetVersion = plan.targetVersion;
   const before = plan.installedVersion;
-  const installer = (deps.runInstaller ?? defaultRunInstaller)(targetVersion);
+  const installer = (deps.runInstaller ?? defaultRunInstaller)(targetVersion, plan.targetIntegrity);
+  // The fetched artifact failed the plan-bound digest; nothing was installed.
+  if (installer.integrityMismatch) return refusedApply("integrity_mismatch", plan);
 
   const inspect = deps.inspect ?? inspectCodexCliInstall;
   let readback: CodexCliInstallReport | null = null;
