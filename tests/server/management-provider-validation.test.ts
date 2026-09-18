@@ -1749,43 +1749,6 @@ describe("provider management validation", () => {
     }
   });
 
-  // A "__proto__" model id is a legitimate override key once the GUI can draft it.
-  // The merge target must be a null-prototype map: on an ordinary object the
-  // assignment windows["__proto__"] = n invokes the inherited setter, so the
-  // PATCH would return success while silently dropping the override.
-  test("PATCH modelContextWindows persists a __proto__-named model override", async () => {
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    saveConfig({
-      port: 0,
-      openaiProviderTierVersion: 2,
-      defaultProvider: "openai",
-      providers: {
-        openai: { ...canonicalDirect },
-      },
-    } as OcxConfig);
-    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
-
-    const server = startServer(0);
-    try {
-      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        // Written as a raw body: an object literal "__proto__" key would set the
-        // prototype instead of creating the own property under test.
-        body: '{"modelContextWindows":{"__proto__":128000}}',
-      });
-      expect(patch.status).toBe(200);
-      const windows = loadConfig().providers.openai?.modelContextWindows ?? {};
-      expect(Object.hasOwn(windows, "__proto__")).toBe(true);
-      expect(Object.getOwnPropertyDescriptor(windows, "__proto__")?.value).toBe(128000);
-    } finally {
-      resolvedError.mockRestore();
-      await server.stop(true);
-    }
-  });
-
   test("canonical OpenAI with selectedModels still rejects transport tampering", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });

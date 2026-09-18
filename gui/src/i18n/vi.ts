@@ -2843,4 +2843,11 @@ export const vi: Record<TKey, string> = {
   "nav.codexAuth": "Codex Auth",
   "pws.noModelMatch": "Không có model nào khớp bộ lọc.",
   "quota.fiveHourLimit": "Giới hạn 5 giờ",
+  "models.fastRows.title": "Hiển thị hàng model Fast",
+  "models.fastRows.desc": "Thêm các bộ chọn “Model Fast” đủ điều kiện vào trình chọn model của client bên ngoài. Việc này không thay đổi tùy chọn reasoning-effort của model gốc. Khi lưu, các tích hợp đang kết nối sẽ được làm mới nếu có thể; nếu không, hãy làm mới tích hợp hoặc catalog của client.",
+  "models.fastRows.refreshHint": "Đã lưu. Đang chờ làm mới catalog.",
+  "models.fastRows.enabled": "Đã bật hàng model Fast.",
+  "models.fastRows.disabled": "Đã tắt hàng model Fast.",
+  "models.fastRows.loadFailed": "Không thể tải cài đặt hàng Fast.",
+  "models.fastRows.updateFailed": "Không thể cập nhật cài đặt hàng Fast.",
 };

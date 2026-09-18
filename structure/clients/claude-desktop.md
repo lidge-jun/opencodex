@@ -25,6 +25,10 @@ Native main reauthentication follows the [CLI JSON output contract](../runtime.m
 
 The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
 
+Native OpenAI pool routing also accepts
+[Orca-linked accounts](../codex-home.md#orca-source-owned-account-import), whose source resolution
+belongs to the shared account store. The import CLI adds pool rows independently of Desktop profiles.
+
 ## Connected Claude Desktop profiles
 
 The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
@@ -184,3 +188,5 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

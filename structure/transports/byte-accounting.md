@@ -155,3 +155,5 @@ This reduces avoidable allocations; it is not a hard heap cap or a guarantee of 
 Schema size still determines traversal work and the cost of copying a changed broad container.
 `tests/adapters/openai/openai-chat-hardening.test.ts` covers wide, deep and mixed-array schemas;
 `tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
