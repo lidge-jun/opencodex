@@ -34,8 +34,9 @@ describe("the Responses passthrough lane reads the provider transient policy", (
 
   test("the ladder is resolved from the provider row, not a constant", () => {
     expect(packed).toContain(dense(
-      "const transientSendAttempts = (): number => transientSendCapFor(\n"
-      + "  transientRetryPolicyFor(route.provider)?.attempts,\n"
+      "const transientSendPolicy = () => transientRetryPolicyFor(route.provider);\n"
+      + "const transientSendAttempts = (): number => transientSendCapFor(\n"
+      + "  transientSendPolicy()?.attempts,\n"
       + "  sendBudgetState.sendsUsed,\n"
       + ");",
     ));
@@ -131,5 +132,46 @@ describe("a configured ladder is bounded by the request budget", () => {
     expect(state.remainingTransientSendBudget(transientSendCapFor(10, state.sendsUsed))).toBe(1);
     // And a narrower configured value still wins over the remaining allowance.
     expect(state.remainingTransientSendBudget(transientSendCapFor(2, state.sendsUsed))).toBe(0);
+  });
+
+  test("a configured one-send total cannot draw the final recovery reserve", () => {
+    const budget = createRequestExecutionBudget();
+    const state = sendBudgetFor(budget);
+
+    state.noteTransientSends(1);
+    const cap = transientSendCapFor(1, state.sendsUsed);
+    expect(cap).toBe(0);
+
+    // Compose the real rebuild allowance rather than checking only the exhaustion predicate.
+    const allowance = state.recoverySendAllowance(
+      cap,
+      "repair",
+      "provider|model|reasoning-effort-downgrade",
+      { allowFinalRecoveryReserve: false },
+    );
+    expect(allowance).toEqual({ attempts: 0 });
+    expect(budget.used).toBe(1);
+    expect(budget.reserveSpent).toBe(false);
+  });
+
+  test("an unconfigured provider retains the shared final recovery reserve", () => {
+    const budget = createRequestExecutionBudget();
+    const state = sendBudgetFor(budget);
+
+    state.noteTransientSends(TRANSIENT_RETRY_MAX_ATTEMPTS);
+    const cap = transientSendCapFor(undefined, state.sendsUsed);
+    const allowance = state.recoverySendAllowance(
+      cap,
+      "repair",
+      "provider|model|reasoning-effort-downgrade",
+    );
+
+    expect(allowance.attempts).toBe(1);
+    expect(allowance.permit).toBeDefined();
+    expect(budget.used).toBe(4);
+    expect(budget.reserveSpent).toBe(true);
+    allowance.permit?.release();
+    expect(budget.used).toBe(3);
+    expect(budget.reserveSpent).toBe(false);
   });
 });

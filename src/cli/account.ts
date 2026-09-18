@@ -323,13 +323,36 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   if (res.status === 0) return proxyUnreachable(res.transportError);
   if (res.status !== 200) return apiError(res.json, `failed to switch ${name}`, res.status);
 
-  if (wantsJson) console.log(JSON.stringify({ ok: true, provider: name, type: c.type, activeId }, null, 2));
-  else console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+  // The route reports this only when routing would drop the pin it just recorded, so an
+  // absent field means the pin survives (#4521).
+  const pinDrainReason = typeof res.json.pinDrainReason === "string" ? res.json.pinDrainReason : undefined;
+  if (wantsJson) {
+    console.log(JSON.stringify({
+      ok: true,
+      provider: name,
+      type: c.type,
+      activeId,
+      ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
+    }, null, 2));
+  } else {
+    console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+  }
   if (c.type === "codex") {
     console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
     const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    if (active.status === 200 && typeof active.json.autoSwitchThreshold === "number" && active.json.autoSwitchThreshold > 0) {
-      console.error(`Note: auto-switch (threshold ${active.json.autoSwitchThreshold}%) may override this pin.`);
+    const threshold = active.status === 200 && typeof active.json.autoSwitchThreshold === "number"
+      ? active.json.autoSwitchThreshold
+      : undefined;
+    if (pinDrainReason !== undefined) {
+      // "may override" is the right caveat for a pin that is currently fine and could be
+      // overtaken later. It is the wrong sentence for one the next request will discard, and
+      // printing only that is what left the operator believing the account was pinned.
+      const because = pinDrainReason === "quota_threshold"
+        ? `is at or above the auto-switch threshold${threshold !== undefined ? ` (${threshold}%)` : ""}`
+        : `cannot currently be selected (${pinDrainReason})`;
+      console.error(`Note: ${displayId(activeId)} ${because}, so routing releases this pin on its next request.`);
+    } else if (threshold !== undefined && threshold > 0) {
+      console.error(`Note: auto-switch (threshold ${threshold}%) may override this pin.`);
     }
   }
   return 0;

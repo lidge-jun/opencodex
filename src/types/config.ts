@@ -779,6 +779,20 @@ export interface OcxConfig {
    */
   codexClientCompaction?: boolean;
   /**
+   * Label Codex shows for the injected `opencodex` provider. Defaults to `OpenCodex Proxy`.
+   *
+   * Presentation only. Routing is keyed on the provider id `opencodex` — the root
+   * `model_provider = "opencodex"` line and the `[model_providers.opencodex]` header — and this
+   * setting never touches either, so renaming the label cannot reroute or orphan a thread whose
+   * row already names that id.
+   *
+   * There is no way to emit an empty label: Codex rejects a provider with no name, so a blank,
+   * over-long, or control-character value falls back to the default rather than writing a config
+   * Codex would refuse to load. "Suppressing" the OpenCodex branding therefore means choosing a
+   * neutral label, not removing the field.
+   */
+  codexProviderDisplayName?: string;
+  /**
    * Compatibility mode: temporarily rewrite Codex resume-history metadata while the proxy is active
    * so Codex App can show old OpenAI chats and opencodex-created exec chats under its default
    * interactive-source/provider filters. Default true; originals are backed up and restored by

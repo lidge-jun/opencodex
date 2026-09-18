@@ -329,6 +329,38 @@ test("two successful cancellation replies complete the same flow only once", asy
 });
 
 for (const phase of ["pending", "committing"] as const) {
+  test.each(["poll-first", "cancel-first"] as const)(`raced polling HTTP error and cancellation failure still observe ${phase} completion (%s)`, async order => {
+    await mount();
+    await beginFlow("A");
+    if (phase === "committing") {
+      await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+      await reply(take("GET", "A"), { status: "committing" });
+    }
+    await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+    const poll = take("GET", "A");
+    await invoke(() => hook.cancel());
+    const cancellation = take("DELETE", "A");
+
+    if (order === "poll-first") {
+      await reply(poll, { code: "unavailable" }, 503);
+      await reply(cancellation, { code: "unavailable" }, 503);
+    } else {
+      await reply(cancellation, { code: "unavailable" }, 503);
+      await reply(poll, { code: "unavailable" }, 503);
+    }
+    expect(hook.state).toEqual({
+      phase, flowId: "A", verificationUrl: "https://auth.openai.com/codex/device",
+      deviceCode: "ABCD-1234", cancelFailed: true,
+    });
+    expect(requests.filter(pending => pending.method === "POST")).toHaveLength(1);
+
+    await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+    await reply(take("GET", "A"), { status: "succeeded" });
+    expect(hook.state.phase).toBe("succeeded");
+    expect(completed).toBe(1);
+    expect(requests.filter(pending => pending.method === "POST")).toHaveLength(1);
+  });
+
   for (const failure of ["network", "http", "nonterminal"] as const) {
     test.each(["poll-first", "cancel-first"] as const)(`raced polling HTTP error keeps ${phase} cancellation ${failure} retryable in the card (%s)`, async order => {
       await mount(false, true);

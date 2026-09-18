@@ -21,6 +21,12 @@ export interface HealthzIdentity {
   uptime?: unknown;
   pid?: unknown;
   port?: unknown;
+  /**
+   * Which listener answered: the standalone/hub server omits it, and the connected-client
+   * machine listener reports `"client"` (src/client/machine-listener.ts). It is the only
+   * on-the-wire way to tell those two apart, because both bind `config.port ?? 10100`.
+   */
+  role?: unknown;
   restartCapability?: unknown;
   providerReloadCapability?: unknown;
   guiPairCapability?: unknown;
@@ -78,6 +84,16 @@ export interface LiveProxy {
    * healthz body predates the field.
    */
   version?: string;
+  /**
+   * Role the live listener reported on `/healthz`, when it reported one: `"client"` for the
+   * connected-client machine listener, absent for a standalone or hub proxy.
+   *
+   * Liveness deliberately still ACCEPTS a client-role listener — see `isOpencodexHealthz`.
+   * The role is carried so a caller that needs a management plane (src/cli/runtime-api.ts)
+   * can refuse one, while `stop` and orphan cleanup keep finding the process they must act
+   * on. Absent for a proxy whose healthz body predates the field.
+   */
+  role?: string;
 }
 
 /**
@@ -101,6 +117,13 @@ export function probeHostname(hostname: string | undefined): string {
  * `service: "opencodex"` marker, plus the legacy `{status, version, uptime}` trio so a
  * still-running pre-identity proxy (e.g. right after `ocx update`) is not mistaken for a
  * foreign server and shadow-started over.
+ *
+ * The connected-client machine listener answers with the same `service: "opencodex"` marker
+ * and an extra `role: "client"`, and it is accepted here on purpose. Liveness answers "is one
+ * of our processes listening on this port", which is exactly what `ocx stop`, orphan cleanup,
+ * and duplicate-start avoidance need: rejecting the client role would make those paths blind to
+ * a real opencodex process and let them shadow-start over it. Callers that additionally need a
+ * management plane discriminate on `LiveProxy.role` instead of narrowing this predicate.
  */
 export function isOpencodexHealthz(body: HealthzIdentity | null): boolean {
   if (!body) return false;
@@ -114,7 +137,7 @@ export async function proxyIdentityAt(
   port: number,
   opts: { hostname?: string; expectedPid?: number } = {},
   io: LivenessIo = {},
-): Promise<{ pid: number | null; version?: string } | null> {
+): Promise<{ pid: number | null; version?: string; role?: string } | null> {
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const sleepFn = io.sleepFn ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const nowFn = io.nowFn ?? Date.now;
@@ -139,7 +162,14 @@ export async function proxyIdentityAt(
       if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return null;
       // Guarded the same way `pid` is: a non-string version is absent, not coerced.
       const version = typeof body?.version === "string" ? body.version : undefined;
-      return version === undefined ? { pid } : { pid, version };
+      // Same guard for the role, for the same reason: absent on a standalone/hub proxy and on
+      // a legacy body, and never coerced from a non-string.
+      const role = typeof body?.role === "string" ? body.role : undefined;
+      return {
+        pid,
+        ...(version === undefined ? {} : { version }),
+        ...(role === undefined ? {} : { role }),
+      };
     } catch {
       // Transport failure (timeout / refused) — retry while budget remains; a proxy that
       // has only just begun listening can miss a single short probe (#764).
@@ -203,6 +233,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
           hostname: runtime.hostname,
           source: "runtime",
           ...(identity.version === undefined ? {} : { version: identity.version }),
+          ...(identity.role === undefined ? {} : { role: identity.role }),
         };
       }
     }
@@ -226,6 +257,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
         hostname: record.hostname,
         source: "runtime",
         ...(identity.version === undefined ? {} : { version: identity.version }),
+        ...(identity.role === undefined ? {} : { role: identity.role }),
       };
     }
   }
@@ -241,6 +273,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
       hostname: config.hostname,
       source: "config",
       ...(identity.version === undefined ? {} : { version: identity.version }),
+      ...(identity.role === undefined ? {} : { role: identity.role }),
     };
   }
   return null;

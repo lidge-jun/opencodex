@@ -37,10 +37,51 @@ describe("apply_patch envelope repair", () => {
     expect(repairFreeformToolInput(JSON.stringify({ input: DECORATED_PATCH }), "apply_patch")).toBe(CANONICAL_PATCH);
   });
 
+  test("recovers one recognized fallback field for exec or apply_patch", () => {
+    expect(repairFreeformToolInput(JSON.stringify({ code: "const x = 1;" }), "exec")).toBe("const x = 1;");
+    expect(repairFreeformToolInput(JSON.stringify({ script: "const x = 2;" }), "exec")).toBe("const x = 2;");
+    expect(repairFreeformToolInput(JSON.stringify({ command: "await tools.exec_command({ cmd: 'pwd' });" }), "exec"))
+      .toBe("await tools.exec_command({ cmd: 'pwd' });");
+    expect(repairFreeformToolInput(JSON.stringify({ patch: DECORATED_PATCH }), "apply_patch")).toBe(CANONICAL_PATCH);
+  });
+
+  test("keeps fallback recovery fail-closed when the body is ambiguous", () => {
+    const ambiguous = JSON.stringify({ code: "const chosen = 'code';", command: "const chosen = 'command';" });
+    const arbitrary = JSON.stringify({ payload: "const chosen = 'payload';" });
+    expect(repairFreeformToolInput(ambiguous, "exec")).toBe(ambiguous);
+    expect(repairFreeformToolInput(arbitrary, "exec")).toBe(arbitrary);
+    expect(repairFreeformToolInput(JSON.stringify({ code: "const x = 1;" }), "render_diagram"))
+      .toBe(JSON.stringify({ code: "const x = 1;" }));
+  });
+
+  test("keeps explicit input authoritative over fallback fields", () => {
+    expect(repairFreeformToolInput(
+      JSON.stringify({ input: "const chosen = 'input';", code: "const chosen = 'code';" }),
+      "exec",
+    )).toBe("const chosen = 'input';");
+    const invalidInput = JSON.stringify({ input: 42, code: "const chosen = 'code';" });
+    expect(repairFreeformToolInput(invalidInput, "exec")).toBe(invalidInput);
+  });
+
+  test("strips only a complete outer fence for executable freeform tools", () => {
+    expect(repairFreeformToolInput("```js\nconst y = 3;\n```", "exec")).toBe("const y = 3;");
+    expect(repairFreeformToolInput("```js example.ts\nconst y = 3;\n```", "exec")).toBe("const y = 3;");
+    expect(repairFreeformToolInput("```diff\n" + DECORATED_PATCH + "\n```", "apply_patch")).toBe(CANONICAL_PATCH);
+
+    const internalFence = "const md = `\n```js\nlet z = 1;\n```\n`;";
+    expect(repairFreeformToolInput(internalFence, "exec")).toBe(internalFence);
+    const nonExecutableFence = "```md\n# diagram source\n```";
+    expect(repairFreeformToolInput(nonExecutableFence, "render_diagram")).toBe(nonExecutableFence);
+  });
+
   test("repairs only bare and reserved-functions apply_patch grammars", () => {
     const wrapped = JSON.stringify({ input: DECORATED_PATCH });
     expect(repairFreeformToolInput(wrapped, "apply_patch", "functions")).toBe(CANONICAL_PATCH);
     expect(repairFreeformToolInput(wrapped, "apply_patch", "mcp")).toBe(DECORATED_PATCH);
+    const foreignFallback = JSON.stringify({ patch: DECORATED_PATCH });
+    expect(repairFreeformToolInput(foreignFallback, "apply_patch", "mcp")).toBe(foreignFallback);
+    const foreignFence = "```diff\n" + DECORATED_PATCH + "\n```";
+    expect(repairFreeformToolInput(foreignFence, "apply_patch", "mcp")).toBe(foreignFence);
   });
 
   test("keeps exec JavaScript strings, comments, templates, and regexes byte-identical", () => {
