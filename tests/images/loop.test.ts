@@ -1080,6 +1080,31 @@ describe("runWithImageBridge — runTurn adapter", () => {
     expect(sse).toContain("hello from runTurn");
   });
 
+  test("runTurn collected events carry adapter-stage diagnostics", async () => {
+    process.env.OCX_DEBUG = "1";
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await runWithImageBridge({
+        parsed: makeParsed(),
+        adapter: {
+          ...mockAdapter,
+          runTurn: async (_parsed, _incoming, emit) => {
+            emit({ type: "text_delta", text: "runturn diagnostic secret" });
+            emit({ type: "done" });
+          },
+        },
+        plan,
+        diagnostic: { requestId: "image-runturn-diagnostic", adapterName: "test" },
+      });
+      await response.text();
+      const lines = getDebugLogEntries().map(entry => entry.line);
+      expect(lines.some(line => line.includes('"stage":"adapter"') && line.includes('"eventType":"text_delta"'))).toBe(true);
+      expect(lines.every(line => !line.includes("runturn diagnostic secret"))).toBe(true);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   test("runTurn adapter → error event surfaces as upstream failure", async () => {
     runTurnEventQueue = [
       [{ type: "error", message: "cursor blew up" }],

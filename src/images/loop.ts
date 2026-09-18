@@ -719,6 +719,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   const consumeIterationEvents = async function* (prepared: IterationResponse): AsyncGenerator<AdapterEvent, IterationSplit> {
     const events: AdapterEvent[] = prepared.collectedEvents ?? [];
     const iterationBudget = prepared.collectedEvents ? undefined : createIterationEventBudget();
+    if (!iterationBudget && deps.diagnostic) {
+      // Collected runTurn events skip the streaming parse loop below, so diagnose
+      // them here before terminal scanning and replay.
+      deps.diagnostic.adapterName = prepared.responseAdapter.name;
+      for (const event of events) diagnoseAdapterEvent(deps.diagnostic, event);
+    }
     try {
       if (iterationBudget) {
         const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
