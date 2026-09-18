@@ -68,6 +68,9 @@ call time, and admission/residue checks consume the same database path. Storage 
 owns the Codex-home tree separately and does not gain deletion authority over an external SQLite
 root from this resolver alone. Durable service launchers preserve an explicitly supplied
 `CODEX_SQLITE_HOME` so a background service resolves the same split state as the installing shell.
+Service install state records that effective SQLite home beside `CODEX_HOME` and `OPENCODEX_HOME`,
+and a lifecycle command requires the recorded value to match the current effective resolution; a
+legacy record without the field keeps its existing behavior.
 An absent `config.toml` or absent root `sqlite_home` permits the environment/home fallback. Any
 other read failure, malformed TOML, wrong-typed or blank `sqlite_home` is indeterminate and fails
 closed so history code cannot select a different database by accident. This strict parse is scoped
