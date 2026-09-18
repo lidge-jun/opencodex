@@ -179,6 +179,11 @@ export function resolveKiroCliNativeSessionEntries(
  * Windows: official MSI installs to `C:\Program Files\Kiro-Cli\kiro-cli.exe`, while some local
  * installs keep the binary next to `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`.
  * macOS/Linux: prefer PATH, then the usual user-local bin directories.
+ *
+ * Blast radius control: `kiro-cli` is the canonical binary name and is checked across all
+ * PATH entries and known install directories before falling back to the shorter `kiro` / `kiro.exe`
+ * name strictly within dedicated Kiro-Cli installation directories. Generic PATH entries are not
+ * probed for `kiro` to prevent accidental execution of unrelated binaries with the same name.
  */
 export function resolveKiroCliExecutable(
   inputs: KiroCliNativeInputs & {
@@ -211,30 +216,48 @@ export function resolveKiroCliExecutable(
       ])
     : pathEntries.map(entry => posix.join(entry, "kiro-cli"));
 
-  const installCandidates: string[] = [];
+  // Canonical kiro-cli in standard user-local and system install directories.
+  const canonicalInstallCandidates: string[] = [];
+  // Scoped fallbacks to kiro / kiro.exe strictly in known Kiro-Cli directories.
+  // Probing generic PATH entries for short 'kiro' is avoided to minimize blast radius.
+  const shortInstallCandidates: string[] = [];
+
   if (inputs.platform === "win32") {
     const localBase = inputs.env.LOCALAPPDATA?.trim()
       || (inputs.env.USERPROFILE?.trim() ? win32.join(inputs.env.USERPROFILE.trim(), "AppData", "Local") : "")
       || win32.join(inputs.home, "AppData", "Local");
     const programFiles = inputs.env["ProgramFiles"]?.trim() || "C:\\Program Files";
-    installCandidates.push(
+    canonicalInstallCandidates.push(
       win32.join(localBase, "Kiro-Cli", "kiro-cli.exe"),
       win32.join(programFiles, "Kiro-Cli", "kiro-cli.exe"),
     );
+    shortInstallCandidates.push(
+      win32.join(localBase, "Kiro-Cli", "kiro.exe"),
+      win32.join(programFiles, "Kiro-Cli", "kiro.exe"),
+    );
   } else if (inputs.platform === "darwin") {
-    installCandidates.push(
+    canonicalInstallCandidates.push(
       posix.join(inputs.home, ".local", "bin", "kiro-cli"),
       "/usr/local/bin/kiro-cli",
       "/opt/homebrew/bin/kiro-cli",
     );
+    shortInstallCandidates.push(
+      posix.join(inputs.home, ".local", "bin", "kiro"),
+      "/usr/local/bin/kiro",
+      "/opt/homebrew/bin/kiro",
+    );
   } else {
-    installCandidates.push(
+    canonicalInstallCandidates.push(
       posix.join(inputs.home, ".local", "bin", "kiro-cli"),
       "/usr/local/bin/kiro-cli",
     );
+    shortInstallCandidates.push(
+      posix.join(inputs.home, ".local", "bin", "kiro"),
+      "/usr/local/bin/kiro",
+    );
   }
 
-  for (const candidate of [...pathCandidates, ...installCandidates]) {
+  for (const candidate of [...pathCandidates, ...canonicalInstallCandidates, ...shortInstallCandidates]) {
     if (exists(candidate) && isFile(candidate)) return candidate;
   }
   return inputs.platform === "win32" ? "kiro-cli.exe" : "kiro-cli";
