@@ -23,7 +23,7 @@ export interface ReasoningDetailSegment {
   text: string;
 }
 
-const MAX_REASONING_DETAIL_ID_BYTES = 1024;
+const MAX_REASONING_DETAIL_KEY_BYTES = 1024;
 const MAX_REASONING_DETAIL_SEGMENTS = 1024;
 
 /**
@@ -39,17 +39,16 @@ export function reasoningDetailSegmentsFrom(record: Record<string, unknown>): Re
     const item: unknown = raw[i];
     if (!isRecord(item)) continue;
     if (typeof item.text !== "string" || item.text.length === 0) continue;
-    let key: string;
-    if (typeof item.id === "string" && item.id.length > 0) {
-      if (new TextEncoder().encode(item.id).byteLength > MAX_REASONING_DETAIL_ID_BYTES) {
-        throw new TranslatorBudgetExceededError("reasoning", MAX_REASONING_DETAIL_ID_BYTES);
-      }
-      key = `id:${item.id}`;
-    } else if (typeof item.index === "number") {
-      key = `i:${item.index}`;
-    } else {
-      key = `n:${i}`;
-    }
+    // Parsing retains nothing, so it rejects nothing. The non-streaming
+    // parseResponse path shares this function and reads only `text`; failing a
+    // whole valid response there because an opaque upstream id is long would be
+    // a new rejection unrelated to the retention bound. The key cap lives with
+    // the map that holds the key; see the tracker below.
+    const key = typeof item.id === "string" && item.id.length > 0
+      ? `id:${item.id}`
+      : typeof item.index === "number"
+        ? `i:${item.index}`
+        : `n:${i}`;
     segments.push({ key, text: item.text });
   }
   return segments;
@@ -60,8 +59,8 @@ export function reasoningDetailSegmentsFrom(record: Record<string, unknown>): Re
  * repeats a detail's full text-so-far, so deltas are derived by prefix-diffing per segment key;
  * a piece that does not extend the previous snapshot is appended whole, which keeps incremental
  * senders parseable on the same path. Retained key+text bytes are charged to the translator
- * budget under the `reasoning` kind, and both the id length and the segment count are capped,
- * so a hostile upstream cannot grow the map without bound.
+ * budget under the `reasoning` kind, and both the key length and the segment count are capped
+ * here, where the map actually retains them, so a hostile upstream cannot grow it without bound.
  */
 export function createReasoningDetailSnapshotTracker(budget: TranslatorBudget): {
   ingest(segment: ReasoningDetailSegment): string | null;
@@ -73,6 +72,9 @@ export function createReasoningDetailSnapshotTracker(budget: TranslatorBudget): 
   return {
     ingest(segment) {
       const existing = snapshots.get(segment.key);
+      if (existing === undefined && encoder.encode(segment.key).byteLength > MAX_REASONING_DETAIL_KEY_BYTES) {
+        throw new TranslatorBudgetExceededError("reasoning", MAX_REASONING_DETAIL_KEY_BYTES);
+      }
       if (existing === undefined && snapshots.size >= MAX_REASONING_DETAIL_SEGMENTS) {
         throw new TranslatorBudgetExceededError("reasoning", MAX_REASONING_DETAIL_SEGMENTS);
       }

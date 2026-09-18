@@ -249,6 +249,29 @@ describe("MiniMax split reasoning", () => {
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
+  test("a non-streaming response with the same oversized id is still parsed", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const budget = createTranslatorBudget();
+    const response = new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "stop",
+        message: {
+          content: "final answer",
+          reasoning_details: [{ type: "reasoning.text", id: "é".repeat(513), format: "MiniMax-response-v1", index: 0, text: "full thinking" }],
+        },
+      }],
+      usage: { total_tokens: 10 },
+    }));
+
+    // parseResponse retains no snapshot key, so the key cap must not turn a
+    // valid response into a parse failure.
+    const events = await adapterFor(route.provider, route.modelId).parseResponse(response, budget);
+
+    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "full thinking" });
+    expect(events).toContainEqual({ type: "text_delta", text: "final answer" });
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("accepts exactly 1024 distinct reasoning detail segment keys", async () => {
     const route = minimaxRoute("MiniMax-M3");
     const encoder = new TextEncoder();
