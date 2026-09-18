@@ -61,6 +61,33 @@ token denial before any count is charged, so neither leaves the other to unwind 
 neither is ever relabelled as the other, because "sends exhausted" and "spend exhausted"
 send an operator to two different remedies.
 
+## The defect that would have made the whole thing inert
+
+Adversarial review of the first cut found it, and it is worth recording because the feature
+would have looked finished and refused nothing on the path that matters.
+
+The canonical passthrough ladder does not reserve its physical sends. It sends, then reports
+the count through `onSendsConsumed`, which assigns through `budget.used`, which calls
+`observer.charge()` after the fact. The comment there already said the right thing — "the
+ledger records them even past a ceiling it would have refused, because refusing after the
+fact only hides spend that was really incurred" — and the ledger could not honour it:
+`reserve()` refused anything over the limit, and a refused reservation books nothing.
+
+That is a fixpoint, not a rounding error. The send that would cross the ceiling is dropped
+from the total, the total stays one send short of the limit forever, the scope never reads
+as exhausted, and every later request is admitted. With 142k-token requests against a 20M
+root ceiling, accounting would stall near 19.9M and nothing would ever be refused.
+
+The fix is `alreadySent` on a reservation: a send being RECORDED rather than admitted skips
+the limit check and the durability refusal, takes the scope over its ceiling, and is marked
+dispatched immediately so it cannot be handed back for free. Taking the total over the limit
+is precisely what arms the next refusal.
+
+The same review found the other half: the production tracker treated every non-limit denial
+as permission to send, including `reserve-not-durable`. Durability before admission is the
+reason this store is on disk, so that one now refuses — and because the ledger raises it only
+when a limit is configured, an install that configured nothing is still never refused.
+
 ## Legibility, and why it needed work in three places
 
 `workflowDenialSummary` already had a sentence for `workflow-spend-exhausted`, and it said
@@ -106,4 +133,3 @@ the operator surface and `tests/lib/spend-ceiling-enforcement.test.ts` for the
 reconfiguration, the admission gate, the count/token ordering and the legibility of the
 refusal. The unconfigured case is pinned explicitly — no ledger resolved, no journal
 opened, admission unchanged — because that is the property an upgrade can break silently.
-

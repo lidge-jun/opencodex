@@ -150,6 +150,24 @@ export interface SpendReservationRequest {
   /** Enforceable output ceiling -- max_output_tokens or the model's documented cap. */
   readonly outputCeilingTokens: number;
   readonly at?: number;
+  /**
+   * This send has ALREADY left for upstream and is being recorded rather than admitted.
+   *
+   * Some transports report their physical sends after the fact -- the passthrough ladder
+   * reports through `onSendsConsumed`, and an adapter's inner retries are counted when they
+   * finish. For those, a ceiling cannot refuse anything: the tokens are spent. Refusing to
+   * BOOK them is the worse answer, and it is not hypothetical -- it is a fixpoint. The send
+   * that would cross the ceiling gets dropped from the total, the total stays just under the
+   * limit forever, the scope never reads as exhausted, and the ceiling never fires again for
+   * any request. So a recorded send skips the limit check and takes the scope over its
+   * ceiling, which is what makes the NEXT request refusable.
+   *
+   * It skips the durability refusal for the same reason: a journal that could not be written
+   * is a reason to report degradation, never a reason to forget spend that really happened.
+   * Identity, capacity and journal-integrity denials still apply -- those say the ledger
+   * cannot account for the send at all, which no flag here can change.
+   */
+  readonly alreadySent?: boolean;
 }
 
 /**
@@ -856,7 +874,9 @@ export function createSpendReservationLedger(options: {
       // reservation booked on the scopes that would have passed. Reading state without
       // creating it matters here -- a denied request must not leave a tracked scope behind.
       for (const ref of refs) {
-        const limit = limitFor(ref.scope);
+        // A recorded send has no limit to fail: it already happened, and the point of booking
+        // it is to let the total go OVER the ceiling so the next request can be refused.
+        const limit = request.alreadySent === true ? undefined : limitFor(ref.scope);
         if (limit === undefined) continue;
         const state = scopes.get(scopeKey(ref.scope, ref.alias));
         const projected = (state ? state.settled + state.reserved + state.unresolved : 0) + tokens;
@@ -875,7 +895,7 @@ export function createSpendReservationLedger(options: {
       // limit a failed write refuses the request rather than admitting one that a restart
       // would forget -- which is exactly the disk-full and permission case durability is for.
       const durable = append({ v: 1, kind: "reserve", send, targets: refs, tokens, at });
-      if (!durable && enforced) {
+      if (!durable && enforced && request.alreadySent !== true) {
         return { reserved: false, denial: { reason: "reserve-not-durable", sendId: request.sendId } };
       }
       applyReserve(send, refs, tokens, at);
