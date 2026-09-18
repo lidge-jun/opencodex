@@ -292,6 +292,7 @@ describe("rotateProviderTransportOn429", () => {
     const initial = resolveOpenCodeGoTransport(
       config.providers["opencode-go"],
       "hashed-parent\0hashed-child",
+      config.providers["opencode-go"],
     );
     const initialSession = initial.headers?.["x-opencode-session"];
     expect(initialSession).toMatch(/^ocx_[0-9a-f]{32}$/);

@@ -42,8 +42,11 @@ Il arrive qu’il n’y ait rien à afficher. La boîte de dialogue précise alo
   octet ; la couche n’a donc rien à envoyer. La boîte de dialogue indique le chemin.
 - **Elle n’a rien envoyé pendant le tour que nous avons lu.** Les couches ne sont renvoyées que
   lorsqu’elles changent ; une couche inchangée est donc absente d’un échantillon unique.
-- **Elle transite hors de la liste lisible.** Le prompt de base est envoyé dans un autre champ et
-  ne peut pas être affiché ici.
+- **Le prompt de base provient du catalogue de modèles.** Codex l'envoie hors de la liste lisible :
+  la boîte de dialogue le lit donc dans l'entrée de catalogue du modèle sélectionné, ou dans le
+  fichier désigné par `model_instructions_file` si vous en avez défini un. Lorsque le catalogue ne
+  publie qu'un gabarit non développé, la boîte de dialogue indique qu'il n'est pas affiché, car ce
+  texte n'est pas celui que Codex envoie.
 - **Le prompt n’a pas pu être lu.** La sonde a échoué sur cette machine.
 
 La lecture est effectuée depuis votre répertoire Codex global (`~/.codex`), et non depuis le

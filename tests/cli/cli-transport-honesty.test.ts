@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { RuntimeApiError, runtimeRequest } from "../../src/cli/runtime-api";
+import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
 import { apiError, apiJson, proxyUnreachable } from "../../src/cli/account-api";
 import { assertNotAdminToken, assertServiceAuthEnvironment } from "../../src/service";
 import { dataPlaneCredentialCollisionCheck } from "../../src/cli/doctor";
@@ -295,5 +296,137 @@ describe("#2696 a management token is refused as the data-plane secret", () => {
   test("familyFailure forwards the transport cause", () => {
     const source = readFileSync(repoPath("src", "cli", "account-extended.ts"), "utf8");
     expect(source).toMatch(/networkDown\) return proxyUnreachable\(result\.transportError\)/);
+  });
+});
+
+/**
+ * #4662: on a connected client the same CLI lied in a third way.
+ *
+ * The machine listener (src/client/machine-listener.ts) binds `config.port ?? 10100`, the same
+ * address the standalone proxy would, and identifies as opencodex on /healthz — so liveness
+ * resolves a base URL for it. It serves only /api/machine/*, so every other management request
+ * came back as `{"error":"not_found","method":"PUT","path":"/api/custom-models/<id>"}`, which
+ * the CLI printed as the bare token `not_found`. The real handler's unknown-id 404 says
+ * `not found` — one space apart — so the reporter read a structural "this listener has no
+ * management API" as "your model id is wrong", and exit code 4 agreed with them.
+ *
+ * The role was already on the wire. These tests pin that it is now read: refused up front for
+ * management, with 503 (exit 1) rather than 404 (exit 4), and that a listener which does not
+ * route a request says so.
+ */
+describe("#4662 a client-role listener is refused instead of misreported", () => {
+  const CLIENT_PROXY = { pid: 4242, port: 10100, source: "config" as const, version: "2.6.17", role: "client" };
+  const STANDALONE_PROXY = { pid: 4242, port: 10100, source: "config" as const, version: "2.6.17" };
+
+  async function refusalFor(live: typeof CLIENT_PROXY): Promise<{ error: RuntimeApiError; sent: number }> {
+    let sent = 0;
+    try {
+      await runtimeRequest("/api/custom-models/2f6f", { method: "PUT" }, {
+        findLiveProxy: async () => live,
+        fetchImpl: async () => { sent += 1; return Response.json({ ok: true }); },
+      });
+    } catch (error) {
+      if (error instanceof RuntimeApiError) return { error, sent };
+      throw error;
+    }
+    throw new Error("expected a RuntimeApiError");
+  }
+
+  async function captureStderr(run: () => Promise<number | null>): Promise<{ code: number | null; text: string }> {
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => { lines.push(args.map(value => String(value)).join(" ")); };
+    try {
+      return { code: await run(), text: lines.join("\n") };
+    } finally {
+      console.error = original;
+    }
+  }
+
+  test("the request is refused before it is sent, and says why and what to do", async () => {
+    const { error, sent } = await refusalFor(CLIENT_PROXY);
+    expect(sent).toBe(0);
+    // 503 (management plane unavailable), never 404: runCliAction maps 404 to exit 4, which
+    // tells a script "no such custom model" about a machine that has no management API at all.
+    expect(error.status).toBe(503);
+    expect(error.message).toContain("port 10100");
+    expect(error.message).toContain("client role");
+    expect(error.message).toContain("/api/machine/*");
+    expect(error.message).toContain("hub");
+    expect(error.message).toContain("ocx sync");
+  });
+
+  test("a listener that reports no role is still used: only the client role is refused", async () => {
+    let sent = 0;
+    const body = await runtimeRequest("/api/custom-models/2f6f", { method: "PUT" }, {
+      findLiveProxy: async () => STANDALONE_PROXY,
+      fetchImpl: async () => { sent += 1; return Response.json({ ok: true }); },
+    });
+    expect(sent).toBe(1);
+    expect(body).toEqual({ ok: true });
+  });
+
+  test("a 404 that names a method and path reads as a routing refusal, not a missing record", async () => {
+    try {
+      await runtimeRequest("/api/custom-models/2f6f", { method: "PUT" }, {
+        baseUrl: "http://127.0.0.1:10100",
+        fetchImpl: async () => Response.json(
+          { error: "not_found", method: "PUT", path: "/api/custom-models/2f6f" },
+          { status: 404 },
+        ),
+      });
+    } catch (error) {
+      const message = (error as RuntimeApiError).message;
+      expect(message).toContain("PUT /api/custom-models/2f6f");
+      expect(message).toContain("does not serve");
+      expect(message).not.toBe("not_found");
+      return;
+    }
+    throw new Error("expected a RuntimeApiError");
+  });
+
+  test("ocx models edit on a connected client exits 1 with the refusal, not 4", async () => {
+    const { code, text } = await captureStderr(() => handleModelsRuntimeCommand(
+      "edit",
+      ["2f6f", "--display-name", "Renamed"],
+      {
+        findLiveProxy: async () => CLIENT_PROXY,
+        fetchImpl: async () => { throw new Error("the refusal must happen before any request"); },
+      },
+    ));
+    expect(code).toBe(1);
+    expect(text).toContain("client role");
+  });
+
+  test("the real handler's unknown-id 404 still names the id and where to find the right one", async () => {
+    const { code, text } = await captureStderr(() => handleModelsRuntimeCommand(
+      "edit",
+      ["2f6f", "--display-name", "Renamed"],
+      {
+        baseUrl: "http://127.0.0.1:10100",
+        fetchImpl: async () => Response.json({ error: "not found" }, { status: 404 }),
+      },
+    ));
+    // Still exit 4: this one really is "no such custom model".
+    expect(code).toBe(4);
+    expect(text).toContain("2f6f");
+    expect(text).toContain("ocx models list-custom");
+  });
+
+  test("a not-served-here 404 is not relabelled as a missing custom model", async () => {
+    const { code, text } = await captureStderr(() => handleModelsRuntimeCommand(
+      "edit",
+      ["2f6f", "--display-name", "Renamed"],
+      {
+        baseUrl: "http://127.0.0.1:10100",
+        fetchImpl: async () => Response.json(
+          { error: "not_found", method: "PUT", path: "/api/custom-models/2f6f" },
+          { status: 404 },
+        ),
+      },
+    ));
+    expect(code).toBe(4);
+    expect(text).toContain("does not serve");
+    expect(text).not.toContain("ocx models list-custom");
   });
 });

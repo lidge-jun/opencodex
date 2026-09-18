@@ -56,6 +56,14 @@ partial-event, injection/drop, and EOF behavior. Output admission precedes its s
 failed enqueue and cancellation release the reservation without re-entering a disposed rewrite.
 Old/new buffer overlap remains charged against the same translator cap.
 
+Complete SSE blocks extract `data` fields with one indexed pass over the block rather than a
+regular-expression split and intermediate line array. Colonless `data` fields, one optional ASCII
+space after the colon, multiline joining, UTF-8 text, LF/CRLF input, and a trailing lone CR retain
+their event-stream semantics. `src/server/relay.ts` re-exports this canonical extractor instead of
+maintaining a second implementation. Empty byte results across the relay and
+`src/server/sse-frame-buffer.ts` reuse one immutable zero-length view; non-empty frame ownership,
+frame limits, cancellation, terminal detection, and wire bytes are unchanged.
+
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
 Serialized request and buffered-response observations use byte counts without measurement arrays.
@@ -102,6 +110,9 @@ composition, including a turn beyond 32 MiB, late usage/output, slow readers,
 cancellation and read-error races. `tests/usage/request-log-nonstream.test.ts`
 binds the bounded non-stream wrapper to request-log status and metadata behavior.
 
+Retaining whole response bodies is the separate concern of `src/lib/bounded-body.ts`, whose cap,
+deadline, and cancellation rules are specified in the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
+
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 ## Terminal-continuation retention
@@ -131,3 +142,16 @@ The same focused tests cover these lifecycle paths and Unicode code-unit limit b
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+## Unicode pattern normalization
+
+`src/adapters/responses-tool-schema.ts` strips unsupported Unicode property patterns with an
+iterative traversal and copies containers only when a descendant changes. Unchanged siblings
+retain identity; a no-op returns the original input. Traversal frames follow the active path
+instead of queueing an assignment closure and eagerly cloned container for each sibling.
+Name bags, literal values and preserved constraint subtrees retain their existing semantics;
+the separate encrypted-marker normalizer is unchanged. Inputs are not mutated.
+This reduces avoidable allocations; it is not a hard heap cap or a guarantee of lower CPU cost.
+Schema size still determines traversal work and the cost of copying a changed broad container.
+`tests/adapters/openai/openai-chat-hardening.test.ts` covers wide, deep and mixed-array schemas;
+`tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
+import { openCodexStateForPreflight } from "./history-state-open";
 import { atomicWriteFile, getConfigDir } from "../config";
 import {
   CODEX_HISTORY_RESUMABLE_SOURCES,
@@ -433,7 +434,9 @@ export function preflightCodexHistoryInjection(
     if (!existsSync(resolvedPath)) {
       return restoreEntries.length > 0 ? "history_state_database_missing" : null;
     }
-    db = new Database(resolvedPath, { readonly: true });
+    // Read-only, and narrowed so a cleanly-closed WAL store is inspected rather than refused
+    // (#4943). The open order is the safety property; see history-state-open.ts.
+    db = openCodexStateForPreflight(resolvedPath);
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
     const paginatedColumn = columns.some(column => column.name === "history_mode");
     if (paginatedColumn && restoreEntries.length > 0) return HISTORY_RELABEL_STANDS_DOWN;

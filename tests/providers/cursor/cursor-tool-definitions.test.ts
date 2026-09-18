@@ -611,7 +611,7 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("`exec_command`");
     expect(note).toContain("`mcp__fs__read_file`");
     expect(note).toContain("current tool catalog as ground truth");
-    expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Glob`, `Bash`, `LS`");
+    expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Glob`, `Bash`, `LS`, `Write`");
     expect(note).toContain("not an external MCP server tool");
     expect(note).toContain("NEVER attempt Cursor-native Shell, Read, Grep, List");
     expect(note).toContain("`exec_command` is the ONLY shell surface");
@@ -688,7 +688,7 @@ describe("Cursor tool definitions", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("available tool names are exactly `exec_command`, `ocx_client_Glob`");
-    expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Bash`, `LS`");
+    expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Bash`, `LS`, `Write`");
     expect(note).not.toContain("`Read`, `Grep`, `Glob`, `Bash`, `LS`");
   });
 
@@ -705,7 +705,7 @@ describe("Cursor tool definitions", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("available tool names are exactly `exec_command`, `ocx_client_read`, `ocx_client_find`, `ocx_client_bash`");
-    expect(note).toContain("This turn does not expose neighboring-agent tool names `Grep`, `LS`");
+    expect(note).toContain("This turn does not expose neighboring-agent tool names `Grep`, `LS`, `Write`");
     expect(note).not.toContain("`Read`");
     expect(note).not.toContain("`Glob`");
     expect(note).not.toContain("`Bash`");
