@@ -185,6 +185,26 @@ test("Grok receives integer response timestamps from Responses streams", () => {
   ]);
 });
 
+test("Grok normalizes timestamps in JSON split across data fields", () => {
+  const block = [
+    "event: response.created",
+    'data: {"type":"response.created","response":{"id":"resp_split",',
+    'data: "created_at":1789740485.0},"unrelated":9007199254740993}',
+    "id: split",
+  ].join("\r\n");
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([[
+    "event: response.created",
+    'data: {"type":"response.created","response":{"id":"resp_split",',
+    'data: "created_at":1789740485},"unrelated":9007199254740993}',
+    "id: split",
+  ].join("\r\n")]);
+});
+
+test("Grok leaves an unrelated same-valued floating timestamp unchanged", () => {
+  const block = 'data: {"type":"response.created","response":{"created_at":1789740485},"metadata":{"created_at":1789740485.0}}';
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([block]);
+});
+
 test.each([
   "data: not-json",
   "data: {\"type\":\"response.output_text.delta\",\"delta\":\"1789740485.0\"}",
