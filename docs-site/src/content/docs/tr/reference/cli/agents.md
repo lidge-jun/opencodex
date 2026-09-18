@@ -230,7 +230,7 @@ için kendi varsayılanlarını uygular) gelir.
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | yok — geri döngü yer tutucusu |
-| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | gizli olmayan geri döngü yer tutucusu |
 | `dsh` | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | `settings.yaml` | yok — gizli olmayan geri döngü bearer yer tutucusu |
 | `mcode` | `~/.minimax/config.yaml` (ayarlandığında `MINIMAX_DATA_DIR`, ardından eski `MAVIS_DATA_DIR` öncelikli; göreli değer reddedilir) | `mcode-config.yaml` | yok — geri döngü yer tutucusu |
 | `zcode` | `~/.zcode/v2/config.json` (ayarlandığında `ZCODE_DATA_DIR` öncelikli; göreli değer reddedilir) | `config.json` | yok — geri döngü yer tutucusu |
@@ -274,9 +274,7 @@ döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl
 görmek için [Uzaktan erişim](/tr/reference/configuration/#remote-access)
 bölümüne bakın. Yukarı akış sağlayıcılarının kendi anahtarları tamamen ayrı bir
 şeydir ve [Sağlayıcılar](/tr/guides/providers/) bölümüne göre yapılandırılır.
-gjc istisnadır: `OPENCODEX_GAJAE_API_KEY` provider kimlik bilgisini ortamdan
-sağlar, ancak şeması uzaktan kabul başlığını gönderemediği için üretilen gjc
-entegrasyonu yalnızca geri döngüde çalışır.
+Oluşturulan gjc entegrasyonu gizli olmayan bir loopback yer tutucusu kullanır; ortam değişkeni gerekmez. Yalnızca loopback desteklenir, uzak erişim kimlik bilgileri yapılandırılmaz.
 
 Aynı yük `GET /api/client-config` tarafından sunulur ve kontrol panelinin API
 sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.
@@ -307,6 +305,19 @@ ocx system codex-cli-update check --json
 `check` paket kayıt defterine istek göndermez ve yapılandırmada belirtilen kurulum adayına ilişkin provenance kanıtını, maskelenmiş yürütülebilir dosya konumu ve sahiplik kanıtı dâhil, sınırlı biçimde inceler. Yayımlanmış başlatıcıdan gelen güvenilir bağlam aday anlık görüntüsünü doğrular; Codex'in başarıyla çalıştırıldığını doğrulamaz. Bu tek seferlik komut Codex'i hiçbir zaman çalıştırmadığından, ortamdan ve kalıcı kayıtlardan gelen adaylar yalnızca raporlanır (`managed: false`, genellikle `selection_unattested`). JSON çıktısında `candidateAvailable`, `candidateVersion` ve `candidateSource` alanları bulunur; `selectionAttested` değeri ise `false` kalır. Yapılandırmada belirtilen kurulum adayını incelemek için yayımlanmış başlatıcıdan gelen güvenilir bağlam gerekir; Bun ile veya kaynak koddan doğrudan başlatıldığında bu kanıt bulunmadığından ortamdaki ve kalıcı kayıtlardaki aday durumu yok sayılır ve POSIX sistemlerinde `candidate_unavailable` bildirilebilir. Windows'ta bu ilk parça, aday veya yapılandırma yollarında hiçbir dosya sistemi G/Ç işlemi yapmaz. Yalnızca güvenilir başlatıcının yakaladığı mutlak bir ortam adayı sözcüksel olarak uygulama paketi ya da sürüm yöneticisi etiketi alabilir; diğer tüm Windows adayları kapalı başarısızlıkla reddedilir. Bu parça kalıcı seçim durumunu hiç okumadığından, ortam adayı yakalanmamış olan Windows çalıştırmaları `candidate_unavailable` yerine `windows_inspection_deferred` bildirir: komut bir Codex CLI'nin kurulu olup olmadığını gözlemleyemez, bu yüzden aday bulunmadığını iddia etmek yerine incelemenin ertelendiğini bildirir. Komut Codex veya bir paket yöneticisi çalıştırmaz, shim'i onarmaz, yapılandırmaya ya da önbellek durumuna yazmaz, hiçbir süreci durdurmaz ve hiçbir şey kurmaz. Uygulamayla birlikte paketlenmiş adaylar, tanınan sürüm yöneticisi yollarında bulunan adaylar, doğrulanmamış bağımsız adaylar ve belirsiz shim durumları `unmanaged` veya `unknown` olarak raporlanır; hiçbir zaman `managed` olarak sınıflandırılmaz.
 
 Windows üzerinde `CODEX_CLI_PATH=codex` gibi yalın bir komut, uzak yol veya aygıt yolu aday olarak yakalanırsa `candidate_path_unavailable` bildirilir. Aday yakalanmıştır; ancak yolu bu inceleme için uygun değildir.
+
+#### Windows x64 kurulumunu açıkça gözlemleme
+
+```text
+ocx system codex-cli-update attest [--json]
+ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+```
+
+`attest`, seçili veya açıkça belirtilen bir Windows x64 npm kurulumunu yalnızca okuyan isteğe bağlı bir işlemdir. Seçenek verilmezse komut, güvenilir başlatıcı anlık görüntüsünün belirlediği seçili adayı (yapılandırılmış `CODEX_CLI_PATH` veya yakalanan PATH üzerindeki ilk `codex`) gözlemler; opencodex sarmalayıcısı, yeniden adlandırılmış `codex.opencodex-real.cmd` npm yedeğine çözümlenir. Dört mutlak yolun tümünü sağlamak keşfi geçersiz kılar; keşif yalnızca yol önerir ve tutulan tanıtıcı gözlemi nihai otoritedir. `--candidate`, standart npm `<prefix>/codex.cmd` veya `<prefix>/node_modules/@openai/codex/bin/codex.js` yoludur. `--npm-cli`, `node_modules/npm/bin/npm-cli.js` ile bitmeli; `--node` açık bir `node.exe` belirtmelidir. Uygulama paketleri, tanınan sürüm yöneticisi yerleşimleri, npm yedeği olmayan opencodex shim’leri ve özel sarmalayıcılar reddedilir.
+
+Sınırlı okuma boyunca yerel tanıtıcılar üst dizinleri ve dosyaları açık tutar. Desteklenmeyen platformlar, yeniden ayrıştırma noktaları/junction, çakışan yazıcılar, güvenli olmayan yollar ve aşırı büyük dosyalar reddedilir. Sabit rapor yol içermez: `status`, `observed` veya `refused` olur ve `installationIdentityObserved` sunulur. `selectionAttested`, `managed` ve `applyAllowed` daima `false` kalır. Raporlanan ret 0 çıkış kodu üretebildiğinden `status` alanını denetleyin.
+
+Kimlik veya özet yalnızca gözlem anındaki dosyaları tanımlar; kalıcı güncelleme izni değildir. Seçilen çalışma zamanını, geçmiş yükleyiciyi, etkin npm yapılandırmasını veya araçların gerçekliğini kanıtlamaz. Verilen Node yalnızca gözlemlenir; başlatıcının onu seçeceği kanıtlanmaz. Hiçbir hedef çalıştırılmaz; kayıt deposu isteği, kurulum, yapılandırma yazımı veya süreç denetimi yapılmaz. Mevcut Windows `check`, aday veya yapılandırma dosya sistemi G/Ç işlemlerini hâlâ yapmaz.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

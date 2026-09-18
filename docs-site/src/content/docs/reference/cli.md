@@ -61,6 +61,8 @@ only a proof-captured absolute environment candidate can receive lexical app-bun
 every other Windows candidate fails closed. The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
 
+For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
+
 List or status is the default where unambiguous. Use `--json` for structured snapshots and
 `ocx observe logs --follow --jsonl` for a streaming request-log feed. Theme, language, navigation,
 and other purely visual browser state have no CLI equivalent; Cloudflare Tunnel setup is outside

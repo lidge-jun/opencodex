@@ -142,32 +142,15 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     }
   });
 
-  test("every thread keys as itself, and the unbound set is unchanged", () => {
-    const rootKey = codexPoolAffinityKey(rootHeaders())!;
-    const childKey = codexPoolAffinityKey(childHeaders("child-1"))!;
-    const grandchildKey = codexPoolAffinityKey(childHeaders("grand-1", "child-1"))!;
-    for (const key of [rootKey, childKey, grandchildKey]) {
-      expect(key.startsWith("app:")).toBe(true);
-    }
-    // The three used to be two: both children collapsed onto the raw parent id.
-    expect(new Set([rootKey, childKey, grandchildKey]).size).toBe(3);
-    // A child keys as its own conversation whether or not this turn names the parent, which is
-    // what lets it hold a binding of its own across a fan-out.
-    expect(childKey).toBe(codexPoolAffinityKey(new Headers({ "session-id": "sess", "thread-id": "child-1" })));
-    // A request naming only a parent rides that parent's lane. With the session in hand that lane
-    // is derivable, and it IS the parent's own key -- no record required.
-    expect(codexPoolAffinityKey(new Headers({
-      "session-id": "sess", "x-codex-parent-thread-id": "root",
-    }))).toBe(rootKey);
-    // Without the session and without a recorded parent there is nothing to reproduce it from,
-    // so the bare parent lane is its own key. The recorded case is the test below.
-    expect(codexPoolAffinityKey(new Headers({ "x-codex-parent-thread-id": "root" }))).not.toBe(rootKey);
-    // Unchanged from before #4546: which requests bind at all did not move. A bare thread-id
-    // with neither a session nor a parent still has no family anchor and stays unbound.
-    expect(codexPoolAffinityKey(new Headers({ "thread-id": "lone" }))).toBeUndefined();
-    expect(codexPoolAffinityKey(new Headers())).toBeUndefined();
-    expect(codexPoolAffinityKey(new Headers({ "x-codex-parent-thread-id": "p".repeat(513) }))).toBeUndefined();
-  });
+  /**
+   * The per-thread keying this unit introduced was retired by #4780, which makes the tree the
+   * binding unit. What that test asserted now lives in the cohort block at the end of this file:
+   * the key shape and the unchanged unbound set are pinned there, and the grandchild-orphan
+   * property wp8 was written to prevent is pinned there too, as a property rather than as a
+   * consequence of per-thread keys. The placement tests below are rewritten for the same reason.
+   *
+   * A request naming only a parent still rides that parent's lane; that case keeps its own test.
+   */
 
   test("lineage resolves the root transitively and stays inside its auth scope", () => {
     const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
@@ -197,8 +180,11 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
   });
 
   test("the table is bounded in both dimensions, not just per scope", () => {
+    // One cohort per index. Members of ONE tree now share a conversation key, so a fixture that
+    // varied only the thread id would write every record under a single key and the eviction
+    // probe below would read the newest record back through the oldest key.
     const keyFor = (index: number) => recordCodexThreadLineage(
-      new Headers({ "session-id": "bulk", "thread-id": `bulk-${index}` }), NOW,
+      new Headers({ "session-id": `bulk-${index}`, "thread-id": `bulk-${index}` }), NOW,
     )!.conversationKey;
     const oldest = keyFor(0);
     for (let index = 1; index <= CODEX_LINEAGE_MAX_ENTRIES; index += 1) keyFor(index);
@@ -221,32 +207,7 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(codexThreadLineageLookup(heldKey, codexLineageScopeKey(held), NOW)).toBeUndefined();
   });
 
-  test("a child with no binding starts on the parent's account under its OWN key", () => {
-    const config = makeConfig();
-    updateAccountQuota("a", 10);
-    updateAccountQuota("b", 20);
-    updateAccountQuota("c", 30);
-    const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
-    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW))
-      .toMatchObject({ status: "selected", accountId: "a" });
-
-    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW)!;
-    // The reason carries the proof here: a cold pick would also have chosen the coolest
-    // account. The tests below make the ACCOUNT itself the discriminator.
-    expect(resolveCodexAccountForThreadDetailed(
-      child.conversationKey, config, NOW, undefined, undefined, undefined, child,
-    )).toMatchObject({
-      status: "selected",
-      accountId: "a",
-      affinity: { move: "new_bind", reason: "lineage_parent" },
-    });
-    // An independent binding, not a root-wide pin: the child's next turn reuses its own entry
-    // without consulting the family again.
-    expect(resolveCodexAccountForThreadDetailed(child.conversationKey, config, NOW + 1))
-      .toMatchObject({ status: "selected", accountId: "a", affinity: { move: "reused", reason: "healthy" } });
-  });
-
-  test("a new child follows the account ACTUALLY serving the parent, detour included", () => {
+  test("a child is served where its cohort is being served, detour included", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
@@ -263,18 +224,21 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
       affinity: { move: "detour", reason: "transient" },
     });
 
-    // The child starts where the parent is being served NOW (b), not at its stale home (a).
+    // The child shares the cohort's binding, so it takes the same detour rather than starting
+    // anywhere of its own. Under per-thread keys this needed a placement hint to reach b; the
+    // cohort key makes it the same binding, so there is nothing to place.
     const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 2)!;
+    expect(child.conversationKey).toBe(root.conversationKey);
     expect(resolveCodexAccountForThreadDetailed(
       child.conversationKey, config, NOW + 2, undefined, undefined, undefined, child,
     )).toMatchObject({
       status: "selected",
       accountId: "b",
-      affinity: { move: "new_bind", reason: "lineage_parent" },
+      affinity: { move: "detour", reason: "transient" },
     });
   });
 
-  test("a later move of the parent does not drag an already-bound child", () => {
+  test("a move of the cohort carries every member, including an already-active child", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
@@ -284,56 +248,46 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     streakTransientFailures(config, "a", NOW);
     resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW + 1);
 
-    // Which account serves the parent at any moment is the quota strategy's business, not this
-    // layer's. What this layer promises is relative, so it is asserted relative to what actually
-    // happened rather than against account names predicted from a fixture nobody ran.
     const parentAtPlacement = resolveCodexAccountForThreadDetailed(
       root.conversationKey, config, NOW + 2,
     ).accountId;
 
-    // The child binds to the account actually SERVING its parent, detour included.
     const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 2)!;
     const childPlacement = resolveCodexAccountForThreadDetailed(
       child.conversationKey, config, NOW + 2, undefined, undefined, undefined, child,
     );
     expect(childPlacement).toMatchObject({ status: "selected" });
     expect(childPlacement.accountId).toBe(parentAtPlacement);
-    const childBoundTo = childPlacement.accountId;
 
-    // Now the parent moves for its OWN reason: a quota refusal retires its binding. This is the
-    // parent's move, not the family's.
+    // A quota refusal retires the binding. Under per-thread keys this was the PARENT's move and
+    // the asymmetry test pinned that an already-bound child was not dragged by it. #4780 retires
+    // that asymmetry deliberately: there is one binding, so the move is the cohort's and every
+    // member is on the other side of it. That is the cost of cohort cache locality, and it is
+    // the behaviour the invariant "same prompt_cache_key, same account" requires.
     updateAccountQuota("c", 5);
     recordCodexUpstreamOutcome(config, "a", 429, { now: NOW + 3 });
     const parentAfterMove = resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW + 3);
     expect(parentAfterMove).toMatchObject({ status: "selected" });
-    // Where the parent lands is the quota strategy's decision and may legitimately be the same
-    // account the child already holds, so nothing is asserted about the destination here.
 
-    // THE ASYMMETRY, which is the whole point of this test: the already-bound child is untouched
-    // by the parent's move. It reuses its own binding rather than being dragged.
     const childAfterParentMoved = resolveCodexAccountForThreadDetailed(
       child.conversationKey, config, NOW + 4,
     );
-    expect(childAfterParentMoved).toMatchObject({
-      status: "selected",
-      affinity: { move: "reused", reason: "healthy" },
-    });
-    expect(childAfterParentMoved.accountId).toBe(childBoundTo);
+    expect(childAfterParentMoved).toMatchObject({ status: "selected" });
+    // Where the cohort lands is the quota strategy's decision, so this is asserted relative to
+    // what actually happened rather than against an account name predicted from the fixture.
+    expect(childAfterParentMoved.accountId).toBe(parentAfterMove.accountId);
 
-    // A NEW child, however, reads the parent's CURRENT account rather than the one its sibling
-    // holds, which is the other half of the same rule.
+    // A later sibling joins the same binding rather than being placed against it.
     const lateChild = recordCodexThreadLineage(childHeaders("child-2"), NOW + 5)!;
+    expect(lateChild.conversationKey).toBe(root.conversationKey);
     const latePlacement = resolveCodexAccountForThreadDetailed(
       lateChild.conversationKey, config, NOW + 5, undefined, undefined, undefined, lateChild,
     );
-    expect(latePlacement).toMatchObject({
-      status: "selected",
-      affinity: { move: "new_bind", reason: "lineage_parent" },
-    });
+    expect(latePlacement).toMatchObject({ status: "selected" });
     expect(latePlacement.accountId).toBe(parentAfterMove.accountId);
   });
 
-  test("a compatible sibling places the child when the parent is not eligible", () => {
+  test("a cohort whose account became ineligible rebinds off it, once, for everyone", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
@@ -342,37 +296,34 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW))
       .toMatchObject({ status: "selected", accountId: "a" });
 
-    // The parent keeps its binding on a, but a is no longer eligible to serve anyone. A stale
-    // home is worse than no hint, so the parent contributes nothing here.
+    // a is no longer eligible to serve anyone. A stale home is worse than no hint, so the
+    // cohort must leave it rather than keep resolving there.
     config.pausedCodexAccountIds = ["a"];
     const sibling = recordCodexThreadLineage(childHeaders("child-1"), NOW + 1)!;
     const siblingPlacement = resolveCodexAccountForThreadDetailed(
       sibling.conversationKey, config, NOW + 1, undefined, undefined, undefined, sibling,
     );
     expect(siblingPlacement).toMatchObject({ status: "selected" });
-    // The point is the NEGATIVE: a paused parent is a stale home and must contribute nothing.
-    // Which account the ordinary rule then picks belongs to the quota strategy.
+    // The point is the NEGATIVE: a paused account must contribute nothing. Which account the
+    // ordinary rule then picks belongs to the quota strategy.
     expect(siblingPlacement.affinity?.reason).not.toBe("lineage_parent");
     expect(siblingPlacement.accountId).not.toBe("a");
 
-    // Make an unrelated cold thread prefer a DIFFERENT account, so the orphan landing on its
-    // sibling's account cannot be explained by the ordinary cold rule agreeing by accident.
+    // Make an unrelated cold thread prefer a DIFFERENT account, so a later member landing with
+    // its cohort cannot be explained by the ordinary cold rule agreeing by accident.
     updateAccountQuota("c", 1);
     const coldPick = resolveCodexAccountForThreadDetailed("unrelated-cold-thread", config, NOW + 2);
     expect(coldPick).toMatchObject({ status: "selected" });
     const orphan = recordCodexThreadLineage(childHeaders("child-2"), NOW + 2)!;
-    expect(orphan.siblingConversationKeys).toContain(sibling.conversationKey);
+    expect(orphan.conversationKey).toBe(sibling.conversationKey);
     const orphanPlacement = resolveCodexAccountForThreadDetailed(
       orphan.conversationKey, config, NOW + 2, undefined, undefined, undefined, orphan,
     );
-    // The orphan follows its SIBLING, which is the reachable half of the family when the parent
-    // is not eligible. Asserted against the sibling's actual placement rather than an account
-    // name predicted from the quota fixture.
+    // It lands with its cohort rather than taking the cold pick, which is what the shared
+    // binding buys. Asserted against the sibling's actual placement rather than an account name
+    // predicted from the quota fixture.
     expect(orphanPlacement.accountId).toBe(siblingPlacement.accountId);
-    expect(orphanPlacement).toMatchObject({
-      status: "selected",
-      affinity: { move: "new_bind", reason: "lineage_sibling" },
-    });
+    expect(orphanPlacement).toMatchObject({ status: "selected" });
   });
 
   test("no known family account falls back to ordinary cold placement", () => {
@@ -455,7 +406,7 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     });
   });
 
-  test("a child follows the parent's MODEL detour, not a home account that cannot serve it", () => {
+  test("a cohort's members are detoured together when the binding cannot serve the model", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
@@ -472,16 +423,24 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW, undefined, roster, modelId))
       .toMatchObject({ status: "selected", accountId: "b" });
 
-    // Make c the cold pick inside the roster, so b is reachable only through the detour.
+    // Move the roster's preferred account, so what is asserted cannot be satisfied by a stale
+    // constant. Under per-thread keys the child was an unbound thread that had to be PLACED on
+    // the parent's current detour target. Under cohort keying it shares the binding, so the
+    // property is simply that both members are served in the same place at the same moment.
     updateAccountQuota("b", 40);
     const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 1)!;
-    expect(resolveCodexAccountForThreadDetailed(
+    expect(child.conversationKey).toBe(root.conversationKey);
+    const rootServed = resolveCodexAccountForThreadDetailed(
+      root.conversationKey, config, NOW + 1, undefined, roster, modelId,
+    );
+    const childServed = resolveCodexAccountForThreadDetailed(
       child.conversationKey, config, NOW + 1, undefined, roster, modelId, child,
-    )).toMatchObject({
-      status: "selected",
-      accountId: "b",
-      affinity: { move: "new_bind", reason: "lineage_parent" },
-    });
+    );
+    expect(rootServed).toMatchObject({ status: "selected" });
+    expect(childServed).toMatchObject({ status: "selected" });
+    // The binding sits on a, which this roster cannot serve, so both are detoured off it.
+    expect(childServed.accountId).not.toBe("a");
+    expect(childServed.accountId).toBe(rootServed.accountId);
   });
 
   test("a preview reads the family only for a request that may own Pool state", () => {
@@ -499,10 +458,17 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     expect(previewCodexPoolLineage(callerOwned, config, { requestScopedMainCredential: true }))
       .toBeUndefined();
 
-    // Read-only: the record belongs to the resolution that binds. A preview must not leave one
-    // behind for a request that turns out to own no Pool state at all.
+    // Read-only: the record belongs to the resolution that binds, so even an ELIGIBLE preview
+    // leaves nothing behind. Probed on a cohort nothing has recorded, because a member of an
+    // already-recorded tree would answer from its root's entry now that they share one key.
+    const unseen = new Headers({
+      "session-id": "unseen-sess",
+      "thread-id": "unseen-child",
+      "x-codex-parent-thread-id": "unseen-root",
+    });
+    expect(previewCodexPoolLineage(unseen, config)).toBeDefined();
     expect(codexThreadLineageLookup(
-      codexPoolAffinityKey(child)!, codexLineageScopeKey(child), NOW,
+      codexPoolAffinityKey(unseen)!, codexLineageScopeKey(unseen), NOW,
     )).toBeUndefined();
   });
 
@@ -516,5 +482,150 @@ describe("codex thread lineage and first placement (#4546 wp8)", () => {
     // request's headers no longer declare one.
     recordCodexThreadLineage(childHeaders("child-9"), NOW);
     expect(codexLineageWorkflowLane(new Headers({ "thread-id": "child-9" }), NOW)).toBe("worker");
+  });
+});
+
+/**
+ * #4780. The binding unit is the COHORT the client already declares, not the thread.
+ *
+ * Upstream keys its prompt cache on something the whole tree shares. `prompt_cache_key()`
+ * returns `responses_metadata.session_id`, or `{source}:{parent_thread_id}` for an internal
+ * session; `AgentControl.session_id` "is equal to the root thread's ID" and that one control
+ * handle is shared with every sub-agent spawned from the root; and the upstream suite asserts
+ * root and child carrying DIFFERENT thread ids while sending the SAME `promptCacheKey`.
+ * openai/codex#44862 went further on 2026-09-11, making an ephemeral fork inherit its parent's
+ * session id for exactly this reason.
+ *
+ * While the proxy keyed per thread, two requests could carry an identical `prompt_cache_key` and
+ * be served by different accounts. The split-off member's key asserts a warm prefix that is
+ * deterministically cold on its account, so the prompt is replayed in full and the cache can
+ * never hit. Nothing fails; only tokens burn.
+ *
+ * THIS IS NOT A REVERT OF wp8. wp8 fixed a different defect: a child keyed under the RAW parent
+ * id, producing one shared entry unrelated to the root's own `app:HMAC(session, thread)`
+ * binding, so a grandchild keying on its own parent landed on a key nobody had ever bound. A
+ * cohort key has no such incoherence, because the root's own binding IS the cohort key. The
+ * orphan test below exists to prove that rather than assert it.
+ */
+describe("cohort pool affinity (#4780)", () => {
+  beforeEach(() => {
+    installScratchHome();
+    clearThreadAccountMap();
+    clearCodexUpstreamHealth();
+    clearCodexThreadLineageForTests();
+    clearPoolRotationState();
+    clearAccountQuota();
+    for (const id of ACCOUNT_IDS) saveTestCredential(id);
+  });
+
+  afterEach(async () => {
+    try {
+      clearAccountQuota();
+      clearCodexUpstreamHealth();
+      clearThreadAccountMap();
+      clearCodexThreadLineageForTests();
+      clearPoolRotationState();
+    } finally {
+      await removeScratchHome();
+    }
+  });
+
+  test("one conversation tree resolves to one affinity key", () => {
+    // The three ids upstream would send an identical prompt_cache_key for.
+    const rootKey = codexPoolAffinityKey(rootHeaders())!;
+    const childKey = codexPoolAffinityKey(childHeaders("child-1"))!;
+    const siblingKey = codexPoolAffinityKey(childHeaders("child-2"))!;
+    const grandchildKey = codexPoolAffinityKey(childHeaders("grand-1", "child-1"))!;
+
+    expect(rootKey.startsWith("app:")).toBe(true);
+    expect(new Set([rootKey, childKey, siblingKey, grandchildKey]).size).toBe(1);
+
+    // A different tree is a different cohort, so this is a cohort key and not a constant.
+    expect(codexPoolAffinityKey(new Headers({
+      "session-id": "other-sess", "thread-id": "root",
+    }))).not.toBe(rootKey);
+    // The raw session id is never the key; it is still HMAC'd under the process-local secret.
+    expect(rootKey).not.toContain("sess");
+  });
+
+  test("a grandchild never lands on a key nobody bound", () => {
+    // wp8's defect, restated as the property that must hold under cohort keying. The root binds
+    // first; every later member of the tree must resolve to the key the root is already on.
+    const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
+    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW)!;
+    const grandchild = recordCodexThreadLineage(childHeaders("grand-1", "child-1"), NOW)!;
+    expect(child.conversationKey).toBe(root.conversationKey);
+    expect(grandchild.conversationKey).toBe(root.conversationKey);
+    expect(grandchild.rootSessionKey).toBe(root.conversationKey);
+
+    // The session-less chain is the case that could still split, because each depth would
+    // otherwise anchor on its own parent. A recorded parent carries the cohort down.
+    const bare = (threadId: string, parentId: string) => new Headers({
+      "thread-id": threadId, "x-codex-parent-thread-id": parentId,
+    });
+    const bareChild = recordCodexThreadLineage(bare("b-child", "b-root"), NOW)!;
+    const bareGrandchild = recordCodexThreadLineage(bare("b-grand", "b-child"), NOW)!;
+    expect(bareGrandchild.conversationKey).toBe(bareChild.conversationKey);
+    // ...and it is a cohort of its own, not folded into the session-keyed tree above.
+    expect(bareChild.conversationKey).not.toBe(root.conversationKey);
+  });
+
+  test("which requests bind at all is unchanged", () => {
+    // Deliberately untouched by #4780: only the VALUE of the key moves, never the set of
+    // requests that produce one. A bare thread-id still has no family anchor.
+    expect(codexPoolAffinityKey(new Headers({ "thread-id": "lone" }))).toBeUndefined();
+    expect(codexPoolAffinityKey(new Headers())).toBeUndefined();
+    expect(codexPoolAffinityKey(new Headers({ "x-codex-parent-thread-id": "p".repeat(513) })))
+      .toBeUndefined();
+    expect(codexPoolAffinityKey(new Headers({ "session-id": "s".repeat(513), "thread-id": "t" })))
+      .toBeUndefined();
+  });
+
+  test("a cohort key stays inside its authenticated scope", () => {
+    // Two callers presenting the same session must not share a binding; the scope HMAC is what
+    // keeps that true, and cohort keying must not have widened it.
+    const mine = rootHeaders();
+    const theirs = rootHeaders();
+    theirs.set("authorization", "Bearer someone-else");
+    expect(codexLineageScopeKey(theirs)).not.toBe(codexLineageScopeKey(mine));
+
+    const root = recordCodexThreadLineage(mine, NOW)!;
+    expect(codexThreadLineageLookup(root.conversationKey, codexLineageScopeKey(theirs), NOW))
+      .toBeUndefined();
+  });
+
+  test("a tree shares one binding, so a move of any member moves the tree", () => {
+    // The behaviour change this issue asks for, stated as the tradeoff it is: the tree gains
+    // cache locality and gives up per-thread placement independence. A member cannot be served
+    // by an account other than the one its cohort is bound to.
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    updateAccountQuota("c", 30);
+
+    const root = recordCodexThreadLineage(rootHeaders(), NOW)!;
+    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW))
+      .toMatchObject({ status: "selected", accountId: "a" });
+
+    // A child arriving later is not an unbound thread any more: its cohort is already on a.
+    const child = recordCodexThreadLineage(childHeaders("child-1"), NOW + 1)!;
+    expect(resolveCodexAccountForThreadDetailed(
+      child.conversationKey, config, NOW + 1, undefined, undefined, undefined, child,
+    )).toMatchObject({
+      status: "selected",
+      accountId: "a",
+      affinity: { move: "reused" },
+    });
+
+    // And when the cohort moves, every member moves with it, which is the whole point: the
+    // prompt_cache_key they all send keeps naming one account.
+    streakTransientFailures(config, "a", NOW + 2);
+    const moved = resolveCodexAccountForThreadDetailed(
+      child.conversationKey, config, NOW + 3, undefined, undefined, undefined, child,
+    );
+    expect(moved).toMatchObject({ status: "selected" });
+    expect(moved.accountId).not.toBe("a");
+    expect(resolveCodexAccountForThreadDetailed(root.conversationKey, config, NOW + 3))
+      .toMatchObject({ status: "selected", accountId: moved.accountId });
   });
 });

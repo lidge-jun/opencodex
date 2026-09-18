@@ -1,6 +1,11 @@
 # Overview
 
+Management provider-validation calls use the [shared relative send-path validation](config.md#provider-relative-send-paths) before persistence.
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+The dashboard's compile-checked locale catalogs include Vietnamese. Locale registration, browser
+detection, Compatibility Lab labels, status descriptions, and locale-sensitive quota formatting
+advance together under the `gui/` catalog parity contract.
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
@@ -49,7 +54,8 @@ preserves saved user model selections and historical usage. See the bounded
 installed service resolve it the same way (`src/config.ts`). Ownership inside that root is tracked
 by the uninstall manifest in `src/lib/config-ownership.ts`, which starts from a declared path list
 and grows as opencodex claims further paths at runtime — so the manifest, not this table, is what
-bounds uninstall. This table groups the state by purpose; it is not an exhaustive file list, and
+bounds uninstall. Newly generated recovery backups follow the [backup ownership contract](config.md#restore)
+without suppressing recovery when registration is unavailable. This table groups state by purpose; it is not an exhaustive file list, and
 derived files such as `auth.json.pre-multiauth` are covered by the group they belong to.
 
 `$CODEX_HOME` is a separate root with a separate owner, and opencodex writes there too: removing the
@@ -75,6 +81,10 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | `$CODEX_HOME/opencodex-journal.json` | opencodex | Injection journal used by restore to strip only marker-owned values while preserving later user edits. |
 | `$CODEX_HOME/models_cache.json` | Codex, invalidated by opencodex | Cache invalidated after model/catalog changes. |
 | `dist/`, `gui/dist/`, `node_modules/` | generated | Build output/dependencies. |
+
+OrcaRouter login returns credentials for storage only after bounded response ingestion and payload
+validation. The shared reader's cancellation contract and the login-specific byte/deadline limits
+are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 ## Non-negotiable invariants
 
@@ -147,6 +157,8 @@ its defaults and exclusions are owned by [Responses transport](transports/respon
 Raw reasoning content and provider-authored summaries remain distinct on the Responses wire. See [reasoning presentation](providers/chat-compat.md).
 
 Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
+
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.

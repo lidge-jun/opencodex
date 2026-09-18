@@ -75,6 +75,44 @@ not cap process RSS or the conversation messages accumulated across completed me
 opaque metadata, normal tool passthrough, coalesced-tail accounting, and consumer cancellation on
 both execution paths.
 
+## Bounded response ingestion and OrcaRouter login
+
+`src/lib/bounded-body.ts` owns `readBoundedResponseBytes`: it consumes the original response
+body without cloning or teeing and retains at most the caller's `maxBytes`. An exact-cap body
+requires EOF to succeed; observing an additional byte discards the retained prefix, returns an
+empty byte view with `oversized: true`, and attempts to cancel the reader. The cap measures raw
+bytes exposed by `response.body`, not characters, `Content-Length`, or total process memory.
+The caller supplies the wall-clock deadline through `signal`; an inactivity deadline exists only
+when explicitly requested.
+
+An already-aborted signal attempts to cancel the original body before any reader is attached,
+then rejects with the same reason by identity. An abort during consumption likewise preserves
+the signal reason. Cancellation is best-effort: synchronous throws and rejected cancellation
+promises are observed, and a cancellation that never settles cannot extend the read's deadline.
+After an attached read, cleanup removes the abort listener, cancels any inactivity timer, and
+attempts to release the reader lock. `tests/server/bounded-body.test.ts` covers these paths.
+
+`src/oauth/orcarouter.ts` applies this reader to a successful `POST /api/v1/auth/keys` response
+with a 65,536-byte (64 KiB) ceiling. One 30-second signal, combined with caller cancellation,
+covers both fetching the response headers and consuming the body; no separate body or inactivity
+budget is started. Only a complete body within the cap is decoded with fatal UTF-8 and parsed
+as JSON before key, user identity, and optional scope validation can return credentials.
+
+Oversized bodies fail with a fixed size-limit error. Malformed UTF-8, malformed JSON, and ordinary
+body-read failures share a fixed invalid-JSON error without upstream text or an error cause.
+Body-phase aborts preserve the combined signal's reason by identity; fetch-phase timeout errors
+retain the existing network-error wrapper. Non-success HTTP responses retain status-only errors
+and do not enter this reader. These limits govern login key exchange, not inference payloads or
+other providers' token grants. `tests/providers/orcarouter-provider.test.ts` covers the login
+contract with synthetic responses and local callback fixtures, not live provider authentication.
+
+Other raw-byte consumers of this reader supply their own byte and deadline budgets and inherit the
+same best-effort cancellation behavior. `src/server/responses/fetch-helpers.ts` keeps its own
+transport budgets, so the 64 KiB login ceiling never caps Responses inference payloads. Because a
+rejected body returns no credentials, an oversized, malformed, or aborted key response ends the
+login before credential persistence or dashboard convergence, leaving only the fixed size-limit or
+invalid-JSON message described above.
+
 ## Provider diagnostic outbound safety
 
 Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
@@ -160,3 +198,16 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+## Model-family-aware OAuth headroom
+
+`src/oauth/account-quota-rank.ts` ranks Antigravity custom windows for the requested
+Gemini or Claude family, including GPT-OSS in the Claude family. An unknown model
+retains all-window ranking; absent matching evidence retains the existing unranked behavior.
+`src/server/responses/request-transport.ts` passes the routed model at initial selection.
+The passthrough, adapter, continuation, sidecar and run-turn execution owners pass
+the same routed model during account rotation, without bypassing their send-budget
+admission or account-snapshot pairing. The forwarding contract is covered in
+`tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
