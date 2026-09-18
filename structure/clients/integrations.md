@@ -76,7 +76,9 @@ exact-ID collisions checked before disabled rows are filtered. Management and CL
 carry the boolean into the shared client serializers. Only true creates an additive `--fast`
 selector, preserving the underlying provider, model ID, modalities, limits, and effort metadata.
 False or missing metadata never causes local inference, so old or disabled remote hubs remain
-authoritative. Existing client configs receive the entries on export or managed refresh.
+authoritative. Existing client configs receive the entries on export or managed refresh. A Dashboard
+save refreshes enabled native clients and already-owned file integrations when the running proxy port
+is available; otherwise the operator refreshes the integration or client catalog explicitly.
 
 ## Model input capability exports
 

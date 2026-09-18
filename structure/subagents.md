@@ -41,6 +41,10 @@ encryption marker when the upstream omitted it or returned a nonempty marker.
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
+Pool credentials used by subagent routes can be
+[linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
+resolver enforces source identity and expiry before those credentials reach routing.
+
 ## Multi-agent surface mode (3-state)
 
 `OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:
@@ -395,6 +399,10 @@ vision support from a provider-wide multimodal label.
 
 [Anthropic seed image metadata](runtime.md#capability-aware-image-admission) supplies missing capability evidence; subagent selection and eligibility rules remain unchanged.
 
+Opper's fallback pool seeds carry provider-scoped text/image declarations from
+`src/providers/registry/model-seeds.ts`. They feed the same capability-aware image admission and
+do not change subagent selection, roster order, or eligibility.
+
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
@@ -404,3 +412,5 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
