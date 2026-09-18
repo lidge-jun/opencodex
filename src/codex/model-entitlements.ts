@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { CodexAccountCredentialRecord, OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
-import { getValidCodexToken, loadCodexAccountRecordSnapshot } from "./account-store";
+import {
+  getValidCodexToken,
+  isCodexAccountGenerationLive,
+  loadCodexAccountRecordSnapshot,
+} from "./account-store";
 import {
   getMainAccountToken,
   getValidMainAccountToken,
@@ -22,6 +26,7 @@ import {
   forgetObservedCodexModelDenialsForAccount,
   observedDeniedCodexAccountIdsForModel,
   recordObservedCodexModelDenial,
+  setObservedDenialGenerationCheck,
   resetObservedCodexModelDenialsForTests,
 } from "./observed-model-denials";
 
@@ -1330,23 +1335,36 @@ export function cachedDeniedCodexAccountIdsForModel(
  * admissible here: 400 covers every malformed request too, and remembering one of those as an
  * entitlement fact would steer routing away from a perfectly capable account.
  */
+// Denial evidence is credential-scoped (#4952). The store stays a leaf module, so the
+// liveness predicate is injected here, where the account store is already a dependency.
+setObservedDenialGenerationCheck(isCodexAccountGenerationLive);
+
 export function recordCodexModelDenialEvidence(
   accountId: string | null | undefined,
   modelId: string | undefined,
+  generation: number | null | undefined,
   now = Date.now(),
 ): void {
   if (!accountId || !modelId) return;
   if (!ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return;
-  recordObservedCodexModelDenial(accountId, modelId, now);
+  // A refusal with no credential generation cannot be attributed to the credential that
+  // earned it, so it is dropped rather than recorded against whatever is current now
+  // (#4952). Every production caller has the dispatched auth context in hand.
+  if (typeof generation !== "number") return;
+  recordObservedCodexModelDenial(accountId, modelId, generation, now);
 }
 
 /** Drop the refusal evidence for a pair the account has just served successfully. */
 export function clearCodexModelDenialEvidence(
   accountId: string | null | undefined,
   modelId: string | undefined,
+  generation: number | null | undefined,
 ): void {
   if (!accountId || !modelId) return;
-  clearObservedCodexModelDenial(accountId, modelId);
+  // Same reasoning as the write: a success that cannot name its generation must not clear
+  // evidence that may belong to a newer credential (#4952).
+  if (typeof generation !== "number") return;
+  clearObservedCodexModelDenial(accountId, modelId, generation);
 }
 
 /** Synchronous projection for management/catalog readers after a discovery pass. */

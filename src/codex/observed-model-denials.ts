@@ -48,8 +48,38 @@ const OBSERVED_DENIAL_TTL_MS = 6 * 60 * 60_000;
 /** Bounded like the roster cache: pool size times flagship count, with room to spare. */
 const OBSERVED_DENIAL_MAX_ENTRIES = 512;
 
-/** `accountId\u0000modelId` -> expiry. Insertion order is the eviction order. */
-const observedDenials = new Map<string, number>();
+/**
+ * One entry of refusal evidence.
+ *
+ * `generation` is the credential generation the refusal was observed under (#4952). Evidence
+ * is about a CREDENTIAL, not an account id: reauthenticating the same internal account can
+ * swap the subscription underneath it, so a refusal from the previous credential says nothing
+ * about the replacement. Carrying the generation lets a reader ignore superseded evidence and
+ * lets a late reply from an older generation be refused rather than applied.
+ */
+interface ObservedDenial {
+  expiresAt: number;
+  generation: number;
+}
+
+/** `accountId\u0000modelId` -> entry. Insertion order is the eviction order. */
+const observedDenials = new Map<string, ObservedDenial>();
+
+/**
+ * Whether `generation` is still the account's live credential.
+ *
+ * Injected rather than imported at module scope so the store stays a leaf: `account-store`
+ * reads the credential file, and a unit test of this map should not have to stand one up.
+ * Production wiring passes {@link isCodexAccountGenerationLive}.
+ */
+type GenerationLiveCheck = (accountId: string, generation: number) => boolean;
+
+let generationIsLive: GenerationLiveCheck = () => true;
+
+/** Wire the liveness predicate. Called once at startup; tests substitute their own. */
+export function setObservedDenialGenerationCheck(check: GenerationLiveCheck): void {
+  generationIsLive = check;
+}
 
 function denialKey(accountId: string, modelId: string): string {
   return `${accountId}\u0000${modelId}`;
@@ -72,12 +102,18 @@ function modelIdOfDenialKey(key: string): string {
 export function recordObservedCodexModelDenial(
   accountId: string,
   modelId: string,
+  generation: number,
   now = Date.now(),
 ): void {
   const key = denialKey(accountId, modelId);
+  const existing = observedDenials.get(key);
+  // A refusal dispatched under generation G can arrive after G+1 has been saved. It is
+  // evidence about a credential that no longer exists, so it must not overwrite — or
+  // resurrect — evidence belonging to the replacement (#4952).
+  if (existing && existing.generation > generation) return;
   // Delete before set so the refreshed entry moves to the back of the eviction order.
   observedDenials.delete(key);
-  observedDenials.set(key, now + OBSERVED_DENIAL_TTL_MS);
+  observedDenials.set(key, { expiresAt: now + OBSERVED_DENIAL_TTL_MS, generation });
   while (observedDenials.size > OBSERVED_DENIAL_MAX_ENTRIES) {
     const oldest = observedDenials.keys().next();
     if (oldest.done) break;
@@ -91,8 +127,19 @@ export function recordObservedCodexModelDenial(
  * A success is newer and stronger evidence than the refusal that preceded it: whatever the
  * entitlement was when upstream refused, it is not that now.
  */
-export function clearObservedCodexModelDenial(accountId: string, modelId: string): void {
-  observedDenials.delete(denialKey(accountId, modelId));
+export function clearObservedCodexModelDenial(
+  accountId: string,
+  modelId: string,
+  generation: number,
+): void {
+  const key = denialKey(accountId, modelId);
+  const existing = observedDenials.get(key);
+  if (!existing) return;
+  // The mirror of the write fence: a success dispatched under G arriving after G+1 was
+  // refused must not clear the replacement's evidence (#4952). Equal generations clear,
+  // because that is the ordinary "this account just served this model" case.
+  if (existing.generation > generation) return;
+  observedDenials.delete(key);
 }
 
 /**
@@ -122,16 +169,26 @@ export function observedDeniedCodexAccountIdsForModel(
 ): ReadonlySet<string> | undefined {
   if (!modelId) return undefined;
   const denied = new Set<string>();
-  for (const [key, expiresAt] of [...observedDenials]) {
-    if (expiresAt <= now) {
+  for (const [key, entry] of [...observedDenials]) {
+    if (entry.expiresAt <= now) {
       observedDenials.delete(key);
       continue;
     }
-    if (modelIdOfDenialKey(key) === modelId) denied.add(accountIdOfDenialKey(key));
+    const accountId = accountIdOfDenialKey(key);
+    // Evidence from a superseded credential is dropped rather than merely ignored: the
+    // account has reauthenticated, so this row can never become relevant again (#4952).
+    // This is what makes the fix self-healing without depending on the conditional
+    // account-wide forget, which cannot run when no roster was ever cached.
+    if (!generationIsLive(accountId, entry.generation)) {
+      observedDenials.delete(key);
+      continue;
+    }
+    if (modelIdOfDenialKey(key) === modelId) denied.add(accountId);
   }
   return denied.size > 0 ? denied : undefined;
 }
 
 export function resetObservedCodexModelDenialsForTests(): void {
   observedDenials.clear();
+  generationIsLive = () => true;
 }

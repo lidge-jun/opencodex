@@ -6,11 +6,15 @@ import {
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
 } from "../../src/codex/model-entitlements";
+import { setObservedDenialGenerationCheck } from "../../src/codex/observed-model-denials";
 import {
   codexUnsupportedModelFromDetail,
   isAllowListedCodexAccountModel400,
   shouldRetryCodexPoolAccountModel400,
 } from "../../src/server/responses/core-codex-account";
+
+/** Credential generation these fixtures record under (#4952). */
+const GEN = 1;
 
 const TEST_CLIENT_VERSION = "0.146.0";
 const DAYBREAK = "gpt-daybreak-blue-latest";
@@ -55,7 +59,7 @@ describe("upstream refusal as per-account model denial evidence", () => {
     // selection sees nothing and picks the Free account on quota.
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
 
-    recordCodexModelDenialEvidence("free", SOL, now);
+    recordCodexModelDenialEvidence("free", SOL, GEN, now);
 
     expect([...(cachedDeniedCodexAccountIdsForModel(SOL, now) ?? [])]).toEqual(["free"]);
     // Model-scoped: refusing Sol says nothing about Astra on the same account.
@@ -64,7 +68,7 @@ describe("upstream refusal as per-account model denial evidence", () => {
 
   test("a confirmed roster grant outranks an earlier refusal", () => {
     const now = 1_800_000_000_000;
-    recordCodexModelDenialEvidence("plus", ASTRA, now);
+    recordCodexModelDenialEvidence("plus", ASTRA, GEN, now);
     expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])]).toEqual(["plus"]);
 
     // A rollout reached the account. The newer answer wins, so a refusal cannot strand an
@@ -75,10 +79,10 @@ describe("upstream refusal as per-account model denial evidence", () => {
 
   test("a success clears the refusal for that pair only", () => {
     const now = 1_800_000_000_000;
-    recordCodexModelDenialEvidence("free", SOL, now);
-    recordCodexModelDenialEvidence("free", ASTRA, now);
+    recordCodexModelDenialEvidence("free", SOL, GEN, now);
+    recordCodexModelDenialEvidence("free", ASTRA, GEN, now);
 
-    clearCodexModelDenialEvidence("free", SOL);
+    clearCodexModelDenialEvidence("free", SOL, GEN);
 
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
     expect([...(cachedDeniedCodexAccountIdsForModel(ASTRA, now) ?? [])]).toEqual(["free"]);
@@ -86,7 +90,7 @@ describe("upstream refusal as per-account model denial evidence", () => {
 
   test("refusal evidence expires, and outlives the five-minute roster window", () => {
     const now = 1_800_000_000_000;
-    recordCodexModelDenialEvidence("free", SOL, now);
+    recordCodexModelDenialEvidence("free", SOL, GEN, now);
 
     // The roster TTL is where #4797's evidence disappeared. This must still be answering there.
     expect([...(cachedDeniedCodexAccountIdsForModel(SOL, now + 5 * 60_000 + 1) ?? [])])
@@ -99,8 +103,8 @@ describe("upstream refusal as per-account model denial evidence", () => {
 
   test("only always-visible natives are recorded, so a 400 elsewhere cannot steer routing", () => {
     const now = 1_800_000_000_000;
-    recordCodexModelDenialEvidence("free", "gpt-5.5", now);
-    recordCodexModelDenialEvidence("free", DAYBREAK, now);
+    recordCodexModelDenialEvidence("free", "gpt-5.5", GEN, now);
+    recordCodexModelDenialEvidence("free", DAYBREAK, GEN, now);
 
     expect(cachedDeniedCodexAccountIdsForModel("gpt-5.5", now)).toBeUndefined();
     // Daybreak is account-gated and fails closed through the eligibility path instead.
@@ -109,7 +113,7 @@ describe("upstream refusal as per-account model denial evidence", () => {
 
   test("an excluded account stays unknown rather than denied", () => {
     const now = 1_800_000_000_000;
-    recordCodexModelDenialEvidence("free", SOL, now);
+    recordCodexModelDenialEvidence("free", SOL, GEN, now);
 
     // The native-main read fence: an excluded account must produce the selection it does today.
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now, {
@@ -177,5 +181,79 @@ describe("unsupported-model refusal detection", () => {
       new Response(refusalBody(SOL), { status: 200 }),
       SOL,
     )).toBe(false);
+  });
+});
+
+// ─── Credential generation (#4952) ───────────────────────────────────────────
+//
+// Denial evidence is about a CREDENTIAL, not an account id. Reauthenticating the
+// same internal account keeps the id and increments the generation, and can swap
+// the subscription underneath it — so a refusal earned by the old credential must
+// not steer routing away from the replacement. The account-wide forget that used
+// to be relied on sits behind a condition requiring a previously cached roster,
+// so with no roster it never runs; these pin the store's own behaviour instead.
+
+describe("denial evidence is scoped to the credential generation (#4952)", () => {
+  beforeEach(() => {
+    resetCodexModelEntitlementCacheForTests();
+  });
+
+  test("evidence from a superseded credential stops denying the replacement", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("pooled", SOL, 1, now);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
+
+    // The account reauthenticates: same id, generation 1 is no longer live.
+    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+  });
+
+  test("a late refusal from the old generation cannot deny the replacement", () => {
+    const now = Date.now();
+    // The replacement has already been refused and re-granted, so nothing is recorded
+    // for generation 2 — then generation 1's in-flight 400 finally lands.
+    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    recordCodexModelDenialEvidence("pooled", SOL, 1, now);
+
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+  });
+
+  test("a late refusal cannot overwrite newer evidence", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("pooled", SOL, 2, now);
+    // Generation 1's refusal arrives afterwards; it must not take the entry back a
+    // generation, which would make it vanish the moment the reader checks liveness.
+    recordCodexModelDenialEvidence("pooled", SOL, 1, now);
+
+    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
+  });
+
+  test("a late success from the old generation cannot clear newer evidence", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("pooled", SOL, 2, now);
+    // Generation 1's 200 lands after generation 2 was refused. Clearing here would
+    // re-admit an account that the current credential has just been refused by.
+    clearCodexModelDenialEvidence("pooled", SOL, 1);
+
+    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
+  });
+
+  test("a success from the same generation still clears, which is the ordinary case", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("pooled", SOL, 2, now);
+    clearCodexModelDenialEvidence("pooled", SOL, 2);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+  });
+
+  test("evidence with no generation is dropped rather than attributed to the current one", () => {
+    const now = Date.now();
+    // A main-account context carries no pool generation. It also carries no account
+    // id, so this is belt-and-braces — but recording against whatever is current now
+    // would be attributing a refusal to a credential that never earned it.
+    recordCodexModelDenialEvidence("pooled", SOL, undefined, now);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
   });
 });
