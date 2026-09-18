@@ -96,7 +96,7 @@ function planSummary(plan: CodexCliUpdatePlan): string[] {
     `session: ${plan.session.state}${plan.session.matches === null ? "" : ` (${plan.session.matches})`}`,
   ];
   if (plan.planId) lines.push(`plan: ${plan.planId}`);
-  if (plan.command) lines.push(`command: ${plan.command.join(" ")}`);
+  if (plan.command) lines.push(`command: ${plan.command.join(" ")} (indicative — apply verifies the packed tarball and installs the verified file)`);
   return lines;
 }
 
