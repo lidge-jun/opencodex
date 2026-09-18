@@ -246,6 +246,25 @@ describe("Codex CLI update apply", () => {
     expect(installs).toEqual([]);
   });
 
+  test("an artifact digest mismatch fails closed before install", async () => {
+    const installs: string[] = [];
+    const plan = await applicablePlan();
+    let seenIntegrity: string | null | undefined;
+    const result = await applyCodexCliUpdatePlan(plan.planId!, applyDeps({
+      runInstaller: (version, expectedIntegrity) => {
+        installs.push(version);
+        seenIntegrity = expectedIntegrity;
+        return { exitCode: null, integrityMismatch: true };
+      },
+    }, installs));
+    // The plan-bound sha512 reaches the installer seam, and a mismatch refuses
+    // rather than reporting an ambiguous post-install state.
+    expect(seenIntegrity).toBe(plan.targetIntegrity);
+    expect(result.status).toBe("refused");
+    expect(result.refusal).toBe("integrity_mismatch");
+    expect(result.installerExitCode).toBeNull();
+  });
+
   test("the readback classifies the result, and installs exactly the pinned version", async () => {
     const installs: string[] = [];
     const plan = await applicablePlan();
@@ -458,4 +477,3 @@ describe("registry target resolution", () => {
     expect(target.kind).toBe("unresolved");
   });
 });
-
