@@ -395,7 +395,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 94 built-in presets: 78 key-based, 12 OAuth, three local, and one default
+opencodex ships 95 built-in presets: 79 key-based, 12 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -427,6 +427,15 @@ token group allows (`gpt-5.5` and `gpt-5.1-codex` are seeded). Register at
 [packyapi.com](https://www.packyapi.com/register?aff=k5KT) and create a Codex-group token; the preset
 pins the row near the top of the Add provider picker and marks it as a sponsor, and nothing else about
 routing or defaults changes.
+
+**Opper** is the EU-hosted AI gateway from Opper AI (Stockholm): one key (created at
+[platform.opper.ai](https://platform.opper.ai)) and one OpenAI-compatible endpoint in front of 700+
+models from 30+ providers. Bare model ids such as `claude-sonnet-4-6` or `gpt-5.5` are *pools*: Opper
+picks the provider and region per request, so the seeded ids stay valid as routes come and go. A
+`vendor/model` id (`anthropic/claude-sonnet-4-6`, `aws/claude-sonnet-4-6-eu`) pins one route instead.
+The catalogue is discovered live from `/v3/compat/models` with your key; the public list, including
+region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper is also a
+[models.dev](https://models.dev) provider (`opper`), which uses the same bare pool ids.
 
 | Provider | Base URL |
 | --- | --- |
@@ -476,6 +485,7 @@ routing or defaults changes.
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| Opper | `https://api.opper.ai/v3/compat` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |

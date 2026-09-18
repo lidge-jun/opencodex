@@ -208,6 +208,7 @@ Published as SVG and committed with only comments, `<title>`/`<desc>` and
 - `digitalocean.svg` — `digitalocean.com` favicon, 32x32.
 - `featherless.svg` — `featherless.ai/favicon.svg`, 256x256.
 - `kilo.svg` — `kilo.ai/favicon/favicon.svg`, 32x32. Keeps its `oklch()` plate.
+- `opper.svg` — supplied in PR #4823 by an Opper employee, 315x315 single-ink mark.
 - `nanogpt.svg` — `nano-gpt.com/logo.svg`, 181x187, gradient.
 - `nebius.svg` — `nebius.com/favicon/favicon.svg`, 96x96.
 - `neuralwatt.svg` — the site's Webflow-hosted brand asset, 32x32.

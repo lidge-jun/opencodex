@@ -35,7 +35,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 
 - **Reasoning folding:** the Responses parser folds `reasoning` items into the FOLLOWING
   assistant turn (`pendingReasoning` in `src/responses/parser.ts`) so the Grok chat wire carries
-  ONE assistant message with `reasoning_content` — exact-prefix cache stability. Unsigned
+  ONE assistant message with `reasoning_content` ??exact-prefix cache stability. Unsigned
   siblings newline-join; `ocxr1`-signed siblings stay separate parts (Anthropic replay keeps
   each signature on its own text); boundaries (user/tool-result/agent) clear pending state;
   call items fold pending reasoning into the same turn.
@@ -53,7 +53,7 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
-  (`expectedGeneration` → superseded adoption), conditional `needsReauth`, bounded jittered
+  (`expectedGeneration` ??superseded adoption), conditional `needsReauth`, bounded jittered
   retry for transient token-endpoint failures.
   Newly created legacy-store recovery copies follow the [backup ownership contract](../config.md#restore);
   an ownership-registration failure (a `false` return or thrown error) warns without discarding downgrade recovery.
@@ -85,7 +85,7 @@ malformed, gapped, oversized, contradictory, failed, or incomplete streams stay 
 - **Transport:** Binary gRPC-Web over HTTP/1.1 or HTTP/2 with 5-byte frame envelope (`0x00` data / `0x80` trailers) and protobuf wire format. Plain JSON is rejected with empty responses upstream.
 - **Authentication:** `Authorization: Bearer <xai OIDC access token>` + `X-XAI-Token-Auth: xai-grok-cli`. No cookies required.
 - **Safety & Idempotency:** Managed via `src/grok/reset-coupon-ledger.ts` using UUIDv4 operation tracking before upstream dispatch to prevent duplicate consumption during network flakes.
-- **Surfaces:** `ocx account grok-reset-coupons` in the terminal, and the dashboard at Providers > xAI Grok > Accounts, where each OAuth row carries a ticket badge with its remaining count and opens a redemption dialog (`gui/src/hooks/useGrokResetCoupons.ts`, `gui/src/components/provider-workspace/GrokResetCoupons.tsx`). The dashboard reads one `GET /api/grok/reset-coupons` per account with at most three in flight, always sends an explicit `tokenId` and a client-minted `operationId`, and treats redemption truth as the settled `code` rather than HTTP 200 — a replayed *failure* returns 200 with `replayed: true`. After a request times out it issues no further consume call, because a redemption whose ledger record is still `open` re-executes.
+- **Surfaces:** `ocx account grok-reset-coupons` in the terminal, and the dashboard at Providers > xAI Grok > Accounts, where each OAuth row carries a ticket badge with its remaining count and opens a redemption dialog (`gui/src/hooks/useGrokResetCoupons.ts`, `gui/src/components/provider-workspace/GrokResetCoupons.tsx`). The dashboard reads one `GET /api/grok/reset-coupons` per account with at most three in flight, always sends an explicit `tokenId` and a client-minted `operationId`, and treats redemption truth as the settled `code` rather than HTTP 200 ??a replayed *failure* returns 200 with `replayed: true`. After a request times out it issues no further consume call, because a redemption whose ledger record is still `open` re-executes.
 
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
@@ -127,6 +127,9 @@ overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`
 The Crusoe fixed-key registry row, discovery predicate, effort ladder, and input-modality map are
 also provider-scoped and do not alter xAI model metadata, OAuth routing, or wire behavior.
 
+The Opper pool seeds in `src/providers/registry/entries-extended.ts` are also provider-scoped and
+do not alter xAI discovery, model metadata, or transport behavior.
+
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
 Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
@@ -147,7 +150,7 @@ grok-composer-2.5-fast each echoed `priority` upstream. The registry entry class
 that set in `modelSupportsServiceTier` and declares `chatServiceTier: true`, so the OAuth lane
 resolves Fast-eligible per model: `--fast` synthetic rows publish, `fastMode` can force the
 tier, and a caller-sent tier forwards (the Codex fast-toggle path). grok-4.20-multi-agent-0309
-is deliberately excluded — the gateway answers `service_tier: "default"` when sent
+is deliberately excluded ??the gateway answers `service_tier: "default"` when sent
 `priority`, so it keeps `forwardCallerServiceTier: false` and publishes no fast row.
 Classification reaches saved configs through the fill-only enrich backfill
 (`src/providers/derive.ts`); an explicit config value always wins, and a config saved while
@@ -172,3 +175,5 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Shared startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](../runtime.md).
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

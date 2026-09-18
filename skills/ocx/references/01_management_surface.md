@@ -560,6 +560,26 @@ JSON mode: `payload`.
 - /api/codex-auth/login stays pool-only and keeps rejecting __main__; this namespace is the only device-reauth surface for the native main slot.
 - Payloads carry only flowId, status, the verification URL, the device code, and a closed set of failure codes -- never tokens, emails, or raw account ids.
 
+### `ocx account import-orca`
+
+Preview or register read-only links to Orca-managed Codex accounts without another login.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--source` | string | Orca data directory containing codex-accounts. |
+| `--registry` | string | The chosen Orca profile's orca-data.json account registry. |
+| `--apply` | boolean | Register new accounts; requires a stopped proxy. Default is preview. |
+| `--json` | boolean | Emit counts and fixed invalid-reason codes without credentials or source paths. |
+
+JSON mode: `envelope`.
+
+- Local files only; never copies refresh tokens or changes Orca authentication files.
+- Skips existing ChatGPT identities. New accounts remain pending until dashboard validation.
+- Orca must keep the source login available and refreshed; a missing or expired source fails closed.
+- Mixed eligible and invalid entries exit successfully; an all-invalid result exits nonzero.
+
 ### `ocx account refresh`
 
 Refresh account quotas without model validation; pending Codex accounts require dashboard consent.
@@ -876,6 +896,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 47
-- of those, state-changing: 23
+- declared capabilities: 48
+- of those, state-changing: 24
 - head-resolved invocations: 2
