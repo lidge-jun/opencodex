@@ -124,6 +124,9 @@ The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is l
 the DeepSeek provider and does not alter xAI metadata or transport behavior; explicit capability
 overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and
 `deepseek-v4-flash` remain sidecar-backed by default. Zen routes are unchanged and unprobed here.
+The Crusoe fixed-key registry row, discovery predicate, effort ladder, and input-modality map are
+also provider-scoped and do not alter xAI model metadata, OAuth routing, or wire behavior.
+
 The Opper pool seeds in `src/providers/registry/entries-extended.ts` are also provider-scoped and
 do not alter xAI discovery, model metadata, or transport behavior.
 
