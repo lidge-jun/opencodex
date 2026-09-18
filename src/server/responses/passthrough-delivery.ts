@@ -83,7 +83,10 @@ import {
 import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-tool-repair";
 import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
-import { createGrokResponsesControlFrameBlockRewrite } from "../grok-responses-control-frame";
+import {
+  createGrokResponsesControlFrameBlockRewrite,
+  createGrokResponsesTimestampBlockRewrite,
+} from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
 import {
   createPlaintextV2AgentMessageCallRestoreRewrite,
@@ -497,6 +500,9 @@ export async function deliverPassthroughResponse(
           : undefined,
         grokClientCompatibilityEnabled
           ? createGrokResponsesControlFrameBlockRewrite()
+          : undefined,
+        grokClientCompatibilityEnabled
+          ? createGrokResponsesTimestampBlockRewrite()
           : undefined,
         grokClientCompatibilityEnabled
           ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget)

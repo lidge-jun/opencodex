@@ -742,6 +742,11 @@ terminal observer. Native Responses, Chat Completions, Claude Messages, and WebS
 request logs must therefore finalize through the context-aware terminal mapper; recognized
 `cyber_policy` terminals stay `400 / cyber_policy` rather than collapsing to a generic 502.
 
+Raw SSE inspection remains upstream-first: client-facing block rewrites run after the original
+bytes are observed. The Grok-only `response.created_at` and `response.completed_at` compatibility
+rewrite is limited to `response.*` events with nonnegative safe integer values and leaves invalid or
+byte-identical payloads unchanged.
+
 The client-facing boundary treats the first Responses terminal as authoritative in both relay
 shapes. High-confidence policy errors carried as `response.incomplete`, `response.failed`, or a
 top-level `error` are normalized to one `response.failed / cyber_policy` event without changing the
