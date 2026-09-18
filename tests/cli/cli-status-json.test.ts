@@ -13,6 +13,7 @@ import * as statusProbes from "../../src/cli/status-probes";
 import { packageVersion } from "../../src/cli/help";
 import { getDefaultConfig } from "../../src/config";
 import { findDeadPid } from "../helpers/dead-pid";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../../src/client/state";
@@ -93,22 +94,23 @@ async function runTimedStatus(
 
 describe("status version skew projection", () => {
   beforeAll(async () => {
-    if (process.platform !== "win32") return;
-    await withStatusVersionFixture(packageVersion(), "ocx-status-skew-cold-", async ({ home, codexHome }) => {
-      // Consume the one cold full-CLI status path before the 15s behavior assertions begin.
-      // Keep this bounded and observable: a failed warmup is a setup failure, never a retry.
-      // The 45s hook reserves removeTreeWithRetry's existing 15s Windows cleanup bound plus 5s
-      // to reap the child, leaving 25s for the cold status invocation itself.
-      const result = await runTimedStatus(home, codexHome, true, 25_000);
-      console.log(`[status-version-skew] coldSetup format=json elapsedMs=${result.elapsedMs.toFixed(0)}`);
-      expect(result.timedOut).toBe(false);
-      expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
-      const parsed = JSON.parse(result.stdout);
-      expect(parsed.schemaVersion).toBe(1);
-      expect(parsed.proxy.health.ok).toBe(true);
-      expect(parsed.versionSkew.proxyVersion).toBe(packageVersion());
+    // #4948 introduced this hook for Windows alone, with a hand-derived 25s child allowance. Both
+    // now come from tests/helpers/cold-spawn-warmup.ts, which derives the same 25s from the hook
+    // budget it reserves teardown and reap out of. The platform gate is gone on purpose: the warm-up
+    // costs one sub-second child on the POSIX lanes, and running it everywhere is what keeps the
+    // mechanism exercised by every leg instead of only by the one where it was needed first.
+    await warmColdSpawn("cli-index/status", async deadlineMs => {
+      await withStatusVersionFixture(packageVersion(), "ocx-status-skew-cold-", async ({ home, codexHome }) => {
+        const result = await runTimedStatus(home, codexHome, true, deadlineMs);
+        expect(result.timedOut).toBe(false);
+        expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" });
+        const parsed = JSON.parse(result.stdout);
+        expect(parsed.schemaVersion).toBe(1);
+        expect(parsed.proxy.health.ok).toBe(true);
+        expect(parsed.versionSkew.proxyVersion).toBe(packageVersion());
+      });
     });
-  }, SPAWN_BUDGET_MS);
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
   test.each([
     ["0.0.1", "the running proxy is older"],

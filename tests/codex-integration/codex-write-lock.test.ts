@@ -8,7 +8,7 @@
  * caller told to retry something that will fail identically forever is how a UI
  * spins on a problem only the user can fix.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import {
   resolveCodexCoordinatorDatabasePath,
@@ -23,6 +23,7 @@ import {
   withCodexWriteLock,
 } from "../../src/codex/codex-write-lock";
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -283,6 +284,12 @@ describe("two real processes contend for one lock", () => {
    * production module.
    */
   const childPath = helperPath("codex-write-lock-child.ts");
+
+  // This describe's first spawned child pays the cold codex write-lock helper graph.
+  // Load that graph during setup so its readiness bound measures lock behavior alone.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "codex-write-lock-child", entry: childPath });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
   function spawnChild(payload: Record<string, unknown>) {
     return Bun.spawn(["bun", childPath], {

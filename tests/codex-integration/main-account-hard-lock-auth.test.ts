@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -33,6 +33,7 @@ import { handleResponses } from "../../src/server/responses/core";
 import { handleResponsesCompact } from "../../src/server/responses/compact";
 import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -141,6 +142,15 @@ afterEach(() => {
 });
 
 describe("startup policy binding read is bounded", () => {
+  // This describe owns the file's first spawned child, so its bounded-auth-read entry pays the
+  // cold module-graph load unless setup imports that graph before the measured timeout.
+  beforeAll(async () => {
+    await warmModuleGraph({
+      graph: "bounded-auth-read-child",
+      entry: helperPath("bounded-auth-read-child.ts"),
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   // FIFO and symlink cases need POSIX semantics; Windows keeps the portable cases.
   const boundedReadCases: string[] = ["valid", "oversize", "directory", "missing",
     ...(process.platform === "win32" ? [] : ["fifo-retained", "fifo-hang-proof", "symlink"])];
@@ -170,6 +180,15 @@ describe("startup policy binding read is bounded", () => {
 });
 
 describe("main quota policy at native admission", () => {
+  // This is the first child of its own graph even though another graph spawned above. Its large
+  // server and responses graph must be warm before the measured timeout starts.
+  beforeAll(async () => {
+    await warmModuleGraph({
+      graph: "main-account-policy-startup-child",
+      entry: helperPath("main-account-policy-startup-child.ts"),
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test.each(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
     "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
     "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding",

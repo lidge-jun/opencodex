@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -14,6 +14,7 @@ import {
   getAccountSet,
   saveCredential,
 } from "../../src/oauth/store";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -25,6 +26,25 @@ let tmp: string;
 
 /** Cursor refresh bound: 3 attempts × 15s timeout + retry backoff budget. */
 const CURSOR_MAX_REFRESH_BOUND_MS = 15_000 * 3 + 5_000;
+
+const writerScript = `
+  import { createOAuthRefreshIntentLock, saveCredential } from "./src/oauth/store.ts";
+  const accountId = process.env.ACCOUNT_ID;
+  const readyPath = process.env.READY_PATH;
+  const holdMs = Number(process.env.HOLD_MS || "2500");
+  const lock = createOAuthRefreshIntentLock("kimi", accountId);
+  const guard = await lock.acquire();
+  await Bun.write(readyPath, "held");
+  await Bun.sleep(holdMs);
+  await saveCredential("kimi", {
+    access: "from-writer",
+    refresh: "rt-writer",
+    expires: Date.now() + 3_600_000,
+    accountId: "kimi-acct",
+  });
+  guard.release();
+  console.log("writer-done");
+`;
 
 beforeEach(() => {
   tmp = join(tmpdir(), `oauth-lock-mp-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -49,6 +69,12 @@ describe("OAuth refresh lock wait bound", () => {
 });
 
 describe("slow multi-process OAuth refresh lock", () => {
+  // This is the file's first spawned child, so warm its oauth/store eval graph
+  // before the readiness deadline starts measuring lock behavior.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "oauth-store/eval", source: writerScript, cwd: repoRoot });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("second process waits and adopts the persisted credential", async () => {
     await saveCredential("kimi", {
       access: "kimi-old",
@@ -59,25 +85,6 @@ describe("slow multi-process OAuth refresh lock", () => {
     const accountId = getAccountSet("kimi")!.activeAccountId;
     const readyPath = join(tmp, "lock-held");
     const holdMs = 2_500;
-
-    const writerScript = `
-      import { createOAuthRefreshIntentLock, saveCredential } from "./src/oauth/store.ts";
-      const accountId = process.env.ACCOUNT_ID;
-      const readyPath = process.env.READY_PATH;
-      const holdMs = Number(process.env.HOLD_MS || "2500");
-      const lock = createOAuthRefreshIntentLock("kimi", accountId);
-      const guard = await lock.acquire();
-      await Bun.write(readyPath, "held");
-      await Bun.sleep(holdMs);
-      await saveCredential("kimi", {
-        access: "from-writer",
-        refresh: "rt-writer",
-        expires: Date.now() + 3_600_000,
-        accountId: "kimi-acct",
-      });
-      guard.release();
-      console.log("writer-done");
-    `;
 
     const writer = Bun.spawn([process.execPath, "--eval", writerScript], {
       cwd: repoRoot,

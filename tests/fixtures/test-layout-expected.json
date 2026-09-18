@@ -11,6 +11,7 @@
   "responses-4546-incident-regression.test.ts": "responses",
   "chat-responses-control-integration.test.ts": "responses",
   "coding-agent-tool-result-images.test.ts": "adapters",
+  "cold-spawn-warmup.test.ts": "ci-workflows",
   "hub-usage.test.ts": "server",
   "client-hub-usage.test.ts": "clients",
   "cli-usage-hub.test.ts": "cli",

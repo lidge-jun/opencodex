@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,6 +11,7 @@ import {
   runHistoryUnitUnderLock,
   type HistoryWorkerRunMessage,
 } from "../../src/codex/history-worker";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -23,6 +24,16 @@ setDefaultTimeout(30_000);
 const repoRoot = resolveRepoRoot();
 const sandboxes: string[] = [];
 const backupArtifacts: string[] = [];
+const historyLockImportPrologue = `
+    import { existsSync, writeFileSync } from "node:fs";
+    const { withHistoryWriteSerialization } = await import("./src/codex/history-lock.ts");
+`;
+
+// The shared key with codex-history-lock is intentional: this machine-level graph cost
+// is paid by whichever file runs first in the worker, warming the other before its timed child.
+beforeAll(async () => {
+  await warmModuleGraph({ graph: "codex/history-lock-eval", source: historyLockImportPrologue, cwd: repoRoot });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
 afterEach(() => {
   setBeforeHistoryBackupConsumeForTests(undefined);
@@ -357,9 +368,7 @@ test("a second holder of H makes the unit report blocked rather than wait", asyn
   const ready = join(fixture.codexHome, "..", "held");
   const release = join(fixture.codexHome, "..", "release");
 
-  const holder = Bun.spawn([process.execPath, "--eval", `
-    import { existsSync, writeFileSync } from "node:fs";
-    const { withHistoryWriteSerialization } = await import("./src/codex/history-lock.ts");
+  const holder = Bun.spawn([process.execPath, "--eval", `${historyLockImportPrologue}
     const outcome = withHistoryWriteSerialization(
       ${JSON.stringify(fixture.codexHome)},
       ${JSON.stringify(fixture.stateDb)},
