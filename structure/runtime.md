@@ -112,6 +112,11 @@ their own files.
 
 ## Lifecycle
 
+Service install state records the effective Codex SQLite home alongside `CODEX_HOME` and
+`OPENCODEX_HOME`, and every lifecycle operation requires the recorded value to match the current
+effective resolution. A legacy record without the field keeps its existing behavior, so an
+installation made before this binding is not invalidated by it.
+
 Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog).
 Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
 described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-contract).
