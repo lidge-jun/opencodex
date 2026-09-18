@@ -33,6 +33,11 @@ served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
+Provider preset totals are recounted from the current registry when a preset lands. With Crusoe the
+documented split is 94 total: 78 key-based, 12 OAuth, three local, and one default ChatGPT-forward
+preset. The English provider guide and all seven translated copies carry the same counts and the
+same fixed-host discovery limits.
+
 Native retirement keeps active model/quota instructions aligned across locales with the
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers
 sharing a model-name fragment remain distinct from current Codex-native support.
@@ -406,7 +411,7 @@ Provider configuration documents distinguish actual summaries from raw reasoning
 
 Private pool credential metadata follows the [quota-history publication identity contract](../providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Hub/browser pairing instructions distinguish machine enrollment, session authentication, permission denial and network failure. The hosted dashboard preview is the render artifact used to review these states.
 The integrations guide documents Cline CLI as a two-file, loopback-only integration. Hosted CI validates its source-backed fixtures; the packaged dashboard exposes it through the existing client list.

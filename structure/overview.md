@@ -38,7 +38,8 @@ The default install keeps native OpenAI/ChatGPT passthrough working through one 
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two
 credential routes never fall through into one another. Built-in provider presets include Anthropic,
 Google, Azure, Neuralwatt Cloud, Tencent Cloud Coding Plan, SiliconFlow, and separate Volcengine Ark
-pay-as-you-go, Coding Plan, and Agent Plan endpoints. Additional
+pay-as-you-go, Coding Plan, and Agent Plan endpoints. Crusoe Serverless Inference is a fixed-host
+API-key preset with registry-owned authenticated model discovery. Additional
 providers are routed by explicit `provider/model`, provider model lists, or the configured
 `defaultProvider`.
 
@@ -115,7 +116,8 @@ still cover the rule, which is a judgement only review makes.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the map
   is `scripts/test-layout/layout.json` and `tests/test-layout.test.ts` rejects a test outside its
   domain. Only the two layout guards sit at the root. Source-oracle tests reach the repository
-  through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`.
+  through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. Provider additions register
+  their focused test in both the explicit layout map and its expected-map fixture.
   Enforced by `tests/test-layout.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
@@ -149,7 +151,7 @@ Listener startup diagnostics follow [the runtime lifecycle contract](runtime.md#
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
 see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
