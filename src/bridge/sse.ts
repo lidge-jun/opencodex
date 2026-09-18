@@ -145,7 +145,7 @@ export function bridgeToResponsesSSE(
   ): string => {
     const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
     return helper
-      ? compileCodeModeHelperInput(args, helper)
+      ? compileCodeModeHelperInput(args, helper, codeModeHelperName ?? toolName)
       : repairFreeformToolInput(args, toolName, namespace);
   };
   // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
