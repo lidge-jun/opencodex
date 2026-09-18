@@ -715,7 +715,13 @@ export function applyMultiAgentMode(
         && hasNativeOpenAiCapabilityMetadata(routedNativeSlug)
         ? routedNativeSlug
         : undefined;
-      const nativeLookupSlug = trustedAccountBoundNativeCatalogSlug(entry) ?? slug;
+      const accountBoundNativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
+      const nativeLookupSlug = accountBoundNativeSlug ?? slug;
+      // The baseline is built from bare native slugs only, so "absent from the
+      // baseline" is not evidence about a routed row — it is guaranteed. Only a
+      // native row can carry a pin the baseline legitimately failed to mention;
+      // a routed row keeps the documented default-mode normalization.
+      const isNativeCatalogEntry = accountBoundNativeSlug !== undefined || !slug.includes("/");
       const hasNativeDefault = !nativeAlias
         && codexForwardCapabilityAlias === undefined
         && options.nativeDefaults?.has(nativeLookupSlug) === true;
@@ -731,6 +737,7 @@ export function applyMultiAgentMode(
       } else if (options.nativeDefaults !== undefined
         && !nativeAlias
         && codexForwardCapabilityAlias === undefined
+        && isNativeCatalogEntry
         && !hasNativeDefault
         && typeof entry.multi_agent_version === "string") {
         continue;
