@@ -16,6 +16,10 @@ interview engine. The rule stands on its own; it does not depend on an external 
 
 Native-main device cancellation, polling and restart follow the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces), including status-gated error DTO handling.
 
+Visible dashboard copy follows the total catalog contract in
+[`gui-and-management-api.md`](gui-and-management-api.md#dashboard-surfaces); Vietnamese is a
+first-class locale across page copy and auxiliary label maps.
+
 ## Existing surfaces and their design direction
 
 The surfaces below are examples chosen to show the design direction, not an inventory; the current

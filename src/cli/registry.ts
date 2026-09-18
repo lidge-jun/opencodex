@@ -390,6 +390,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "system update manages OpenCodex itself.",
       "ocx system codex-cli-update check [--json]",
+      "ocx system codex-cli-update attest [--json]",
+      "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
       "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
     ],
   },

@@ -384,6 +384,28 @@ JSON mode: `envelope`.
 - Makes no package-registry request.
 - Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.
 
+### `ocx system codex-cli-update attest`
+
+Observe the selected or explicitly named Windows npm Codex installation files without enabling updates.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--candidate` | string | Absolute npm codex.cmd or package bin/codex.js path; all four paths are all-or-none. |
+| `--npm-prefix` | string | Absolute prefix containing node_modules/@openai/codex. |
+| `--npm-cli` | string | Absolute node_modules/npm/bin/npm-cli.js path. |
+| `--node` | string | Absolute node.exe path; observed, never executed. |
+| `--json` | boolean | Emit the path-free installation identity observation. |
+
+JSON mode: `envelope`.
+
+- Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.
+- Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate: the configured CODEX_CLI_PATH or the first codex on the captured PATH, with an OpenCodex wrapper resolving to its codex.opencodex-real backing. Discovery only proposes paths; the held-handle observation remains the authority.
+- Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.
+- selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.
+- Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.
+
 ### `ocx claude desktop status`
 
 Applied-vs-desired Claude Desktop state, including staleness, drift, and health.
@@ -854,6 +876,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 46
+- declared capabilities: 47
 - of those, state-changing: 23
 - head-resolved invocations: 2

@@ -26,7 +26,10 @@ import { withNativeMainSharedClaim } from "../codex/native-main-claim";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
-import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-model-fallback";
+import {
+  scanCodexAgentRolesWithTomlModelFallback,
+  scanOpencodexDerivedCodexAgentRolesWithoutModelPin,
+} from "../codex/subagent-model-fallback";
 import { readCatalog, readCodexCatalogPath, readConfiguredDefaultModel } from "../codex/catalog/parsing";
 import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
 import { providerTableString, rootTomlString } from "../codex/injected-marker";
@@ -1508,6 +1511,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   } else {
     console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
     console.log("        Codex >= 0.146 rejects that field as unknown and skips the whole role. Move the chains to opencodex config `subagentModelFallbackByModel` (keyed by primary model) and remove the field from the TOML files.");
+  }
+  // opencodex does not write these files; the Codex desktop external-agent import does, and it
+  // drops the model pin on the way in. Observe-only: doctor never repairs or removes them.
+  const unpinnedDerivedRoles = scanOpencodexDerivedCodexAgentRolesWithoutModelPin(resolveCodexHomeDirImpl());
+  if (unpinnedDerivedRoles.length === 0) {
+    console.log("  ok     every opencodex-derived role file in $CODEX_HOME/agents/*.toml pins a model");
+  } else {
+    console.log(`  [WARN] ${unpinnedDerivedRoles.length} opencodex-derived role file${unpinnedDerivedRoles.length === 1 ? "" : "s"} without a \`model\` pin: ${unpinnedDerivedRoles.map(role => `${role}.toml`).join(", ")}`);
+    console.log("        Codex runs these roles on the parent model, so a spawn records one role and another model. The `ocx-route` directive in the file cannot pin them: it is honoured only on the Claude Code `/v1/messages` path and is inert on `/v1/responses`.");
+    console.log("        Add `model = \"<id>\"` to each file, or remove them. They usually come from the Codex desktop external-agent import of ~/.claude/agents/ocx-*.md; set `[desktop] external-agent-import-sync-item-types` with `SUBAGENTS = false` to stop it recreating them.");
   }
 
   const dual = collectWslDualInstall();

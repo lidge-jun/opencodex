@@ -30,6 +30,8 @@ opencodex 的命令列工具是 `ocx`。它依第一個命令名稱分派，有�
 
 `ocx system codex-cli-update check` 不需要執行中的代理，也不會向套件 registry 發出請求。它只會在限定範圍內檢查設定中的安裝候選項來源中繼資料，包括經過遮罩的可執行檔位置與所有權證據。正式發布的 launcher 所提供的可信內容只會驗證該候選項快照，並不證明 Codex 已成功執行。由於這個單次檢查命令絕不會執行 Codex，來自環境變數與持久化記錄的候選項只供報告（`managed: false`，通常為 `selection_unattested`）；JSON 輸出包含 `candidateAvailable`、`candidateVersion` 與 `candidateSource`，而 `selectionAttested` 維持 `false`。檢查設定中的安裝候選項時，必須有正式發布的 launcher 所提供的可信內容；直接使用 Bun 啟動或從原始碼執行時不具備這項證明，因此會忽略來自環境與持久化記錄的候選項狀態，並可能報告 POSIX 下的 `candidate_unavailable` 或 Windows 下的 `windows_inspection_deferred`。在 Windows 上，這個首個切片不會對候選路徑或設定路徑執行任何檔案系統 I/O。只有由可信 launcher 擷取的絕對環境候選項可以取得應用程式封裝或版本管理工具的純詞彙標籤；其他所有 Windows 候選項都會以失敗關閉方式處理。此命令不會安裝或修復軟體、不會執行 Codex 或 npm、不會控制執行中的程序，也不會寫入設定或快取狀態。
 
+觀測 Windows x64 安裝的方式請參閱 [`attest` 命令](/zh-tw/reference/cli/agents/)。未提供明確路徑時，該命令會觀測由受證明約束的啟動器快照識別出的已選候選項；它不授予更新權限，也不證明執行階段選擇。
+
 沒有歧義時，list 或 status 是預設。使用 `--json` 取得結構化快照，並以
 `ocx observe logs --follow --jsonl` 取得串流的請求 log feed。佈景主題、語言、導覽與
 其他純視覺的瀏覽器狀態沒有 CLI 對應；Cloudflare Tunnel 設定不在此命令集內。
