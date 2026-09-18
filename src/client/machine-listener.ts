@@ -46,9 +46,14 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   if (req.headers.get("upgrade")) return false;
   const path = url.pathname;
   if (req.method === "GET" && (path === "/healthz" || path === "/readyz" || path === "/" || path === "/opencodex-session")) return true;
-  if (req.method === "GET" && (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim")) return true;
+  if ((req.method === "GET" || req.method === "HEAD") && (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim")) return true;
   if (req.method === "POST" && (path === "/api/machine/sync" || path === "/api/machine/shim" || path === "/api/machine/disconnect")) return true;
   if (relayEnabled && path.startsWith("/api/machine/hub-relay/")) return true;
+  // Known machine endpoints are admitted for every method so an unsupported
+  // method reaches the authenticated method restriction (403) instead of a
+  // bare 404 that hides the endpoint entirely.
+  if (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim"
+    || path === "/api/machine/sync" || path === "/api/machine/disconnect") return true;
   if (req.method !== "GET" || path.startsWith("/api/") || path.startsWith("/v1/")) return false;
   return GUI_SPA_PATHS.has(path)
     || path.startsWith("/integrations/")
