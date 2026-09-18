@@ -790,6 +790,7 @@ export const zhTW: Record<TKey, string> = {
   "usage.col.cacheHits": "快取命中",
   "usage.col.cacheWrites": "快取寫入",
   "usage.col.cacheHitRate": "命中率",
+  "usage.unavailable": "—",
   "usage.col.tokens": "Token 數",
   "usage.col.apiListPrice": "API 標價",
   "usage.col.share": "佔比",

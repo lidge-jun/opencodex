@@ -1003,6 +1003,7 @@ export const en = {
   "usage.col.cacheHits": "Cache hits",
   "usage.col.cacheWrites": "Cache writes",
   "usage.col.cacheHitRate": "Hit rate",
+  "usage.unavailable": "—",
   "usage.col.tokens": "Tokens",
   "usage.col.apiListPrice": "API list-price",
   "usage.col.share": "Share",

@@ -965,6 +965,7 @@ export const zh: Record<TKey, string> = {
   "usage.col.cacheHits": "缓存命中",
   "usage.col.cacheWrites": "缓存写入",
   "usage.col.cacheHitRate": "命中率",
+  "usage.unavailable": "—",
   "usage.col.tokens": "Token 数",
   "usage.col.apiListPrice": "API 标价",
   "usage.col.share": "占比",

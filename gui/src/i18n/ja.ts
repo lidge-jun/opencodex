@@ -916,6 +916,7 @@ export const ja: Record<TKey, string> = {
   "usage.col.cacheHits": "キャッシュヒット",
   "usage.col.cacheWrites": "キャッシュ書き込み",
   "usage.col.cacheHitRate": "ヒット率",
+  "usage.unavailable": "—",
   "usage.col.tokens": "トークン",
   "usage.col.apiListPrice": "API 定価",
   "usage.col.share": "割合",

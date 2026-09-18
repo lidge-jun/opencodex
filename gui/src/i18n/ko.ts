@@ -984,6 +984,7 @@ export const ko: Record<TKey, string> = {
   "usage.col.cacheHits": "캐시 히트",
   "usage.col.cacheWrites": "캐시 쓰기",
   "usage.col.cacheHitRate": "히트율",
+  "usage.unavailable": "—",
   "usage.col.tokens": "토큰",
   "usage.col.apiListPrice": "API 정가",
   "usage.col.share": "비율",

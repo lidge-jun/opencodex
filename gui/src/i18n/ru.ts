@@ -971,6 +971,7 @@ export const ru: Record<TKey, string> = {
   "usage.col.cacheHits": "Попадания в кэш",
   "usage.col.cacheWrites": "Записи в кэш",
   "usage.col.cacheHitRate": "Доля попаданий",
+  "usage.unavailable": "—",
   "usage.col.tokens": "Токены",
   "usage.col.apiListPrice": "Прайс-лист API",
   "usage.col.share": "Доля",

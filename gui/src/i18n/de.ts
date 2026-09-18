@@ -950,6 +950,7 @@ export const de: Record<TKey, string> = {
   "usage.col.cacheHits": "Cache-Treffer",
   "usage.col.cacheWrites": "Cache-Schreibvorgänge",
   "usage.col.cacheHitRate": "Trefferquote",
+  "usage.unavailable": "—",
   "usage.col.tokens": "Tokens",
   "usage.col.apiListPrice": "API-Listenpreis",
   "usage.col.share": "Anteil",

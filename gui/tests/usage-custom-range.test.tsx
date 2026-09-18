@@ -95,6 +95,19 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
       cacheReadInputTokens: 600,
       cacheCreationInputTokens: 100,
       cacheHitRate: 0.6,
+      cacheObservedInputTokens: 1_000,
+    },
+    {
+      ...data.models[0]!,
+      model: "partial-cache-model",
+      totalTokens: 1_000,
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cachedInputTokens: 450,
+      cacheReadInputTokens: 450,
+      cacheCreationInputTokens: 0,
+      cacheHitRate: 0.9,
+      cacheObservedInputTokens: 500,
     },
     {
       ...data.models[0]!,
@@ -113,10 +126,12 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
     "Cache hits", "Cache writes", "Hit rate", "Tokens", "Share",
   ]);
   const rows = table!.querySelectorAll("tbody tr");
-  expect(rows).toHaveLength(2);
+  expect(rows).toHaveLength(3);
   const measured = [...rows[0]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
   expect(measured?.slice(4, 9)).toEqual(["1000", "120", "600", "100", "60%"]);
-  const unavailable = [...rows[1]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  const partial = [...rows[1]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  expect(partial?.slice(6, 9)).toEqual(["450", "0", "—"]);
+  const unavailable = [...rows[2]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
   expect(unavailable?.slice(6, 9)).toEqual(["—", "—", "—"]);
 });
 

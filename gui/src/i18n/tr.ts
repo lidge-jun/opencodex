@@ -990,6 +990,7 @@ export const tr: Record<TKey, string> = {
   "usage.col.cacheHits": "Önbellek isabetleri",
   "usage.col.cacheWrites": "Önbellek yazma",
   "usage.col.cacheHitRate": "İsabet oranı",
+  "usage.unavailable": "—",
   "usage.col.tokens": "Jetonlar",
   "usage.col.apiListPrice": "API liste fiyatı",
   "usage.col.share": "Pay",
