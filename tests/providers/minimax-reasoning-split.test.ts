@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { releaseTranslatedEvent } from "../../src/lib/translator-budget";
 import { createTestTranslatorBudget as createTranslatorBudget } from "../helpers/translator-budget";
 import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import { routeModel } from "../../src/router";
@@ -269,6 +270,9 @@ describe("MiniMax split reasoning", () => {
 
     expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "full thinking" });
     expect(events).toContainEqual({ type: "text_delta", text: "final answer" });
+    // The returned batch is caller-owned and stays charged until consumed; releasing
+    // each event's lease must drain the budget, proving no snapshot key is retained.
+    for (const event of events) releaseTranslatedEvent(event, budget);
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
