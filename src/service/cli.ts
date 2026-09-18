@@ -197,23 +197,28 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     assertServiceAuthEnvironment();
     // A throw used to escape straight to the top level, so the one command that can
     // leave a macOS hub evicted never reached its own serving check (#4236, defect 1f).
-    // Report the failure, then still ask whether anything is listening: on darwin the
-    // rollback inside installLaunchd may have brought the previous job back, and on
-    // Windows the preserve/restart protocol may have done the same. The operator needs
-    // both halves of that answer, and the exit code stays non-zero either way.
+    // Still ask whether anything is listening: on darwin the rollback inside installLaunchd
+    // may have brought the previous job back, and on Windows the preserve/restart protocol
+    // may have done the same. The operator needs both halves of that answer, and the exit
+    // code stays non-zero either way.
+    //
+    // The failure text travels INTO that report rather than being printed here. Printing it
+    // here and then letting the report reach its success line stated both outcomes for one
+    // run — "❌ Service repair failed: ... exit code 199" beside "✅ opencodex service
+    // repaired and serving on port 10100" — and the checkmark was the false half: the
+    // existing registration had been restarted, not repaired (#4914).
     let repairError: unknown;
     try {
       await repairService({ verb });
     } catch (error) {
       repairError = error;
-      console.error(`❌ Service ${verb} failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exitCode = 1;
     }
     // All three platforms: a repair that reports success while nothing serves is the
     // defect class this unit exists to close. Windows bakes its port into the
     // scheduler wrapper or the WinSW XML, both of which installedServiceListenPort()
     // now reads.
-    await reportServiceServing(verb === "restart" ? "restarted" : "repaired");
+    await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);
     if (repairError !== undefined) process.exitCode = 1;
     return;
   }

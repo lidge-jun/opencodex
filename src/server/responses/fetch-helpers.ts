@@ -45,6 +45,31 @@ export function safeOriginLabel(url: string): string {
   }
 }
 
+/**
+ * Check whether a target host should bypass Bun's keep-alive pool reuse.
+ * Configured via the `OCX_FRESH_CONNECTION_HOSTS` environment variable (comma-separated).
+ */
+export function wantsFreshConnection(
+  input: Parameters<typeof globalThis.fetch>[0],
+  hostsEnv = process.env.OCX_FRESH_CONNECTION_HOSTS,
+): boolean {
+  if (!hostsEnv) return false;
+  try {
+    const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    const targets = hostsEnv
+      .split(",")
+      .map(h => h.trim().toLowerCase().replace(/^\.+/, ""))
+      .filter(Boolean);
+    for (const target of targets) {
+      if (host === target || host.endsWith(`.${target}`)) return true;
+    }
+  } catch {
+    /* unparseable target URL keeps default connection behavior */
+  }
+  return false;
+}
+
 
 
 export interface PaceAwareFetch {
@@ -84,12 +109,27 @@ export function providerFetch(
   // Rebuilt dispatches must use the same physical-send boundary as ordinary HTTP sends.
   // Return the original 3xx so the response owner retains its retry/health/relay contract.
   const dispatch = Object.assign(
-    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      base(input, { ...init, redirect: "manual" }),
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const fresh = wantsFreshConnection(input);
+      if (fresh) {
+        headers.set("Connection", "close");
+      }
+      return base(input, {
+        ...init,
+        headers,
+        redirect: "manual",
+        ...(fresh ? { keepalive: false } : {}),
+      });
+    },
     { preconnect },
   ) as typeof globalThis.fetch;
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
+      // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
+      // is decided inside `dispatch`, which runs after this, so the fresh-connection policy
+      // wins regardless of what any caller or hook put in the header.
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
       return options.dispatchOverride
