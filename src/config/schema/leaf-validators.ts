@@ -32,7 +32,11 @@ import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerMod
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { COST4_RATE_KEYS, isValidCost4Rate } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
-import { isHostedToolUnsupportedForModel } from "../../responses/hosted-tool-policy";
+import {
+  DECLARABLE_HOSTED_TOOL_TYPES,
+  declaredUnsupportedHostedTools,
+  isHostedToolUnsupportedForModel,
+} from "../../responses/hosted-tool-policy";
 import { getConfigDir } from "../paths";
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
@@ -275,6 +279,18 @@ export const providerConfigSchema = z.object({
   omitReasoningEffortWithToolsModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
+  // Validated against a closed vocabulary rather than accepted as free strings. This
+  // schema ends in `.passthrough()`, so a misspelled `web_serch` would otherwise be
+  // accepted, persisted, and strip nothing -- leaving the operator with the upstream 400
+  // the field was set to prevent, and no message saying why (the `codexToolMode` lesson,
+  // #2106).
+  unsupportedHostedTools: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .refine(
+      tools => tools.every(tool => DECLARABLE_HOSTED_TOOL_TYPES.has(tool)),
+      { message: `unsupportedHostedTools accepts only hosted tool types: ${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}` },
+    )
+    .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
@@ -377,7 +393,13 @@ export function modelPreferHostedToolsConfigError(
   value: unknown,
   field: string,
   providerName: string,
-  provider: { adapter?: unknown; authMode?: unknown; modelAdapters?: unknown; baseUrl?: unknown },
+  provider: {
+    adapter?: unknown;
+    authMode?: unknown;
+    modelAdapters?: unknown;
+    baseUrl?: unknown;
+    unsupportedHostedTools?: unknown;
+  },
 ): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
@@ -385,6 +407,12 @@ export function modelPreferHostedToolsConfigError(
   if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
   const entries = Object.entries(value);
   const registry = getProviderRegistryEntry(providerName);
+  // A provider that denies a hosted tool cannot also prefer it. Both keys are
+  // provider-owned capability statements about the same tool, and the denial wins at
+  // request time, so accepting the pair would silently ignore the preference.
+  const declaredUnsupported = declaredUnsupportedHostedTools(
+    provider as { unsupportedHostedTools?: readonly string[] },
+  );
   // Effective transport: a `preserveCustomDestination` registry row reused under a
   // different endpoint keeps its own adapter AND its own auth at runtime, because
   // `routedProviderConfig()` honors `providerMatchesRegistryTransport()`. Both the
@@ -444,6 +472,9 @@ export function modelPreferHostedToolsConfigError(
     for (const tool of entry) {
       if (typeof tool !== "string" || !SUPPORTED_PREFERRED_HOSTED_TOOLS.has(tool)) {
         return `${field}.${key} supports only image_generation`;
+      }
+      if (declaredUnsupported.has(tool)) {
+        return `${field}.${key} cannot prefer ${tool}: unsupportedHostedTools declares it unsupported`;
       }
       if (isHostedToolUnsupportedForModel(key, tool)) {
         return `${field}.${key} cannot prefer ${tool}: the model does not support it`;

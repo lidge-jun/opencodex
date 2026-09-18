@@ -1,4 +1,5 @@
 import { modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -672,6 +673,26 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "unsupportedHostedTools")) {
+    const value = rawBody.unsupportedHostedTools;
+    if (value === null) {
+      delete next.unsupportedHostedTools;
+    } else {
+      const error = nonBlankStringArrayConfigError(value, "unsupportedHostedTools");
+      if (error) return { error };
+      const tools = normalizeNonBlankStringArray(value as string[]);
+      const unknownTool = tools.find(tool => !DECLARABLE_HOSTED_TOOL_TYPES.has(tool));
+      if (unknownTool !== undefined) {
+        return {
+          error: `unsupportedHostedTools must name only hosted tool types: `
+            + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`,
+        };
+      }
+      if (tools.length > 0) next.unsupportedHostedTools = tools;
+      else delete next.unsupportedHostedTools;
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "retainModels")) {
     const value = rawBody.retainModels;
     if (value === null) {
@@ -873,6 +894,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
       noJsonSchemaModels: p.noJsonSchemaModels,
+      unsupportedHostedTools: p.unsupportedHostedTools,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
