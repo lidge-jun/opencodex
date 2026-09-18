@@ -89,9 +89,9 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(getMainAccountHardLockStatus(enabled).state).toBe("ready");
   });
 
-  test("an expired non-blocking short reading cannot hide a fresh weekly block", () => {
+  test.each([4, 101])("an expired non-blocking short reading %s cannot hide a fresh weekly block", shortPercent => {
     const elapsed = Math.floor(Date.now() / 1000) - 60;
-    observe({ shortPercent: 4, shortWindowSeconds: 18_000, shortResetAt: elapsed, weeklyPercent: 20 });
+    observe({ shortPercent, shortWindowSeconds: 18_000, shortResetAt: elapsed, weeklyPercent: 20 });
 
     observe({ weeklyPercent: 99 });
 
