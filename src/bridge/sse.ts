@@ -265,6 +265,13 @@ export function bridgeToResponsesSSE(
    * progressive streaming this path exists to provide. The completed item stays authoritative,
    * and no model emits a duplicate key in practice.
    *
+   * A wrapper that turns invalid AFTER streaming has committed has the same shape and the same
+   * answer. `{"input":"a` followed by `\\qb"}` has already published a when the undefined escape
+   * arrives, and completion returns the raw text because nothing parses. The preview stops
+   * there: no rewind, and no decoded text the completed item does not contain. Bounding the
+   * damage is what is available without giving up progressive streaming, and the args are
+   * unusable in that case whichever representation wins.
+   *
    * A fallback key is not. It only unwraps when it is the SINGLE string field, and a second
    * key can still arrive — so a value emitted early would have to be taken back. That is the
    * rewind this holds instead: stream nothing until the object closes, then publish the one

@@ -1875,6 +1875,18 @@ describe("fallback freeform wrappers stream one stable representation (#5047)", 
     expect(view).toEqual({ concatenated: "", done: wrapper, itemInput: wrapper });
   });
 
+  test("a wrapper that turns invalid after streaming committed stops rather than continuing", async () => {
+    // The valid prefix has already been published when the undefined escape arrives, and no
+    // mechanism can take a delta back. What is guaranteed is that nothing further is invented:
+    // the preview stops at the last decodable character and the completed item carries the raw
+    // text. Holding the whole wrapper instead would mean never streaming any canonical wrapper
+    // progressively, which the test above this one requires.
+    const view = inputView(await streamExec(['{"input":"a', '\\qb"}']));
+    expect(view.concatenated).toBe("a");
+    expect(view.done).toBe('{"input":"a\\qb"}');
+    expect(view.itemInput).toBe('{"input":"a\\qb"}');
+  });
+
   test("a surrogate pair split across chunks is emitted whole, never as a lone half", async () => {
     const emoji = "\u{1F600}";
     const wrapper = '{"input":"x\\ud83d\\ude00y"}';
