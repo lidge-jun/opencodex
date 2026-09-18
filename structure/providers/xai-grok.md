@@ -24,6 +24,10 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
+Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
+The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
+limited to unambiguous bare `exec` and `apply_patch` calls and does not rewrite foreign grammars.
+
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
 `devlog/_fin/260716_grok_build_hardening/`.
 

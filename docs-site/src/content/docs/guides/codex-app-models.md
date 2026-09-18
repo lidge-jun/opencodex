@@ -133,6 +133,29 @@ rows from the effective catalog while compatibility aliases exist, so Desktop ca
 them by ignoring `visibility`. See [Codex Desktop native-allowlist compatibility](/guides/combos/#codex-desktop-native-allowlist-compatibility)
 for the command, disable-key semantics, and safety constraints.
 
+### What this means for a disabled native model
+
+Without a native alias configured, disabling a bare native GPT slug does not remove it from the
+catalog. The row stays with `visibility: "hide"`, which `/v1/models` and the dashboard both honour
+— they stop listing the model — while Desktop, under the policy above, can keep showing it. So the
+model can still be picked in Desktop after you disabled it, and the surfaces disagree about whether
+it exists.
+
+Picking it is not rejected for being disabled. `disabledModels` controls catalog visibility, not
+admission, so the request is routed by the ordinary rules as though the model were enabled: the turn
+runs on the model you disabled, or fails on whatever path that id resolves to. Either way the
+outcome is not the one the toggle implies.
+
+The row is retained deliberately. It holds the real upstream metadata, so re-enabling the model
+restores that metadata instead of a synthesized guess. When you need the row gone outright rather
+than hidden, configure a `nativeAlias` combo: while one exists, disabled bare native rows are
+omitted from the effective catalog entirely.
+
+If Codex's `config.toml` pins a root `model` that this proxy does not expose — a disabled model
+among them — every new session starts on a model opencodex does not serve. `ocx doctor` reports
+that under **Codex default model exposure**, as a warning rather than a failure, and says when it
+could not determine the exposed set at all.
+
 ## Integration path
 
 `ocx init`, `ocx start`, and `ocx sync` wire the shared Codex config and catalog into the proxy; see

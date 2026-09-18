@@ -1,6 +1,7 @@
 # Model Catalog
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+Explicit Codex CLI installation observation supplies no selected-runtime proof to catalog discovery or publication. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
@@ -116,6 +117,20 @@ while explicit target limits remain authoritative. Because the affected renderer
 native alias also omits disabled bare native rows from the effective catalog. Dashboard rows remain
 derived from the static native set, and sync retains bundled/pristine native recovery sources so a
 later re-enable or alias removal restores native metadata.
+
+Without such an alias, a disabled bare native keeps a `visibility: "hide"` row, and that retention
+has an operator-visible consequence. `visibleNativeSlugs` in `src/codex/catalog/metadata.ts` drops
+the slug from `/v1/models` and the dashboard while `applyNativeVisibility` keeps the catalog row, so
+a renderer that ignores `visibility` can still offer a model every other surface calls disabled.
+Selecting it is not refused: `disabledModels` is a catalog control, and `src/router.ts` never
+consults it, so the turn resolves by the ordinary routing rules instead of failing as disabled.
+Retention is the deliberate trade — it preserves real upstream metadata for a later re-enable
+rather than synthesizing a guess — and a `nativeAlias` combo is the lever that omits the row
+outright.
+
+Nothing in the catalog validates Codex's own root `model` pin against this exposed set;
+`readConfiguredDefaultModel` in `src/codex/catalog/parsing.ts` reads the pin, and `ocx doctor`
+reports it (see [Runtime](runtime.md)).
 
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
@@ -252,6 +267,16 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   account targets are not advertised, and private account ids never become catalog labels.
   `codexAccountPickerEnabled: false` hides generated rows without deleting exact routing bindings;
   an omitted flag preserves the established behavior of a nonempty hand-written selector map.
+- **An omitted Luna Reserve row explains itself once.** The Reserve projection is
+  account-qualified (`<selector>/gpt-reserve`), so it cannot be written without a selector that
+  targets the main Codex account, and a fresh authless install has an empty selector map. Because
+  an omission has no row to carry a reason, catalog sync emits one warn-once line naming the
+  cause — absent canonical OpenAI provider, explicitly disabled picker, empty selector map, or a
+  map with no main-account target — and the action that restores it
+  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where authless Codex Desktop
+  routing is effective, so an install that never opted in is never told about a Reserve row it
+  did not ask for. An install that stores the flag where it cannot take effect is a different
+  silence, reported as `inertReason` by `describeCodexDesktopSwitches` rather than repeated here.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **A transient hold is probed half-open, never opened all at once.** While a bound account is

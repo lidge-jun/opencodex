@@ -145,16 +145,22 @@ export function createResponsesSendBudget(
    * The base allowance is spent first. Once it is gone a recovery class may still draw the
    * single shared final-recovery reserve -- which is what keeps the validated sanitized rebuild
    * after a 5xx streak alive at four total sends -- but an account move and a rebuild cannot
-   * each take one. `countedExternally` is set because these legs run through the retry helper,
-   * which reports the same send again through `onSendsConsumed`.
+   * each take one. A caller with an exact provider total can suppress that reserve. The
+   * `countedExternally` flag exists because these legs run through the retry helper, which reports
+   * the same send again through `onSendsConsumed`.
    */
   const recoverySendAllowance = (
     cap: number,
     sendClass: SendClass,
     targetKey: string,
+    options: { allowFinalRecoveryReserve?: boolean } = {},
   ): { attempts: number; permit?: SingleUseDispatchPermit } => {
     const base = remainingTransientSendBudget(cap);
     if (base > 0) return { attempts: base };
+    // A provider-configured transient total is an exact physical-send ceiling. Once it is
+    // exhausted, the request-wide recovery reserve must not silently widen it. The default stays
+    // permissive so unconfigured providers retain the guarded profile's fourth recovery send.
+    if (options.allowFinalRecoveryReserve === false) return { attempts: 0 };
     if (pendingHopPermit) {
       const hopPermit = pendingHopPermit;
       pendingHopPermit = undefined;
