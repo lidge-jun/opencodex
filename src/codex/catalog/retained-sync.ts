@@ -75,6 +75,7 @@ import {
 import { finishUpstreamNativeEntry } from "./derive-entry";
 import { finalizeAutoReviewModelOverride } from "./auto-review";
 import { gatedNativeAccountLabel, gatedNativeReauthSuppressionReason, warnGatedNativeSuppressedOnce } from "./gated-native-warn";
+import { reserveCatalogSuppressionReason, warnReserveSuppressedOnce } from "./reserve-warn";
 
 interface RetainedCatalogSyncRead {
   readonly catalogPath: string;
@@ -376,6 +377,14 @@ function writeRetainedCatalogSync({
   const accountTargets = new Map(codexAccountNamespaceEntries(config));
   const reserveMainSelectors = accountSelectors.filter(selector =>
     isMainCodexAccountTarget(accountTargets.get(selector) ?? ""));
+  // #4811: an omitted Reserve row carries no reason, so the explanation has to be emitted here,
+  // where the selector inputs that produced the omission are still in scope. Silent for every
+  // install that did not opt into authless Codex Desktop routing.
+  const reserveSuppression = reserveCatalogSuppressionReason(config, {
+    includeAccountBoundNativeOpenAi,
+    mainSelectors: reserveMainSelectors,
+  });
+  if (reserveSuppression) warnReserveSuppressedOnce(reserveSuppression);
   // The active file can own a bare source even when the bundled catalog is the build base.
   // A previously clamped qualified projection must not shorten a retained genuine ladder.
   const reserveObservations = [

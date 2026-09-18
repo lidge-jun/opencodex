@@ -16,6 +16,10 @@ interview engine. The rule stands on its own; it does not depend on an external 
 
 Native-main device cancellation, polling and restart follow the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces), including status-gated error DTO handling.
 
+Visible dashboard copy follows the total catalog contract in
+[`gui-and-management-api.md`](gui-and-management-api.md#dashboard-surfaces); Vietnamese is a
+first-class locale across page copy and auxiliary label maps.
+
 ## Existing surfaces and their design direction
 
 The surfaces below are examples chosen to show the design direction, not an inventory; the current
@@ -55,4 +59,4 @@ Cline uses the existing file-integration page, tabs, status badge and rollback d
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Native-main reauthentication separates polling lifetime from flow ownership: a non-2xx GET stops polling, while cancellation requested for the same flow preserves the pending/committing device state even before DELETE settles. A retryable DELETE failure preserves or restores Cancel retry without a second login POST. Trusted terminal results release ownership.
+Native-main reauthentication separates polling lifetime from flow ownership: a non-2xx GET normally stops polling, while cancellation requested for the same owned flow preserves the pending/committing device state and existing polling cadence even before DELETE settles. A retryable DELETE failure preserves or restores Cancel retry without a second login POST, and later trusted terminal results remain observable and release ownership.

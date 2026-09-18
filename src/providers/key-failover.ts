@@ -30,6 +30,243 @@ const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
 
 /**
+ * Cap for a cooldown the upstream itself dated, as opposed to one we inferred.
+ *
+ * `MAX_COOLDOWN_MS` is deliberately short because an undated 429 is a guess: ten
+ * minutes bounds how long a transient limit can park a working key. A free-tier
+ * quota is not a guess — OpenRouter replies `Weekly/Monthly Limit Exhausted ...
+ * will reset at <date>`, and until that date the key cannot serve anything. Held
+ * for ten minutes instead, it comes back, takes a 429, and rotates again, every
+ * ten minutes for the rest of the week (#4024).
+ *
+ * 32 days rather than unbounded. The wording this parses is
+ * `Weekly/Monthly Limit Exhausted`, so the cap has to clear a monthly window —
+ * 31 days plus a day of slack for timezone and month length. An earlier 8-day
+ * cap looked generous against the weekly case in the issue and silently clamped
+ * every monthly reset to ~23 days early, which puts the key back into exactly
+ * the 429 loop this exists to stop. Caught by the cap's own test.
+ *
+ * Bounded at all because the date is upstream-controlled input: a malformed or
+ * hostile `reset at 2999-01-01` must not park a working key past any horizon an
+ * operator would think to look at.
+ */
+const MAX_QUOTA_COOLDOWN_MS = 32 * 24 * 60 * 60_000;
+const QUOTA_RESET_PEEK_TIMEOUT_MS = 250;
+
+interface QuotaResetReadOptions {
+  now?: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+function rebuiltResponse(response: Response, body: ReadableStream<Uint8Array>): Response {
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function replayOnlyResponse(response: Response, chunks: readonly Uint8Array[]): Response {
+  return rebuiltResponse(response, new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  }));
+}
+
+/**
+ * Read a bounded prefix of a 429 body and pull the upstream's declared reset instant.
+ *
+ * The returned response replays the bounded prefix and any boundary-chunk overflow
+ * before streaming the unread remainder. A rotation storm must not be gated on
+ * reading N full error payloads. Any failure — no body, already consumed, slow,
+ * malformed — returns undefined and leaves the `Retry-After` path in charge.
+ */
+export async function readQuotaResetAt(
+  response: Response,
+  nowOrOptions: number | QuotaResetReadOptions = {},
+): Promise<{ at: number | undefined; response: Response }> {
+  if (!response.body) return { at: undefined, response };
+  const options = typeof nowOrOptions === "number" ? { now: nowOrOptions } : nowOrOptions;
+  const now = options.now ?? Date.now();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = response.body.getReader();
+  } catch {
+    return { at: undefined, response };
+  }
+  const chunks: Uint8Array[] = [];
+  let transferred = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new AbortController();
+  const timeoutReason = new DOMException("Quota reset body peek timed out", "TimeoutError");
+  try {
+    const decoder = new TextDecoder();
+    let seen = 0;
+    let text = "";
+    timer = setTimeout(() => deadline.abort(timeoutReason), options.timeoutMs ?? QUOTA_RESET_PEEK_TIMEOUT_MS);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, deadline.signal])
+      : deadline.signal;
+    while (seen < QUOTA_RESET_SCAN_BYTES) {
+      const read = reader.read();
+      let rejectAbort: ((reason: unknown) => void) | undefined;
+      const onAbort = () => rejectAbort?.(signal.reason);
+      const aborted = new Promise<never>((_resolve, reject) => {
+        rejectAbort = reject;
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener("abort", onAbort, { once: true });
+      });
+      // Derived from the reader rather than named directly: Bun's lib types
+      // `ReadableStreamDefaultReader.read()` as returning
+      // `ReadableStreamDefaultReadResult`, which is not assignable to the
+      // `ReadableStreamReadResult` alias.
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await Promise.race([read, aborted]);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+      const { done, value } = result;
+      if (done) break;
+      const remaining = QUOTA_RESET_SCAN_BYTES - seen;
+      const prefix = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      const overflow = value.byteLength > remaining ? value.subarray(remaining) : undefined;
+      chunks.push(prefix);
+      if (overflow?.byteLength) chunks.push(overflow);
+      seen += prefix.byteLength;
+      text += decoder.decode(prefix, { stream: true });
+    }
+    // Hand back a Response carrying the bytes already pulled followed by whatever
+    // is left, so the caller can still read or cancel it. `response.clone()` is
+    // NOT usable here: it tees, and with the original branch undrained the tee
+    // stalls once its buffer fills — a 5MB error body hangs the rotation path,
+    // which is worse than the unbounded read this replaced.
+    const rest = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(c);
+      },
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            reader.releaseLock();
+            return;
+          }
+          controller.enqueue(value);
+        } catch (error) {
+          controller.error(error);
+          reader.releaseLock();
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          reader.releaseLock();
+        }
+      },
+    });
+    transferred = true;
+    return { at: parseQuotaResetAt(text, now), response: rebuiltResponse(response, rest) };
+  } catch (error) {
+    const clientAborted = options.signal?.aborted === true;
+    void reader.cancel(error).catch(() => {}).finally(() => {
+      try { reader.releaseLock(); } catch { /* already released */ }
+    });
+    if (clientAborted) throw options.signal!.reason ?? error;
+    return { at: undefined, response: replayOnlyResponse(response, chunks) };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (!transferred) {
+      try { reader.releaseLock(); } catch { /* already released */ }
+    }
+  }
+}
+
+/**
+ * How much of a 429 body is read and scanned for the reset instant.
+ *
+ * Bounds the READ, not just the parse: this runs on the rotation path, once per
+ * rotated key under a rate-limit storm, and the body is upstream-controlled.
+ * OpenRouter's rate_limit_error JSON is a few hundred bytes.
+ */
+const QUOTA_RESET_SCAN_BYTES = 4_096;
+
+/**
+ * Reset instant an upstream declared in a 429 *body*, in epoch ms.
+ *
+ * Only the body carries this: OpenRouter sends no `Retry-After` for a quota
+ * exhaustion, so the header path (`parseRetryAfterMs`) sees nothing and falls
+ * back to `DEFAULT_COOLDOWN_MS`. Returns undefined for anything it cannot read
+ * as a date, so an unparsable body keeps today's behaviour exactly.
+ */
+/**
+ * Whether `YYYY-MM-DD…` names a day that exists.
+ *
+ * `Date.parse` does NOT reject an out-of-range day: measured on Bun,
+ * `2026-02-30T00:00:00Z` yields March 2 and `2026-04-31T00:00:00Z` yields
+ * May 1, so a malformed upstream body would park a key past the instant it
+ * actually named. Only the month is rejected outright (`2026-13-01` is NaN).
+ *
+ * Checked on the date text alone rather than by round-tripping the parsed
+ * instant, because a value carrying an explicit offset (`…T23:00+05:30`)
+ * legitimately lands on a different UTC day than the one written.
+ */
+function isRealCalendarDate(value: string): boolean {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  if (month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const lengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day <= lengths[month - 1]!;
+}
+
+export function parseQuotaResetAt(body: string | null | undefined, now = Date.now()): number | undefined {
+  const text = body?.slice(0, QUOTA_RESET_SCAN_BYTES);
+  if (!text) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const error = (parsed as { error?: unknown }).error;
+  if (!error || typeof error !== "object") return undefined;
+  const code = (error as { code?: unknown }).code;
+  const message = (error as { message?: unknown }).message;
+  if ((code !== "rate_limit_error" && code !== 429) || typeof message !== "string") return undefined;
+  if (!/^(?:Weekly|Monthly) Limit Exhausted\b/i.test(message.trim())) return undefined;
+  // `will reset at 2026-09-09 03:30:06` / `... at 2026-09-09T03:30:06Z` / `resets at <date>`
+  const match = /reset[s]?\s+at\s+([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)?)/i.exec(message);
+  if (!match) return undefined;
+  // Pin a bare `YYYY-MM-DD hh:mm:ss` to UTC explicitly.
+  //
+  // ECMA-262 says a date-TIME form with no offset is LOCAL time, and Node follows
+  // that: `Date.parse("2026-09-09 03:30:06")` differs from the UTC reading by the
+  // host offset (7h on a PDT box, measured). Bun currently returns the UTC value
+  // for the same string, so on this runtime the normalisation is a no-op today —
+  // which is exactly why it is written out rather than relied upon. If Bun ever
+  // conforms, an un-normalised parse would silently shift every park-until by the
+  // operator's offset, and the early direction resumes the 429 loop.
+  //
+  // A consequence worth knowing: no Bun test can observe this branch being
+  // removed. The explicit-zone case below is the part the suite can pin.
+  const raw = match[1].includes("T") || /(?:Z|[+-][0-9]{2}:?[0-9]{2})$/.test(match[1])
+    ? match[1]
+    : `${match[1].replace(" ", "T")}Z`;
+  if (!isRealCalendarDate(match[1])) return undefined;
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return undefined;
+  // Already past, or beyond the cap: not usable as a park-until instant.
+  if (at <= now) return undefined;
+  return Math.min(at, now + MAX_QUOTA_COOLDOWN_MS);
+}
+
+/**
  * Default same-target 429 retry policy used when a provider opts in via a bare
  * `retryOn429: {}` (presence = opt-in with these defaults).
  */
@@ -370,6 +607,7 @@ function rotateKeyAfterFailure(
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
+  quotaResetAt?: number,
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
@@ -428,7 +666,12 @@ function rotateKeyAfterFailure(
     // full cap instead of the 429 default so a dead key is not re-tried once a minute.
     const cooldownMs = failureStatus === 401
       ? MAX_COOLDOWN_MS
-      : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
+      // A reset instant the upstream dated outranks both the header and the
+      // default: it is the only one of the three that knows when the quota
+      // actually returns (#4024).
+      : quotaResetAt !== undefined
+        ? Math.max(quotaResetAt - now, 1)
+        : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
     keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
     sweepExpiredOnWrite(now);
   }
@@ -455,8 +698,9 @@ export function rotateKeyOn429(
   now = Date.now(),
   attemptedKey?: string,
   attemptedSelection?: ProviderApiKeySelection,
+  quotaResetAt?: number,
 ): OcxProviderConfig | null {
-  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection);
+  return rotateKeyAfterFailure(config, providerName, 429, retryAfterHeader, now, attemptedKey, attemptedSelection, quotaResetAt);
 }
 
 /**
@@ -489,6 +733,8 @@ export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
 
 interface RotateProviderTransportOptions {
   retryAfter?: string | null;
+  /** Epoch ms from `parseQuotaResetAt`, when the upstream dated the reset in its body. */
+  quotaResetAt?: number;
   now?: number;
   attemptedKey?: string;
   attemptedSelection?: ProviderApiKeySelection;
@@ -514,6 +760,7 @@ export function rotateProviderTransportOn429(
     options.now,
     options.attemptedKey,
     options.attemptedSelection ?? routedProvider._apiKeyAttempt,
+    options.quotaResetAt,
   );
   if (!rotated) return null;
   return applyRotatedTransport(providerName, routedProvider, rotated, options.promptCacheKey);

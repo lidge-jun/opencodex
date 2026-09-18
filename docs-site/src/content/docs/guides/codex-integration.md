@@ -799,6 +799,20 @@ snapshot:
 
 Normal picker behavior returns when the 5-hour window resets.
 
+**What the proxy answers while that state holds.** Once the app has collapsed the picker it sends
+`gpt-reserve`, and without the [authless Desktop opt-in](#authless-codex-desktop-opt-in) opencodex
+holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
+native model and come back as the upstream's own `The usage limit has been reached`, which names
+neither the real cause nor the setting that would change it. It is now refused locally with an HTTP
+400 that says `codexDesktopAuthless` is off and gives the command that turns it on
+(`ocx system settings --desktop-authless on`). Nothing is sent upstream and no quota is spent.
+
+The refusal is deliberately narrow. It applies only to `gpt-reserve` on a loopback-admitted request
+that would reach the canonical ChatGPT forward route. A `gpt-reserve` selector an operator has
+aliased or routed onto another provider keeps working, a request admitted on a non-loopback listener
+still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the opt-in
+restores the normal Reserve path rather than the refusal.
+
 ## The subagent picker
 
 Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for v1/base/v2 delegation and fallback behavior.
