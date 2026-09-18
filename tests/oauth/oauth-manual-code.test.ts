@@ -247,8 +247,15 @@ describe("OAuth manual login code fallback", () => {
       expect(fragmentNoState.ok).toBe(false);
       if (!fragmentNoState.ok) expect(fragmentNoState.error).toContain("missing the state");
 
+      // A raw code#state paste is state-bearing too: a mismatched suffix is
+      // rejected rather than bypassing validation.
+      const rawMismatch = submitManualLoginCode("xai", "evil-code#WRONG");
+      expect(rawMismatch.ok).toBe(false);
+      if (!rawMismatch.ok) expect(rawMismatch.error).toContain("state mismatch");
+
       // Correct paste: matching state completes the login via the original verifier.
-      const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-auth-code&state=${state}`);
+      // The raw code#state form exercises the same gate for a state-bearing raw paste.
+      const goodSubmit = submitManualLoginCode("xai", `pasted-auth-code#${state}`);
       expect(goodSubmit).toEqual({ ok: true });
 
       // Background runLogin finishes: poll status until done.

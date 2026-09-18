@@ -1800,7 +1800,10 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
   // shared gate so the provider-specific parser can validate it.
   const isCommandCodeJson = provider === "command-code" && trimmed.startsWith("{") && !parsed.code;
   if (!parsed.code && !isCommandCodeJson) return { ok: false, error: "no authorization code found in input" };
-  if (parsed.kind !== "raw" && slot.expectedState !== undefined) {
+  // A raw paste carrying an explicit code#state suffix is state-bearing too: it
+  // must match the expected state rather than bypass validation.
+  const stateBearing = parsed.kind !== "raw" || parsed.state !== undefined;
+  if (stateBearing && slot.expectedState !== undefined) {
     if (parsed.state === undefined) return { ok: false, error: "redirect URL is missing the state parameter" };
     if (parsed.state !== slot.expectedState) return { ok: false, error: "state mismatch — paste the redirect URL from THIS login attempt" };
   }
