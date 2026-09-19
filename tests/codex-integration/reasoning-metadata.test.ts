@@ -226,6 +226,32 @@ describe("learned rung refusals", () => {
     }
   });
 
+  // The request path must hash the credential that served the request, not a live re-read of
+  // the reference: a rotation between routing and refusal recording would otherwise bind the
+  // learned refusal to the rotated credential and leave the refused one unclamped.
+  test("a refusal learned at request time stays bound to the serving credential after rotation", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "serving-secret";
+    const requestSide = {
+      ...ZEN_GO,
+      apiKey: "serving-secret",
+      _apiKeyAttempt: { reference: "${OCX_REASONING_METADATA_TEST_KEY}" },
+    } as OcxProviderConfig;
+    // Rotate behind the stable reference after routing but before the refusal is recorded.
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "rotated-secret";
+    try {
+      expect(metadata.recordUnsupportedReasoningEffort(requestSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      const served = { ...ZEN_GO, apiKey: "serving-secret" } as OcxProviderConfig;
+      const rotated = { ...ZEN_GO, apiKey: "rotated-secret" } as OcxProviderConfig;
+      expect(effort.configuredReasoningEfforts(served, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+      expect(effort.configuredReasoningEfforts(rotated, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
+    } finally {
+      delete process.env["OCX_REASONING_METADATA_TEST_KEY"];
+    }
+  });
+
   test("ignores legacy destination-wide support rows", async () => {
     const legacyRows = { ["opencode-go|" + DEEPSEEK_FLASH + "|max"]: { effort: "max", at: Date.now() } };
     const { effort } = await load({

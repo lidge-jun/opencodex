@@ -169,14 +169,16 @@ function modelLadderValue(
  * The hash input is the resolved wire credential, not the configured expression: the catalog
  * path carries the raw config string in apiKey (a keychain:/env reference stays unresolved
  * there), while the request path carries the resolved secret in apiKey and the configured
- * expression in _apiKeyAttempt.reference. Resolving the configured expression on both sides
- * hashes the same secret the upstream sees, so a refusal learned at request time also clamps
- * the catalog ladder for keychain/env users -- and a rotation behind a stable reference
- * starts clean instead of inheriting the previous credential's refusals.
+ * expression in _apiKeyAttempt.reference. The request path hashes apiKey exactly as routed --
+ * the reference is only provenance, and re-resolving it at record time could read a credential
+ * rotated since the request was served. The catalog path resolves the configured expression,
+ * so both sides still bind learned refusals to the same wire credential, and a rotation behind
+ * a stable reference starts clean instead of inheriting the previous credential's refusals.
  */
 function credentialIdentity(provider: OcxProviderConfig): string | undefined {
-  const configured = provider._apiKeyAttempt?.reference ?? provider.apiKey;
-  const resolved = resolveProviderApiKey(configured);
+  const resolved = provider._apiKeyAttempt?.reference !== undefined
+    ? provider.apiKey
+    : resolveProviderApiKey(provider.apiKey);
   if (typeof resolved !== "string" || resolved.length === 0) return undefined;
   return createHash("sha256").update(resolved).digest("hex");
 }
