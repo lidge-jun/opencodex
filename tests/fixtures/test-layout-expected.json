@@ -904,6 +904,7 @@
   "parser-content-audio.test.ts": "responses",
   "passive-route-linker.test.ts": "server",
   "passthrough-abort.test.ts": "responses",
+  "passthrough-grok-upstream-envelope-echo.test.ts": "responses",
   "passthrough-headers.test.ts": "responses",
   "passthrough-override.test.ts": "responses",
   "phase100-native-parity.test.ts": "e2e-style",

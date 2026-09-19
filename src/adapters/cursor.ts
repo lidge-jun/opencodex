@@ -41,6 +41,7 @@ import {
   recordCursorIncompleteToolRemint,
   recordCursorEnvelopeEchoRemint,
   recordCursorOverflowRemint,
+  rememberCursorConversationRewrite,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
   shouldSurfaceCursorOverflowFirst,
@@ -55,6 +56,7 @@ import {
   CursorRoutingCommentaryError,
   CursorRoutingCommentarySniffer,
   CursorToolResultEchoError,
+  stripAssistantEchoedToolEnvelope,
 } from "./cursor/envelope-echo";
 import {
   createDisabledCursorTransport,
@@ -306,8 +308,22 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           let guardHeld: AdapterEvent[] = [];
           // Exactly-once observation: every client-bound text delta passes through here
           // exactly once — held deltas only on release, ordinary deltas at emit time.
+          let suppressMidstreamEchoTail = false;
           const emitTextObserved = (event: AdapterEvent): void => {
-            if (event.type === "text_delta") midstreamObserver?.feed(event.text);
+            if (event.type === "text_delta") {
+              if (suppressMidstreamEchoTail) return;
+              if (midstreamObserver) {
+                midstreamObserver.feed(event.text);
+                const kept = stripAssistantEchoedToolEnvelope(event.text);
+                const found = midstreamObserver.findings().length > 0 || kept !== event.text;
+                if (found) {
+                  suppressMidstreamEchoTail = true;
+                  sawMidstreamEnvelopeEcho = true;
+                  if (kept && kept !== event.text) emit({ ...event, text: kept });
+                  return;
+                }
+              }
+            }
             emit(event);
           };
           const releaseGuardHeld = () => {
@@ -448,6 +464,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
           // compaction turns must not park their throwaway id under the parent or Desktop owner.
           const threadOwner = cursorClientThreadOwner(_parsed);
+          rememberCursorConversationRewrite(failedConversationId, next.conversationId);
           if (threadOwner && _parsed._cursorIsolateConversation !== true) {
             rememberCursorThreadConversation(
               threadOwner,
@@ -570,11 +587,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         } else if (!sawIncompleteToolCall && completedNormally && incompleteToolRemintScopeKey) {
           clearCursorIncompleteToolRemint(incompleteToolRemintScopeKey);
         }
-        // A mid-stream envelope echo has ALREADY reached the client — the prefix sniffer only
-        // watches the first bytes of a turn, and grok-4.6 writes a real sentence before pasting
-        // the envelope. It cannot be quarantined, so the recovery is the same as the
-        // incomplete-tool case: leave this turn alone and rotate the next turn's id, otherwise
-        // the stored echo is replayed and primes the model to echo again.
+        // A mid-stream envelope echo is stripped from client-visible deltas, but any leading
+        // prose already escaped, so this send is not retried. grok-4.6 writes a real sentence
+        // before pasting the envelope; rotating the next turn's id still matters because Codex
+        // Desktop may restore the pre-remint conversation from providerState.
         //
         // Its own budget, not the incomplete-tool one: echoing is cheap and repeatable while an
         // incomplete client-tool stream is rare and structural, so a shared counter would let a
@@ -584,12 +600,19 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           _parsed._cursorIsolateConversation !== true
           && request.contextUsageStoreCheckpoints !== false
             ? cursorEnvelopeEchoRemintScopeKey(
-                cursorClientThreadOwner(_parsed),
+                cursorClientThreadOwner(_parsed)
+                  ?? _parsed._cursorConversationId
+                  ?? request.conversationId,
                 _parsed._cursorIdentityScope,
               )
             : null;
-        if (sawMidstreamEnvelopeEcho && !sawIncompleteToolCall && envelopeEchoRemintScopeKey) {
-          if (recordCursorEnvelopeEchoRemint(envelopeEchoRemintScopeKey)) {
+        if (sawMidstreamEnvelopeEcho && !sawIncompleteToolCall
+          && _parsed._cursorIsolateConversation !== true
+          && request.contextUsageStoreCheckpoints !== false) {
+          const allowed = envelopeEchoRemintScopeKey
+            ? recordCursorEnvelopeEchoRemint(envelopeEchoRemintScopeKey)
+            : true;
+          if (allowed) {
             if (inheritedCheckpointRef) invalidateCursorCheckpoint(inheritedCheckpointRef);
             debugProviderDiagnostic("cursor", "midstream-envelope-echo-remint", {
               wireModel: request.modelId,

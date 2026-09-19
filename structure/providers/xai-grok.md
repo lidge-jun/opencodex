@@ -13,6 +13,13 @@ answers a replayed tool call whose output never arrived. It is deliberately not 
 The contract for both, and the reason they do not collapse into one, is specified in
 [chat-compat](./chat-compat.md); it is not restated here.
 
+Native xAI Responses SSE is otherwise relayed verbatim. A mid-turn tool-result envelope paste
+is stripped in `src/server/grok-upstream-envelope-echo.ts` from `src/server/responses/passthrough-delivery.ts`
+when the destination is xAI, because Cursor protobuf quarantine never runs on this path. Leading
+prose is kept; the envelope and later text deltas on that turn are dropped so Codex does not store
+the dump as the assistant answer. This does not remint xAI's upstream conversation and does not
+treat first-hit 502s as this failure.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 

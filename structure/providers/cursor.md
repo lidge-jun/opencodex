@@ -184,11 +184,13 @@ Translated Chat request construction uses the [inline-image budget](../transport
 ## Mid-stream envelope echo
 
 The prefix sniffer only watches the opening bytes of a turn. An external model that writes real
-prose first and then pastes a replayed `[Tool Result]` envelope defeats it, so that text reaches
-the client and is stored as assistant output. `CursorMidstreamEchoObserver` records those
-findings without throwing or withholding output, and at turn end eligible non-isolated turns
-remint the conversation id for the NEXT turn. The current send is never retried: the echo is
-already delivered and a resend would be an uncertain replay.
+prose first and then pastes a replayed tool-result envelope defeats it. Client-visible
+`text_delta` events drop the envelope from the marker line (`stripAssistantEchoedToolEnvelope`)
+and suppress later text deltas on that turn so Codex does not store the paste as the answer.
+`CursorMidstreamEchoObserver` still records those findings without throwing. At turn end, eligible
+non-isolated turns remint the conversation id for the NEXT turn, using the stored conversation id
+as a fallback budget scope when the client omitted a thread owner. The current send is never
+retried: any leading prose already escaped, and a resend would be an uncertain replay.
 
 That rotation has its own bounded allowance in `src/adapters/cursor/thread-continuity.ts`,
 separate from the incomplete-tool budget and from the overflow budget. It is bounded because a
@@ -208,10 +210,11 @@ pasted body contains its own blank line therefore leaves a remainder in replay; 
 remint, not this filter, is the primary defence against a poisoned conversation.
 
 `resolveCursorConversationId` prefers the retained thread override over a stored
-`_cursorConversationId`. Only the remint path writes that store, so a stored id that disagrees
-with it is the pre-remint value; preferring it let a second Responses chain in one Codex thread
-keep resuming the conversation the previous turn had rotated away from. Isolated helper turns
-still bypass both and mint their own id.
+`_cursorConversationId`, then rewrites a stored or hashed id that a remint has already rotated
+away from. Codex Desktop often restores the pre-remint id from providerState and may omit
+`x-codex-parent-thread-id`; the rewrite map is what makes that restore land on the new
+conversation instead of the poisoned one. Isolated helper turns still bypass both and mint
+their own id.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.

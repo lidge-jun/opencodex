@@ -18,6 +18,8 @@ import {
   lookupCursorThreadConversation,
   recordCursorEnvelopeEchoRemint,
   recordCursorIncompleteToolRemint,
+  rememberCursorConversationRewrite,
+  resolveCursorConversationRewrite,
 } from "../../../src/adapters/cursor/thread-continuity";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
@@ -439,6 +441,18 @@ describe("stripAssistantEchoedToolEnvelope", () => {
   test("drops a prefix-only envelope to empty text", () => {
     expect(stripAssistantEchoedToolEnvelope("[Tool Result]\n[tool_result]\ncall_id: 1\n")).toBe("");
   });
+
+  test("drops a trailing [Tool call: echo after commentary", () => {
+    expect(stripAssistantEchoedToolEnvelope(
+      "I will locate the existing registration scripts and back up the tasks.\n[Tool call: Glob",
+    )).toBe("I will locate the existing registration scripts and back up the tasks.");
+  });
+
+  test("drops a truncated [Tool Result line without a closing bracket", () => {
+    expect(stripAssistantEchoedToolEnvelope(
+      "The previous read exceeded the parameter limit.\n[Tool Result",
+    )).toBe("The previous read exceeded the parameter limit.");
+  });
 });
 
 describe("Cursor midstream envelope-echo remint", () => {
@@ -474,9 +488,9 @@ describe("Cursor midstream envelope-echo remint", () => {
 
     const first: AdapterEvent[] = [];
     await adapter.runTurn?.(body, { headers: new Headers() }, event => first.push(event));
-    // The echo already reached the client: it is not withheld, only recovered from.
-    expect(first.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join(""))
-      .toContain("[Tool Result]");
+    const firstText = first.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
+    expect(firstText).toContain("I'll write the import script now.");
+    expect(firstText).not.toContain("[Tool Result]");
     expect(body._cursorConversationId).toBeDefined();
     expect(body._cursorConversationId).not.toBe(seen[0]);
     expect(lookupCursorThreadConversation(threadId, "acct-midstream-echo")).toBe(body._cursorConversationId);
@@ -485,6 +499,54 @@ describe("Cursor midstream envelope-echo remint", () => {
     await adapter.runTurn?.(body, { headers: new Headers() }, event => second.push(event));
     expect(attempts).toBe(2);
     expect(seen[1]).toBe(body._cursorConversationId);
+    expect(second.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("NEXT");
+
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+  });
+
+  test("rewrites a stale providerState conversation id even without a client thread owner", async () => {
+    clearCursorThreadContinuityForTests();
+    clearCursorEnvelopeEchoRemintForTests();
+    const seen: string[] = [];
+    let attempts = 0;
+    const factory = () => ({
+      async *run(request: CursorRunRequest) {
+        seen.push(request.conversationId);
+        attempts += 1;
+        if (attempts === 1) {
+          yield { type: "text", text: "Continuing from the previous dump.\n" } satisfies CursorServerMessage;
+          yield { type: "text", text: "[Tool Result]\n[tool_result]\nname: Write\n" } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+          return;
+        }
+        yield { type: "text", text: "NEXT" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+    const poisoned = "cursor_poisoned_desktop_restore";
+    const firstBody = {
+      ...toolResultBody("cursor/grok-4.6"),
+      _cursorIdentityScope: "acct-stale-restore",
+      _cursorConversationId: poisoned,
+    } as OcxParsedRequest;
+    await adapter.runTurn?.(firstBody, { headers: new Headers() }, () => {});
+    expect(seen[0]).toBe(poisoned);
+    expect(firstBody._cursorConversationId).toBeDefined();
+    expect(firstBody._cursorConversationId).not.toBe(poisoned);
+
+    const secondBody = {
+      ...toolResultBody("cursor/grok-4.6"),
+      _cursorIdentityScope: "acct-stale-restore",
+      _cursorConversationId: poisoned,
+    } as OcxParsedRequest;
+    const second: AdapterEvent[] = [];
+    await adapter.runTurn?.(secondBody, { headers: new Headers() }, event => second.push(event));
+    expect(attempts).toBe(2);
+    expect(seen[1]).not.toBe(poisoned);
+    expect(seen[1]).toBe(firstBody._cursorConversationId);
     expect(second.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("NEXT");
 
     clearCursorThreadContinuityForTests();
@@ -512,3 +574,14 @@ describe("Cursor midstream envelope-echo remint", () => {
   });
 });
 
+describe("Cursor conversation rewrite map", () => {
+  test("follows a remint chain so a restored poisoned id lands on the latest conversation", () => {
+    clearCursorThreadContinuityForTests();
+    rememberCursorConversationRewrite("poisoned", "fresh-1");
+    rememberCursorConversationRewrite("fresh-1", "fresh-2");
+    expect(resolveCursorConversationRewrite("poisoned")).toBe("fresh-2");
+    expect(resolveCursorConversationRewrite("fresh-1")).toBe("fresh-2");
+    expect(resolveCursorConversationRewrite("unknown")).toBe("unknown");
+    clearCursorThreadContinuityForTests();
+  });
+});

@@ -12,10 +12,11 @@
  * cursor.ts to retry before any invalid text reaches the client.
  */
 
-const ECHO_MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]"] as const;
+const ECHO_MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]", "[Tool Result", "[Tool Error", "[tool_result", "[Tool call:"] as const;
 
 function isEchoMarkerLine(line: string): boolean {
-  return (ECHO_MARKERS as readonly string[]).includes(line.replace(/^[ \t]+/, ""));
+  const probe = line.replace(/^[ \t]*/, "");
+  return ECHO_MARKERS.some(marker => probe.startsWith(marker));
 }
 
 /**
@@ -39,7 +40,9 @@ function isEchoMarkerLine(line: string): boolean {
  * remint, not this filter, is the primary defence against a poisoned conversation, and this only
  * stops the transcript from feeding itself.
  *
- * Only whole-line markers count, so prose such as "the string [Tool Result] appeared" survives.
+ * Only line-leading envelope prefixes count, so prose such as "the string [Tool Result] appeared"
+ * survives. Prefixes are used because live grok-4.6 also pastes \`[Tool call: Glob\` and truncated
+ * \`[Tool Result\` lines that never equal the old exact markers.
  */
 export function stripAssistantEchoedToolEnvelope(text: string): string {
   if (!text || !ECHO_MARKERS.some(marker => text.includes(marker))) return text;

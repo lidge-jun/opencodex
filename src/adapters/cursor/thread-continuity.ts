@@ -62,8 +62,70 @@ export function lookupCursorThreadConversation(
   return entry.conversationId;
 }
 
+const conversationRewrites = new Map<string, { to: string; updatedAt: number }>();
+
+function pruneConversationRewrites(at: number): void {
+  for (const [key, entry] of conversationRewrites) {
+    if (at - entry.updatedAt > OVERRIDE_TTL_MS) conversationRewrites.delete(key);
+    else break; // Map iterates insertion order; refreshed entries are moved to the end
+  }
+  while (conversationRewrites.size > OVERRIDE_MAX_ENTRIES) {
+    const oldest = conversationRewrites.keys().next().value;
+    if (oldest === undefined) break;
+    conversationRewrites.delete(oldest);
+  }
+}
+
+function rememberRewriteEntry(from: string, to: string, at: number): void {
+  conversationRewrites.delete(from);
+  conversationRewrites.set(from, { to, updatedAt: at });
+}
+
+/**
+ * Remember that a poisoned Cursor conversation id was rotated away.
+ *
+ * Codex Desktop often restores the pre-remint id from providerState on the next
+ * Responses request and may omit x-codex-parent-thread-id. Thread-owner
+ * lookup then misses, and the next turn resumes the same Cursor conversation.
+ * Rewriting the old wire id itself survives that restore path.
+ */
+export function rememberCursorConversationRewrite(
+  fromConversationId: string,
+  toConversationId: string,
+): void {
+  if (!fromConversationId || !toConversationId || fromConversationId === toConversationId) return;
+  const at = now();
+  rememberRewriteEntry(fromConversationId, toConversationId, at);
+  const redirected: string[] = [];
+  for (const [from, entry] of conversationRewrites) {
+    if (from !== fromConversationId && entry.to === fromConversationId) redirected.push(from);
+  }
+  for (const from of redirected) rememberRewriteEntry(from, toConversationId, at);
+  pruneConversationRewrites(at);
+}
+
+/** Follow a remint chain; missing or expired entries return the input id. */
+export function resolveCursorConversationRewrite(conversationId: string): string {
+  const at = now();
+  const seen = new Set<string>();
+  let current = conversationId;
+  while (!seen.has(current)) {
+    const entry = conversationRewrites.get(current);
+    if (!entry) break;
+    if (at - entry.updatedAt > OVERRIDE_TTL_MS) {
+      conversationRewrites.delete(current);
+      break;
+    }
+    rememberRewriteEntry(current, entry.to, at);
+    seen.add(current);
+    current = entry.to;
+  }
+  return current;
+}
+
 export function clearCursorThreadContinuityForTests(): void {
   overrides.clear();
+  conversationRewrites.clear();
 }
 
 /** Max conversation-id remints after the first surfaced overflow per retained scope. */

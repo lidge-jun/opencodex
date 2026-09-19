@@ -85,6 +85,11 @@ import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-sea
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
 import { createGrokResponsesControlFrameBlockRewrite } from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
+import { isXaiResponsesDestination } from "../../providers/xai-transport";
+import {
+  createGrokUpstreamEnvelopeEchoBlockRewrite,
+  stripGrokUpstreamEnvelopeEchoFromResponsesJson,
+} from "../grok-upstream-envelope-echo";
 import {
   createPlaintextV2AgentMessageCallRestoreRewrite,
   restorePlaintextV2AgentMessageCallsInJsonResult,
@@ -335,6 +340,7 @@ export async function deliverPassthroughResponse(
     // (src/server/relay-eager.ts; policy:
     // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
     // The bundled known-bad runtime remains on tee by default on both platforms.
+    const grokUpstreamEchoEnabled = isXaiResponsesDestination(route.provider);
     if (isEventStream && upstreamResponse.body) {
       // For streamed passthrough, a successful terminal response means non-error upstream status
       // before relay starts. Waiting for SSE completion would retain request state across the whole
@@ -500,6 +506,9 @@ export async function deliverPassthroughResponse(
           : undefined,
         grokClientCompatibilityEnabled
           ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget)
+          : undefined,
+        grokUpstreamEchoEnabled
+          ? createGrokUpstreamEnvelopeEchoBlockRewrite()
           : undefined,
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
@@ -769,6 +778,9 @@ export async function deliverPassthroughResponse(
       // the reframed-SSE branch below are built from this body, so one check covers them. This
       // runs BEFORE the continuation cache write below: a refused turn must not become state a
       // later `previous_response_id` replay can expand from.
+      if (grokUpstreamEchoEnabled) {
+        clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
+      }
       if (nativeExchange.undeclaredToolGuardActive) {
         const undeclared = (() => {
           try {
