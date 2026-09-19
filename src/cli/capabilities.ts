@@ -777,7 +777,7 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "envelope",
     details: [
       "--plan is mandatory because the operator must approve a target they have read. The plan is recomputed from live evidence and refused unless the id still matches.",
-      "Runs exactly one command, npm install -g @openai/codex at the exact resolved version, and never stops, restarts or signals Codex, the app-server, the desktop app or the tray.",
+      "Packs the exact resolved @openai/codex version, verifies the tarball sha512 against the plan-bound integrity, and installs only that verified file; never stops, restarts or signals Codex, the app-server, the desktop app or the tray.",
       "The outcome is classified from a fresh inspection rather than the installer exit code, and is never retried or rolled back automatically.",
       "Repairs the shim only when this installation owned a matched shim before the update.",
     ],
