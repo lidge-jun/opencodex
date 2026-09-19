@@ -535,6 +535,111 @@ function contentCodingFormat(headers: Headers): "gzip" | "deflate" | undefined {
   throw new Socks5FetchError("SOCKS5 upstream returned an unsupported content-encoding: " + coding);
 }
 
+/** Read response heads until the final one, consuming the interim informational answers. */
+async function finalResponseHead(
+  reader: SocketReader,
+  signal: AbortSignal,
+): Promise<{ status: number; statusText: string; headers: Headers }> {
+  let head = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, signal));
+  while (head.status >= 100 && head.status < 200 && head.status !== 101) {
+    head = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, signal));
+  }
+  return head;
+}
+
+/**
+ * A promise that rejects with the caller's abort reason, and a way to stop listening.
+ *
+ * Destroying the socket is not enough to end a pending `bodyReader.read()`: that promise belongs
+ * to the caller's body stream, which knows nothing about this socket. Racing it against this one
+ * is what turns an abort into a settled fetch instead of a permanently pending one.
+ */
+function abortRejection(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
+  let onAbort = (): void => { /* replaced below */ };
+  const promise = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  // The race below may settle on another branch first; this rejection must not be reported as
+  // unhandled when nobody is left waiting for it.
+  promise.catch(() => { /* surfaced by whoever loses the race */ });
+  return { promise, dispose: () => signal.removeEventListener("abort", onAbort) };
+}
+
+type UploadStep =
+  | { kind: "chunk"; value: Uint8Array }
+  | { kind: "end" }
+  | { kind: "drained" }
+  | { kind: "answered" };
+
+/**
+ * Send the request body, settling on caller abort or on an answer that arrives first.
+ *
+ * A peer is entitled to answer a request it has not finished receiving — a 413 or a 401 lands
+ * while a large body is still going out — and a body stream is entitled to stall. Waiting for
+ * the upload to finish before looking at the socket made those two facts combine into a fetch
+ * that never settles, with the answer already sitting in the receive buffer.
+ *
+ * `answered` covers the head settling either way: a final response means the peer has stopped
+ * reading, and a terminal socket failure means nothing more can be written. Which of the two it
+ * was belongs to whoever awaits the head, so this only needs to know that it happened.
+ */
+async function uploadRequestBody(
+  socket: Socket,
+  request: Request,
+  chunked: boolean,
+  head: Promise<unknown>,
+): Promise<void> {
+  const body = request.body;
+  if (!body) return;
+  const signal = request.signal;
+  const bodyReader = body.getReader();
+  const abort = abortRejection(signal);
+  const answered: Promise<UploadStep> = head.then(
+    (): UploadStep => ({ kind: "answered" }),
+    (): UploadStep => ({ kind: "answered" }),
+  );
+  let completed = false;
+  try {
+    for (;;) {
+      const read: Promise<UploadStep> = bodyReader.read().then(
+        (result): UploadStep => (result.done ? { kind: "end" } : { kind: "chunk", value: result.value }),
+      );
+      // Releasing the lock below rejects a read still waiting on a source that stopped
+      // producing. That rejection is this function's own doing, not a failure to report.
+      read.catch(() => { /* settled by releasing the reader */ });
+      const step = await Promise.race([read, answered, abort.promise]);
+      if (step.kind === "answered") break;
+      if (step.kind === "end") {
+        completed = true;
+        break;
+      }
+      const payload = chunked
+        ? Buffer.concat([Buffer.from(`${step.value.byteLength.toString(16)}\r\n`), Buffer.from(step.value), CRLF])
+        : step.value;
+      if (socket.write(payload)) continue;
+      const drain: Promise<UploadStep> = waitForDrain(socket, signal).then((): UploadStep => ({ kind: "drained" }));
+      if ((await Promise.race([drain, answered, abort.promise])).kind === "answered") break;
+    }
+    // A terminating chunk written after the peer has already answered goes into a conversation
+    // that is over, and a peer that has moved on may read it as the head of the next request.
+    if (completed && chunked && !socket.write("0\r\n\r\n")) {
+      const drain: Promise<UploadStep> = waitForDrain(socket, signal).then((): UploadStep => ({ kind: "drained" }));
+      await Promise.race([drain, answered, abort.promise]);
+    }
+  } finally {
+    abort.dispose();
+    if (!completed) {
+      // Cancelling runs the caller's own cancel algorithm, which is free to never settle, so it
+      // is started rather than awaited. Releasing the lock is what actually frees a read still
+      // waiting on a body that stopped producing.
+      void bodyReader.cancel().catch(() => { /* the caller's stream owns this outcome */ });
+    }
+    try { bodyReader.releaseLock(); } catch { /* already released */ }
+  }
+}
+
 export async function socks5Fetch(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
@@ -570,26 +675,16 @@ export async function socks5Fetch(
     const headers = requestHeaders(request, target);
     const head = `${request.method} ${target.pathname}${target.search} HTTP/1.1\r\n${headers.text}\r\n`;
     socket.write(head);
-    if (request.body) {
-      const bodyReader = request.body.getReader();
-      try {
-        while (true) {
-          const next = await bodyReader.read();
-          if (next.done) break;
-          const body = headers.chunked
-            ? Buffer.concat([Buffer.from(`${next.value.byteLength.toString(16)}\r\n`), Buffer.from(next.value), CRLF])
-            : next.value;
-          if (!socket.write(body)) await waitForDrain(socket, request.signal);
-        }
-        if (headers.chunked && !socket.write("0\r\n\r\n")) await waitForDrain(socket, request.signal);
-      } finally {
-        bodyReader.releaseLock();
-      }
-    }
-    let responseHead = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, request.signal));
-    while (responseHead.status >= 100 && responseHead.status < 200 && responseHead.status !== 101) {
-      responseHead = parseResponseHead(await reader.readUntil(HEADER_END, MAX_RESPONSE_HEADER_BYTES, request.signal));
-    }
+    // Start reading the answer before the upload finishes, and keep one consumer of the socket
+    // reader for the whole exchange. The upload races this promise so an early final response or
+    // a terminal socket failure ends it, instead of leaving it waiting on a body chunk that is
+    // never coming while the answer sits in the receive buffer.
+    const pendingHead = finalResponseHead(reader, request.signal);
+    // The upload observes this promise through a handler of its own; this one keeps a rejection
+    // from being reported as unhandled in the window before the await below.
+    pendingHead.catch(() => { /* rethrown by the await below */ });
+    await uploadRequestBody(socket, request, headers.chunked, pendingHead);
+    const responseHead = await pendingHead;
     // A bodyless response has no coded bytes to undo, so its `content-encoding` describes the
     // representation it would have sent and must neither be decoded nor refused — a HEAD whose
     // peer advertises brotli is a correct answer, not an unreadable body. For everything else,

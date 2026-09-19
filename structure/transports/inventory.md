@@ -234,11 +234,21 @@ The tunnel reader keeps incomplete framing separate from queued socket bytes,
 waits for new input, and caps headers even when the terminating delimiter arrives
 in the same chunk. Cancellation removes the exact queued waiter; socket errors
 remain errors on later reads rather than turning into clean EOF. Buffered body
-reads pause the socket at the local high-water mark, and upload errors are observed
-before the response reader takes ownership. `tests/lib/socks5-fetch.test.ts` covers
+reads pause the socket at the local high-water mark, and an upload failure is observed
+by the caller rather than lost behind the answer. `tests/lib/socks5-fetch.test.ts` covers
 fragmented framing, header limits and explicit-route snapshot preservation.
 Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
 honor them and must not silently downgrade the provider contract.
+
+The upload and the answer are read together. One reader consumes the socket for the whole
+exchange, starting before the request body is finished, because a peer may answer a request it
+has not finished receiving and a caller's body stream may stall. Each body read and drain wait
+races the caller's abort and that pending answer, so an abort settles the fetch with its own
+reason rather than leaving a read the transport does not own, an early final response ends the
+upload without writing a terminating chunk into a finished conversation, and a socket failure
+during a stalled read surfaces as the failure instead of a promise that never settles. The
+request body is cancelled without being awaited, since a caller's cancel algorithm may itself
+never settle. `tests/lib/socks5-upload-lifecycle.test.ts` covers these four outcomes.
 
 Content-coding is this transport's own obligation. `fetch` decodes a coded body below the
 Response constructor; this tunnel assembles the body from a socket, so a response wrapped with

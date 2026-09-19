@@ -3,6 +3,7 @@
   "key-attribution.test.ts": "usage",
   "provider-send-path-import.test.ts": "server",
   "socks5-fetch.test.ts": "lib",
+  "socks5-upload-lifecycle.test.ts": "lib",
   "start-args.test.ts": "cli",
   "responses-core-modules.test.ts": "responses",
   "responses-passthrough-transient-policy.test.ts": "responses",
