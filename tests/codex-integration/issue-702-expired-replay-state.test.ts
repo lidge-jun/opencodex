@@ -53,6 +53,19 @@ interface ForwardScenario {
 
 type ForwardScenarioMode = "expired" | "fresh" | "ordinary";
 
+/**
+ * The one answer every local replay failure gives a client.
+ *
+ * Missing, corrupt and task-scope-mismatched state all mean "replay in full", so they share a
+ * response rather than each describing which one happened. Stated once here so a drift shows up
+ * as one failing constant instead of several assertions written from memory.
+ */
+const LOCAL_REPLAY_UNAVAILABLE = {
+  message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+  type: "invalid_request_error",
+  code: "previous_response_not_found",
+} as const;
+
 function forwardConfig(): OcxConfig {
   return {
     port: 0,
@@ -649,13 +662,7 @@ describe("Issue #702 expired forward replay state", () => {
             }),
           });
           expect(response.status).toBe(400);
-          expect(await response.json()).toEqual({
-            error: {
-              message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-              type: "invalid_request_error",
-              code: "previous_response_not_found",
-            },
-          });
+          expect(await response.json()).toEqual({ error: LOCAL_REPLAY_UNAVAILABLE });
         } finally {
           await server.stop(true);
         }
@@ -685,11 +692,7 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.upstreamRequests).toHaveLength(1);
     expect(scenario.secondStatus).toBe(400);
     expect(JSON.parse(scenario.secondResponseText)).toMatchObject({
-      error: {
-        message: expect.stringMatching(/continuation state.*expired/i),
-        type: "invalid_request_error",
-        code: "previous_response_not_found",
-      },
+      error: LOCAL_REPLAY_UNAVAILABLE,
     });
   });
 
@@ -791,13 +794,7 @@ describe("Issue #702 expired forward replay state", () => {
 
     expect(scenario.firstStatus).toBe(200);
     expect(scenario.secondStatus).toBe(400);
-    expect(JSON.parse(scenario.secondResponseText)).toEqual({
-      error: {
-        message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-        type: "invalid_request_error",
-        code: "previous_response_not_found",
-      },
-    });
+    expect(JSON.parse(scenario.secondResponseText)).toEqual({ error: LOCAL_REPLAY_UNAVAILABLE });
     expect(scenario.upstreamRequests).toHaveLength(1);
   });
 
@@ -858,13 +855,7 @@ describe("Issue #702 expired forward replay state", () => {
       const missing = await ask("resp_local_missing", "task-a");
       const corrupt = await ask("resp_local_corrupt", "task-a");
       const mismatch = await ask("resp_local_foreign", "task-b");
-      const expected = {
-        error: {
-          message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-          type: "invalid_request_error",
-          code: "previous_response_not_found",
-        },
-      };
+      const expected = { error: LOCAL_REPLAY_UNAVAILABLE };
       for (const [label, outcome] of [["missing", missing], ["corrupt", corrupt], ["mismatch", mismatch]] as const) {
         expect(outcome.status, label).toBe(400);
         expect(JSON.parse(outcome.body), label).toEqual(expected);
