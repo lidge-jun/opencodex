@@ -53,7 +53,7 @@
  *    that are re-applied to an EXISTING file rather than trusted from its creation.
  */
 
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
@@ -407,8 +407,20 @@ function ledgerEntryExists(path: string): boolean {
   try {
     lstatSync(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Only a genuinely absent entry is absent. Treating every failure as "no file" meant a
+    // permission denial or an I/O error skipped assertSafeLedgerFile entirely and let the
+    // append proceed against whatever is actually there, which is the case that check exists
+    // for. An entry we cannot inspect is a refusal, not an empty slot.
+    //
+    // Raised as the module's typed error rather than the raw fs error: the path and errno of a
+    // state file are not something a client should be handed.
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return false;
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be inspected safely.",
+      { cause: error },
+    );
   }
 }
 
@@ -468,9 +480,22 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
         mode: 0o600,
         flag: "wx",
       });
-      assertSafeLedgerFile(temp);
-      hardenLedgerFile(temp, { force: true });
-      renameSync(temp, path);
+      // Everything after the temp exists is failure-cleaned. The name carries random bytes, so
+      // a validate, harden or rename that throws used to leave a uniquely named file behind and
+      // the next attempt made another: repeated failures accumulated instead of overwriting one
+      // fixed name. Only this exact temp is removed, and only on the failure path, so the
+      // original journal and the primary error both survive.
+      let renamed = false;
+      try {
+        assertSafeLedgerFile(temp);
+        hardenLedgerFile(temp, { force: true });
+        renameSync(temp, path);
+        renamed = true;
+      } finally {
+        if (!renamed) {
+          try { unlinkSync(temp); } catch { /* the compaction failure is the one to report */ }
+        }
+      }
       assertSafeLedgerFile(path);
       hardenLedgerFile(path, { force: true });
     },

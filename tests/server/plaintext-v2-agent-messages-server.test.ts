@@ -19,8 +19,10 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
 let releaseInheritedSpendHome: (() => void) | undefined;
-// Taken per inherited-home dispatch because the pool retry row installs a different home.
-const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome = acquireOwnedSpendHome(); };
+// Taken per inherited-home dispatch because the pool retry row installs a different home. The
+// ??= keeps a second call inside one case idempotent rather than replacing the release callback
+// it would need; no row here calls it twice today, so this is defence, not a fixed regression.
+const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome ??= acquireOwnedSpendHome(); };
 beforeEach(() => { clearResponseStateForTests(); });
 afterEach(() => {
   // Released first so a failed row cannot leak its writer lease into the next case.

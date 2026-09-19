@@ -32,13 +32,32 @@ export function acquireSpendLedgerServerLifecycle(configDir: string): SpendLedge
     track<T extends { stop(closeActiveConnections?: boolean): void | Promise<void> }>(server: T): T {
       // Capture the raw stop before startServer replaces the public method with full teardown.
       const stop = server.stop.bind(server);
-      failedStartStops.push(() => { try { void stop(true); } catch { /* preserve startup failure */ } });
+      failedStartStops.push(() => stop(true));
       return server;
     },
     release,
     releaseAfterFailedStart(): void {
-      for (const stop of failedStartStops.reverse()) stop();
-      release();
+      // Every listener that came up is stopped, newest first, and the lease is held until those
+      // stops have actually SETTLED. Bun's Server.stop(true) returns a promise that resolves
+      // once connections are closed, so discarding it handed the state directory back while a
+      // listener could still be serving, which is the one thing single-writer ownership exists
+      // to prevent.
+      //
+      // This stays synchronous and returns void on purpose: startServer must not become async,
+      // so the wait is a continuation rather than an await. Rollback failures are contained
+      // because the startup error that brought us here is the one worth reporting.
+      const settling: Promise<unknown>[] = [];
+      for (const stop of failedStartStops.splice(0).reverse()) {
+        try {
+          const pending = stop();
+          if (pending !== undefined) settling.push(Promise.resolve(pending));
+        } catch { /* a rollback failure must not replace the startup error that caused it */ }
+      }
+      const finish = (): void => {
+        try { release(); } catch { /* same: the startup error is the one that matters */ }
+      };
+      if (settling.length === 0) { finish(); return; }
+      void Promise.allSettled(settling).then(finish);
     },
   };
 }

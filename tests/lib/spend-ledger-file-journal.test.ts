@@ -12,6 +12,7 @@ import {
 import {
   acquireSpendLedgerOwner,
   mintSpendLedgerStorage,
+  SpendLedgerOwnerError,
   type SpendLedgerOwnerLease,
 } from "../../src/lib/spend-ledger-owner";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -54,6 +55,38 @@ afterEach(() => {
 });
 
 describe("spend ledger file journal", () => {
+  test.skipIf(!posixModes || process.getuid?.() === 0)(
+    "an entry that cannot be read is refused rather than reported absent", () => {
+    const dir = ownedHome("ocx-spend-journal-unreadable-");
+    const journal = createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME));
+    journal.append(line("alias-one"));
+
+    const before = readdirSync(dir).sort();
+    // Deny traversal of the owned directory, so the entry's lstat fails with EACCES instead of
+    // ENOENT. Answering "absent" for that is what this pins: the file-safety assertion is
+    // skipped for an entry that reads as missing, so a journal nobody can inspect would have
+    // been appended to as though the slot were empty.
+    chmodSync(dir, 0o000);
+    try {
+      expect(() => journal.read()).toThrowError(SpendLedgerOwnerError);
+      // The refusal carries the module's own vocabulary, not the errno and path of a state file.
+      expect(() => journal.read()).toThrow(/could not be inspected safely/);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    // Nothing was created or reset while the directory was unreadable.
+    expect(readdirSync(dir).sort()).toEqual(before);
+    // The same entry is readable again once the directory is, so the refusal was about the
+    // failed inspection and not about the journal's own contents.
+    expect(journal.read()).toHaveLength(1);
+  });
+
+  test("a genuinely absent entry still reads as empty", () => {
+    ownedHome("ocx-spend-journal-absent-");
+    // The ENOENT control for the case above: absent is still absent, and only absent is.
+    expect(createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME)).read()).toEqual([]);
+  });
+
   test.skipIf(!posixModes)("a journal that already exists is re-hardened, not trusted", () => {
     const dir = ownedHome("ocx-spend-journal-");
     const path = join(dir, SPEND_LEDGER_JOURNAL_FILENAME);

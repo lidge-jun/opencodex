@@ -89,14 +89,18 @@ function prepareOwnerPath(configDir: string): { home: string; path: string } {
   if (process.platform !== "win32") chmodSync(home, 0o700);
   hardenSecretDir(home, { required: true });
   const path = join(home, SPEND_LEDGER_OWNER_FILENAME);
+  // Registered while the directory is still EMPTY. Config ownership refuses to claim a
+  // directory that already has contents, so creating the database first meant a fresh home
+  // never got an ownership marker at all: the manifest was never written, and the database and
+  // its sidecars were left behind by a later uninstall because nothing recorded them.
+  recordOwnedConfigPath(home, path);
+  for (const suffix of OWNER_SIDECARS) recordOwnedConfigPath(home, `${path}${suffix}`);
   try { closeSync(openSync(path, "wx", 0o600)); }
   catch (error) { if (errorCode(error) !== "EEXIST") throw error; }
   assertPrivateFile(path);
   if (process.platform !== "win32") chmodSync(path, 0o600);
   hardenSecretPath(path, { required: true });
   assertPrivateFile(path);
-  recordOwnedConfigPath(home, path);
-  for (const suffix of OWNER_SIDECARS) recordOwnedConfigPath(home, `${path}${suffix}`);
   return { home: process.platform === "win32" ? home.toLowerCase() : home, path };
 }
 

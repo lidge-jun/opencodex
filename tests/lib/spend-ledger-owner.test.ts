@@ -1,6 +1,6 @@
 /** Cross-process ownership for the process-wide spend journal (#5123). */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,6 +23,7 @@ import {
   spendLedgerDiagnosticsSnapshot,
 } from "../../src/lib/spend-reservation-ledger";
 import { helperPath } from "../helpers/repo-root";
+import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -377,6 +378,28 @@ describe("in-process references and privacy", () => {
 });
 
 describe("backing file identity", () => {
+  test("a fresh state directory is claimed before its database exists, so it stays removable", () => {
+    // Config ownership refuses to claim a directory that already has contents, and the owner
+    // database lives inside that directory. Creating the database first therefore left a fresh
+    // home with no owner marker and no manifest at all, so nothing recorded the database or its
+    // sidecars and a later uninstall could not remove them.
+    expect(existsSync(home)).toBe(false);
+    acquireSpendLedgerOwner().release();
+
+    expect(existsSync(join(home, CONFIG_OWNER_FILE))).toBe(true);
+    const manifest = JSON.parse(
+      readFileSync(join(home, CONFIG_UNINSTALL_MANIFEST), "utf8"),
+    ) as { paths: string[] };
+    expect(manifest.paths).toContain(SPEND_LEDGER_OWNER_FILENAME);
+    for (const sidecar of ["-journal", "-wal", "-shm"]) {
+      expect(manifest.paths).toContain(`${SPEND_LEDGER_OWNER_FILENAME}${sidecar}`);
+    }
+
+    // The point of recording them: an uninstall can now take the whole directory back.
+    expect(removeOwnedConfigState(home).status).toBe("removed");
+    expect(existsSync(home)).toBe(false);
+  });
+
   const expectBackingAliasesRefused = (kind: "hardlink" | "symlink"): void => {
     const first = acquireSpendLedgerOwner(home);
     sharedSpendLedger().reserve({
