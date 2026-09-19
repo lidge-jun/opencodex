@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   CURSOR_CAPABILITIES,
+  cursorLiveRosterScope,
   cursorUmbrellaRows,
   parseCursorVariantId,
   recordLiveCursorClaudeModels,
+  recordLiveCursorMaxModeModels,
   resetLiveCursorClaudeWireIdentitiesForTests,
   resolveCursorSelection,
 } from "../../../src/adapters/cursor/catalog";
+import { clearModelCache, reconcileModelCacheProviders } from "../../../src/codex/model-cache";
 import {
   cursorEffortSuffix,
   cursorModelHasEffortTiers,
@@ -33,6 +36,9 @@ const LEGACY_EFFORT_IDS = [
 ] as const;
 
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra", undefined] as const;
+
+/** Monotonic generations for reconcileModelCacheProviders calls in this file. */
+let rosterReconcileGeneration = Date.now();
 
 const EXISTING_CLAUDE_WIRE_SNAPSHOT = {
   "claude-opus-5@high": "claude-opus-5-thinking-high",
@@ -207,6 +213,71 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
         expect(resolveCursorSelection("claude-fable-5-1", "high").wireId).toBe("claude-5.1-fable-high-thinking");
         expect(resolveCursorSelection("claude-fable-5.1", "high").wireId).toBe("claude-5.1-fable-high-thinking");
       } finally {
+        resetLiveCursorClaudeWireIdentitiesForTests();
+      }
+    });
+
+    test("live roster spellings stay isolated by provider credential scope and clear with its cache", () => {
+      const trusted = cursorLiveRosterScope("https://trusted.cursor.test", "trusted-token");
+      const untrusted = cursorLiveRosterScope("https://other.cursor.test", "other-token");
+      try {
+        // The surviving scope records a spelling distinct from the normalized default
+        // ("claude-4.6-opus-high-thinking"), so the post-clear assertion proves its slot lived.
+        recordLiveCursorClaudeModels(
+          ["claude-opus-4-6-thinking-high"],
+          { provider: "cursor-trusted", key: trusted },
+        );
+        recordLiveCursorClaudeModels(
+          ["claude-4.6-opus-high-thinking"],
+          { provider: "cursor-other", key: untrusted },
+        );
+
+        expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: trusted }).wireId)
+          .toBe("claude-opus-4-6-thinking-high");
+        expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: untrusted }).wireId)
+          .toBe("claude-4.6-opus-high-thinking");
+
+        clearModelCache("cursor-other");
+        expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: untrusted }).wireId)
+          .toBe("claude-4.6-opus-high-thinking");
+        expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: trusted }).wireId)
+          .toBe("claude-opus-4-6-thinking-high");
+      } finally {
+        resetLiveCursorClaudeWireIdentitiesForTests();
+      }
+    });
+
+    test("live Max Mode evidence stays isolated between credential scopes", () => {
+      const trusted = cursorLiveRosterScope("https://trusted.cursor.test", "trusted-token");
+      const untrusted = cursorLiveRosterScope("https://other.cursor.test", "other-token");
+      try {
+        recordLiveCursorMaxModeModels(
+          ["claude-opus-4-8-high"],
+          { provider: "cursor-trusted", key: trusted },
+        );
+        // Only the recording account's scope arms ultra; a scope with no record gets an
+        // empty evidence set — never the other account's slot.
+        expect(resolveCursorSelection("claude-opus-4-8", "ultra", undefined, { liveRosterScope: trusted }).maxMode)
+          .toBe(true);
+        expect(resolveCursorSelection("claude-opus-4-8", "ultra", undefined, { liveRosterScope: untrusted }).maxMode)
+          .toBe(false);
+
+        // The process-global slot feeds unscoped calls only; it must not leak into a scoped request.
+        recordLiveCursorMaxModeModels(["claude-opus-4-8-high"]);
+        expect(resolveCursorSelection("claude-opus-4-8", "ultra").maxMode).toBe(true);
+        expect(resolveCursorSelection("claude-opus-4-8", "ultra", undefined, { liveRosterScope: untrusted }).maxMode)
+          .toBe(false);
+
+        // Reconciliation keeps scoped evidence while the provider stays configured...
+        reconcileModelCacheProviders(new Set(["cursor-trusted"]), ++rosterReconcileGeneration);
+        expect(resolveCursorSelection("claude-opus-4-8", "ultra", undefined, { liveRosterScope: trusted }).maxMode)
+          .toBe(true);
+        // ...and drops it once the provider leaves the configuration.
+        reconcileModelCacheProviders(new Set(), ++rosterReconcileGeneration);
+        expect(resolveCursorSelection("claude-opus-4-8", "ultra", undefined, { liveRosterScope: trusted }).maxMode)
+          .toBe(false);
+      } finally {
+        recordLiveCursorMaxModeModels([]);
         resetLiveCursorClaudeWireIdentitiesForTests();
       }
     });

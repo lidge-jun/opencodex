@@ -10,6 +10,7 @@
 import type { CatalogModel } from "./catalog";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
+import { clearLiveCursorRosterState, liveCursorRosterScopedProviders } from "../adapters/cursor/catalog";
 
 /** Default freshness window. Matches Codex's own 5-min models cache so the two stay in step. */
 export const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -240,6 +241,7 @@ export function clearModelCache(
   provider?: string,
   reason: ModelCacheClearReason = "authority",
 ): void {
+  clearLiveCursorRosterState(provider);
   const revokesInFlightDiscovery = reason === "authority";
   if (provider) {
     if (revokesInFlightDiscovery) {
@@ -279,6 +281,7 @@ export function reconcileModelCacheProviders(
     ...discoveryStatus.keys(),
     ...liveModelCounts.keys(),
     ...cache.keys(),
+    ...liveCursorRosterScopedProviders(),
   ]);
   let revokedRemovedProviderAuthority = false;
   for (const provider of trackedProviders) {
@@ -294,6 +297,9 @@ export function reconcileModelCacheProviders(
     providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
     providerCacheGenerations.delete(provider);
     deleteCachedProvider(provider);
+    // Credential-scoped live roster state (Claude spellings, Max-Mode evidence) is keyed by
+    // provider too; a configured-away provider must not keep it alive until process end.
+    clearLiveCursorRosterState(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
