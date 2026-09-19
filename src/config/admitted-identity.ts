@@ -1,5 +1,6 @@
 import { readConfigAdmissionSnapshot } from "./diagnostics";
 import { getConfigPath } from "./paths";
+import { canonicalPlainData, copyPlainData, isPlainObject, ownDataKeys } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
 
 /**
@@ -62,27 +63,11 @@ export function captureExportConfigAdmission(live: OcxConfig): ExportConfigAdmis
   if (file === null) return null;
   const resident = detachConfig(live);
   if (resident === null) return null;
-  const admission: ExportConfigAdmission = { config: withExecutors(resident) };
-  evidence.set(admission, { path, file, data: canonical(resident.data), executors: resident.executors });
+  const config = withExecutors(resident);
+  if (config === null) return null;
+  const admission: ExportConfigAdmission = { config };
+  evidence.set(admission, { path, file, data: canonicalPlainData(resident.data), executors: resident.executors });
   return admission;
-}
-
-/**
- * A plain-data copy of a configuration for a consumer that must not observe later edits.
- *
- * The integration writer is the case this exists for. It freezes every other resolution seam
- * before its first await and then held the configuration by reference, so a plan checked under one
- * configuration could be written from another: the check and the document it authorizes were
- * reading the same object at two different moments. One copy taken before the await gives both of
- * them the same configuration.
- *
- * A configuration this cannot copy as plain data is returned as the caller's own object. That is
- * deliberate and is never worse than the reference the caller already had; it is the export
- * admission above, not this, that has to refuse what it cannot prove.
- */
-export function detachedConfigSnapshot(config: OcxConfig): OcxConfig {
-  const detached = detachConfig(config);
-  return detached === null ? config : withExecutors(detached);
 }
 
 /**
@@ -104,22 +89,43 @@ export function isExportConfigAdmissionCurrent(admission: ExportConfigAdmission,
   const file = admittedFileTerm();
   if (file === null || file !== captured.file) return false;
   const resident = detachConfig(live);
-  if (resident === null || canonical(resident.data) !== captured.data) return false;
+  if (resident === null || canonicalPlainData(resident.data) !== captured.data) return false;
   if (!sameExecutors(resident.executors, captured.executors)) return false;
   const working = detachConfig(admission.config);
   return working !== null
-    && canonical(working.data) === captured.data
+    && canonicalPlainData(working.data) === captured.data
     && sameExecutors(working.executors, captured.executors);
+}
+
+/**
+ * A plain-data copy of a configuration for a consumer that must not observe later edits, or null.
+ *
+ * The integration writer is the case this exists for. It freezes every other resolution seam
+ * before its first await and then held the configuration by reference, so a plan checked under one
+ * configuration could be written from another: the check and the document it authorized were
+ * reading the same object at two different moments. One copy taken before the await gives both of
+ * them the same configuration.
+ *
+ * Null rather than the caller's object when the copy cannot be made. Handing back the reference
+ * would have been a copy in name only, and the caller would have gone on to describe it as the
+ * configuration it checked.
+ */
+export function detachedConfigSnapshot(config: OcxConfig): OcxConfig | null {
+  const detached = detachConfig(config);
+  return detached === null ? null : withExecutors(detached);
 }
 
 /**
  * The configuration file as an opaque term: its exact bytes, or the distinguished absence of one.
  *
+ * This is a byte observation and nothing more. It says the operator's configuration file has not
+ * been rewritten since a roster was built; it is not a claim about whether the configuration the
+ * process is holding agrees with that file.
+ *
  * Null for a file that cannot be read, because then a later read cannot tell whether it changed.
- * Null too for one that is there and does not load cleanly: the resident configuration is then a
- * salvage of it rather than its contents, and binding a roster to bytes that describe something
- * else records a relationship that does not hold. Before this, a digest was accepted ahead of any
- * look at what the parse produced.
+ * Null too for one that is there and does not load cleanly, which is the existing contract for a
+ * derived roster rather than an inference about the resident configuration. Before this, a digest
+ * was accepted ahead of any look at what the parse produced.
  *
  * Absence is a configuration rather than the lack of one. No file means defaults, which is an
  * ordinary fresh install and the ordinary state in CI.
@@ -137,20 +143,12 @@ interface DetachedConfig {
 }
 
 /**
- * A plain-data copy of a configuration, plus the transport executors kept out of it.
+ * A configuration as plain data, with the transport executors kept out of it.
  *
- * Serializing with JSON is not a safe copier here and using it as one would have been a quiet
- * hole: it drops functions without saying so, and it invokes getters and toJSON, so an object
- * carrying either could decide what this sees. This walks own enumerable string keys, refuses an
- * accessor rather than calling it, refuses any value JSON could not have produced, and refuses a
- * cycle.
- *
- * The one exception is a provider's fetch executor, which a caller owns and the gather uses
- * instead of the global transport. It is kept by reference for the detached copy and compared by
- * reference afterwards, so replacing it invalidates the admission while it is never serialized.
- *
- * Symbol keys are skipped rather than refused. The configuration carries process bookkeeping on
- * symbols by convention, and none of it is the operator's configuration.
+ * The copier refuses everything JSON could not have produced, so the one thing that needs handling
+ * here is a provider's fetch executor: a caller owns it and the gather uses it instead of the
+ * global transport. It is held by reference for the detached copy and compared by reference
+ * afterwards, so replacing it invalidates the binding while it is never serialized.
  */
 function detachConfig(live: OcxConfig): DetachedConfig | null {
   const executors = new Map<string, unknown>();
@@ -162,9 +160,9 @@ function detachConfig(live: OcxConfig): DetachedConfig | null {
     const value = root[key];
     if (value === undefined) continue;
     if (key !== "providers") {
-      const copied = plainCopy(value, new Set());
-      if (copied === REFUSED) return null;
-      data[key] = copied;
+      const copied = copyPlainData(value);
+      if (!copied.ok) return null;
+      data[key] = copied.value;
       continue;
     }
     if (!isPlainObject(value)) return null;
@@ -184,9 +182,9 @@ function detachConfig(live: OcxConfig): DetachedConfig | null {
           executors.set(name, fieldValue);
           continue;
         }
-        const copied = plainCopy(fieldValue, new Set());
-        if (copied === REFUSED) return null;
-        copiedProvider[field] = copied;
+        const copied = copyPlainData(fieldValue);
+        if (!copied.ok) return null;
+        copiedProvider[field] = copied.value;
       }
       providers[name] = copiedProvider;
     }
@@ -195,9 +193,12 @@ function detachConfig(live: OcxConfig): DetachedConfig | null {
   return { data, executors };
 }
 
-/** The copy the gather actually runs against, with the executors put back by reference. */
-function withExecutors(detached: DetachedConfig): OcxConfig {
-  const config = copyOfData(detached.data);
+/** The copy a consumer runs against, with the executors put back by reference. */
+function withExecutors(detached: DetachedConfig): OcxConfig | null {
+  // A second copy, so what is compared later is never the object handed to a consumer.
+  const copied = copyPlainData(detached.data);
+  if (!copied.ok) return null;
+  const config = copied.value;
   const providers = config.providers;
   if (isPlainObject(providers)) {
     for (const [name, executor] of detached.executors) {
@@ -214,82 +215,4 @@ function sameExecutors(left: ReadonlyMap<string, unknown>, right: ReadonlyMap<st
     if (!right.has(name) || right.get(name) !== executor) return false;
   }
   return true;
-}
-
-const REFUSED = Symbol("refused");
-
-/** Own enumerable string keys, with null in the position of any key that is an accessor. */
-function ownDataKeys(value: Record<string, unknown>): Array<string | null> {
-  return Object.keys(value).map(key => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor !== undefined && descriptor.get === undefined && descriptor.set === undefined ? key : null;
-  });
-}
-
-function plainCopy(value: unknown, seen: Set<object>): unknown {
-  if (value === null) return null;
-  const type = typeof value;
-  if (type === "string" || type === "boolean") return value;
-  if (type === "number") return Number.isFinite(value as number) ? value : REFUSED;
-  if (type !== "object") return REFUSED;
-  const object = value as object;
-  if (seen.has(object)) return REFUSED;
-  seen.add(object);
-  try {
-    if (Array.isArray(object)) {
-      const copied: unknown[] = [];
-      for (const entry of object) {
-        // A hole or an explicit undefined in an array serializes as null, which is what a reader of
-        // the persisted configuration would find in that position.
-        if (entry === undefined) { copied.push(null); continue; }
-        const item = plainCopy(entry, seen);
-        if (item === REFUSED) return REFUSED;
-        copied.push(item);
-      }
-      return copied;
-    }
-    if (!isPlainObject(object)) return REFUSED;
-    const copied: Record<string, unknown> = {};
-    for (const key of ownDataKeys(object)) {
-      if (key === null) return REFUSED;
-      const entry = object[key];
-      if (entry === undefined) continue;
-      const item = plainCopy(entry, seen);
-      if (item === REFUSED) return REFUSED;
-      copied[key] = item;
-    }
-    return copied;
-  } finally {
-    seen.delete(object);
-  }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-/** A second copy, so what is compared later is never the object handed to a consumer. */
-function copyOfData(data: Record<string, unknown>): Record<string, unknown> {
-  const copied = plainCopy(data, new Set());
-  return copied === REFUSED ? {} : copied as Record<string, unknown>;
-}
-
-/**
- * Key-sorted entry pairs rather than objects, because property order is observable through
- * serialization and two configurations that differ only in it are the same configuration.
- */
-function canonical(value: unknown): string {
-  return JSON.stringify(sorted(value));
-}
-
-function sorted(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sorted);
-  if (value !== null && typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map(key => [key, sorted((value as Record<string, unknown>)[key])]);
-  }
-  return value;
 }

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExportModel } from "../../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegrationCoordinated } from "../../src/integrations/writer";
+import { mutateAsideProfiles } from "../../src/integrations/aside-profiles";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -24,7 +25,7 @@ const MODELS: ExportModel[] = [
 ];
 
 const CHECKED_HOST = "127.0.0.1";
-const LATER_HOST = "10.11.12.13";
+const LATER_HOST = "127.0.0.2";
 
 beforeEach(() => {
   const base = mkdtempSync(join(tmpdir(), "ocx-writer-frozen-config-"));
@@ -80,4 +81,130 @@ test("the configuration a coordinated write checked is the one it writes", async
   expect(written).not.toContain(LATER_HOST);
   // And the edit itself is untouched: freezing the input is not an excuse to write it back.
   expect(config.hostname).toBe(LATER_HOST);
+});
+
+/**
+ * The same rule one layer up, where the window is wider.
+ *
+ * An Aside change checks its confirmation, then awaits the preference write, and only then builds
+ * each profile's write input. The preference write edits the live configuration itself, so reading
+ * that object again afterwards guaranteed the document came from a configuration the check never
+ * saw, and anything else editing it during the await arrived the same way.
+ */
+test("the configuration an Aside change was checked against is the one written", async () => {
+  mkdirSync(join(home, ".aside", "u", "0"), { recursive: true });
+  writeFileSync(join(home, ".aside", "accounts.json"), JSON.stringify({
+    currentAccountId: 0, accounts: [{ id: 0, name: "Primary" }],
+  }));
+  const profilePath = join(home, ".aside", "u", "0", "models.json");
+  writeFileSync(profilePath, JSON.stringify({ theme: "keep", providers: { personal: { models: [] } } }));
+
+  const config = {
+    port: 10100,
+    hostname: CHECKED_HOST,
+    defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as unknown as OcxConfig;
+
+  let checked = false;
+  const result = await mutateAsideProfiles(
+    {
+      config, models: MODELS, port: 10100, env: {} as NodeJS.ProcessEnv, home, store,
+      persistConfig: async () => {
+        // Both hosts are loopback, so neither is rewritten on the way into a client document and
+        // the one that appears is the one the write actually read.
+        config.hostname = LATER_HOST;
+        // A real suspension, so the profile write below genuinely resumes after this edit rather
+        // than being ordered ahead of it by chance.
+        await Promise.resolve();
+      },
+    },
+    { profileId: 0, enabled: true },
+    {
+      revalidate: async () => {
+        checked = true;
+        return null;
+      },
+    },
+  );
+
+  expect(checked).toBe(true);
+  expect(result.ok).toBe(true);
+  const written = readFileSync(profilePath, "utf8");
+  expect(written).toContain(":10100/v1");
+  expect(written).not.toContain(LATER_HOST);
+  // The preference write is a real effect on the live configuration and stays one.
+  expect(config.hostname).toBe(LATER_HOST);
+});
+
+/**
+ * The roster is the other half of the same input.
+ *
+ * A caller passes model objects it still owns, and the plan that authorizes the write is computed
+ * from them before the lock. Spreading the input carried those objects by reference, so an edit
+ * made after the check was serialized into the document the check had vouched for.
+ */
+test("the roster a coordinated write checked is the one it writes", async () => {
+  const configPath = installHermes();
+  const config = {
+    port: 10100,
+    hostname: CHECKED_HOST,
+    defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as unknown as OcxConfig;
+  const models: ExportModel[] = [
+    { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000 },
+  ];
+
+  const result = await applyIntegrationCoordinated(
+    { clientId: "hermes", models, config, port: 10100, store, env: TEST_ENV, home },
+    {
+      revalidate: async () => {
+        models[0]!.id = "edited-after-the-check";
+        models[0]!.namespaced = "anthropic/edited-after-the-check";
+        return null;
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  const written = readFileSync(configPath, "utf8");
+  expect(written).toContain("claude-opus-4-8");
+  expect(written).not.toContain("edited-after-the-check");
+});
+
+/**
+ * What happens when the input cannot be held still at all.
+ *
+ * An accessor is not read here, so there is no copy to check a plan against and no way to promise
+ * the document matches it. The write is refused before anything is touched, which is bounded and
+ * honest; returning the caller's object and calling it frozen would have been neither.
+ */
+test("an input that cannot be copied refuses the write instead of reading it twice", async () => {
+  const configPath = installHermes();
+  let reads = 0;
+  const config = {
+    port: 10100,
+    defaultProvider: "mock",
+    providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
+  } as unknown as OcxConfig;
+  Object.defineProperty(config, "hostname", {
+    configurable: true,
+    enumerable: true,
+    get: () => { reads += 1; return CHECKED_HOST; },
+  });
+
+  let checked = false;
+  const result = await applyIntegrationCoordinated(
+    { clientId: "hermes", models: MODELS, config, port: 10100, store, env: TEST_ENV, home },
+    { revalidate: async () => { checked = true; return null; } },
+  );
+
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("an uncopyable input must not be written");
+  expect(result.reason).toBe("unsafe");
+  // Refused before the plan, the lock and the document: nothing ran and nothing was read.
+  expect(checked).toBe(false);
+  expect(reads).toBe(0);
+  expect(existsSync(configPath)).toBe(false);
 });

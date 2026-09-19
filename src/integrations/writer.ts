@@ -16,6 +16,7 @@ import { dirname } from "node:path";
 import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
+import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
 import { defaultIntegrationIO, loadTarget, type IntegrationIO } from "./config-io";
 import {
@@ -699,6 +700,16 @@ type FrozenIntegrationInput = IntegrationWriteInput & {
   resolvedPaths: { configPath: string; detectDir: string };
 };
 
+/**
+ * An input this write cannot hold still.
+ *
+ * A coordinated write checks a plan and then writes a document from the same input, with an await
+ * in between. Anything it cannot copy would have to be read from the caller's object twice, and
+ * the second read is not the one that was checked. Refusing is bounded and says so; carrying the
+ * reference and calling it a frozen input would not be.
+ */
+class UncopyableIntegrationInputError extends Error {}
+
 function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegrationInput {
   const env = { ...(input.env ?? process.env) };
   const home = input.home ?? homedir();
@@ -714,15 +725,22 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
     ? { ...input.resolvedPaths }
     : resolveIntegrationPaths(input.clientId, env, home);
   /*
-   * The configuration is a seam like the others, and it was the one still held by reference. A
-   * coordinated write plans from this input, awaits the writer lock and a revalidation, and only
-   * then serializes the document from it. A management route editing the live configuration in
-   * that window would have been checked in one configuration and written from another, which is
-   * the substitution the fingerprint exists to prevent. Copying it here gives the plan and the
-   * document one configuration.
+   * The configuration and the roster are seams like the others, and they were the two still held
+   * by reference. A coordinated write plans from this input, awaits the writer lock and a
+   * revalidation, and only then serializes the document from it. A management route editing the
+   * live configuration, or a caller editing the model objects it passed in, would have been
+   * checked in one state and written from another, which is the substitution the fingerprint
+   * exists to prevent. Copying both here gives the plan and the document one input.
    */
   const config = detachedConfigSnapshot(input.config);
-  return { ...input, config, env, home, store, io, resolvedPaths };
+  if (config === null) {
+    throw new UncopyableIntegrationInputError("the proxy configuration could not be captured for this write");
+  }
+  const models = copyPlainData(input.models);
+  if (!models.ok) {
+    throw new UncopyableIntegrationInputError("the model roster could not be captured for this write");
+  }
+  return { ...input, config, models: models.value, env, home, store, io, resolvedPaths };
 }
 
 function tryFreezeIntegrationInput(input: IntegrationWriteInput):
@@ -731,6 +749,9 @@ function tryFreezeIntegrationInput(input: IntegrationWriteInput):
   try {
     return { ok: true, value: freezeIntegrationInput(input) };
   } catch (error) {
+    if (error instanceof UncopyableIntegrationInputError) {
+      return { ok: false, refusal: refuse(input.clientId, "unsafe", "unsafe", error.message) };
+    }
     if (!(error instanceof ClientPathError)) throw error;
     return {
       ok: false,
