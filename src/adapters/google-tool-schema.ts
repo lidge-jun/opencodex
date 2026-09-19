@@ -35,6 +35,8 @@ const UNSUPPORTED_CONSTRAINT_KEYS = [
   "unevaluatedItems",
 ] as const;
 const CONDITIONAL_KEYS = ["if", "then", "else"] as const;
+const BOUNDED_VALUE_KEYS = new Set(["enum", "properties", "required", "items", "anyOf"]);
+const RETAINED_UNION_KEYS = ["type", "nullable", "format", "enum", "properties", "items", "required"] as const;
 // Annotation-only keywords do not change the accepted value set. The sanitizer intentionally
 // drops title, default, examples, $comment, deprecated, readOnly, writeOnly, contentEncoding,
 // contentMediaType, contentSchema, externalDocs, and example without loss.
@@ -71,6 +73,7 @@ export type GoogleToolSchemaLossCategory =
   | "conditional-dropped"
   | "tuple-prefix-dropped"
   | "ref-overlay-replaced"
+  | "union-sibling-replaced"
   | "root-object-coerced"
   | "union-widened"
   | "recursive-ref-widened"
@@ -85,6 +88,7 @@ export interface GoogleToolSchemaLossReport {
   endpointClass: GoogleToolSchemaEndpointClass;
   lossy: boolean;
   truncated: boolean;
+  /** Saturating proven-loss counts only; capped/unknown structural comparisons add no category. */
   categories: Partial<Record<GoogleToolSchemaLossCategory, number>>;
 }
 
@@ -155,13 +159,18 @@ function reportDroppedConstraints(node: Schema, state: SanitizeState): void {
 
   let sizeBounds = 0;
   for (const key of SIZE_BOUND_KEYS) {
-    if (Object.hasOwn(node, key)) sizeBounds++;
+    if (!Object.hasOwn(node, key)) continue;
+    if ((key === "minLength" || key === "minItems" || key === "minProperties") && node[key] === 0) continue;
+    sizeBounds++;
   }
   addGoogleToolSchemaLoss(state.report, "size-bound-dropped", sizeBounds);
 
   let unsupported = 0;
   for (const key of UNSUPPORTED_CONSTRAINT_KEYS) {
-    if (Object.hasOwn(node, key)) unsupported++;
+    if (!Object.hasOwn(node, key)) continue;
+    if (key === "additionalProperties" && node[key] === true) continue;
+    if (key === "uniqueItems" && node[key] === false) continue;
+    unsupported++;
   }
   addGoogleToolSchemaLoss(state.report, "unsupported-constraint-dropped", unsupported);
 
@@ -170,7 +179,7 @@ function reportDroppedConstraints(node: Schema, state: SanitizeState): void {
     if (Object.hasOwn(node, key)) conditionals++;
   }
   addGoogleToolSchemaLoss(state.report, "conditional-dropped", conditionals);
-  if (Object.hasOwn(node, "prefixItems")) {
+  if (Object.hasOwn(node, "prefixItems") && !(Array.isArray(node.prefixItems) && node.prefixItems.length === 0)) {
     addGoogleToolSchemaLoss(state.report, "tuple-prefix-dropped");
   }
 }
@@ -201,12 +210,71 @@ function collectDefs(root: unknown, defs: Map<string, unknown>): void {
   }
 }
 
+interface BoundedEqualityState {
+  remainingNodes: number;
+}
+
+/**
+ * Exact JSON-value comparison with the sanitizer's own depth/node ceilings.
+ * `unknown` means the cap prevented a proof; report-only mode does not count it as proven loss.
+ */
+type BoundedEquality = "equal" | "different" | "unknown";
+
+function boundedJsonEqual(
+  left: unknown,
+  right: unknown,
+  state: BoundedEqualityState = { remainingNodes: MAX_SCHEMA_NODES },
+  depth = 0,
+): BoundedEquality {
+  if (Object.is(left, right)) return "equal";
+  if (depth >= MAX_SCHEMA_DEPTH || state.remainingNodes <= 0) return "unknown";
+  state.remainingNodes--;
+
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return "different";
+    for (let index = 0; index < left.length; index++) {
+      if (state.remainingNodes <= 0) return "unknown";
+      state.remainingNodes--;
+      const comparison = boundedJsonEqual(left[index], right[index], state, depth + 1);
+      if (comparison !== "equal") return comparison;
+    }
+    return "equal";
+  }
+  if (!isRecord(left) || !isRecord(right)) return "different";
+
+  let leftCount = 0;
+  for (const key in left) {
+    if (!Object.hasOwn(left, key)) continue;
+    if (state.remainingNodes <= 0) return "unknown";
+    state.remainingNodes--;
+    leftCount++;
+    if (!Object.hasOwn(right, key)) return "different";
+    const comparison = boundedJsonEqual(left[key], right[key], state, depth + 1);
+    if (comparison !== "equal") return comparison;
+  }
+  let rightCount = 0;
+  for (const key in right) {
+    if (!Object.hasOwn(right, key)) continue;
+    if (state.remainingNodes <= 0) return "unknown";
+    state.remainingNodes--;
+    rightCount++;
+    if (rightCount > leftCount) return "different";
+  }
+  return leftCount === rightCount ? "equal" : "different";
+}
+
+function compareMergedValue(key: string, left: unknown, right: unknown): BoundedEquality {
+  if (BOUNDED_VALUE_KEYS.has(key)) return boundedJsonEqual(left, right);
+  return Object.is(left, right) ? "equal" : "different";
+}
+
 function mergeRefTarget(target: Schema, overlay: Schema, state: SanitizeState): Schema {
   const merged: Schema = {};
   if (Object.hasOwn(target, "$ref")) merged.$ref = target.$ref;
   for (const key of MERGED_SCHEMA_KEYS) {
     if (Object.hasOwn(overlay, key)) {
-      if (key !== "description" && Object.hasOwn(target, key) && !Object.is(overlay[key], target[key])) {
+      if (key !== "description" && Object.hasOwn(target, key)
+        && compareMergedValue(key, overlay[key], target[key]) === "different") {
         addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
       }
       merged[key] = overlay[key];
@@ -472,7 +540,14 @@ function sanitizeSchema(
     return out;
   }
   if (Object.hasOwn(node, "anyOf")) {
-    Object.assign(out, normalizeAnyOf(node.anyOf, defs, depth, refDepth, state));
+    const normalized = normalizeAnyOf(node.anyOf, defs, depth, refDepth, state);
+    for (const key of RETAINED_UNION_KEYS) {
+      if (Object.hasOwn(out, key) && Object.hasOwn(normalized, key)
+        && boundedJsonEqual(out[key], normalized[key]) === "different") {
+        addGoogleToolSchemaLoss(state.report, "union-sibling-replaced");
+      }
+    }
+    Object.assign(out, normalized);
   }
   return out;
 }

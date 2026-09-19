@@ -184,6 +184,20 @@ describe("Google tool-schema loss report", () => {
     expect(result.lossReport.categories).toEqual({ "union-widened": 1 });
   });
 
+  test("reports when nullable anyOf resolution replaces an explicit sibling type", () => {
+    const result = sanitize({
+      type: "object",
+      properties: {
+        value: { type: "number", anyOf: [{ type: "string" }, { type: "null" }] },
+      },
+    });
+    expect(result.parameters).toEqual({
+      type: "object",
+      properties: { value: { type: "string", nullable: true } },
+    });
+    expect(result.lossReport.categories).toEqual({ "union-sibling-replaced": 1 });
+  });
+
   test("classifies type unions and unsupported type values", () => {
     const result = sanitize({
       type: "object",
@@ -318,6 +332,100 @@ describe("Google tool-schema loss report", () => {
       properties: { value: { type: "number" } },
     });
     expect(result.lossReport.categories).toEqual({ "ref-overlay-replaced": 1 });
+  });
+
+  test("separately allocated equal ref overlays are not classified as loss", () => {
+    const result = sanitize({
+      type: "object",
+      properties: {
+        enumValue: { $ref: "#/$defs/EnumValue", enum: ["a"] },
+        objectValue: {
+          $ref: "#/$defs/ObjectValue",
+          properties: { name: { type: "string" } },
+        },
+        requiredValue: { $ref: "#/$defs/RequiredValue", required: ["name"] },
+      },
+      $defs: {
+        EnumValue: { type: "string", enum: ["a"] },
+        ObjectValue: { type: "object", properties: { name: { type: "string" } } },
+        RequiredValue: {
+          type: "object",
+          properties: { name: { type: "string" }, other: { type: "string" } },
+          required: ["name"],
+        },
+      },
+    });
+    expect(result.lossReport).toEqual({
+      version: 1,
+      endpointClass: "ai-studio",
+      lossy: false,
+      truncated: false,
+      categories: {},
+    });
+  });
+
+  test.each([
+    [
+      "enum",
+      { type: "string", enum: ["a"] },
+      { enum: ["b"] },
+    ],
+    [
+      "properties",
+      { type: "object", properties: { name: { type: "string" } } },
+      { properties: { name: { type: "number" } } },
+    ],
+    [
+      "required",
+      {
+        type: "object",
+        properties: { name: { type: "string" }, other: { type: "string" } },
+        required: ["name"],
+      },
+      { required: ["other"] },
+    ],
+  ] as const)("a genuinely different %s ref overlay reports exactly one loss", (_name, target, overlay) => {
+    const result = sanitize({
+      type: "object",
+      properties: { value: { $ref: "#/$defs/Value", ...overlay } },
+      $defs: { Value: target },
+    });
+    expect(result.lossReport.categories).toEqual({ "ref-overlay-replaced": 1 });
+  });
+
+  test("comparison budget exhaustion is unknown and is not counted as proven loss", () => {
+    const values = Array.from({ length: 1_100 }, (_, index) => `value-${index}`);
+    const result = sanitize({
+      type: "object",
+      properties: { value: { $ref: "#/$defs/Value", enum: [...values] } },
+      $defs: { Value: { type: "string", enum: [...values] } },
+    });
+    expect(result.lossReport).toEqual({
+      version: 1,
+      endpointClass: "ai-studio",
+      lossy: false,
+      truncated: false,
+      categories: {},
+    });
+  });
+
+  test("default-equivalent constraints are neutral", () => {
+    const result = sanitize({
+      type: "object",
+      additionalProperties: true,
+      minProperties: 0,
+      properties: {
+        text: { type: "string", minLength: 0 },
+        list: { type: "array", minItems: 0, uniqueItems: false, prefixItems: [] },
+      },
+    });
+    expect(result.lossReport).toEqual({
+      version: 1,
+      endpointClass: "ai-studio",
+      lossy: false,
+      truncated: false,
+      categories: {},
+    });
   });
 
   test("reports depth and dereference ceilings at their existing boundaries", () => {

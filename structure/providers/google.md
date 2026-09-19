@@ -78,8 +78,10 @@ with no structured-output request keeps its existing `responseModalities` behavi
 `src/adapters/google-tool-schema.ts` compiles tool declarations against an explicit `ai-studio`,
 `vertex`, or `cloud-code-assist` endpoint profile. All three profiles currently use the same
 conservative documented subset. Compilation returns the compatible parameters plus a versioned
-loss report containing only endpoint class, fixed category counts, and bounded/truncated flags.
-Counts saturate at 255. The report never retains tool or property names, paths, descriptions,
+loss report with exactly five fields: `version`, `endpointClass`, `lossy`, `truncated`, and
+`categories`. Category values are counts that saturate at 255; saturation beyond the cap sets
+`truncated`. Bounded structural comparisons that exhaust their 24-level or 1,024-node allowance
+are unknown rather than proven loss and add no category. The report never retains tool or property names, paths, descriptions,
 schema or enum values, references, hashes, request ids, project ids, or account ids.
 Every sanitizer branch that widens or drops an accepted-value constraint has a closed category,
 including type unions and unsupported types, conditional and tuple constraints, reference-overlay
