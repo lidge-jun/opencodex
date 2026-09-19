@@ -246,7 +246,11 @@ export async function prepareAdapterExchange(
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
   try {
-    initialRequest = await transportState.activeAdapter.buildRequest(parsed, { headers: requestState.selectedForwardHeaders, translatorBudget });
+    initialRequest = await transportState.activeAdapter.buildRequest(parsed, {
+      headers: requestState.selectedForwardHeaders,
+      translatorBudget,
+      abortSignal: upstream.signal,
+    });
     refreshRequestToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
@@ -405,6 +409,7 @@ export async function prepareAdapterExchange(
           retryRequest = await transportState.activeAdapter.buildRequest(parsed, {
             headers: requestState.selectedForwardHeaders,
             translatorBudget,
+            abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, retryRequest);

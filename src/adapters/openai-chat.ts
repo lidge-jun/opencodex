@@ -297,7 +297,13 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         };
       };
       if (hasShrinkableOpenAIChatImages(messages)) {
-        return normalizeOpenAIChatImages(messages, { tierBias: incoming?.imageTierBias }).then(finish, finish);
+        return normalizeOpenAIChatImages(messages, {
+          tierBias: incoming?.imageTierBias,
+          abortSignal: incoming?.abortSignal,
+        }).then(finish, error => {
+          if (incoming?.abortSignal?.aborted) throw error;
+          return finish();
+        });
       }
       return finish();
     },
