@@ -269,6 +269,7 @@
   "cline-writer.test.ts": "clients",
   "closed-pr-branch-cleanup.test.ts": "ci-workflows",
   "codebuddy-adapter.test.ts": "providers",
+  "codebuddy-live-models.test.ts": "providers",
   "codebuddy-protocol.test.ts": "providers",
   "codex-account-delete-atomicity.test.ts": "codex-integration",
   "codex-account-label.test.ts": "codex-integration",
