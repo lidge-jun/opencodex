@@ -9,20 +9,76 @@
     "guiTree": "ce7f1018aa53203767a665de94d7e6005311f2a8"
   },
   "fixtureRoutes": [
-    { "method": "GET", "path": "/", "purpose": "serve index.html" },
-    { "method": "GET", "path": "/assets/*", "purpose": "serve hosted GUI assets" },
-    { "method": "GET", "path": "/provider-icons/*", "purpose": "serve client icons" },
-    { "method": "GET", "path": "/healthz", "purpose": "minimal dashboard health bootstrap" },
-    { "method": "GET", "path": "/api/startup-health", "purpose": "minimal startup state" },
-    { "method": "GET", "path": "/api/client-integrations", "purpose": "integration list fixture" },
-    { "method": "GET", "path": "/api/client-integrations/opencode", "purpose": "OpenCode integration state fixture" },
-    { "method": "GET", "path": "/api/client-integrations/journal?client=opencode", "purpose": "OpenCode rollback journal fixture" },
-    { "method": "POST", "path": "/api/client-integrations/preview", "purpose": "apply or overwrite preview plan" },
-    { "method": "PUT", "path": "/api/client-integrations/opencode", "purpose": "confirmed mutation; stale mode returns one 409 with a fresh plan" },
-    { "method": "POST", "path": "/api/client-integrations/restore/preview", "purpose": "restore preview plan" },
-    { "method": "POST", "path": "/api/client-integrations/restore", "purpose": "confirmed restore mutation" },
-    { "method": "POST", "path": "/__fixture/mode", "purpose": "select apply, overwrite, restore, or stale fixture state" },
-    { "method": "GET", "path": "/__fixture/state", "purpose": "inspect current fixture state" }
+    {
+      "method": "GET",
+      "path": "/",
+      "purpose": "serve index.html"
+    },
+    {
+      "method": "GET",
+      "path": "/assets/*",
+      "purpose": "serve hosted GUI assets"
+    },
+    {
+      "method": "GET",
+      "path": "/provider-icons/*",
+      "purpose": "serve client icons"
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "purpose": "minimal dashboard health bootstrap"
+    },
+    {
+      "method": "GET",
+      "path": "/api/startup-health",
+      "purpose": "minimal startup state"
+    },
+    {
+      "method": "GET",
+      "path": "/api/client-integrations",
+      "purpose": "integration list fixture"
+    },
+    {
+      "method": "GET",
+      "path": "/api/client-integrations/opencode",
+      "purpose": "OpenCode integration state fixture"
+    },
+    {
+      "method": "GET",
+      "path": "/api/client-integrations/journal?client=opencode",
+      "purpose": "OpenCode rollback journal fixture"
+    },
+    {
+      "method": "POST",
+      "path": "/api/client-integrations/preview",
+      "purpose": "apply or overwrite preview plan"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/client-integrations/opencode",
+      "purpose": "confirmed mutation; stale mode returns one 409 with a fresh plan"
+    },
+    {
+      "method": "POST",
+      "path": "/api/client-integrations/restore/preview",
+      "purpose": "restore preview plan"
+    },
+    {
+      "method": "POST",
+      "path": "/api/client-integrations/restore",
+      "purpose": "confirmed restore mutation"
+    },
+    {
+      "method": "POST",
+      "path": "/__fixture/mode",
+      "purpose": "select apply, overwrite, restore, or stale fixture state"
+    },
+    {
+      "method": "GET",
+      "path": "/__fixture/state",
+      "purpose": "inspect current fixture state"
+    }
   ],
   "requestSequences": {
     "apply": [
@@ -121,5 +177,10 @@
     "restore-drift-narrow.png": "3c831fc361ce60210820b533eca91292142800389c45a2d52bfe61a1c454d60c",
     "stale-reconfirm-desktop.png": "ccf802e2cc7ef81b461a90bdbf167266ae5ccaabea582d0a1d1988a3189ebf58",
     "stale-reconfirm-narrow.png": "0088073e9cbaabb149137846e0a32ec39f212e29600897e3deac0e67aa0c6e40"
+  },
+  "reproduction": {
+    "command": "cd <scratch>/gui-capture && python3 fixture_server.py  # serves the verified artifact bundle + fixture API on http://127.0.0.1:18797 (GUI_CAPTURE_PORT overridable)",
+    "driver": "Aside CLI repl (aside repl) opened http://127.0.0.1:18797/ in the real browser; states driven via POST /__fixture/mode plus the dashboard UI; captures via page.screenshot at the recorded CSS viewports/DPR.",
+    "harnessScript": "fixture_server.py (scratch only, not tracked)"
   }
 }
