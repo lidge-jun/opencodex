@@ -2090,6 +2090,44 @@ describe("codex-auth API", () => {
     expect(existsSync(join(TEST_DIR, "config.json"))).toBe(false);
   });
 
+  test("pool quota rejection reports quota authorization as the reauthentication cause", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "pool-quota-rejected", email: "pool-quota-rejected@example.com" });
+    globalThis.fetch = (async () => Response.json(
+      { detail: { code: "invalid_refresh_token" } },
+      { status: 401 },
+    )) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as { accounts: Array<{ id: string; reauthReason?: string }> };
+
+    expect(data.accounts.find(account => account.id === "pool-quota-rejected"))
+      .toMatchObject({ reauthReason: "quota_unauthorized" });
+  });
+
+  test("pool token refresh rejection reports refresh failure as the reauthentication cause", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-refresh-rejected",
+      email: "pool-refresh-rejected@example.com",
+      expiresAt: Date.now() - 1,
+    });
+    const urls: string[] = [];
+    globalThis.fetch = (async input => {
+      urls.push(String(input));
+      return Response.json({ error: "invalid_grant" }, { status: 400 });
+    }) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as { accounts: Array<{ id: string; reauthReason?: string }> };
+
+    expect(urls).toEqual(["https://auth.openai.com/oauth/token"]);
+    expect(data.accounts.find(account => account.id === "pool-refresh-rejected"))
+      .toMatchObject({ reauthReason: "refresh_failed" });
+  });
+
   test("pool plan refresh batches multiple authoritative changes into one config save", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "pool-plan-a", email: "pool-plan-a@example.com", plan: "plus" });

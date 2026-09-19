@@ -202,6 +202,7 @@ export function projectStoredOAuthAccountHealth(
 export function projectCodexAccountHealth(input: {
   accountId: string;
   needsReauth: boolean;
+  reauthReason?: "unauthorized" | "forbidden" | "refresh_failed";
   now?: number;
 }): OAuthAccountHealth {
   // One read serves every verdict below. Each lookup re-reads and re-hardens the whole store
@@ -239,7 +240,7 @@ export function projectCodexAccountHealth(input: {
   const snap = getCodexAccountHealthSnapshot(input.accountId, now);
   return projectOAuthAccountHealth({
     needsReauth,
-    reauthReason: needsReauth ? "refresh_failed" : undefined,
+    reauthReason: needsReauth ? (input.reauthReason ?? "refresh_failed") : undefined,
     cooldownUntilMs: snap?.cooldownUntil,
     cooldownReason: cooldownReasonFromSource(snap?.cooldownSource),
     now,
