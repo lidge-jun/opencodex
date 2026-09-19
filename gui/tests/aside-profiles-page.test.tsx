@@ -396,8 +396,17 @@ test("a failed Aside restore keeps the error dialog open but refetches persisted
       residual: true }, 500);
   };
   await click("Undo");
-  await waitFor(() => Boolean(container.querySelector("dialog[open]")));
-  await click("Restore", container.querySelector("dialog[open]")!);
+  await waitFor(() => {
+    const dialog = container.querySelector("dialog[open]");
+    const restore = dialog ? findButton("Restore", dialog) : undefined;
+    return Boolean(restore && !restore.disabled);
+  });
+  const readyDialog = container.querySelector("dialog[open]")!;
+  await click("Restore", readyDialog);
+  const restorePosts = requests.filter(request => request.path === `${profilesPath}/2/restore` && request.method === "POST");
+  expect(restorePosts).toEqual([{ path: `${profilesPath}/2/restore`, method: "POST",
+    body: { opId: "aside-profile-2-failed-restore", confirmDrift: false, operation: "restore",
+      planFingerprint: `p1:${"2".padStart(32, "0")}` } }]);
   await waitFor(() => container.querySelector("dialog[open]")?.textContent?.includes("Personal restore could not finish") === true);
   await waitFor(() => stateReads() > before && findButton("Disable")?.getAttribute("aria-pressed") === "true");
   const dialog = container.querySelector("dialog[open]")!;
