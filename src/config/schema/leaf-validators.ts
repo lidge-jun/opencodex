@@ -38,18 +38,12 @@ import {
   isHostedToolUnsupportedForModel,
 } from "../../responses/hosted-tool-policy";
 import { getConfigDir } from "../paths";
+import { COMPACTION_TRIGGERS } from "./compaction-triggers";
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
-
-/**
- * Codex labels every compaction turn with one of these in `compaction.trigger`
- * (`CompactionTrigger` in codex-rs: manual `/compact` versus automatic compaction).
- * The override selects which of them it applies to; omission means manual only.
- */
-export const COMPACTION_TRIGGERS = ["manual", "auto"] as const;
 
 export const compactionRoutingSchema = z.object({
   model: z.string().trim().min(1),

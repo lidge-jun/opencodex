@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { isDeclaredReasoningEffort } from "../../reasoning-effort";
-import { COMPACTION_TRIGGERS } from "../../config/schema/leaf-validators";
+import { COMPACTION_TRIGGERS } from "../../config/schema/compaction-triggers";
 import { routeConcreteModel, type RouteResult } from "../../router";
 import { resolveComboId } from "../../combos/identifiers";
 import { recallComboForLane } from "./combo-session-recall";
