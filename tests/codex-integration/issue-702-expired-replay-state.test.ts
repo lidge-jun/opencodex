@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -801,23 +801,81 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.upstreamRequests).toHaveLength(1);
   });
 
-  test("every local replay failure answers the same on one route", async () => {
-    // Missing, corrupt and mismatched local state all mean the same thing to a client: replay
-    // in full. One envelope for all three keeps the answer from reporting which it was.
-    const mismatch = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
-    const missing = await runForwardScenario("expired");
-    const expected = {
-      error: {
-        message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-        type: "invalid_request_error",
-        code: "previous_response_not_found",
-      },
+  test("missing, corrupt and mismatched local state answer identically on one route", async () => {
+    // All three mean the same thing to a client: replay in full. Each is produced for real here
+    // rather than inferred from the source strings - one spill deleted, one overwritten with
+    // bytes that do not parse, and one entry retained under a different task.
+    setResponseStateByteCapForTests(1_024);
+    const stored = async (id: string, threadId?: string): Promise<string> => {
+      rememberResponseState(
+        { model: "gpt-5.5", input: "x".repeat(8_000), store: false },
+        { id, status: "completed", output: [{ role: "assistant", content: "done" }] },
+        undefined,
+        { force: true, ...(threadId ? { clientThreadId: threadId } : {}) },
+      );
+      await flushPendingResponseSpillsForTests();
+      const spillDir = responseSpillDirectory(testHome);
+      const spill = readdirSync(spillDir).find(name => name.includes(id));
+      expect(spill, `spill for ${id}`).toBeDefined();
+      return join(spillDir, spill!);
     };
-    expect(mismatch.secondStatus).toBe(400);
-    expect(missing.secondStatus).toBe(400);
-    expect(JSON.parse(mismatch.secondResponseText)).toEqual(expected);
-    expect(JSON.parse(missing.secondResponseText)).toEqual(expected);
-    expect(mismatch.secondResponseText).toBe(missing.secondResponseText);
+
+    const missingPath = await stored("resp_local_missing");
+    unlinkSync(missingPath);
+    const corruptPath = await stored("resp_local_corrupt");
+    writeFileSync(corruptPath, "{ this is not valid json", "utf8");
+    await stored("resp_local_foreign", "task-a");
+
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("upstream must not be called");
+    }) as typeof fetch;
+    saveConfig(forwardConfig());
+    const server = startServer(0);
+    const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
+    const ask = async (previousResponseId: string, threadId: string): Promise<{ status: number; body: string }> => {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          "chatgpt-account-id": "acct-issue-702",
+          "x-codex-parent-thread-id": threadId,
+        },
+        body: JSON.stringify({
+          model: "gpt-5.5",
+          previous_response_id: previousResponseId,
+          input: [inputMessage(CURRENT_USER_SENTINEL)],
+          stream: true,
+          store: false,
+        }),
+      });
+      return { status: response.status, body: await response.text() };
+    };
+
+    try {
+      const missing = await ask("resp_local_missing", "task-a");
+      const corrupt = await ask("resp_local_corrupt", "task-a");
+      const mismatch = await ask("resp_local_foreign", "task-b");
+      const expected = {
+        error: {
+          message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+          type: "invalid_request_error",
+          code: "previous_response_not_found",
+        },
+      };
+      for (const [label, outcome] of [["missing", missing], ["corrupt", corrupt], ["mismatch", mismatch]] as const) {
+        expect(outcome.status, label).toBe(400);
+        expect(JSON.parse(outcome.body), label).toEqual(expected);
+      }
+      // Byte-identical, not merely equivalent once parsed.
+      expect(corrupt.body).toBe(missing.body);
+      expect(mismatch.body).toBe(missing.body);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("a WebSocket client whose task scope changed is refused and recovers by replaying in full", async () => {
