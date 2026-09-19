@@ -277,7 +277,9 @@ export function applyProviderConfigHints(
   const configuredMaxInput = staticPolicy.model.maxInputTokens;
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
-  let inputModalities = staticPolicy.model.inputModalities ? [...staticPolicy.model.inputModalities] : undefined;
+  // Preserve the established catalog contract: exact capabilities win, while the legacy map
+  // retains case/family inference and becomes authoritative again when the exact row is removed.
+  let inputModalities = configuredInputModalities(prov, model.id);
   // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
   // planning aligned. The catalog must still advertise image input — the Codex app
   // gates attachments client-side on input_modalities, and a text-only entry would block images

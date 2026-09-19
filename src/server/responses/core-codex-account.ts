@@ -328,7 +328,8 @@ export interface CodexPoolAccountRetryArgs {
   /** Sanitized caller input, before any selected Pool credential was materialized. */
   callerAuthHeaders: Headers;
   config: OcxConfig;
-  route: { providerName: string; modelId: string; provider: OcxProviderConfig };
+  /** Actual routed result narrowed to the fields this retry consumes. */
+  route: Pick<RouteResult, "providerName" | "modelId" | "provider" | "staticPolicy">;
   parsed: OcxParsedRequest;
   logCtx: RequestLogContext;
   options: {

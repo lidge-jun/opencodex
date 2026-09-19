@@ -57,6 +57,10 @@ export function captureOpenAiVirtualWirePolicy(
   resolution: OpenAiVirtualModelResolution,
   inboundWire: InboundWire = "responses",
 ): void {
+  // applyOpenAiVirtualModel is also a public mutation helper with older focused callers that
+  // construct only providerName/modelId/provider. Production RouteResult builders always capture
+  // staticPolicy; a legacy partial shape has no authority to recapture and keeps the old rewrite.
+  if (!route.staticPolicy) return;
   const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === route.providerName);
   route.staticPolicy = resolveModelPolicy({
     providerName: route.providerName,
