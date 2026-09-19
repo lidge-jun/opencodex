@@ -103,8 +103,8 @@ debug is enabled. `generationConfig.responseMimeType` and `generationConfig.resp
 are output-schema fields and never enter tool-schema sanitation or loss accounting.
 
 `googleToolSchemaPolicy` is provider-scoped. Omission and `compatible` retain the report-only body
-and existing repair replay. `reject-lossy` refuses an initially lossy compilation before
-`buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
+and existing repair replay. `reject-lossy` refuses an initially lossy or comparison-indeterminate
+compilation before `buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
 resolved policy into their 400 compatibility repair: indexed repair reports one opened declaration,
 unindexed repair reports every declaration it would open, and strict policy returns the original
 400 without a changed repair send. The `google-tool-schema-repair` diagnostic inherits the complete

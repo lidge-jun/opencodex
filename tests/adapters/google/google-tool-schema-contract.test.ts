@@ -744,6 +744,29 @@ describe("Google tool-schema loss report", () => {
       expect(policyError.message).not.toContain(canary);
     }
   });
+  test.each(ENDPOINT_CASES)("reject-lossy refuses indeterminate $endpointClass compilation before any send", async ({ endpointClass, provider }) => {
+    const adapter = createGoogleAdapter({ ...provider, googleToolSchemaPolicy: "reject-lossy" });
+    let sends = 0;
+    const executor = (async () => {
+      sends++;
+      return new Response("unexpected send");
+    }) as typeof fetch;
+    let caught: unknown;
+    try {
+      const built = await adapter.buildRequest(endpointRequestUncertain());
+      await adapter.fetchResponse?.(built, { executor });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GoogleToolSchemaPolicyError);
+    const policyError = caught as GoogleToolSchemaPolicyError;
+    expect(policyError.phase).toBe("initial");
+    expect(policyError.endpointClass).toBe(endpointClass);
+    expect(policyError.indeterminate).toBe(true);
+    expect(policyError.categories).toEqual({});
+    expect(policyError.message).toContain("indeterminate");
+    expect(sends).toBe(0);
+  });
 
   test.each(ENDPOINT_CASES)("reject-lossy accepts lossless $endpointClass tools and native output schemas", async ({ endpointClass, provider }) => {
     const built = await createGoogleAdapter({ ...provider, googleToolSchemaPolicy: "reject-lossy" })

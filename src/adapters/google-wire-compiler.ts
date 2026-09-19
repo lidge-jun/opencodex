@@ -19,13 +19,17 @@ export class GoogleToolSchemaPolicyError extends Error {
   readonly phase = "initial" as const;
   readonly endpointClass: GoogleToolSchemaProfile["endpointClass"];
   readonly categories: GoogleToolSchemaLossReport["categories"];
+  /** True when refusal is due to exhausted bounded comparison rather than proven loss. */
+  readonly indeterminate: boolean;
 
   constructor(report: GoogleToolSchemaLossReport) {
     const categories = { ...report.categories };
-    super(`google tool schema policy rejected lossy initial compilation (${report.endpointClass}; categories=${JSON.stringify(categories)})`);
+    const indeterminate = report.uncertainComparisons > 0;
+    super(`google tool schema policy rejected ${report.lossy ? "lossy" : "indeterminate"} initial compilation (${report.endpointClass}; categories=${JSON.stringify(categories)}${indeterminate ? `; uncertainComparisons=${report.uncertainComparisons}` : ""})`);
     this.name = "GoogleToolSchemaPolicyError";
     this.endpointClass = report.endpointClass;
     this.categories = categories;
+    this.indeterminate = indeterminate;
   }
 }
 
@@ -228,7 +232,9 @@ export function compileGoogleWireBody(
   if (isObject(source.systemInstruction)) body.systemInstruction = source.systemInstruction;
   const tools = compileTools(source.tools, names.toWire, profile, toolSchemaLossReport);
   if (tools) body.tools = tools;
-  if (policy === "reject-lossy" && toolSchemaLossReport.lossy) {
+  // Strict mode refuses proven loss and bounded-comparison indeterminacy alike: an exhausted
+  // comparison can hide a changed constraint, so unknown is not admitted as lossless.
+  if (policy === "reject-lossy" && (toolSchemaLossReport.lossy || toolSchemaLossReport.uncertainComparisons > 0)) {
     throw new GoogleToolSchemaPolicyError(toolSchemaLossReport);
   }
   const generationConfig = compileGenerationConfig(source.generationConfig);
