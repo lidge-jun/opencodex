@@ -22,7 +22,22 @@ Main directly inspected eleven real-browser screenshots of the hosted artifact s
 
 The receipt records desktop1280x720 CSS pixels at DPR2, narrow480x800 at DPR2, and Korean390x686 at DPR2.5. It includes all eleven PNG hashes, fixture routes and request sequences, the scratch fixture-server command, artifact provenance, and keyboard Escape closing the dialog. Main verified hashes and the final commit-pinned image links. Filenames alone were not used to establish viewport measurements.
 
-The dashboard receipt is committed in `.github/pr-assets/5197-capture-receipt.json` at3d9fffd1be64ff47ca504493e14a7c293dc139e1. Artifact identity and current GUI-tree equality must remain valid after the final cascade, or affected evidence must be refreshed.
+The [dashboard capture receipt](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-capture-receipt.json) is pinned to commit3d9fffd1be64ff47ca504493e14a7c293dc139e1. Artifact identity and current GUI-tree equality must remain valid after the final cascade, or affected evidence must be refreshed.
+
+
+Pinned capture files (historical artifact, before the final parent cascade):
+
+- [apply-desktop.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-apply-desktop.png)
+- [apply-narrow.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-apply-narrow.png)
+- [keyboard-focus.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-keyboard-focus.png)
+- [ko-restore-drift-390.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-ko-restore-drift-390.png)
+- [ko-stale-reconfirm-390.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-ko-stale-reconfirm-390.png)
+- [overwrite-foreign-desktop.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-overwrite-foreign-desktop.png)
+- [overwrite-foreign-narrow.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-overwrite-foreign-narrow.png)
+- [restore-drift-desktop.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-restore-drift-desktop.png)
+- [restore-drift-narrow.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-restore-drift-narrow.png)
+- [stale-reconfirm-desktop.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-stale-reconfirm-desktop.png)
+- [stale-reconfirm-narrow.png](https://github.com/lidge-jun/opencodex/blob/3d9fffd1be64ff47ca504493e14a7c293dc139e1/.github/pr-assets/5197-stale-reconfirm-narrow.png)
 
 ## Remaining delivery
 
