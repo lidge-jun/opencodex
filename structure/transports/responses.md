@@ -547,6 +547,19 @@ declared bare tool and to rewrite code-mode helper names into the declared `exec
 input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
 is expressed by a separate flag rather than by withholding it.
 
+The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so
+whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
+`normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
+`default.`-prefixed code-mode helper was admitted as `exec` (#4412) and then relayed verbatim.
+`default.view_image` is not a legal Responses tool name, and Codex stores what it receives, so the
+one relayed item was refused by `^[a-zA-Z0-9_-]+$` on every later replay of that conversation and
+the task could not be compacted or continued (#5095). The rewrite now falls back to the resolver
+whenever `isSchemaValidResponsesToolName` (`src/responses/tool-name-aliases.ts`) rejects the emitted
+name, and only then, so a name the upstream accepts is never reshaped by this branch. A name that
+resolves to nothing declared stays refused by the #1700 guard, which is the pre-existing and
+intended outcome: an invalid name that cannot be resolved must end the turn visibly rather than
+reach stored history.
+
 Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
 wire enforces. A routed provider that names a tool the request never declared ends the turn there:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed

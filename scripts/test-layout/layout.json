@@ -276,6 +276,7 @@
     "azure-model-router-tool-schema.test.ts": "providers",
     "bare-echo-alias.test.ts": "responses",
     "responses-bare-echo-helper-fence.test.ts": "responses",
+    "responses-default-namespace-emit-normalize.test.ts": "responses",
     "responses-preview-main-read-fence.test.ts": "responses",
     "baseten-provider.test.ts": "providers",
     "bearer-admission-routed-provider.test.ts": "codex-integration",
