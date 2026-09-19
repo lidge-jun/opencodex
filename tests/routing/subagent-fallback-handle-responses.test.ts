@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
   clearAccountQuota,
   updateAccountQuota,
@@ -2157,15 +2158,12 @@ describe("native passthrough terminal finalization", () => {
     const terminals: ResponsesTerminalStatus[] = [];
     mockSseUpstream(sseBody);
 
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    // Force win32 so eager-relay decision path is reachable via streamMode override.
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    // Ownership identity lowercases the state directory on win32, so the lease this file took
-    // under the real platform stops matching the directory the dispatch checks the moment the
-    // override lands, and the turn is refused with no terminal at all. Retake it under the
-    // platform this case is pretending to run on, and give it back before restoring.
-    releaseSpendHome?.();
-    releaseSpendHome = acquireOwnedSpendHome();
+    // The eager relay is only reachable on win32 and darwin, and this shard is neither. The
+    // claim is narrowed to the relay decision itself: overwriting process.platform globally
+    // also redirects filesystem, ACL and state-directory identity, and the spend-ledger owner
+    // lowercases its home on win32, which on a case-sensitive filesystem is a different
+    // directory. That made the send unreservable and the turn delivered no terminal at all.
+    setRelayPlatformForTests("win32");
     try {
       const response = await postSpawn(
         cfg,
@@ -2174,6 +2172,12 @@ describe("native passthrough terminal finalization", () => {
           onNativePassthroughTerminal: (status) => terminals.push(status),
         },
       );
+      // Asserted before the callback is inspected, so a turn that never delivered says so
+      // instead of presenting as a missing callback.
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      // The relay path this case exists to exercise, proven rather than assumed.
+      expect(isEagerRelaySseResponse(response)).toBe(streamMode === "eager-relay");
       const responseText = await response.text();
       // Allow inspection consumer microtasks to settle.
       await Bun.sleep(20);
@@ -2183,9 +2187,7 @@ describe("native passthrough terminal finalization", () => {
         responseText,
       };
     } finally {
-      releaseSpendHome?.();
-      releaseSpendHome = undefined;
-      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+      setRelayPlatformForTests(undefined);
     }
   }
 
