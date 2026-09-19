@@ -155,6 +155,7 @@ export async function prepareResponsesRequest(
       transport: options.inboundTransport,
     });
   }
+  options.onRequestBodyParsed?.(body);
   // An effort row naming a table-less combo (`combo/x--high`) must reach the combo dispatcher
   // as its base id, so the selector is normalized here, before comboIdFromRawBody reads model.
   const comboRows = !options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)
