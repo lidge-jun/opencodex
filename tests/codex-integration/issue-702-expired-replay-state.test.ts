@@ -786,6 +786,21 @@ describe("Issue #702 expired forward replay state", () => {
     expect(serialized).toContain(CURRENT_USER_SENTINEL);
   });
 
+  test("a task-scope mismatch refuses the delta before ordinary HTTP upstream I/O", async () => {
+    const scenario = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
+
+    expect(scenario.firstStatus).toBe(200);
+    expect(scenario.secondStatus).toBe(400);
+    expect(JSON.parse(scenario.secondResponseText)).toEqual({
+      error: {
+        message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+      },
+    });
+    expect(scenario.upstreamRequests).toHaveLength(1);
+  });
+
   test("forward mode still sends an ordinary request without previous_response_id", async () => {
     const scenario = await runForwardScenario("ordinary");
 

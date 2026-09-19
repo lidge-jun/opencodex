@@ -480,7 +480,12 @@ receive `previous_response_not_found` before upstream dispatch and must resend c
 without `previous_response_id`. That refusal is not specific to the stateless flag: it covers every
 destination that cannot see the prefix this process failed to restore, which is every destination
 except the native Responses passthrough. The passthrough forwards the id and keeps its
-upstream-owned state. `PROVIDER_OWNED_CONTINUATION_WIRES` in
+upstream-owned state. A task-scope mismatch uses the same generic refusal even when the supplied
+input appears complete, because the proxy cannot prove that it contains the full conversation.
+The internal mismatch reason, stored scope and state contents never enter the client response;
+the caller retries explicitly with complete history and no `previous_response_id`. Matching
+normalized scopes replay, and two absent or blank scopes remain the legacy unscoped cohort.
+`PROVIDER_OWNED_CONTINUATION_WIRES` in
 `src/responses/continuation-ownership.ts` is deliberately empty and records why the three
 candidates do not qualify: devin re-sends the whole conversation each turn, cursor reads its
 `checkpointRef` out of the same expired store and otherwise falls back to `full-replay`, and kiro

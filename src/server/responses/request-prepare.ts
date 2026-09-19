@@ -41,7 +41,6 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
-  previousResponseScopeMismatch,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -243,10 +242,11 @@ export async function prepareResponsesRequest(
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
     body = expandPreviousResponseInput(body, inboundClientThreadId);
-    if (previousResponseScopeMismatch(body)) {
-      console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+    const replayFailure = previousResponseReplayFailure(body);
+    if (replayFailure?.reason === "scope_mismatch") {
+      console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
     }
-    if (previousResponseReplayFailure(body)) {
+    if (replayFailure) {
       return formatErrorResponse(
         400,
         "previous_response_not_found",
