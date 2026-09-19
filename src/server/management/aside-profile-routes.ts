@@ -77,17 +77,7 @@ export function asideGuardFor(
   capture: { plan: IntegrationMutationPlan | null },
 ): (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> {
   return async prepared => {
-    const plan = previewIntegration(prepared, {
-      profileId: profileIdValue,
-      operation: binding.operation,
-      ...(request.opId === undefined ? {} : { opId: request.opId }),
-      ...(request.confirmDrift === undefined ? {} : { confirmDrift: request.confirmDrift }),
-      // The row the route selected, so the guard and the mutation mean the same operation even
-      // when more than one valid copy exists.
-      ...(request.resolved === undefined
-        ? {}
-        : { resolved: { entry: request.resolved.entry, store: request.resolved.store } }),
-    });
+    const plan = planFor(prepared, profileIdValue, binding, request);
     /*
      * The roster this confirmation was planned against has to still be the retained one. Only its
      * rows were carried into the mutation, so an ordinary load completing while this action
@@ -110,6 +100,59 @@ export function asideGuardFor(
       profileId: profileIdValue,
     };
   };
+}
+
+/**
+ * The same comparison, run again immediately before the document is written.
+ *
+ * Aside takes no writer lock, and its preference write and journal import sit between the first
+ * check and the write that check authorizes. A target edited in that window is read fresh by the
+ * writer, which then compares it against itself and finds nothing to object to, so a confirmation
+ * about the earlier file would still overwrite the later one.
+ *
+ * The roster is deliberately not re-examined here. This action has just written the operator's
+ * preference into the configuration, which retires the retained roster by design, so asking that
+ * question at this point would refuse every confirmation on principle. What is asked is the one
+ * thing this moment can answer: does the plan the operator confirmed still describe this file.
+ */
+export function asideLateGuardFor(
+  profileIdValue: number,
+  binding: { operation: IntegrationPlanOperation; fingerprint: string },
+  request: { opId?: string; confirmDrift?: boolean; resolved?: AsideOperation },
+  capture: { plan: IntegrationMutationPlan | null },
+): (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> {
+  return async prepared => {
+    const plan = planFor(prepared, profileIdValue, binding, request);
+    if (plan.canApply && plan.fingerprint === binding.fingerprint) return null;
+    capture.plan = plan;
+    return {
+      ok: false,
+      reason: "conflict",
+      state: plan.state,
+      clientId: "aside",
+      message: "that confirmation no longer describes this profile",
+      profileId: profileIdValue,
+    };
+  };
+}
+
+function planFor(
+  prepared: IntegrationWriteInput,
+  profileIdValue: number,
+  binding: { operation: IntegrationPlanOperation; fingerprint: string },
+  request: { opId?: string; confirmDrift?: boolean; resolved?: AsideOperation },
+): IntegrationMutationPlan {
+  return previewIntegration(prepared, {
+    profileId: profileIdValue,
+    operation: binding.operation,
+    ...(request.opId === undefined ? {} : { opId: request.opId }),
+    ...(request.confirmDrift === undefined ? {} : { confirmDrift: request.confirmDrift }),
+    // The row the route selected, so the guard and the mutation mean the same operation even
+    // when more than one valid copy exists.
+    ...(request.resolved === undefined
+      ? {}
+      : { resolved: { entry: request.resolved.entry, store: request.resolved.store } }),
+  });
 }
 
 function stalePlanResponse(ctx: ManagementContext, plan: IntegrationMutationPlan): Response {
@@ -294,6 +337,7 @@ export async function handleAsideProfileRoutes(
     const capture: { plan: IntegrationMutationPlan | null } = { plan: null };
     let mutationInput = options.input();
     let revalidate: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
+    let revalidateBeforeWrite: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
     if (binding !== null && id !== undefined) {
       const roster = previewExportSnapshot(ctx.config);
       if (roster === null) {
@@ -305,11 +349,12 @@ export async function handleAsideProfileRoutes(
       // One roster for the guard and the mutation, so they cannot disagree by construction.
       mutationInput = { ...mutationInput, models: roster.models };
       revalidate = asideGuardFor(ctx, roster.identity, id, binding, {}, capture);
+      revalidateBeforeWrite = asideLateGuardFor(id, binding, {}, capture);
     }
     const batch = await mutateAsideProfiles(
       mutationInput,
       { enabled: body.enabled, profileId: id, overwriteConflict: body.overwriteConflict === true },
-      revalidate ? { revalidate } : undefined,
+      revalidate ? { revalidate, ...(revalidateBeforeWrite ? { revalidateBeforeWrite } : {}) } : undefined,
     );
     if (capture.plan) return stalePlanResponse(ctx, capture.plan);
     if (id !== undefined) {
@@ -382,6 +427,7 @@ export async function asideRestoreResponse(
     const capture: { plan: IntegrationMutationPlan | null } = { plan: null };
     let restoreInput = input;
     let revalidate: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
+    let revalidateBeforeWrite: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
     if (restoreBinding !== null) {
       const roster = previewExportSnapshot(ctx.config);
       if (roster === null) {
@@ -396,13 +442,18 @@ export async function asideRestoreResponse(
         confirmDrift: body.confirmDrift === true,
         resolved: operation,
       }, capture);
+      revalidateBeforeWrite = asideLateGuardFor(operation.profileId, restoreBinding, {
+        opId: body.opId,
+        confirmDrift: body.confirmDrift === true,
+        resolved: operation,
+      }, capture);
     }
     const result = await restoreAsideProfile(
       restoreInput,
       // The same row the preview and guard used. Letting the mutation resolve its own copy is how
       // a confirmation ends up bound to an operation other than the one that runs.
       { ...body, profileId: operation.profileId, selectedOperation: operation },
-      revalidate ? { revalidate } : undefined,
+      revalidate ? { revalidate, ...(revalidateBeforeWrite ? { revalidateBeforeWrite } : {}) } : undefined,
     );
     if (capture.plan) return stalePlanResponse(ctx, capture.plan);
     return result.ok ? jsonResponse(result, 200, ctx.req, ctx.config) : options.failure(result);

@@ -177,7 +177,18 @@ export function restoreAsideProfile(
      */
     selectedOperation?: AsideOperation;
   },
-  options?: { revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> },
+  options?: {
+    revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
+    /**
+     * Checked again immediately before the target is rewritten.
+     *
+     * The preference write and the journal import sit between the first check and the restore
+     * itself, and Aside takes no writer lock. The snapshot checks below still hold, but they say
+     * nothing about the target file, which can be edited in that window; without this, a
+     * confirmation about the earlier file still overwrote the later one.
+     */
+    revalidateBeforeWrite?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
+  },
 ): Promise<AsideProfileWriteOutcome> {
   return runAsideProfileAction<AsideProfileWriteOutcome>(input, request.profileId, `restore:${request.opId}:${Boolean(request.confirmDrift)}`, async ctx => {
     const row = request.selectedOperation ?? requiredOperation(ctx, request.opId, request.profileId);
@@ -218,7 +229,18 @@ export function restoreAsideProfile(
         throw new AsideProfileError("aside_operation_changed", 409, "Aside operation or snapshot changed while saving preferences");
       }
       importOperation(row, scope);
-      return { ...await restoreIntegrationCoordinated({ ...bound, opId: request.opId, confirmDrift: request.confirmDrift }, { lockSeams: input.lockSeams }), profileId: profile.id };
+      return {
+        ...await restoreIntegrationCoordinated(
+          { ...bound, opId: request.opId, confirmDrift: request.confirmDrift },
+          {
+            lockSeams: input.lockSeams,
+            ...(options?.revalidateBeforeWrite
+              ? { revalidate: (frozen: IntegrationWriteInput) => options.revalidateBeforeWrite!(frozen) }
+              : {}),
+          },
+        ),
+        profileId: profile.id,
+      };
     } catch (error) { return asideProfileFailure(profile.id, error); }
   });
 }

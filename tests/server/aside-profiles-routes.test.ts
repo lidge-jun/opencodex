@@ -25,6 +25,12 @@ let config: OcxConfig;
 let isolation: IsolatedCodexHome;
 let priorOcxHome: string | undefined;
 let saved: OcxConfig | undefined;
+/**
+ * Runs inside the preference write, which is where the window this fixture exercises lives: the
+ * confirmation has been checked, nothing has been written to the client yet, and an editor outside
+ * this process can still change the target.
+ */
+let onPersist: (() => void) | undefined;
 const env: NodeJS.ProcessEnv = {};
 
 beforeEach(() => {
@@ -47,6 +53,7 @@ beforeEach(() => {
     fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", liveModels: false, models: ["one","two"] },
   } } as OcxConfig;
   saved = undefined;
+  onPersist = undefined;
   setIntegrationPathTestHooks({ home, env });
   setIntegrationMutationFlightTestHooks({ store });
 });
@@ -91,7 +98,7 @@ async function rawApi(pathname: string, method: string, body?: string) {
     method, headers: { Host: url.host, "content-type": "application/json" },
     ...(body === undefined ? {} : { body }),
   }), url, config, {
-    saveConfigPreservingClaudeCode: value => { saved = structuredClone(value); },
+    saveConfigPreservingClaudeCode: value => { saved = structuredClone(value); onPersist?.(); },
     createManagementConvergeCodex: catalogConvergenceFactory(),
     refreshOwnedCatalogIntegrations: input => refreshOwnedCatalogIntegrations({ ...input, store, env, home }),
   });
@@ -483,4 +490,82 @@ test("a confirmed disable of a profile with nothing applied saves the preference
   // The preference is the one thing that was written, and it is what the operator asked for.
   expect(saved?.asideProfileSync?.profiles?.["1"]).toBe(false);
   expect(config.asideProfileSync?.profiles?.["1"]).toBe(false);
+});
+
+test("a target edited while the preference is being saved is not overwritten by the old confirmation", async () => {
+  /*
+   * Aside takes no writer lock, and its preference write sits between the confirmation check and
+   * the write that check authorizes. An overwrite does not ask the writer's own conflict question,
+   * so without a second look the confirmation about the earlier file would land on the later one.
+   */
+  await seedRoster();
+  const foreign = JSON.stringify({ theme: "keep", providers: { opencodex: { models: [{ id: "written-by-someone-else" }] } } });
+  writeFileSync(path(1), foreign);
+
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "overwrite" });
+  expect(preview.status).toBe(200);
+  const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+
+  const edited = JSON.stringify({ theme: "edited-after-the-check", providers: { opencodex: { models: [{ id: "still-not-ours" }] } } });
+  onPersist = () => { writeFileSync(path(1), edited); };
+
+  const commit = await api("/api/client-integrations/aside?profile=1", "PUT", {
+    enabled: true, overwriteConflict: true, operation: "overwrite", planFingerprint: plan.fingerprint,
+  });
+
+  expect(commit.status).toBe(409);
+  expect((await commit.json() as { code: string }).code).toBe("integration_preview_stale");
+  // The file the editor wrote is the file that is still there.
+  expect(readFileSync(path(1), "utf8")).toBe(edited);
+});
+
+test("an unchanged target still commits the same confirmed overwrite", async () => {
+  // The control for the case above: nothing moves in the window, and the confirmation stands.
+  await seedRoster();
+  writeFileSync(path(1), JSON.stringify({ theme: "keep", providers: { opencodex: { models: [{ id: "written-by-someone-else" }] } } }));
+
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "overwrite" });
+  const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+
+  const commit = await api("/api/client-integrations/aside?profile=1", "PUT", {
+    enabled: true, overwriteConflict: true, operation: "overwrite", planFingerprint: plan.fingerprint,
+  });
+
+  expect(commit.status).toBe(200);
+  // The block that was there is the one the overwrite was for, and it is gone.
+  expect(JSON.stringify(document(1))).not.toContain("written-by-someone-else");
+  expect(document(1).providers.opencodex).toBeDefined();
+});
+
+test("a confirmed drift restore does not rewrite a target edited while preferences were saved", async () => {
+  /*
+   * Confirming drift says the operator accepted the difference they were shown. It does not say
+   * they accepted one that appeared afterwards, and the snapshot checks say nothing about the
+   * target file.
+   */
+  const enabled = await (await api("/api/client-integrations/aside?profile=1", "PUT", { enabled: true })).json();
+  expect(enabled.ok).toBe(true);
+  const opId = enabled.opId as string;
+
+  writeFileSync(path(1), JSON.stringify({ theme: "drifted-before-the-preview" }));
+  await seedRoster();
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", {
+    operation: "restore", opId, confirmDrift: true,
+  });
+  expect(preview.status).toBe(200);
+  const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+
+  const edited = JSON.stringify({ theme: "edited-after-the-check" });
+  onPersist = () => { writeFileSync(path(1), edited); };
+
+  const undo = await api("/api/client-integrations/aside/profiles/1/restore", "POST", {
+    opId, operation: "restore", confirmDrift: true, planFingerprint: plan.fingerprint,
+  });
+
+  expect(undo.status).toBe(409);
+  expect((await undo.json() as { code: string }).code).toBe("integration_preview_stale");
+  expect(readFileSync(path(1), "utf8")).toBe(edited);
 });

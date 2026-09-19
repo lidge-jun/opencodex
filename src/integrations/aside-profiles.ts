@@ -149,7 +149,18 @@ export async function getAsideProfileState(input: AsideProfilesInput, id: number
 export function mutateAsideProfiles(
   input: AsideProfilesInput,
   change: { enabled: boolean; profileId?: number; overwriteConflict?: boolean },
-  options?: { revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> },
+  options?: {
+    revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
+    /**
+     * Checked again immediately before the client document is written.
+     *
+     * Aside takes no writer lock, and the preference write sits between the first check and the
+     * write it authorizes. Nothing stops the target file from being edited in that window, and the
+     * writer's own comparison reads the file as it is now, so a confirmation about the earlier
+     * file would otherwise still overwrite the later one.
+     */
+    revalidateBeforeWrite?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
+  },
 ): Promise<AsideProfileMutationResult> {
   return runAsideProfileAction<AsideProfileMutationResult>(input, change.profileId, `${change.enabled ? "enable" : "disable"}:${Boolean(change.overwriteConflict)}`, async (ctx, profiles) => {
     const refused = new Map<number, AsideProfileWriteOutcome>();
@@ -228,7 +239,15 @@ export function mutateAsideProfiles(
         const bound = prepared.get(profile.id) ?? await asideWriteInput(ctx, asideProfileScope(ctx, profile));
         const operation = !change.enabled ? disableIntegrationCoordinated
           : change.overwriteConflict ? overwriteIntegrationCoordinated : applyIntegrationCoordinated;
-        results.push({ ...await operation(bound, { lockSeams: input.lockSeams }), profileId: profile.id });
+        results.push({
+          ...await operation(bound, {
+            lockSeams: input.lockSeams,
+            ...(options?.revalidateBeforeWrite
+              ? { revalidate: (frozen: IntegrationWriteInput) => options.revalidateBeforeWrite!(frozen) }
+              : {}),
+          }),
+          profileId: profile.id,
+        });
       } catch (error) { results.push(asideProfileFailure(profile.id, error)); }
     }
     const ok = results.every(result => result.ok);
