@@ -567,11 +567,14 @@ function abortRejection(signal: AbortSignal): { promise: Promise<never>; dispose
   return { promise, dispose: () => signal.removeEventListener("abort", onAbort) };
 }
 
-type UploadStep =
-  | { kind: "chunk"; value: Uint8Array }
-  | { kind: "end" }
-  | { kind: "drained" }
-  | { kind: "answered" };
+/**
+ * The two races below have different possible outcomes, so they have different result types.
+ * One union covering both would let the compiler accept reading `value` off a drain result,
+ * which is the kind of mistake a type is supposed to catch rather than describe.
+ */
+type Answered = { kind: "answered" };
+type BodyStep = { kind: "chunk"; value: Uint8Array } | { kind: "end" } | Answered;
+type DrainStep = { kind: "drained" } | Answered;
 
 /**
  * Send the request body, settling on caller abort or on an answer that arrives first.
@@ -596,15 +599,15 @@ async function uploadRequestBody(
   const signal = request.signal;
   const bodyReader = body.getReader();
   const abort = abortRejection(signal);
-  const answered: Promise<UploadStep> = head.then(
-    (): UploadStep => ({ kind: "answered" }),
-    (): UploadStep => ({ kind: "answered" }),
+  const answered: Promise<Answered> = head.then(
+    (): Answered => ({ kind: "answered" }),
+    (): Answered => ({ kind: "answered" }),
   );
   let completed = false;
   try {
     for (;;) {
-      const read: Promise<UploadStep> = bodyReader.read().then(
-        (result): UploadStep => (result.done ? { kind: "end" } : { kind: "chunk", value: result.value }),
+      const read: Promise<BodyStep> = bodyReader.read().then(
+        (result): BodyStep => (result.done ? { kind: "end" } : { kind: "chunk", value: result.value }),
       );
       // Releasing the lock below rejects a read still waiting on a source that stopped
       // producing. That rejection is this function's own doing, not a failure to report.
@@ -619,13 +622,13 @@ async function uploadRequestBody(
         ? Buffer.concat([Buffer.from(`${step.value.byteLength.toString(16)}\r\n`), Buffer.from(step.value), CRLF])
         : step.value;
       if (socket.write(payload)) continue;
-      const drain: Promise<UploadStep> = waitForDrain(socket, signal).then((): UploadStep => ({ kind: "drained" }));
+      const drain: Promise<DrainStep> = waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" }));
       if ((await Promise.race([drain, answered, abort.promise])).kind === "answered") break;
     }
     // A terminating chunk written after the peer has already answered goes into a conversation
     // that is over, and a peer that has moved on may read it as the head of the next request.
     if (completed && chunked && !socket.write("0\r\n\r\n")) {
-      const drain: Promise<UploadStep> = waitForDrain(socket, signal).then((): UploadStep => ({ kind: "drained" }));
+      const drain: Promise<DrainStep> = waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" }));
       await Promise.race([drain, answered, abort.promise]);
     }
   } finally {

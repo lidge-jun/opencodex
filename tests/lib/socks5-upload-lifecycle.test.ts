@@ -148,9 +148,27 @@ describe("SOCKS5 upload lifecycle", () => {
   });
 
   test("a caller abort settles a fetch waiting on a body chunk that never arrives", async () => {
+    // Abort is driven by the upstream actually receiving a body byte, not by the stream having
+    // produced one. A caller's stream can be pulled before the tunnel is even established, so
+    // aborting on that signal would not prove the fetch was waiting mid-upload.
+    let markUploading: () => void = () => { /* replaced below */ };
+    const uploading = new Promise<void>(resolve => { markUploading = resolve; });
     const target = createTcpServer(socket => {
       socket.once("error", () => { /* the caller resets this peer on abort */ });
-      socket.on("data", () => { /* never answer */ });
+      let head = Buffer.alloc(0);
+      let headComplete = false;
+      socket.on("data", chunk => {
+        if (headComplete) {
+          markUploading();
+          return;
+        }
+        head = Buffer.concat([head, chunk]);
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        headComplete = true;
+        if (head.byteLength > end + 4) markUploading();
+      });
+      // Never answer: the fetch can only settle through the abort path.
     });
     const proxy = socksProxy();
     const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
@@ -160,7 +178,9 @@ describe("SOCKS5 upload lifecycle", () => {
     try {
       const pending = post(targetPort, proxyPort, body.stream, controller.signal);
       const outcome = pending.then(() => "resolved" as const, (error: unknown) => error);
-      await body.delivered;
+      // The upload is now parked on a read the caller's stream will never fulfil.
+      expect(await settlesWithin(uploading)).toBe(true);
+      expect(await settlesWithin(body.delivered)).toBe(true);
       controller.abort(reason);
       expect(await settlesWithin(outcome)).toBe(true);
       expect(await outcome).toBe(reason);
