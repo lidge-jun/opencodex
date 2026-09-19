@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,11 @@ import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+// Every case here binds a real listener and drives it over HTTP, so the file-wide budget is
+// the server budget; the assertions themselves are unchanged.
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 const enc = new TextEncoder();
 const originalFetch = globalThis.fetch;

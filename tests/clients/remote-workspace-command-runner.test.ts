@@ -17,6 +17,19 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const roots: string[] = [];
 
+// trustedBubblewrap() only stats this path, so POSIX uses the system shell and Windows a minimal
+// fixture that is never executed. The host runtime cannot serve: node_modules/bun hard-links
+// bin/bunx.exe to bin/bun.exe, and a /tmp checkout fails the ancestor rule Windows skips.
+function trustedSandboxBinary(): string {
+  if (process.platform !== "win32") return realpathSync("/bin/sh");
+  const root = mkdtempSync(join(tmpdir(), "ocx-trusted-sandbox-"));
+  roots.push(root);
+  const fixture = join(root, "bwrap.exe");
+  writeFileSync(fixture, "", { mode: 0o755 });
+  chmodSync(fixture, 0o755);
+  return realpathSync(fixture);
+}
+
 afterEach(() => {
   for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
@@ -83,14 +96,15 @@ describe("remote workspace Linux command sandbox", () => {
 
   test("builds a minimal bubblewrap argv with one writable workspace", () => {
     const state = fixture();
+    const sandboxBinary = trustedSandboxBinary();
     const argv = linuxRemoteWorkspaceCommandArgv({
       command: ["/bin/sh", "-lc", "pwd"],
       root: state.workspace,
       cwd: join(state.workspace, "project"),
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
-    }, { bubblewrapPath: process.execPath });
-    expect(argv[0]).toBe(process.execPath);
+    }, { bubblewrapPath: sandboxBinary });
+    expect(argv[0]).toBe(sandboxBinary);
     expect(argv).toContain("--unshare-net");
     expect(argv).toContain("--clearenv");
     expect(argv).toContain("--bind");
@@ -280,6 +294,7 @@ describe("remote workspace Linux command sandbox", () => {
 
   test("revalidates approved toolchain roots and rejects a later symlink substitution", () => {
     const state = fixture();
+    const sandboxBinary = trustedSandboxBinary();
     const realToolchain = join(state.root, "real-toolchain");
     const substituted = join(state.root, "toolchain");
     mkdirSync(realToolchain);
@@ -291,7 +306,7 @@ describe("remote workspace Linux command sandbox", () => {
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
     }, {
-      bubblewrapPath: process.execPath,
+      bubblewrapPath: sandboxBinary,
       toolchainRoots: [substituted],
     })).toThrow("remain a real directory");
   });

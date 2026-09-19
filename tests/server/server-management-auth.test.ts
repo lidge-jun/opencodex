@@ -462,7 +462,7 @@ describe("management and data-plane credential separation", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, SERVER_BUDGET_MS); // eight sequential live requests against a real listener; Bun's 5s default is not a server budget.
 
   test("a provider-reload capability is one-shot and exact to its operation", () => {
     const secret = "A".repeat(43);

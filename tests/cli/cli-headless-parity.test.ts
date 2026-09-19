@@ -1253,6 +1253,13 @@ describe("Aside CLI recovery metadata", () => {
       expect(await handleClientIntegrationCommand([
         "enable", "--client", "aside", ...(wantsJson ? ["--json"] : []),
       ], runtime.deps)).toBe(1);
+      // Assert the failure channel before stdout. A request that never reached the route leaves
+      // stdout empty for a reason stderr alone names, and checking stdout first reports the empty
+      // rendering instead of the transport error that caused it.
+      expect(error.mock.calls.map(call => String(call[0])).join("\n")).toContain(result.message);
+      expect(runtime.requests).toEqual([{
+        path: "/api/client-integrations/aside/profiles", method: "PUT", body: { enabled: true },
+      }]);
       const stdout = log.mock.calls.map(call => String(call[0])).join("\n");
       if (wantsJson) {
         expect(JSON.parse(stdout)).toEqual(result);
@@ -1265,10 +1272,6 @@ describe("Aside CLI recovery metadata", () => {
           "aside:9  Profile 9 recovery failed Recovery did not finish.",
         ]);
       }
-      expect(error.mock.calls.map(call => String(call[0])).join("\n")).toContain(result.message);
-      expect(runtime.requests).toEqual([{
-        path: "/api/client-integrations/aside/profiles", method: "PUT", body: { enabled: true },
-      }]);
     } finally {
       log.mockRestore();
       error.mockRestore();

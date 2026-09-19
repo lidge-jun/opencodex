@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
+import { isolationBudgetMs } from "../helpers/ci-watchdog";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -62,7 +63,9 @@ function cfg(anthropicBaseUrl: string, extraClaude?: Record<string, unknown>): O
     providers: {
       mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, liveModels: false, models: ["test-model"] },
     },
-    connectTimeoutMs: 250,
+    // Shortened on purpose so a wedged upstream fails fast; the wrapper's full-suite
+    // lane needs headroom for a loopback round-trip on a busy machine.
+    connectTimeoutMs: isolationBudgetMs(250),
     claudeCode: { anthropicBaseUrl, ...extraClaude },
   } as OcxConfig;
 }
