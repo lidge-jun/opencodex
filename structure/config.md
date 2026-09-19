@@ -191,7 +191,7 @@ that prefix hashed to a different backup filename before the normalization, so t
 (`history-provider.ts` for mutation, `native-residue.ts` for observation) fall back to the
 legacy filename when no canonical manifest exists. When both names exist the canonical manifest
 wins and the legacy file is left in place; a conflict is never resolved by silently replacing
-either file.
+either file. History Worker job targets use that same canonical-first lookup rather than passing a canonical-only filename that would bypass the provider's legacy fallback.
 
 `history-provider.ts` remains the strict mutation owner and maps shared validation failures to its
 restore/no-op integrity states. `native-residue.ts` remains a read-only observer and maps the same
@@ -410,7 +410,7 @@ management handler's own unknown-id answer, and it names the id and `ocx models 
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. History Worker targets preserve the canonical-first legacy-manifest fallback when they cross the Worker boundary. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
 
 Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
