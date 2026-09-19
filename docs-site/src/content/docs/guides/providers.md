@@ -211,11 +211,14 @@ Google Antigravity account and provider quota probes use fixed Google accounting
 
 ### Google tool-schema loss diagnostics
 
-Google tool declarations are compiled against the selected endpoint class. With provider debug
-enabled, compatibility widening emits only the endpoint class, fixed loss categories, bounded
-counts, and a truncation flag. Tool and property names, paths, values, and schema text are never
-included. This diagnostic observes the existing compatible conversion and does not reject the
-request. Native output schemas are outside this diagnostic.
+Google tool declarations are compiled against the selected endpoint class. When provider debug is
+on — `ocx debug provider on`, the dashboard Logs toggle, or `OCX_DEBUG=1` — compatibility widening
+emits a `[ocx:google:google-tool-schema-loss]` record (tail with `ocx debug provider logs -f`)
+carrying only the report version, endpoint class, a `lossy` indicator, fixed loss categories with
+bounded counts, and a truncation flag. Tool and property names, paths, values, and schema text are
+never included. This diagnostic observes the existing compatible conversion and does not reject
+the request. Native output schemas are outside this diagnostic. See the
+[debug command reference](/reference/cli/agents/).
 
 
 After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.

@@ -147,10 +147,13 @@ Google Antigravity hesap ve sağlayıcı kota sorguları, model listesine geri d
 ### Google araç şeması kayıp tanılaması
 
 Google araç bildirimleri seçilen uç nokta sınıfına göre derlenir. Sağlayıcı hata ayıklaması
-etkinleştirildiğinde uyumluluk genişletmesi yalnızca uç nokta sınıfını, sabit kayıp
-kategorilerini, sınırlı sayımları ve kesilme işaretini yayınlar. Araç ve özellik adları,
-yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Bu tanılama mevcut uyumlu dönüşümü
-gözlemler ve isteği reddetmez. Yerel çıktı şemaları bu tanılamanın dışındadır.
+`ocx debug provider on`, kontrol panelindeki Logs anahtarı veya `OCX_DEBUG=1` ile açıldığında,
+uyumluluk genişletmesi bir `[ocx:google:google-tool-schema-loss]` kaydı yayınlar
+(`ocx debug provider logs -f` ile takip edin). Kayıt yalnızca rapor sürümünü, uç nokta sınıfını,
+bir `lossy` göstergesini, sınırlı sayımlara sahip sabit kayıp kategorilerini ve kesilme işaretini
+taşır. Araç ve özellik adları, yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Bu
+tanılama mevcut uyumlu dönüşümü gözlemler ve isteği reddetmez. Yerel çıktı şemaları bu tanılamanın
+dışındadır. [Hata ayıklama komutu başvurusuna](/tr/reference/cli/agents/) bakın.
 
 
 Uç bir Nous yenileme hatasından sonra yeniden kimlik doğrulamak için `ocx login
