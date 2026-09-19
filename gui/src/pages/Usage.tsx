@@ -67,6 +67,12 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheHitRate?: number | null;
+  /** Input tokens whose cache detail was observed; hit rate is not model-wide below inputTokens. */
+  cacheObservedInputTokens?: number;
   /** API list-price estimate for the priced portion of this row. */
   estimatedCostUsd?: number;
   /** Requests included in the API list-price estimate. */
@@ -158,6 +164,16 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
       )}
     </>
   );
+}
+
+function formatOptionalTokens(value: number | undefined, locale: Locale, unavailable: string): string {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? formatTokens(value, locale)
+    : unavailable;
+}
+
+function formatOptionalPct(value: number | null | undefined, unavailable: string): string {
+  return typeof value === "number" && Number.isFinite(value) ? formatPct(value) : unavailable;
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -695,6 +711,7 @@ function UsageModelsTable({
   const sectionLabel = t("usage.section.models");
   const titleId = "usage-models-title";
   const listPriceDisclaimerId = "usage-models-list-price-disclaimer";
+  const unavailable = t("usage.unavailable");
   const searchInput = (
     <input
       className="input"
@@ -713,6 +730,11 @@ function UsageModelsTable({
             <th>{t("logs.col.provider")}</th>
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.inputTokens")}</th>
+            <th className="num">{t("usage.col.outputTokens")}</th>
+            <th className="num">{t("usage.col.cacheHits")}</th>
+            <th className="num">{t("usage.col.cacheWrites")}</th>
+            <th className="num">{t("usage.col.cacheHitRate")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
             <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
             <th>{t("usage.col.share")}</th>
@@ -725,6 +747,18 @@ function UsageModelsTable({
               <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
+              <td className="num mono">{formatTokens(model.inputTokens, locale)}</td>
+              <td className="num mono">{formatTokens(model.outputTokens, locale)}</td>
+              <td className="num mono">{formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale, unavailable)}</td>
+              <td className="num mono">{formatOptionalTokens(model.cacheCreationInputTokens, locale, unavailable)}</td>
+              <td className="num mono">{formatOptionalPct(
+                typeof model.cacheObservedInputTokens === "number"
+                  && Number.isFinite(model.cacheObservedInputTokens)
+                  && model.cacheObservedInputTokens >= model.inputTokens
+                  ? model.cacheHitRate
+                  : null,
+                unavailable,
+              )}</td>
               <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
               <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
