@@ -256,9 +256,9 @@ dialing the upstream directly.
 
 These rules belong to the upstream WebSocket transport, independently of the selected provider
 adapter. HTTP fetch-based Responses requests, including SSE fallback, use the
-[configured outbound fetch](/reference/configuration/server/#server-fields). An explicit server
-`socks5://` or `socks5h://` proxy uses OpenCodex's built-in tunnel; an inherited SOCKS5
-`ALL_PROXY` does the same after `NO_PROXY`/`no_proxy` does not exempt the target. Scheme-specific
+[configured outbound fetch](/reference/configuration/server/#server-fields). A server SOCKS5 proxy — set
+with `config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when
+`NO_PROXY`/`no_proxy` does not exempt the target. Scheme-specific
 `HTTP_PROXY`/`HTTPS_PROXY` values retain Bun's native HTTP(S) handling, while a non-SOCKS
 `ALL_PROXY` is not a native HTTP fetch route. `config.proxy` fills missing
 `HTTP_PROXY`/`HTTPS_PROXY` values; the resulting scheme-specific value also takes precedence over

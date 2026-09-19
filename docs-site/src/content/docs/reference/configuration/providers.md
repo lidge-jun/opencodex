@@ -517,8 +517,9 @@ HTTPS retains the original Host, SNI, and certificate verification; provider con
 certificate checks.
 
 These operations use the [server's configured outbound fetch](/reference/configuration/server/).
-An explicit server `socks5://` or `socks5h://` proxy uses OpenCodex's built-in tunnel; an inherited
-SOCKS5 `ALL_PROXY` does the same when `NO_PROXY` does not match. Scheme-specific `HTTP_PROXY` and
+A server SOCKS5 proxy — set with
+`config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when
+`NO_PROXY` does not exempt the target. Scheme-specific `HTTP_PROXY` and
 `HTTPS_PROXY` retain Bun's native HTTP(S) handling, while a non-SOCKS `ALL_PROXY` is not a native
 HTTP fetch route. URL and literal-address checks still run, but a selected proxy chooses the final
 route, DNS answer, and peer, so opencodex cannot pin or verify that peer. This is an explicit
@@ -536,8 +537,9 @@ Two fake-IP DNS accommodations exist for Clash / Surge / Mihomo users, and both 
 *answers* only — a literal address in the URL is still rejected. The IANA benchmark range
 `198.18.0.0/15` (and its IPv4-mapped IPv6 spellings) is accepted whenever an outbound proxy applies
 to the host. Mihomo's default IPv6 fake-IP range `fdfe:dcba:9876::/48` is accepted on a stricter
-gate: the proxy variable that matches the URL scheme (`HTTPS_PROXY` for `https:`, `HTTP_PROXY` for
-`http:`; `ALL_PROXY` does not count) must be set, the host must not match `NO_PROXY`, and the
+gate: the proxy variable that matches the URL scheme (`HTTPS_PROXY` for
+`https:`, `HTTP_PROXY` for `http:`) or a SOCKS5 `ALL_PROXY` must be set (a non-SOCKS `ALL_PROXY` does
+not count), the host must not match `NO_PROXY`, and the
 request is then bound to that proxy explicitly. Any other ULA, an adjacent prefix, or a fake-IP answer
 mixed with a real private answer still requires `allowPrivateNetwork: true`. Provider save-time
 validation never applies the IPv6 accommodation.

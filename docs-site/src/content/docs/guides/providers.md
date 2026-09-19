@@ -972,9 +972,9 @@ is not supported directly.
 Provider configuration selects the adapter; upstream transport selection is separate. Eligible
 Responses traffic can use WSS with [explicit proxy routing](/reference/proxy-formats/#json-and-sse-output).
 Invalid or unsupported WebSocket proxy settings fall back to HTTP/SSE, which uses the
-[server's configured outbound fetch](/reference/configuration/server/). An explicit server SOCKS5
-proxy uses the built-in tunnel, and an inherited SOCKS5 `ALL_PROXY` does so when `NO_PROXY` does not
-match. Scheme-specific HTTP(S) proxy variables retain their separate native handling; non-SOCKS
+[server's configured outbound fetch](/reference/configuration/server/). A server SOCKS5 proxy from
+`config.proxy` or an inherited SOCKS5 `ALL_PROXY` uses the built-in tunnel when `NO_PROXY` does
+not exempt the target. Scheme-specific HTTP(S) proxy variables retain their separate native handling; non-SOCKS
 `ALL_PROXY` is not a native HTTP fetch route.
 
 **GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
