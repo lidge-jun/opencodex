@@ -13,8 +13,8 @@ import { repoPath, repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import {
   analyzeWarmupRegistration,
-  warmupIsRegistered,
-  warmupRegistrationComplaints,
+  dispositionComplaints,
+  type WarmupDisposition,
 } from "../helpers/warmup-registration";
 
 /**
@@ -31,10 +31,12 @@ import {
  * substring test for the helper's path, which #5060 showed accepts an unused import, a comment or a
  * string literal as proof — each of them survives deleting the beforeAll call that did the work, so
  * the measured child pays the cold load again with a green guard in front of it.
- * tests/helpers/warmup-registration.ts replaces the substring with a structural judge over the
- * file's tokens, and its own regression set is tests/ci-workflows/warmup-registration.test.ts. It
- * reads shape, not execution: the execution oracle is the [cold-spawn-warmup] completion line the
- * helper prints on every hosted run.
+ * tests/helpers/warmup-registration.ts replaces the substring with a judge that recognises four
+ * shapes exactly and refuses every other construct by name; its own regression set is
+ * tests/ci-workflows/warmup-registration.test.ts. A refused shape is not a blocked file: a
+ * disposition records the construct in `unmodeled` and the refusal itself stays under test. The
+ * judge reads shape, not execution — the execution oracle is the [cold-spawn-warmup] completion
+ * line the helper prints on every hosted run.
  *
  * The unit tests answer "does the warm-up still warm the right thing". A warm-up that names its
  * modules by hand decays silently, so `moduleGraphSpecifiers` derives them from the child's own
@@ -43,7 +45,7 @@ import {
  * it fails closed when it finds nothing.
  */
 
-type Disposition = Readonly<{ warmed: boolean; why: string }>;
+type Disposition = WarmupDisposition;
 
 /**
  * Every test file that bounds a spawned child with `INTERNAL_DEADLINE_MS`.
@@ -123,36 +125,20 @@ describe("cold-spawn warm-up coverage", () => {
     expect(filesBoundingASpawnWithTheDeadline()).toEqual(Object.keys(DISPOSITIONS).sort());
   });
 
-  test("a file recorded as warmed registers the warm-up and waits for it", () => {
-    // The bar is a bun:test beforeAll that calls a binding imported from the helper module and
-    // awaits or returns what it gives back. A mention of the helper's path is not evidence of any
-    // of those, which is what #5060 was: the substring check this replaced stayed green through the
-    // deletion of the call it was supposed to be watching.
-    const unproven = Object.entries(DISPOSITIONS)
-      .filter(([, disposition]) => disposition.warmed)
-      .map(([path]) => ({ path, report: judgeWarmup(path) }))
-      .filter(entry => !warmupIsRegistered(entry.report))
-      .map(entry => entry.path + ": " + warmupRegistrationComplaints(entry.report).join(" | "));
-    expect(unproven).toEqual([]);
+  test("every disposition still describes the file it is recorded against", () => {
+    // Warmed means one of the four accepted shapes is here and nothing on the binding path was
+    // refused; unwarmed means the file does not reach the helper at all, which is asked of the
+    // whole file rather than of its bindings, because a namespace import or a barrel binds no name
+    // this judge follows and would otherwise read as an absence.
+    const wrong = Object.entries(DISPOSITIONS)
+      .flatMap(([path, disposition]) => dispositionComplaints(path, disposition, judgeWarmup(path)));
+    expect(wrong).toEqual([]);
   });
 
-  test("a file recorded as unwarmed says why, and does not quietly become warmed", () => {
+  test("anything other than a plainly warmed file says why, at length", () => {
     for (const [path, disposition] of Object.entries(DISPOSITIONS)) {
-      if (disposition.warmed) continue;
-      expect(disposition.why.length).toBeGreaterThan(80);
-      // The reason is half of it. The other half is that the file is still what the reason
-      // describes: an unwarmed file may discuss the helper in prose, and may not bind it, because a
-      // binding is the first thing a real warm-up needs and the last thing a stale note has.
-      // The import flag is checked as well as the bindings: a namespace import binds no name this
-      // judge follows, so bindings alone would read a real warm-up here as an absence.
-      const report = judgeWarmup(path);
-      expect({
-        path,
-        bindings: report.bindings,
-        imports: report.importsHelperModule,
-        registrations: report.registrations,
-        unreadable: report.unreadable,
-      }).toEqual({ path, bindings: [], imports: false, registrations: [], unreadable: [] });
+      if (disposition.warmed && disposition.unmodeled === undefined) continue;
+      expect({ path, reason: disposition.why.length > 80 }).toEqual({ path, reason: true });
     }
   });
 });

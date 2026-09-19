@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
 import {
   analyzeWarmupRegistration,
+  dispositionComplaints,
   warmupIsRegistered,
   warmupRegistrationComplaints,
 } from "../helpers/warmup-registration";
@@ -11,14 +12,18 @@ import {
  *
  * #5060: the coverage guard accepted the substring "helpers/cold-spawn-warmup" as proof that a file
  * pays its cold module-graph load in setup, so a comment, a string, or an import left behind after
- * its call was deleted all passed. Every shape named in that report is below, together with the
- * forms that really do warm. A judge that only refused would be as useless as one that only
- * accepted, so both directions are pinned here rather than the refusals alone.
+ * its call was deleted all passed.
  *
- * The fixtures are source text. They are never imported and never run: this is a structural check
- * and it is scoped like one. The fixture path is a real directory under tests/, so the relative
- * specifier resolves to the real helper module, which is what makes the same-name-from-another-file
- * case fail rather than pass by spelling.
+ * The judge answers that by recognising four shapes exactly and refusing everything else, so this
+ * file has to pin both halves. The first describe is the accepted grammar - if one of those stops
+ * being accepted, ordinary test files start failing for no reason. The second is the refusals,
+ * which are the point: each one is a construct that either does not warm, or does warm in a way
+ * this judge will not claim to have proved. The third is the disposition contract, which is how a
+ * refusal records a legitimate file instead of blocking it.
+ *
+ * The fixtures are source text, never imported and never run. The fixture path is a real directory
+ * under tests/, so the relative specifier resolves to the real helper module, which is what makes
+ * the same-name-from-another-file case fail rather than pass by spelling.
  */
 const FIXTURE = repoPath("tests", "ci-workflows", "warmup-registration-fixture.test.ts");
 
@@ -33,6 +38,10 @@ function registers(...lines: string[]): boolean {
   return warmupIsRegistered(judge(...lines));
 }
 
+function why(...lines: string[]): string {
+  return warmupRegistrationComplaints(judge(...lines)).join(" | ");
+}
+
 /** The registration shape every warmed file in this repository uses today. */
 function hook(...body: string[]): string[] {
   return [
@@ -45,87 +54,16 @@ function hook(...body: string[]): string[] {
   ];
 }
 
-describe("warm-up judge: the import binding", () => {
-  test("a comment or a string that names the warm-up binds nothing", () => {
-    // These two are the defect verbatim. Both contain every character the old substring check
-    // looked for, and neither loads a module.
-    const commented = judge(BUN_TEST, ...hook("// await warmModuleGraph(options); helpers/cold-spawn-warmup"));
-    const quoted = judge(BUN_TEST, ...hook('const note = "warmModuleGraph(options) helpers/cold-spawn-warmup";'));
-    expect([warmupIsRegistered(commented), warmupIsRegistered(quoted)]).toEqual([false, false]);
-    expect([commented.bindings, quoted.bindings]).toEqual([[], []]);
-  });
-
-  test("an import left behind after the call was deleted is not a warm-up", () => {
-    // The shape a decayed file actually takes: the import survives review because it looks load
-    // bearing, and the hook that used it is gone.
-    const report = judge(BUN_TEST, HELPER, ...hook("const unrelated = 1;"));
-    expect(warmupIsRegistered(report)).toBe(false);
-    expect(report.bindings).toEqual(["warmModuleGraph"]);
-    expect(warmupRegistrationComplaints(report).join(" ")).toContain("never awaited");
-  });
-
-  test("an alias is followed, because renaming the import does not change what it loads", () => {
-    const report = judge(
-      BUN_TEST,
-      'import { warmModuleGraph as warmUp } from "../helpers/cold-spawn-warmup";',
-      ...hook("await warmUp(options);"),
-    );
+describe("warm-up judge: the shapes it accepts", () => {
+  test("a describe, a beforeAll, and the warm-up as a whole awaited statement", () => {
+    const report = judge(BUN_TEST, HELPER, ...hook("await warmModuleGraph(options);"));
     expect(warmupIsRegistered(report)).toBe(true);
     expect(report.registrations).toEqual([
-      { helper: "warmModuleGraph", local: "warmUp", completion: "await", line: 5 },
+      { helper: "warmModuleGraph", local: "warmModuleGraph", shape: "hook-statement", line: 5 },
     ]);
   });
 
-  test("the same name from another module is another function", () => {
-    expect(registers(
-      BUN_TEST,
-      'import { warmModuleGraph } from "../helpers/some-other-helper";',
-      ...hook("await warmModuleGraph(options);"),
-    )).toBe(false);
-  });
-
-  test("a type-only import loads nothing at run time", () => {
-    const clause = judge(
-      BUN_TEST,
-      'import type { warmModuleGraph } from "../helpers/cold-spawn-warmup";',
-      ...hook("await warmModuleGraph(options);"),
-    );
-    const inline = judge(
-      BUN_TEST,
-      'import { type warmModuleGraph } from "../helpers/cold-spawn-warmup";',
-      ...hook("await warmModuleGraph(options);"),
-    );
-    expect([warmupIsRegistered(clause), warmupIsRegistered(inline)]).toEqual([false, false]);
-    expect(warmupRegistrationComplaints(clause).join(" ")).toContain("type only");
-  });
-
-  test("a local function of the same name is not the shared warm-up", () => {
-    expect(registers(
-      BUN_TEST,
-      "async function warmModuleGraph(options) { return options; }",
-      ...hook("await warmModuleGraph(options);"),
-    )).toBe(false);
-  });
-
-  test("a shape the judge does not read fails loudly instead of passing", () => {
-    // A namespace import is legal and would warm. It is refused with its own reason rather than
-    // silently, because a judge that quietly ignores what it cannot read is the original defect.
-    const report = judge(
-      BUN_TEST,
-      'import * as warmup from "../helpers/cold-spawn-warmup";',
-      ...hook("await warmup.warmModuleGraph(options);"),
-    );
-    expect(warmupIsRegistered(report)).toBe(false);
-    expect(warmupRegistrationComplaints(report).join(" ")).toContain("namespace");
-    // The unwarmed disposition is guarded by this flag rather than by the bindings, which a
-    // namespace import leaves empty while really warming.
-    expect(report.importsHelperModule).toBe(true);
-  });
-});
-
-describe("warm-up judge: the hook registration", () => {
-  test("a registration inside describe counts, and so does one at the top level", () => {
-    expect(registers(BUN_TEST, HELPER, ...hook("await warmModuleGraph(options);"))).toBe(true);
+  test("the same hook at the top level, with no describe around it", () => {
     expect(registers(
       BUN_TEST,
       HELPER,
@@ -135,170 +73,24 @@ describe("warm-up judge: the hook registration", () => {
     )).toBe(true);
   });
 
-  test("a callback that is declared but never registered warms nothing", () => {
-    expect(registers(
-      BUN_TEST,
-      HELPER,
-      "const warmUpHook = async () => {",
-      "  await warmModuleGraph(options);",
-      "};",
-    )).toBe(false);
-  });
-
-  test("a hook handed a name instead of a callback is refused, not guessed", () => {
-    // beforeAll(warmUpHook) would work at run time, and the judge still refuses: a name can be
-    // reassigned between the declaration and the call, so the file no longer says what runs.
-    const report = judge(
-      BUN_TEST,
-      HELPER,
-      "const warmUpHook = async () => { await warmModuleGraph(options); };",
-      "beforeAll(warmUpHook, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-    );
-    expect(warmupIsRegistered(report)).toBe(false);
-    expect(warmupRegistrationComplaints(report).join(" ")).toContain("inline callback");
-  });
-
-  test("beforeAll has to come from bun:test", () => {
-    expect(registers(
-      'import { describe, test } from "bun:test";',
-      'import { beforeAll } from "../helpers/local-hook-shim";',
-      HELPER,
-      ...hook("await warmModuleGraph(options);"),
-    )).toBe(false);
-  });
-
-  test("a registration the file never reaches is not a registration", () => {
-    // Both shapes call beforeAll with a correct, awaited warm-up, and neither runs: one sits in a
-    // helper nobody calls, the other behind a condition that is false. A hook that never registers
-    // leaves the measured child paying the cold load, which is the defect wearing the right shape.
-    const uncalled = judge(
-      BUN_TEST,
-      HELPER,
-      "function installWarmUp() {",
-      "  beforeAll(async () => {",
-      "    await warmModuleGraph(options);",
-      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-      "}",
-    );
-    const guarded = judge(
-      BUN_TEST,
-      HELPER,
-      "if (false) {",
-      "  beforeAll(async () => {",
-      "    await warmModuleGraph(options);",
-      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-      "}",
-    );
-    expect([warmupIsRegistered(uncalled), warmupIsRegistered(guarded)]).toEqual([false, false]);
-    expect(warmupRegistrationComplaints(uncalled).join(" ")).toContain("cannot see it run");
-    // The third is the same hole one level in: a helper declared inside the describe still reads
-    // as a describe scope by paren depth alone, and still nobody calls it.
-    const inner = judge(
-      BUN_TEST,
-      HELPER,
-      'describe("subject", () => {',
-      "  const installWarmUp = () => {",
-      "    beforeAll(async () => {",
-      "      await warmModuleGraph(options);",
-      "    }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-      "  };",
-      "});",
-    );
-    expect(warmupIsRegistered(inner)).toBe(false);
-  });
-
-  test("a semicolonless guarded hook does not poison the registration after it", () => {
-    // The guarded one is refused and the plain one is not. Without a statement boundary that does
-    // not need a semicolon, the condition would still be set on the next line, and a file whose
-    // style omits semicolons would lose a warm-up it really has.
-    const report = judge(
-      BUN_TEST,
-      HELPER,
-      "if (false) beforeAll(() => warmModuleGraph(options))",
-      "beforeAll(async () => {",
-      "  await warmModuleGraph(options);",
-      "}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-    );
-    expect(warmupIsRegistered(report)).toBe(true);
-    expect(warmupRegistrationComplaints(report).join(" ")).toContain("cannot see it run");
-  });
-
-  test("a line that continues the guarded expression is still the guarded statement", () => {
-    // The second line opens with a paren, so there is no automatic semicolon between them: this is
-    // one conditional consequent and neither hook runs. A statement boundary drawn on the line
-    // break alone would read the second one as unconditional and accept the file.
-    const report = judge(
-      BUN_TEST,
-      HELPER,
-      "if (false) beforeAll(() => warmModuleGraph(options))",
-      "(beforeAll(async () => { await warmModuleGraph(options); }))",
-    );
-    expect(warmupIsRegistered(report)).toBe(false);
-  });
-});
-
-describe("warm-up judge: call ownership", () => {
-  test("a call inside a nested function is not the hook's own work", () => {
-    expect(registers(BUN_TEST, HELPER, ...hook(
-      "await runLater(async () => {",
-      "  await warmModuleGraph(options);",
-      "});",
-    ))).toBe(false);
-  });
-
-  test("a call behind a condition is not a warm-up the file always pays", () => {
-    const braced = judge(BUN_TEST, HELPER, ...hook("if (false) { await warmModuleGraph(options); }"));
-    const bare = judge(BUN_TEST, HELPER, ...hook("if (false) await warmModuleGraph(options);"));
-    expect([warmupIsRegistered(braced), warmupIsRegistered(bare)]).toEqual([false, false]);
-    expect(warmupRegistrationComplaints(bare).join(" ")).toContain("condition");
-  });
-
-  test("a redeclared name does not reach the import", () => {
-    const report = judge(
-      BUN_TEST,
-      HELPER,
-      "const warmModuleGraph = async () => {};",
-      ...hook("await warmModuleGraph(options);"),
-    );
-    expect(warmupIsRegistered(report)).toBe(false);
-    expect(warmupRegistrationComplaints(report).join(" ")).toContain("redeclared");
-  });
-
-  test("a callback parameter of the same name shadows the import for the whole body", () => {
-    // Out of reach of the redeclaration scan: a parameter is bound by the parameter list, with no
-    // declaration keyword in front of it to find.
-    const report = judge(
-      BUN_TEST,
-      HELPER,
-      'describe("subject", () => {',
-      "  beforeAll(async (warmModuleGraph) => {",
-      "    await warmModuleGraph(options);",
-      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-      "});",
-    );
-    expect(warmupIsRegistered(report)).toBe(false);
-    expect(warmupRegistrationComplaints(report).join(" ")).toContain("parameter");
-  });
-});
-
-describe("warm-up judge: completion", () => {
-  test("fire and forget leaves the hook finishing before the warm-up does", () => {
-    const dropped = judge(BUN_TEST, HELPER, ...hook("warmModuleGraph(options);"));
-    const voided = judge(BUN_TEST, HELPER, ...hook("void warmModuleGraph(options);"));
-    expect([warmupIsRegistered(dropped), warmupIsRegistered(voided)]).toEqual([false, false]);
-    expect(warmupRegistrationComplaints(dropped).join(" ")).toContain("neither awaited nor returned");
-  });
-
-  test("await, return, an implicit return and a function expression all connect the promise", () => {
-    expect(judge(BUN_TEST, HELPER, ...hook("await warmModuleGraph(options);")).registrations[0].completion)
-      .toBe("await");
-    expect(judge(BUN_TEST, HELPER, ...hook("return warmModuleGraph(options);")).registrations[0].completion)
-      .toBe("return");
-    expect(registers(
+  test("return and a concise body connect the promise as well as await does", () => {
+    expect(judge(BUN_TEST, HELPER, ...hook("return warmModuleGraph(options);")).registrations[0].shape)
+      .toBe("hook-return");
+    expect(judge(BUN_TEST, HELPER, ...hook("return await warmModuleGraph(options);")).registrations[0].shape)
+      .toBe("hook-return");
+    expect(judge(
       BUN_TEST,
       HELPER,
       "beforeAll(() => warmModuleGraph(options), COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+    ).registrations[0].shape).toBe("hook-expression");
+    expect(registers(
+      BUN_TEST,
+      HELPER,
+      "beforeAll(async () => await warmModuleGraph(options), COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
     )).toBe(true);
+  });
+
+  test("a function expression stands in for the arrow", () => {
     expect(registers(
       BUN_TEST,
       HELPER,
@@ -308,36 +100,217 @@ describe("warm-up judge: completion", () => {
     )).toBe(true);
   });
 
-  test("a warm-up that is only part of the returned expression does not settle the hook", () => {
-    // Both return something other than the warm-up promise: the right operand of &&, and the right
-    // side of a comma expression. The hook settles on that instead, while the warm-up runs on.
-    const operand = judge(
+  test("an alias is followed, and an optional call is still a call", () => {
+    const aliased = judge(
       BUN_TEST,
-      HELPER,
-      "beforeAll(() => warmModuleGraph(options) && ready(), COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+      'import { warmModuleGraph as warmUp } from "../helpers/cold-spawn-warmup";',
+      ...hook("await warmUp(options);"),
     );
-    const sequence = judge(BUN_TEST, HELPER, ...hook("return warmModuleGraph(options), ready();"));
-    expect([warmupIsRegistered(operand), warmupIsRegistered(sequence)]).toEqual([false, false]);
-    expect(warmupRegistrationComplaints(operand).join(" ")).toContain("larger returned expression");
+    expect(aliased.registrations).toEqual([
+      { helper: "warmModuleGraph", local: "warmUp", shape: "hook-statement", line: 5 },
+    ]);
+    expect(registers(BUN_TEST, HELPER, ...hook("await warmModuleGraph?.(options);"))).toBe(true);
   });
-});
 
-describe("warm-up judge: reading the file at all", () => {
+  test("a module-level await is a warm-up the file always pays", () => {
+    // No hook to register: the statement runs when the module loads, which is before any test in
+    // it is timed. It has to be the whole statement, exactly as it does inside a hook.
+    const report = judge(BUN_TEST, HELPER, "await warmModuleGraph(options);");
+    expect(report.registrations.map(entry => entry.shape)).toEqual(["module-top-level"]);
+    expect(registers(BUN_TEST, HELPER, "const warmed = await warmModuleGraph(options);")).toBe(false);
+  });
+
   test("a template substitution and a regular expression do not derail the token walk", () => {
     // Both are scanner rescans rather than plain tokens. Read naively, the closing brace of a
     // substitution leaks an unmatched brace and a regular expression is read as a division that
     // swallows whatever delimiters sit inside it, and either one moves the rest of the file to a
-    // depth where a real call no longer looks direct.
+    // depth where the hook no longer looks like a hook.
     expect(registers(BUN_TEST, HELPER, ...hook(
-      "const label = `graph-${options.graph}-${JSON.stringify({ warm: true })}`;",
+      "const label = \`graph-\${options.graph}-\${JSON.stringify({ warm: true })}\`;",
       'const trimmed = label.replace(/[^a-z-]{1,4}/g, "");',
       "await warmModuleGraph(options);",
     ))).toBe(true);
   });
+});
 
-  test("a file the judge cannot read is a failure, never an absence", () => {
+describe("warm-up judge: what it refuses, and says why", () => {
+  test("a comment or a string that names the warm-up binds nothing", () => {
+    // These two are the defect verbatim. Both contain every character the old substring check
+    // looked for, and neither loads a module.
+    const commented = judge(BUN_TEST, ...hook("// await warmModuleGraph(options); helpers/cold-spawn-warmup"));
+    const quoted = judge(BUN_TEST, ...hook('const note = "warmModuleGraph(options) helpers/cold-spawn-warmup";'));
+    expect([warmupIsRegistered(commented), warmupIsRegistered(quoted)]).toEqual([false, false]);
+    expect([commented.bindings, quoted.bindings, commented.mentionsEntryPoint]).toEqual([[], [], false]);
+  });
+
+  test("an import left behind after the call was deleted is not a warm-up", () => {
+    expect(why(BUN_TEST, HELPER, ...hook("const unrelated = 1;"))).toContain("never called");
+  });
+
+  test("a helper reached without a direct named import is refused rather than guessed", () => {
+    // A namespace import and a barrel both warm at run time. Following either one means resolving
+    // a binding through another module, and a judge that guesses there is a judge that can be
+    // wrong in the direction that matters. The disposition table is where such a file is recorded.
+    const namespaced = judge(
+      BUN_TEST,
+      'import * as warmup from "../helpers/cold-spawn-warmup";',
+      ...hook("await warmup.warmModuleGraph(options);"),
+    );
+    expect([warmupIsRegistered(namespaced), namespaced.mentionsEntryPoint]).toEqual([false, true]);
+    expect(warmupRegistrationComplaints(namespaced).join(" ")).toContain("namespace");
+
+    const barrel = judge(
+      BUN_TEST,
+      'import { warmModuleGraph } from "../helpers/test-helpers";',
+      ...hook("await warmModuleGraph(options);"),
+    );
+    expect([warmupIsRegistered(barrel), barrel.mentionsEntryPoint]).toEqual([false, true]);
+    expect(warmupRegistrationComplaints(barrel).join(" ")).toContain("direct named import");
+  });
+
+  test("a type-only import loads nothing, and a local function of the same name is not the import", () => {
+    expect(why(
+      BUN_TEST,
+      'import type { warmModuleGraph } from "../helpers/cold-spawn-warmup";',
+      ...hook("await warmModuleGraph(options);"),
+    )).toContain("type only");
+    expect(registers(
+      BUN_TEST,
+      "async function warmModuleGraph(options) { return options; }",
+      ...hook("await warmModuleGraph(options);"),
+    )).toBe(false);
+  });
+
+  test("a hook the file never reaches registers nothing", () => {
+    // Each of these calls beforeAll with a correct, awaited warm-up, and none of them runs: one
+    // sits in a helper nobody calls, one behind a false condition, and one inside an
+    // expression-bodied callback, which has no braces to give the scope away.
+    const uncalled = judge(BUN_TEST, HELPER,
+      "function installWarmUp() {",
+      "  beforeAll(async () => {",
+      "    await warmModuleGraph(options);",
+      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+      "}");
+    const guarded = judge(BUN_TEST, HELPER,
+      "if (false) {",
+      "  beforeAll(async () => {",
+      "    await warmModuleGraph(options);",
+      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+      "}");
+    const expressionBodied = judge(BUN_TEST, HELPER,
+      "register(() => beforeAll(async () => {",
+      "  await warmModuleGraph(options);",
+      "}));");
+    expect([uncalled, guarded, expressionBodied].map(warmupIsRegistered)).toEqual([false, false, false]);
+    expect(warmupRegistrationComplaints(expressionBodied).join(" ")).toContain("does not model");
+  });
+
+  test("an expression-bodied arrow is a scope, so a warm-up inside an uncalled one is refused", () => {
+    expect(registers(BUN_TEST, HELPER, "const warmUp = async () => await warmModuleGraph(options);"))
+      .toBe(false);
+    expect(registers(BUN_TEST, HELPER, "const warmUp = () => warmModuleGraph(options);")).toBe(false);
+  });
+
+  test("a rebound beforeAll or describe is not the bun:test one", () => {
+    // The shadowed hook takes a correct callback and runs nothing at all. Provenance has to hold
+    // for the hook name exactly as it does for the warm-up name.
+    const shadowedHook = judge(BUN_TEST, HELPER,
+      'describe("subject", () => {',
+      "  const beforeAll = (body) => body;",
+      "  beforeAll(async () => {",
+      "    await warmModuleGraph(options);",
+      "  });",
+      "});");
+    const shadowedSuite = judge(BUN_TEST, HELPER,
+      "const describe = (name, body) => body();",
+      ...hook("await warmModuleGraph(options);"));
+    expect([shadowedHook, shadowedSuite].map(warmupIsRegistered)).toEqual([false, false]);
+    expect(warmupRegistrationComplaints(shadowedHook).join(" ")).toContain("rebound");
+    expect(warmupRegistrationComplaints(shadowedSuite).join(" ")).toContain("rebound");
+  });
+
+  test("a parameter, a variable alias, and a callback reached by name are all refused", () => {
+    const parameter = judge(BUN_TEST, HELPER,
+      'describe("subject", () => {',
+      "  beforeAll(async (warmModuleGraph) => {",
+      "    await warmModuleGraph(options);",
+      "  });",
+      "});");
+    const alias = judge(BUN_TEST, HELPER, "const warm = warmModuleGraph;", ...hook("await warm(options);"));
+    const byName = judge(BUN_TEST, HELPER,
+      "const warmUpHook = async () => {",
+      "  await warmModuleGraph(options);",
+      "};",
+      "beforeAll(warmUpHook, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);");
+    expect([parameter, alias, byName].map(warmupIsRegistered)).toEqual([false, false, false]);
+    expect(warmupRegistrationComplaints(alias).join(" ")).toContain("without being called");
+  });
+
+  test("fire and forget, void, and a partial expression leave the hook settling first", () => {
+    expect(registers(BUN_TEST, HELPER, ...hook("warmModuleGraph(options);"))).toBe(false);
+    expect(registers(BUN_TEST, HELPER, ...hook("void warmModuleGraph(options);"))).toBe(false);
+    expect(registers(BUN_TEST, HELPER, ...hook("return warmModuleGraph(options), ready();"))).toBe(false);
+    expect(registers(
+      BUN_TEST,
+      HELPER,
+      "beforeAll(() => warmModuleGraph(options) && ready(), COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+    )).toBe(false);
+  });
+
+  test("a conditional call is refused even when every branch warms", () => {
+    // Refused rather than analysed. Deciding that two branches both warm means modelling control
+    // flow, and the judge that models control flow from tokens is the one that gets it wrong.
+    expect(registers(BUN_TEST, HELPER, ...hook(
+      "if (portable) {",
+      "  await warmModuleGraph(portableOptions);",
+      "} else {",
+      "  await warmModuleGraph(nativeOptions);",
+      "}",
+    ))).toBe(false);
+    expect(registers(BUN_TEST, HELPER, ...hook("if (false) await warmModuleGraph(options);"))).toBe(false);
+  });
+
+  test("a file this judge cannot read is a failure, never an absence", () => {
     const report = judge(BUN_TEST, HELPER, 'describe("unclosed", () => {');
-    expect(report.unreadable.length).toBeGreaterThan(0);
+    expect(report.refusals.length).toBeGreaterThan(0);
     expect(warmupIsRegistered(report)).toBe(false);
   });
 });
+
+describe("warm-up judge: what a disposition has to match", () => {
+  const warmed = { warmed: true, why: "the canonical hook" };
+  const unwarmed = { warmed: false, why: "nothing here spawns a child that loads a repository graph" };
+  const canonical = () => judge(BUN_TEST, HELPER, ...hook("await warmModuleGraph(options);"));
+  const dropped = () => judge(BUN_TEST, HELPER, ...hook("warmModuleGraph(options);"));
+  const namespaced = () => judge(
+    BUN_TEST,
+    'import * as warmup from "../helpers/cold-spawn-warmup";',
+    ...hook("await warmup.warmModuleGraph(options);"),
+  );
+
+  test("warmed means an accepted shape and nothing refused", () => {
+    expect(dispositionComplaints("f.test.ts", warmed, canonical())).toEqual([]);
+    expect(dispositionComplaints("f.test.ts", warmed, dropped()).join(" ")).toContain("recorded warmed");
+  });
+
+  test("unwarmed means the file does not reach the helper at all", () => {
+    expect(dispositionComplaints("f.test.ts", unwarmed, judge(BUN_TEST, ...hook("const x = 1;")))).toEqual([]);
+    expect(dispositionComplaints("f.test.ts", unwarmed, canonical()).join(" ")).toContain("recorded unwarmed");
+    // A namespace import binds no name this judge follows, so bindings alone would read this as an
+    // absence. It is the reason the unwarmed test asks whether the helper is reached at all.
+    expect(dispositionComplaints("f.test.ts", unwarmed, namespaced()).join(" ")).toContain("reaches the warm-up helper");
+  });
+
+  test("an unmodelled shape is recorded, and the record has to keep matching", () => {
+    // This is how a refusal records a legitimate file instead of blocking it. The escape is not a
+    // silence: the judge still has to see the warm-up and still has to refuse it for the stated
+    // reason, so deleting the call or dropping the await changes the refusal and fails again.
+    const recorded = { warmed: true, why: "warms through a namespace import", unmodeled: "namespace" };
+    expect(dispositionComplaints("f.test.ts", recorded, namespaced())).toEqual([]);
+    expect(dispositionComplaints("f.test.ts", recorded, dropped()).join(" ")).toContain("not what was refused");
+    expect(dispositionComplaints("f.test.ts", recorded, canonical()).join(" ")).toContain("drop the note");
+    expect(dispositionComplaints("f.test.ts", recorded, judge(BUN_TEST, ...hook("const x = 1;"))).join(" "))
+      .toContain("nothing here reaches");
+  });
+});
+

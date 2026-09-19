@@ -1,273 +1,189 @@
 import { dirname, isAbsolute, resolve } from "node:path";
-import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
+import { SyntaxKind } from "typescript/unstable/ast";
 import { helperPath } from "./repo-root";
+import { argumentEnd, at, CLOSERS, lineOf, OPENERS, tokenize, type Token } from "./warmup-tokens";
 
 /**
- * Decide, from a test file's source alone, whether it REGISTERS a cold-spawn warm-up and waits for
- * that warm-up to finish before anything is measured.
+ * Decide, from a test file's source alone, whether it registers a cold-spawn warm-up and waits for
+ * it: by recognising a small set of exact shapes and refusing everything else.
  *
  * ## The defect this exists for
  *
  * The coverage guard in tests/ci-workflows/cold-spawn-warmup.test.ts recorded a file as warmed when
  * its text contained the substring "helpers/cold-spawn-warmup" (#5060). A comment, a string literal,
- * or an import left behind after the beforeAll call was deleted all satisfied it. The measured child
- * then pays the cold module-graph load again while the guard in front of it reports the file as
- * handled, which is worse than having no guard at all: the flake comes back and the classified list
- * says it cannot.
+ * or an import left behind after the beforeAll call was deleted all satisfied it, and the measured
+ * child went back to paying its cold module-graph load with a green guard standing in front of it.
  *
- * ## The five stages, and what each one refuses
+ * ## The shapes this judge accepts
  *
- * import binding - a runtime import of the exact helper module binds warmColdSpawn or
- * warmModuleGraph to a local name, aliases followed. A same-named local function, a comment and a
- * string bind nothing, and a type-only import loads nothing at run time.
+ * W is a name bound by a DIRECT named import of tests/helpers/cold-spawn-warmup, aliases followed;
+ * the call may be W(...) or W?.(...). describe and beforeAll must be direct named imports of
+ * bun:test, and neither may be rebound anywhere in the file.
  *
- * hook registration - a bun:test beforeAll binding is called with an inline callback, at the top
- * level or inside a describe, unconditionally. A callback that is only declared registers nothing,
- * and neither does a hook sitting in a helper function nobody calls or behind a false condition.
+ *   hook-statement    describe(...)* > beforeAll(async () => { ... await W(...); ... }, ...)
+ *   hook-return       describe(...)* > beforeAll(() => { return W(...); }, ...)
+ *   hook-expression   describe(...)* > beforeAll(() => W(...), ...) and its awaited form
+ *   module-top-level  await W(...); as a whole statement at the top level of the file
  *
- * call ownership - the bound name is called on that callback's own direct path: not inside a nested
- * function, not behind a condition, and not through a name the file redeclares or the callback
- * takes as a parameter.
+ * In the two statement shapes the call is the whole statement: it begins right after a brace or a
+ * semicolon and ends on its own semicolon or on the closing brace of the hook. A function
+ * expression stands in for the arrow in any of them. Nesting is exact - every block between the
+ * file and the hook must be a describe callback, and the open calls must be exactly the calls that
+ * own those blocks, so an extra paren or an extra block is not the same shape.
  *
- * completion - the returned promise reaches the hook through await or return. Fire-and-forget and
- * void both leave the hook finishing before the warm-up does, which is the same measured cold start
- * with extra steps, and a warm-up that is only one operand of the returned expression settles the
- * hook on something else.
+ * ## What it refuses, by design
  *
- * unwarmed exception - a file recorded as unwarmed must not import the helper at all, not merely
- * bind nothing from it, so a namespace import cannot hide a real warm-up behind a false
- * disposition.
+ * Every other occurrence of W is a refusal naming its line, and one refusal anywhere on the binding
+ * path means the file is not proven. Shapes that do warm at run time are refused too:
  *
- * ## What this cannot decide
+ *   a namespace import of the helper, and any call made through it;
+ *   a barrel or re-export path, because the specifier does not resolve to the helper module;
+ *   an alias through a variable, const warm = W, and a callback the hook reaches by name;
+ *   a call in a scope this judge does not model - a nested function, an uncalled helper, a bare
+ *     block, a conditional branch, even when every branch warms;
+ *   fire-and-forget, void, and a call that is one operand of a larger expression.
  *
- * A structural check reads the shape of a file, not the run. It does not prove the describe holding
- * the registration is reached, and it does not prove the warm-up child loaded anything. That oracle
- * exists separately and already runs on every hosted shard: the helper prints one
- * "[cold-spawn-warmup] graph=..." completion line per warmed graph, and a warm-up that throws fails
- * the file as a setup failure.
+ * That list is the design rather than a backlog. TypeScript 7.0.2 publishes no in-process parser
+ * (see tests/helpers/warmup-tokens.ts), so the alternative to an exact accept-set is reconstructing
+ * scoping and expression grammar from tokens, where every wrong guess is a FALSE PASS - the one
+ * failure this file exists to remove. A refusal is the opposite: loud, located, and cheap to answer.
+ * A legitimate file that needs a refused shape records it once in its disposition, which keeps the
+ * refusal itself under test; see WarmupDisposition.
  *
- * ## Why a token walk rather than an AST
+ * ## What no structural check can decide
  *
- * The repository's TypeScript is 7.0.2, the native port, and it publishes no in-process parser. Its
- * entry points are "typescript" (a version constant), "typescript/unstable/sync" and ".../async"
- * (clients that spawn the Go tsgo executable and hold a whole project), and
- * "typescript/unstable/ast" - AST types, type guards, a visitor, and the scanner, with parsing
- * itself left in Go. Reading one file through the RPC client would start a compiler process on
- * every shard of every platform. So this drives the scanner, which is what
- * tests/responses/responses-fetch-helpers-boundary.test.ts already does, and reconstructs only the
- * grammar the five stages need.
- *
- * A token stream has to be driven honestly to stay balanced. A template substitution continues with
- * a rescan at its closing brace, or every template in the file leaks an unmatched brace; a slash is
- * a regular expression or a division depending on the token before it, and guessing wrong swallows
- * whichever delimiters sit between. Both are handled below, and a file that still does not balance
- * is reported as unreadable rather than quietly answered - an unreadable file is a failure, never a
- * pass.
+ * It reads the shape of a file, not the run. It does not prove the process reached the describe that
+ * holds the registration, and it does not prove the warm-up child loaded anything. That oracle is
+ * separate and unchanged: the helper prints one completion line per warmed graph on every hosted
+ * run, and a warm-up that throws fails its file as a setup failure.
  */
 
 /** The entry points in tests/helpers/cold-spawn-warmup.ts that pay a cold module graph. */
 const WARMUP_ENTRY_POINTS: ReadonlySet<string> = new Set(["warmColdSpawn", "warmModuleGraph"]);
 
-/** The bun:test hook a warm-up belongs in, so the cost lands in setup and not in an assertion. */
+/** The bun:test hook a warm-up belongs in, and the only call its scopes may be nested inside. */
 const REGISTRATION_HOOK = "beforeAll";
+const SUITE_CALL = "describe";
 
-type Token = Readonly<{
-  kind: SyntaxKind;
-  text: string;
-  value: string;
-  start: number;
-  /** Whether trivia before this token held a line break, which is where a statement can end. */
-  newline: boolean;
-}>;
-
-export type WarmupRegistration = Readonly<{
-  /** The helper entry point the hook waits for. */
-  helper: string;
-  /** The local name it was called through, which is the alias when the import renames it. */
-  local: string;
-  /** How the promise reaches the hook. */
-  completion: "await" | "return";
-  /** 1-based line of the call, so a failure points at a place rather than a file. */
-  line: number;
-}>;
-
-export type WarmupRegistrationReport = Readonly<{
-  /** Local names a runtime import bound to a warm-up entry point. */
-  bindings: readonly string[];
-  /**
-   * Whether the file imports the helper module at all, whatever it binds. A file recorded as
-   * unwarmed needs this false: a namespace import binds no name this judge follows, so bindings
-   * alone would report a real warm-up as an absence.
-   */
-  importsHelperModule: boolean;
-  /** Registrations that survived every stage. */
-  registrations: readonly WarmupRegistration[];
-  /** Near misses, named with the stage that refused them and the line they sit on. */
-  rejected: readonly string[];
-  /** Shapes this judge cannot read. Never treated as absence. */
-  unreadable: readonly string[];
-}>;
-
-/** True only when a registration survived every stage and nothing about the file was unreadable. */
-export function warmupIsRegistered(report: WarmupRegistrationReport): boolean {
-  return report.unreadable.length === 0 && report.registrations.length > 0;
-}
-
-/** Everything the judge refused or could not read, for a failure message that names the reason. */
-export function warmupRegistrationComplaints(report: WarmupRegistrationReport): string[] {
-  return [...report.unreadable, ...report.rejected];
-}
-
-/**
- * A slash opens a regular expression unless the token before it ends a value. This is the standard
- * heuristic, and the one place it stays ambiguous - a closing brace - is read as the end of a
- * statement, because a regular expression after a block is real code and a division by an object
- * literal is not.
- */
-const REGEX_CANNOT_FOLLOW: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.Identifier,
-  SyntaxKind.PrivateIdentifier,
-  SyntaxKind.NumericLiteral,
-  SyntaxKind.BigIntLiteral,
-  SyntaxKind.StringLiteral,
-  SyntaxKind.NoSubstitutionTemplateLiteral,
-  SyntaxKind.TemplateTail,
-  SyntaxKind.RegularExpressionLiteral,
-  SyntaxKind.CloseParenToken,
-  SyntaxKind.CloseBracketToken,
-  SyntaxKind.PlusPlusToken,
-  SyntaxKind.MinusMinusToken,
-  SyntaxKind.ThisKeyword,
-  SyntaxKind.SuperKeyword,
-  SyntaxKind.TrueKeyword,
-  SyntaxKind.FalseKeyword,
-  SyntaxKind.NullKeyword,
-]);
-
-const OPENERS: ReadonlyMap<SyntaxKind, SyntaxKind> = new Map([
-  [SyntaxKind.OpenBraceToken, SyntaxKind.CloseBraceToken],
-  [SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken],
-  [SyntaxKind.OpenBracketToken, SyntaxKind.CloseBracketToken],
-]);
-
-const CLOSERS: ReadonlySet<SyntaxKind> = new Set([
+/** What a modelled statement may begin after. Anything else means it is part of something larger. */
+const STATEMENT_START: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.SemicolonToken,
+  SyntaxKind.OpenBraceToken,
   SyntaxKind.CloseBraceToken,
-  SyntaxKind.CloseParenToken,
-  SyntaxKind.CloseBracketToken,
 ]);
 
-/** Declaration keywords that can rebind a name the file also imports. */
+/** Keywords that introduce a new binding for the name that follows them. */
 const DECLARATION_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ConstKeyword,
   SyntaxKind.LetKeyword,
   SyntaxKind.VarKeyword,
   SyntaxKind.FunctionKeyword,
-]);
-
-/** Where a binding list ends, so the scan for a rebound name does not run into the initializer. */
-const BINDING_TERMINATORS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.EqualsToken,
-  SyntaxKind.SemicolonToken,
-  SyntaxKind.OpenParenToken,
-  SyntaxKind.EqualsGreaterThanToken,
-]);
-
-/**
- * Anything that can decide whether the next statement runs. A warm-up reached through one of these
- * is not a warm-up the file always pays, and if(false) is only the most obvious member.
- */
-const CONDITIONAL_TOKENS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.IfKeyword,
-  SyntaxKind.ElseKeyword,
-  SyntaxKind.ForKeyword,
-  SyntaxKind.WhileKeyword,
-  SyntaxKind.SwitchKeyword,
-  SyntaxKind.CaseKeyword,
-  SyntaxKind.QuestionToken,
-  SyntaxKind.AmpersandAmpersandToken,
-  SyntaxKind.BarBarToken,
-  SyntaxKind.QuestionQuestionToken,
-]);
-
-/**
- * Conditionals with a parenthesized head. Their closing paren can end a statement, so the token
- * after it needs an exemption from the line-break rule below: it begins the guarded statement
- * rather than a new one.
- */
-const HEADED_CONDITIONALS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.IfKeyword,
-  SyntaxKind.ForKeyword,
-  SyntaxKind.WhileKeyword,
-  SyntaxKind.SwitchKeyword,
-]);
-
-/**
- * Tokens a statement can end on. This repository writes its semicolons, but the judge cannot
- * assume that: with no automatic semicolon insertion, one semicolonless guarded statement would
- * leave the conditional flag set and refuse the next, unconditional registration after it.
- */
-const CAN_END_STATEMENT: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.Identifier,
-  SyntaxKind.PrivateIdentifier,
-  SyntaxKind.CloseParenToken,
-  SyntaxKind.CloseBracketToken,
-  SyntaxKind.CloseBraceToken,
-  SyntaxKind.StringLiteral,
-  SyntaxKind.NumericLiteral,
-  SyntaxKind.BigIntLiteral,
-  SyntaxKind.NoSubstitutionTemplateLiteral,
-  SyntaxKind.TemplateTail,
-  SyntaxKind.RegularExpressionLiteral,
-  SyntaxKind.TrueKeyword,
-  SyntaxKind.FalseKeyword,
-  SyntaxKind.NullKeyword,
-  SyntaxKind.ThisKeyword,
-  SyntaxKind.PlusPlusToken,
-  SyntaxKind.MinusMinusToken,
-]);
-
-/**
- * Tokens a statement can begin with. A line break only ends a statement when the next line cannot
- * continue the previous expression, so a line opening with a paren, a bracket, a template or an
- * operator keeps the statement it is part of - the classic hazard automatic semicolon insertion
- * leaves behind. Anything missing from this set only keeps a conditional in force for longer,
- * which refuses a registration rather than accepting one.
- */
-const CAN_START_STATEMENT: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.Identifier,
-  SyntaxKind.OpenBraceToken,
-  SyntaxKind.SemicolonToken,
-  SyntaxKind.ConstKeyword,
-  SyntaxKind.LetKeyword,
-  SyntaxKind.VarKeyword,
-  SyntaxKind.FunctionKeyword,
   SyntaxKind.ClassKeyword,
-  SyntaxKind.AsyncKeyword,
-  SyntaxKind.IfKeyword,
-  SyntaxKind.ForKeyword,
-  SyntaxKind.WhileKeyword,
-  SyntaxKind.SwitchKeyword,
-  SyntaxKind.TryKeyword,
-  SyntaxKind.ReturnKeyword,
-  SyntaxKind.ThrowKeyword,
-  SyntaxKind.ImportKeyword,
-  SyntaxKind.ExportKeyword,
 ]);
 
+export type WarmupShape = "hook-statement" | "hook-return" | "hook-expression" | "module-top-level";
+
+export type WarmupRegistration = Readonly<{
+  /** The helper entry point the file waits for. */
+  helper: string;
+  /** The local name it was called through, which is the alias when the import renames it. */
+  local: string;
+  /** Which of the accepted shapes matched. */
+  shape: WarmupShape;
+  /** 1-based line of the call, so a failure points at a place rather than a file. */
+  line: number;
+}>;
+
+export type WarmupRegistrationReport = Readonly<{
+  /** Local names a direct named import bound to a warm-up entry point. */
+  bindings: readonly string[];
+  /** Whether any import specifier resolves to the helper module. */
+  importsHelperModule: boolean;
+  /**
+   * Whether either entry-point name appears as an identifier at all, however it got here. A barrel
+   * import and a namespace call both bind nothing this judge follows, so bindings alone would read
+   * a real warm-up as an absence.
+   */
+  mentionsEntryPoint: boolean;
+  /** Occurrences that matched an accepted shape. */
+  registrations: readonly WarmupRegistration[];
+  /** One channel for everything fatal: unreadable source, and every construct not modelled. */
+  refusals: readonly string[];
+}>;
+
+export type WarmupDisposition = Readonly<{
+  /** Whether the file is claimed to pay its cold module-graph load in setup. */
+  warmed: boolean;
+  /** Why, in enough detail to survive review. */
+  why: string;
+  /**
+   * For a file that really does warm in a shape this judge refuses: the text its refusal has to
+   * contain. The judge still has to see the warm-up and still has to refuse it for that stated
+   * reason, so deleting the call, or degrading it to fire-and-forget, changes the refusal and fails.
+   */
+  unmodeled?: string;
+}>;
+
+/** True only when an accepted shape matched and nothing on the binding path was refused. */
+export function warmupIsRegistered(report: WarmupRegistrationReport): boolean {
+  return report.refusals.length === 0 && report.registrations.length > 0;
+}
+
+/** Everything the judge refused, for a failure message that names the construct and the line. */
+export function warmupRegistrationComplaints(report: WarmupRegistrationReport): string[] {
+  return [...report.refusals];
+}
+
 /**
- * The only call a registration may sit inside. A hook registered in an uncalled helper function,
- * in a test body, or in an immediately-invoked function is not a hook the file is known to run, and
- * bun:test registers per describe scope, so describe is the whole allowed set.
+ * Where a file disagrees with the disposition recorded for it, empty when they agree.
+ *
+ * Three states rather than two. A file recorded as warmed has to show an accepted shape and nothing
+ * refused; a file recorded as unwarmed must not reach the helper at all; and a file recorded as
+ * warmed through an unmodelled shape has to still reach the helper and still be refused for the
+ * stated reason. That third state is what keeps a refusal from blocking a legitimate test file
+ * while keeping the refusal itself honest.
  */
-const REGISTRATION_SCOPE = "describe";
+export function dispositionComplaints(
+  path: string,
+  disposition: WarmupDisposition,
+  report: WarmupRegistrationReport,
+): string[] {
+  const complaints: string[] = [];
+  const say = (what: string): number => complaints.push(path + ": " + what);
+  const refused = report.refusals.join("; ");
+  if (!disposition.warmed) {
+    if (report.mentionsEntryPoint || report.importsHelperModule) say("recorded unwarmed, but it reaches the warm-up helper");
+    if (report.registrations.length > 0) say("recorded unwarmed, but it registers a warm-up");
+    if (report.refusals.length > 0) say("recorded unwarmed, and " + refused);
+    return complaints;
+  }
+  const unmodeled = disposition.unmodeled;
+  if (unmodeled === undefined) {
+    if (report.registrations.length === 0) {
+      say("recorded warmed, but no accepted shape is here: " + (refused || "nothing reaches the warm-up helper"));
+    } else if (report.refusals.length > 0) {
+      say("recorded warmed, and " + refused);
+    }
+    return complaints;
+  }
+  if (!report.mentionsEntryPoint) say("recorded warmed through " + unmodeled + ", but nothing here reaches the warm-up helper");
+  else if (report.registrations.length > 0) say("recorded warmed through " + unmodeled + ", but this judge accepts what it found; drop the note");
+  else if (!report.refusals.some(refusal => refusal.includes(unmodeled))) {
+    say("recorded warmed through " + unmodeled + ", which is not what was refused: " + (refused || "nothing was refused"));
+  }
+  return complaints;
+}
 
 export function analyzeWarmupRegistration(fileName: string, source: string): WarmupRegistrationReport {
   const scan = tokenize(source);
-  const rejected: string[] = [];
   if (scan.unreadable.length > 0) {
-    return { bindings: [], importsHelperModule: false, registrations: [], rejected, unreadable: scan.unreadable };
+    return {
+      bindings: [], importsHelperModule: false, mentionsEntryPoint: false,
+      registrations: [], refusals: scan.unreadable,
+    };
   }
   const tokens = scan.tokens;
+  const refusals: string[] = [];
   const clauses = importClauses(tokens);
 
   const bindings = new Map<string, string>();
@@ -276,270 +192,310 @@ export function analyzeWarmupRegistration(fileName: string, source: string): War
     if (!importsTheWarmupHelper(fileName, clause.specifier)) continue;
     importsHelperModule = true;
     if (clause.namespace !== undefined) {
-      rejected.push(at(source, clause.start) + "the warm-up helper is imported as a namespace (* as "
-        + clause.namespace + "), a shape this judge does not follow; teach it that form before using it");
+      refusals.push(at(source, clause.start) + "the warm-up helper is imported as a namespace (* as "
+        + clause.namespace + "), which this judge does not model");
     }
     for (const name of clause.names) {
       if (!WARMUP_ENTRY_POINTS.has(name.imported)) continue;
       if (name.typeOnly) {
-        rejected.push(at(source, clause.start) + name.imported
+        refusals.push(at(source, clause.start) + name.imported
           + " is imported for its type only, which loads nothing at run time");
         continue;
       }
       bindings.set(name.local, name.imported);
     }
   }
+  const mentionsEntryPoint = importsHelperModule || tokens.some(token =>
+    token.kind === SyntaxKind.Identifier && WARMUP_ENTRY_POINTS.has(token.text));
 
-  for (const local of [...bindings.keys()]) {
-    const shadow = redeclarationOf(tokens, local);
-    if (shadow === undefined) continue;
-    rejected.push(at(source, shadow.start) + local
-      + " is redeclared in this file, so a call through that name does not reach the imported warm-up");
-    bindings.delete(local);
-  }
   if (bindings.size === 0) {
-    if (rejected.length === 0) {
-      rejected.push("no runtime import binds warmColdSpawn or warmModuleGraph from tests/helpers/cold-spawn-warmup");
+    if (mentionsEntryPoint && refusals.length === 0) {
+      refusals.push("the warm-up helper is reached without a direct named import of "
+        + "tests/helpers/cold-spawn-warmup, which this judge does not model");
     }
-    return { bindings: [], importsHelperModule, registrations: [], rejected, unreadable: [] };
+    return { bindings: [], importsHelperModule, mentionsEntryPoint, registrations: [], refusals };
   }
 
-  const hooks = new Set<string>();
-  for (const clause of clauses) {
-    if (clause.specifier !== "bun:test") continue;
-    for (const name of clause.names) {
-      if (name.imported === REGISTRATION_HOOK && !name.typeOnly) hooks.add(name.local);
-    }
-  }
-  if (hooks.size === 0) {
-    rejected.push(REGISTRATION_HOOK + " is not imported from bun:test, so nothing registers the warm-up");
-    return { bindings: [...bindings.keys()], importsHelperModule, registrations: [], rejected, unreadable: [] };
+  const hooks = importedLocals(clauses, "bun:test", REGISTRATION_HOOK);
+  const suites = importedLocals(clauses, "bun:test", SUITE_CALL);
+  const rebound = new Map<string, Token>();
+  for (const name of [...hooks, ...suites]) {
+    const rebinding = rebindingOf(tokens, name);
+    if (rebinding !== undefined) rebound.set(name, rebinding);
   }
 
+  const registrations = judgeOccurrences({ tokens, source, bindings, hooks, suites, rebound, refusals,
+    imported: importedTokenRanges(clauses) });
+  if (registrations.length === 0 && refusals.length === 0) {
+    refusals.push("the warm-up helper is imported here and never called");
+  }
+  return { bindings: [...bindings.keys()], importsHelperModule, mentionsEntryPoint, registrations, refusals };
+}
+
+type CallFrame = Readonly<{ callee: string; open: number }>;
+
+/** How a scope reads in a refusal, so the message says where the call actually sits. */
+const LAYER_LABELS: Readonly<Record<string, string>> = {
+  suite: "a describe callback",
+  hook: "a beforeAll callback",
+  "hook-expression": "a beforeAll expression body",
+  other: "a scope this judge does not model",
+};
+
+/**
+ * A scope the judge tracks. Only two kinds are part of an accepted shape; everything else is
+ * "other" and refuses whatever sits inside it. A concise arrow body is a scope with no braces, and
+ * missing it is how a hook registered inside an uncalled callback reads as top-level work.
+ */
+type Layer = Readonly<{
+  kind: "suite" | "hook" | "hook-expression" | "other";
+  /** Token index where the scope ends: its closing brace, or the end of the arrow expression. */
+  end: number;
+  /** Token index of the first token inside it. */
+  bodyStart: number;
+  /** Why a scope that looks like one of the accepted kinds is not, for the refusal message. */
+  reason?: string;
+}>;
+
+type Judgement = Readonly<{
+  tokens: readonly Token[];
+  source: string;
+  bindings: ReadonlyMap<string, string>;
+  hooks: ReadonlySet<string>;
+  suites: ReadonlySet<string>;
+  rebound: ReadonlyMap<string, Token>;
+  refusals: string[];
+  imported: readonly { from: number; to: number }[];
+}>;
+
+/**
+ * One pass over the file, carrying the two stacks an accepted shape is defined in terms of: the
+ * calls that are open, and the scopes that are open. Every occurrence of a warm-up binding is
+ * classified against them, and an occurrence that matches no accepted shape is refused by name.
+ */
+function judgeOccurrences(j: Judgement): WarmupRegistration[] {
+  const { tokens } = j;
+  const matches = delimiterMatches(tokens);
   const registrations: WarmupRegistration[] = [];
-  // One pass carrying the context a registration has to sit in. The call stack is every open call
-  // by paren depth, the frames are every open block with the call that owns it, and the statement
-  // flag is a condition seen at statement level since the last statement boundary. Without them
-  // the scan would accept a hook registered inside if (false), or inside a helper function nobody
-  // calls, which registers nothing and reads exactly like a hook that does.
-  const callStack: string[] = [];
-  const frames: { owner: string; conditional: boolean; parenDepth: number }[] = [];
-  let statementConditional = false;
-  // The token that begins a guarded statement: the one place where a line break after a closing
-  // paren continues the statement rather than ending it.
-  let consequentStart = -1;
-  let awaitingConsequent = false;
+  const layers: Layer[] = [];
+  const calls: CallFrame[] = [];
+  const acceptedHookCalls = new Set<number>();
   for (let i = 0; i < tokens.length; i += 1) {
+    while (layers.length > 0 && layers[layers.length - 1].end <= i) layers.pop();
     const token = tokens[i];
-    if (token.kind === SyntaxKind.CloseParenToken) callStack.pop();
-    if (token.kind === SyntaxKind.CloseBraceToken) {
-      frames.pop();
-      statementConditional = false;
+    if (token.kind === SyntaxKind.CloseParenToken) {
+      calls.pop();
+      continue;
     }
-    // Statement level is relative to the block we are in, not to the file: everything inside a
-    // describe sits one paren deep, so a file-level test would never see a condition in there.
-    const frame = frames[frames.length - 1];
-    const atStatementLevel = callStack.length === (frame === undefined ? 0 : frame.parenDepth);
-    const previousToken = tokens[i - 1];
-    if (atStatementLevel && token.newline && i !== consequentStart
-      && CAN_START_STATEMENT.has(token.kind)
-      && previousToken !== undefined && CAN_END_STATEMENT.has(previousToken.kind)) {
-      statementConditional = false;
+    if (token.kind === SyntaxKind.OpenParenToken) {
+      calls.push({ callee: calleeBefore(tokens, i), open: i });
+      continue;
     }
-    if (atStatementLevel && awaitingConsequent && token.kind === SyntaxKind.CloseParenToken) {
-      awaitingConsequent = false;
-      consequentStart = i + 1;
-    }
-    if (atStatementLevel && CONDITIONAL_TOKENS.has(token.kind)) {
-      statementConditional = true;
-      if (HEADED_CONDITIONALS.has(token.kind)) awaitingConsequent = true;
-    }
-    if (atStatementLevel && token.kind === SyntaxKind.SemicolonToken) statementConditional = false;
     if (token.kind === SyntaxKind.OpenBraceToken) {
-      frames.push({
-        owner: opensArgumentCallback(tokens, i) ? callStack[callStack.length - 1] ?? "" : "",
-        conditional: statementConditional || (frame?.conditional ?? false),
-        parenDepth: callStack.length,
-      });
-      statementConditional = false;
-    }
-    if (token.kind === SyntaxKind.OpenParenToken) callStack.push(calleeBefore(tokens, i));
-    if (token.kind !== SyntaxKind.Identifier || !hooks.has(token.text)) continue;
-    const before = tokens[i - 1];
-    if (before !== undefined && (before.kind === SyntaxKind.DotToken || before.kind === SyntaxKind.QuestionDotToken)) continue;
-    if (tokens[i + 1] === undefined || tokens[i + 1].kind !== SyntaxKind.OpenParenToken) continue;
-    const foreignScope = frames.find(entry => entry.owner !== REGISTRATION_SCOPE);
-    if (statementConditional || frames.some(entry => entry.conditional) || foreignScope !== undefined) {
-      rejected.push(at(source, token.start) + token.text
-        + " is registered where the judge cannot see it run: a registration belongs at the top level"
-        + " or in a describe, unconditionally");
+      layers.push(braceLayer(j, i, calls, acceptedHookCalls, matches));
       continue;
     }
-    const body = callbackBody(tokens, i + 2);
-    if (body === undefined) {
-      rejected.push(at(source, token.start) + token.text
-        + " is not given an inline callback here, so the judge cannot see what the hook runs");
+    if (token.kind === SyntaxKind.EqualsGreaterThanToken
+      && (tokens[i + 1] === undefined || tokens[i + 1].kind !== SyntaxKind.OpenBraceToken)) {
+      layers.push(conciseArrowLayer(j, i, calls, acceptedHookCalls, matches));
       continue;
     }
-    const verdict = warmupCallIn(tokens, body, bindings, source);
-    if (verdict.found !== undefined) {
-      registrations.push({
-        helper: verdict.found.helper,
-        local: verdict.found.local,
-        completion: verdict.found.completion,
-        line: lineOf(source, verdict.found.start),
-      });
+    if (token.kind !== SyntaxKind.Identifier) continue;
+    if (j.hooks.has(token.text) && !isMemberName(tokens, i)) {
+      const open = opensCall(tokens, i);
+      if (open !== undefined && hookCallIsVisible(j, i, layers, calls)) acceptedHookCalls.add(open);
       continue;
     }
-    for (const reason of verdict.reasons) rejected.push(reason);
+    if (!isBindingOccurrence(j, i)) continue;
+    const verdict = classifyOccurrence(j, i, layers, calls, matches);
+    if (typeof verdict === "string") j.refusals.push(verdict);
+    else registrations.push(verdict);
   }
-  if (registrations.length === 0 && rejected.length === 0) {
-    rejected.push("the warm-up helper is imported but never awaited inside a " + REGISTRATION_HOOK + " callback");
+  return registrations;
+}
+
+/** Index of the delimiter each delimiter pairs with, computed once rather than scanned per call. */
+function delimiterMatches(tokens: readonly Token[]): number[] {
+  const matches = new Array<number>(tokens.length).fill(-1);
+  const open: number[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (OPENERS.has(tokens[i].kind)) open.push(i);
+    else if (CLOSERS.has(tokens[i].kind)) {
+      const start = open.pop();
+      if (start !== undefined) {
+        matches[start] = i;
+        matches[i] = start;
+      }
+    }
   }
-  return { bindings: [...bindings.keys()], importsHelperModule, registrations, rejected, unreadable: [] };
+  return matches;
+}
+
+function braceLayer(
+  j: Judgement,
+  brace: number,
+  calls: readonly CallFrame[],
+  accepted: ReadonlySet<number>,
+  matches: readonly number[],
+): Layer {
+  const end = matches[brace] < 0 ? j.tokens.length : matches[brace];
+  const bodyStart = brace + 1;
+  const owner = calls[calls.length - 1];
+  if (!opensArgumentCallback(j.tokens, brace, matches)) return { kind: "other", end, bodyStart };
+  if (owner !== undefined && accepted.has(owner.open)) return { kind: "hook", end, bodyStart };
+  if (owner !== undefined && j.suites.has(owner.callee) && !j.rebound.has(owner.callee)) {
+    return { kind: "suite", end, bodyStart };
+  }
+  const rebinding = owner === undefined ? undefined : j.rebound.get(owner.callee);
+  const reason = rebinding === undefined ? undefined
+    : owner!.callee + " is rebound at line " + lineOf(j.source, rebinding.start) + ", so this is not bun:test";
+  return { kind: "other", end, bodyStart, reason };
+}
+
+function conciseArrowLayer(
+  j: Judgement,
+  arrow: number,
+  calls: readonly CallFrame[],
+  accepted: ReadonlySet<number>,
+  matches: readonly number[],
+): Layer {
+  const owner = calls[calls.length - 1];
+  const ownsHookBody = owner !== undefined && accepted.has(owner.open)
+    && arrowIsArgument(j.tokens, arrow, matches);
+  return {
+    kind: ownsHookBody ? "hook-expression" : "other",
+    end: argumentEnd(j.tokens, arrow + 1),
+    bodyStart: arrow + 1,
+  };
 }
 
 /**
- * The name of the call an open paren belongs to, following a member chain back to its root so
- * describe.only counts as describe. An empty string when the paren opens something that is not a
- * plain call, which is a scope this judge refuses rather than guesses at.
+ * Whether a beforeAll call is one this judge can see running: the bun:test import itself, at the
+ * start of a statement, with describe callbacks and nothing else between it and the file.
  */
-function calleeBefore(tokens: readonly Token[], open: number): string {
-  let k = open - 1;
-  if (tokens[k] === undefined || tokens[k].kind !== SyntaxKind.Identifier) return "";
-  let root = tokens[k].text;
-  while (tokens[k - 1] !== undefined && tokens[k - 1].kind === SyntaxKind.DotToken
-    && tokens[k - 2] !== undefined && tokens[k - 2].kind === SyntaxKind.Identifier) {
-    k -= 2;
-    root = tokens[k].text;
+function hookCallIsVisible(
+  j: Judgement,
+  hook: number,
+  layers: readonly Layer[],
+  calls: readonly CallFrame[],
+): boolean {
+  if (j.rebound.has(j.tokens[hook].text)) return false;
+  if (calls.length !== layers.length) return false;
+  if (!layers.every(layer => layer.kind === "suite")) return false;
+  const before = j.tokens[hook - 1];
+  return before === undefined || STATEMENT_START.has(before.kind);
+}
+
+function classifyOccurrence(
+  j: Judgement,
+  w: number,
+  layers: readonly Layer[],
+  calls: readonly CallFrame[],
+  matches: readonly number[],
+): WarmupRegistration | string {
+  const token = j.tokens[w];
+  const helper = j.bindings.get(token.text) ?? token.text;
+  const made = (shape: WarmupShape): WarmupRegistration =>
+    ({ helper, local: token.text, shape, line: lineOf(j.source, token.start) });
+  const refuse = (why: string): string => at(j.source, token.start) + token.text + " " + why;
+  const open = opensCall(j.tokens, w);
+  if (open === undefined) return refuse("is used without being called, which this judge does not model");
+  const close = matches[open];
+  if (close < 0) return refuse("opens a call this judge cannot close");
+  if (calls.length !== layers.length) {
+    return chainRefusal(j, w, layers, " (the open calls do not match the open scopes)");
   }
-  return root;
+  if (layers.length === 0) {
+    const statement = wholeStatement(j.tokens, w, close, undefined);
+    if (statement === undefined || statement.keyword !== "await") {
+      return refuse("is not a whole awaited statement at the top level of the file");
+    }
+    return made("module-top-level");
+  }
+  const inner = layers[layers.length - 1];
+  if (!layers.slice(0, layers.length - 1).every(layer => layer.kind === "suite")) return chainRefusal(j, w, layers);
+  if (inner.kind === "hook") {
+    const statement = wholeStatement(j.tokens, w, close, inner.end);
+    if (statement === undefined) {
+      return refuse("is not a whole awaited or returned statement of the hook callback");
+    }
+    return made(statement.keyword === "return" ? "hook-return" : "hook-statement");
+  }
+  if (inner.kind === "hook-expression") {
+    const head = inner.bodyStart;
+    const awaited = j.tokens[head] !== undefined && j.tokens[head].kind === SyntaxKind.AwaitKeyword;
+    if (w !== head && !(awaited && w === head + 1)) {
+      return refuse("is not the whole body of the hook callback");
+    }
+    if (close + 1 !== inner.end) return refuse("is one part of a larger returned expression");
+    return made("hook-expression");
+  }
+  return chainRefusal(j, w, layers);
+}
+
+function chainRefusal(j: Judgement, w: number, layers: readonly Layer[], extra = ""): string {
+  const chain = layers
+    .map(layer => LAYER_LABELS[layer.kind] + (layer.reason === undefined ? "" : " (" + layer.reason + ")"))
+    .join(" > ");
+  return at(j.source, j.tokens[w].start) + j.tokens[w].text
+    + " is not in a shape this judge models; enclosing scopes: "
+    + (chain === "" ? "the top level of the file" : chain) + extra;
 }
 
 /**
- * Whether a block brace opens a callback passed as an argument, which is what a describe body is.
- * The same brace shape opens a helper function nobody calls, and the difference is only what comes
- * before the arrow: an argument starts right after the call paren or a comma, while a declared
- * function starts after an equals sign or a name.
+ * The call as a whole statement introduced by await or return, or undefined when it is part of
+ * something larger. A statement begins right after a brace or a semicolon and ends on its own
+ * semicolon or on the brace that closes the scope, which is what rules out fire-and-forget, void,
+ * a conditional consequent, and an operand of a larger expression without modelling any of them.
  */
-function opensArgumentCallback(tokens: readonly Token[], brace: number): boolean {
-  let k = brace - 1;
-  if (tokens[k] === undefined || tokens[k].kind !== SyntaxKind.EqualsGreaterThanToken) return false;
-  k -= 1;
-  if (tokens[k] === undefined) return false;
-  if (tokens[k].kind === SyntaxKind.CloseParenToken) {
-    const open = openingParen(tokens, k);
-    if (open === undefined) return false;
-    k = open - 1;
-  } else if (tokens[k].kind === SyntaxKind.Identifier) {
-    k -= 1;
-  } else {
-    return false;
+function wholeStatement(
+  tokens: readonly Token[],
+  w: number,
+  close: number,
+  scopeEnd: number | undefined,
+): { start: number; keyword: "await" | "return" } | undefined {
+  const pre = tokens[w - 1];
+  if (pre === undefined) return undefined;
+  let start = w - 1;
+  let keyword: "await" | "return";
+  if (pre.kind === SyntaxKind.AwaitKeyword) keyword = "await";
+  else if (pre.kind === SyntaxKind.ReturnKeyword) keyword = "return";
+  else return undefined;
+  const beforeKeyword = tokens[start - 1];
+  if (keyword === "await" && beforeKeyword !== undefined && beforeKeyword.kind === SyntaxKind.ReturnKeyword) {
+    start -= 1;
+    keyword = "return";
   }
-  if (tokens[k] !== undefined && tokens[k].kind === SyntaxKind.AsyncKeyword) k -= 1;
-  const before = tokens[k];
-  return before !== undefined
-    && (before.kind === SyntaxKind.OpenParenToken || before.kind === SyntaxKind.CommaToken);
+  const before = tokens[start - 1];
+  if (before !== undefined && !STATEMENT_START.has(before.kind)) return undefined;
+  const after = tokens[close + 1];
+  const ends = after === undefined || after.kind === SyntaxKind.SemicolonToken
+    || (scopeEnd !== undefined && close + 1 === scopeEnd);
+  return ends ? { start, keyword } : undefined;
 }
 
-/** The paren that opens the group closing at close, scanning backwards. */
-function openingParen(tokens: readonly Token[], close: number): number | undefined {
-  let depth = 0;
-  for (let i = close; i >= 0; i -= 1) {
-    if (CLOSERS.has(tokens[i].kind)) depth += 1;
-    else if (OPENERS.has(tokens[i].kind)) {
-      depth -= 1;
-      if (depth === 0) return tokens[i].kind === SyntaxKind.OpenParenToken ? i : undefined;
-    }
-  }
+/** Index of the paren that opens a call on the identifier at i, for W(...) and W?.(...). */
+function opensCall(tokens: readonly Token[], i: number): number | undefined {
+  const next = tokens[i + 1];
+  if (next === undefined) return undefined;
+  if (next.kind === SyntaxKind.OpenParenToken) return i + 1;
+  if (next.kind === SyntaxKind.QuestionDotToken && tokens[i + 2] !== undefined
+    && tokens[i + 2].kind === SyntaxKind.OpenParenToken) return i + 2;
   return undefined;
 }
 
-/** The module a binding has to come from. A same-named export of another file is not this one. */
-function warmupHelperModule(): string {
-  return withoutTsExtension(helperPath("cold-spawn-warmup.ts"));
+function isMemberName(tokens: readonly Token[], i: number): boolean {
+  const before = tokens[i - 1];
+  return before !== undefined
+    && (before.kind === SyntaxKind.DotToken || before.kind === SyntaxKind.QuestionDotToken);
 }
 
-function withoutTsExtension(path: string): string {
-  return path.endsWith(".ts") ? path.slice(0, -3) : path;
-}
-
-function importsTheWarmupHelper(fileName: string, specifier: string): boolean {
-  if (!specifier.startsWith(".") && !isAbsolute(specifier)) return false;
-  const resolved = isAbsolute(specifier) ? specifier : resolve(dirname(fileName), specifier);
-  return withoutTsExtension(resolved) === warmupHelperModule();
-}
-
-/**
- * The file as a balanced token stream, with the two rescans a raw scan gets wrong.
- *
- * Template substitutions: the scanner returns the closing brace of "${...}" as an ordinary brace,
- * so every template in the file would leak one unmatched brace and every depth after it would be
- * off. The brace depth each substitution opened at is remembered, and at the matching brace the
- * token is rescanned as the template middle or tail it actually is.
- *
- * Regular expressions: the scanner returns a slash, and only the preceding token says whether a
- * regular expression can start there. When it can, the rescan is accepted unless it ran to the end
- * of the line unterminated, in which case the position is rewound and the slash stays a division.
- */
-function tokenize(source: string): { tokens: Token[]; unreadable: string[] } {
-  const scanner = createScanner(true, LanguageVariant.Standard, source);
-  const tokens: Token[] = [];
-  const unreadable: string[] = [];
-  const templates: number[] = [];
-  let braces = 0;
-  let parens = 0;
-  let brackets = 0;
-  for (;;) {
-    let kind = scanner.scan();
-    if (kind === SyntaxKind.EndOfFile) break;
-    let start = scanner.getTokenStart();
-    let text = scanner.getTokenText();
-    const newline = scanner.hasPrecedingLineBreak();
-    if (kind === SyntaxKind.SlashToken || kind === SyntaxKind.SlashEqualsToken) {
-      const afterSlash = scanner.getTokenEnd();
-      const previous = tokens[tokens.length - 1];
-      if (previous === undefined || !REGEX_CANNOT_FOLLOW.has(previous.kind)) {
-        const rescanned = scanner.reScanSlashToken();
-        if (rescanned === SyntaxKind.RegularExpressionLiteral && !scanner.isUnterminated()) {
-          kind = rescanned;
-          start = scanner.getTokenStart();
-          text = scanner.getTokenText();
-        } else {
-          scanner.resetTokenState(afterSlash);
-        }
-      }
-    }
-    if (kind === SyntaxKind.CloseBraceToken && templates[templates.length - 1] === braces) {
-      templates.pop();
-      kind = scanner.reScanTemplateToken(false);
-      start = scanner.getTokenStart();
-      text = scanner.getTokenText();
-    }
-    const value = kind === SyntaxKind.StringLiteral ? scanner.getTokenValue() : "";
-    if (scanner.isUnterminated()) {
-      unreadable.push(at(source, start) + "an unterminated literal, so this judge is reading the file wrong");
-      return { tokens, unreadable };
-    }
-    if (kind === SyntaxKind.TemplateHead || kind === SyntaxKind.TemplateMiddle) templates.push(braces);
-    else if (kind === SyntaxKind.OpenBraceToken) braces += 1;
-    else if (kind === SyntaxKind.CloseBraceToken) braces -= 1;
-    else if (kind === SyntaxKind.OpenParenToken) parens += 1;
-    else if (kind === SyntaxKind.CloseParenToken) parens -= 1;
-    else if (kind === SyntaxKind.OpenBracketToken) brackets += 1;
-    else if (kind === SyntaxKind.CloseBracketToken) brackets -= 1;
-    if (braces < 0 || parens < 0 || brackets < 0) {
-      unreadable.push(at(source, start) + "a closing delimiter with nothing open, so this judge is reading the file wrong");
-      return { tokens, unreadable };
-    }
-    tokens.push({ kind, text, value: value ?? "", start, newline });
-  }
-  if (braces !== 0 || parens !== 0 || brackets !== 0 || templates.length > 0) {
-    unreadable.push("the file does not close every delimiter this judge opened (braces " + braces
-      + ", parens " + parens + ", brackets " + brackets + ", open template substitutions "
-      + templates.length + ")");
-  }
-  return { tokens, unreadable };
+/** An identifier that IS the imported binding: not a property name, and not the import clause. */
+function isBindingOccurrence(j: Judgement, i: number): boolean {
+  const token = j.tokens[i];
+  if (token.kind !== SyntaxKind.Identifier || !j.bindings.has(token.text)) return false;
+  if (isMemberName(j.tokens, i)) return false;
+  return !j.imported.some(range => i >= range.from && i <= range.to);
 }
 
 type ImportedName = Readonly<{ imported: string; local: string; typeOnly: boolean }>;
@@ -548,12 +504,15 @@ type ImportClause = Readonly<{
   specifier: string;
   names: readonly ImportedName[];
   namespace: string | undefined;
+  /** Token index of the import keyword and of its specifier, so occurrences inside are not calls. */
+  from: number;
+  to: number;
   start: number;
 }>;
 
 /**
  * Every import DECLARATION and what it binds. A dynamic import(...) and import.meta are skipped:
- * neither creates the top-level binding a hook can call.
+ * neither creates the top-level binding an accepted shape is written in terms of.
  */
 function importClauses(tokens: readonly Token[]): ImportClause[] {
   const clauses: ImportClause[] = [];
@@ -563,7 +522,7 @@ function importClauses(tokens: readonly Token[]): ImportClause[] {
     if (next === undefined) break;
     if (next.kind === SyntaxKind.OpenParenToken || next.kind === SyntaxKind.DotToken) continue;
     if (next.kind === SyntaxKind.StringLiteral) {
-      clauses.push({ specifier: next.value, names: [], namespace: undefined, start: tokens[i].start });
+      clauses.push({ specifier: next.value, names: [], namespace: undefined, from: i, to: i + 1, start: tokens[i].start });
       i += 1;
       continue;
     }
@@ -610,251 +569,120 @@ function importClauses(tokens: readonly Token[]): ImportClause[] {
       }
       k = entry;
     }
-    clauses.push({ specifier: specifier.value, names, namespace, start: tokens[i].start });
+    clauses.push({ specifier: specifier.value, names, namespace, from: i, to: cursor + 1, start: tokens[i].start });
     i = cursor + 1;
   }
   return clauses;
 }
 
+function importedLocals(
+  clauses: readonly ImportClause[],
+  specifier: string,
+  imported: string,
+): Set<string> {
+  const locals = new Set<string>();
+  for (const clause of clauses) {
+    if (clause.specifier !== specifier) continue;
+    for (const name of clause.names) if (name.imported === imported && !name.typeOnly) locals.add(name.local);
+  }
+  return locals;
+}
+
+function importedTokenRanges(clauses: readonly ImportClause[]): { from: number; to: number }[] {
+  return clauses.map(clause => ({ from: clause.from, to: clause.to }));
+}
+
+/** The module a binding has to come from. A same-named export of another file is not this one. */
+function warmupHelperModule(): string {
+  return withoutTsExtension(helperPath("cold-spawn-warmup.ts"));
+}
+
+function withoutTsExtension(path: string): string {
+  return path.endsWith(".ts") ? path.slice(0, -3) : path;
+}
+
+function importsTheWarmupHelper(fileName: string, specifier: string): boolean {
+  if (!specifier.startsWith(".") && !isAbsolute(specifier)) return false;
+  const resolved = isAbsolute(specifier) ? specifier : resolve(dirname(fileName), specifier);
+  return withoutTsExtension(resolved) === warmupHelperModule();
+}
+
 /**
- * A declaration that rebinds an imported name anywhere in the file. Deliberately conservative: any
- * redeclaration, in any scope, disqualifies the import, because the alternative is to decide which
- * scope a call site sits in, and a false pass here is the defect this file exists to stop.
+ * Where a name is bound to something other than its import: a declaration, an assignment, or a
+ * parameter. A shadowed beforeAll takes a correct callback and runs nothing, so the hook name has
+ * to be as provably the import as the warm-up name is.
  */
-function redeclarationOf(tokens: readonly Token[], name: string): Token | undefined {
+function rebindingOf(tokens: readonly Token[], name: string): Token | undefined {
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
-    const following = tokens[i + 1];
-    if (token.kind === SyntaxKind.Identifier && token.text === name && following !== undefined
-      && following.kind === SyntaxKind.EqualsGreaterThanToken) return token;
-    if (!DECLARATION_KEYWORDS.has(token.kind)) continue;
-    const limit = Math.min(tokens.length, i + 32);
-    for (let k = i + 1; k < limit; k += 1) {
-      if (BINDING_TERMINATORS.has(tokens[k].kind)) break;
-      if (tokens[k].kind === SyntaxKind.Identifier && tokens[k].text === name) return tokens[k];
-    }
+    if (token.kind !== SyntaxKind.Identifier || token.text !== name) continue;
+    if (isMemberName(tokens, i)) continue;
+    const before = tokens[i - 1];
+    const after = tokens[i + 1];
+    if (before !== undefined && DECLARATION_KEYWORDS.has(before.kind)) return token;
+    if (after === undefined) continue;
+    if (after.kind === SyntaxKind.EqualsToken) return token;
+    if (after.kind === SyntaxKind.EqualsGreaterThanToken) return token;
+    if (before !== undefined && before.kind === SyntaxKind.OpenParenToken
+      && after.kind === SyntaxKind.CloseParenToken && tokens[i + 2] !== undefined
+      && tokens[i + 2].kind === SyntaxKind.EqualsGreaterThanToken) return token;
   }
   return undefined;
 }
 
-type CallbackBody = Readonly<{
-  start: number;
-  end: number;
-  expression: boolean;
-  /** Names the callback binds itself. A parameter shadows the import for the whole body. */
-  parameters: readonly string[];
-}>;
+/**
+ * The name of the call an open paren belongs to, following a member chain back to its root so
+ * describe.only reads as describe. An empty string when the paren opens something else.
+ */
+function calleeBefore(tokens: readonly Token[], open: number): string {
+  let k = open - 1;
+  if (tokens[k] === undefined || tokens[k].kind !== SyntaxKind.Identifier) return "";
+  let root = tokens[k].text;
+  while (tokens[k - 1] !== undefined && tokens[k - 1].kind === SyntaxKind.DotToken
+    && tokens[k - 2] !== undefined && tokens[k - 2].kind === SyntaxKind.Identifier) {
+    k -= 2;
+    root = tokens[k].text;
+  }
+  return root;
+}
 
 /**
- * The body of the inline callback a hook is given, or undefined when the first argument is not one.
- * A bare identifier is the "declared but not registered" shape: the judge refuses it rather than
- * chasing a variable, because a callback that reaches the hook by name can be reassigned anywhere.
+ * Whether an arrow is written directly as an argument of the call it sits in. A describe body and
+ * a hook body are arguments; a helper assigned to a name is not, and that difference is the whole
+ * distance between a hook that registers and one that never runs.
  */
-function callbackBody(tokens: readonly Token[], from: number): CallbackBody | undefined {
-  let k = from;
-  if (tokens[k] !== undefined && tokens[k].kind === SyntaxKind.AsyncKeyword) k += 1;
-  const head = tokens[k];
-  if (head === undefined) return undefined;
-  if (head.kind === SyntaxKind.FunctionKeyword) {
-    let p = k + 1;
-    if (tokens[p] !== undefined && tokens[p].kind === SyntaxKind.Identifier) p += 1;
-    if (tokens[p] === undefined || tokens[p].kind !== SyntaxKind.OpenParenToken) return undefined;
-    const close = matching(tokens, p);
-    if (close === undefined) return undefined;
-    const brace = skipReturnType(tokens, close + 1);
-    if (tokens[brace] === undefined || tokens[brace].kind !== SyntaxKind.OpenBraceToken) return undefined;
-    const end = matching(tokens, brace);
-    return end === undefined ? undefined
-      : { start: brace + 1, end, expression: false, parameters: identifiersBetween(tokens, p, close) };
+function arrowIsArgument(tokens: readonly Token[], arrow: number, matches: readonly number[]): boolean {
+  let k = arrow - 1;
+  if (tokens[k] === undefined) return false;
+  if (tokens[k].kind === SyntaxKind.CloseParenToken) {
+    const open = matches[k];
+    if (open < 0) return false;
+    k = open - 1;
+  } else if (tokens[k].kind === SyntaxKind.Identifier) {
+    k -= 1;
+  } else {
+    return false;
   }
-  let arrow: number | undefined;
-  let parameters: readonly string[] = [];
-  if (head.kind === SyntaxKind.OpenParenToken) {
-    const close = matching(tokens, k);
-    if (close === undefined) return undefined;
-    parameters = identifiersBetween(tokens, k, close);
-    arrow = skipReturnType(tokens, close + 1);
-  } else if (head.kind === SyntaxKind.Identifier && tokens[k + 1] !== undefined
-    && tokens[k + 1].kind === SyntaxKind.EqualsGreaterThanToken) {
-    parameters = [head.text];
-    arrow = k + 1;
-  }
-  if (arrow === undefined || tokens[arrow] === undefined
-    || tokens[arrow].kind !== SyntaxKind.EqualsGreaterThanToken) return undefined;
-  const bodyStart = arrow + 1;
-  if (tokens[bodyStart] === undefined) return undefined;
-  if (tokens[bodyStart].kind === SyntaxKind.OpenBraceToken) {
-    const end = matching(tokens, bodyStart);
-    return end === undefined ? undefined
-      : { start: bodyStart + 1, end, expression: false, parameters };
-  }
-  return { start: bodyStart, end: argumentEnd(tokens, bodyStart), expression: true, parameters };
+  if (tokens[k] !== undefined && tokens[k].kind === SyntaxKind.AsyncKeyword) k -= 1;
+  const before = tokens[k];
+  return before !== undefined
+    && (before.kind === SyntaxKind.OpenParenToken || before.kind === SyntaxKind.CommaToken);
 }
 
-/** Every identifier inside a delimiter pair, which for a parameter list over-collects on purpose. */
-function identifiersBetween(tokens: readonly Token[], open: number, close: number): string[] {
-  const names: string[] = [];
-  for (let i = open + 1; i < close; i += 1) {
-    if (tokens[i].kind === SyntaxKind.Identifier) names.push(tokens[i].text);
-  }
-  return names;
-}
-
-/** Walk past a return-type annotation to the arrow or body brace that follows it. */
-function skipReturnType(tokens: readonly Token[], from: number): number {
-  let k = from;
-  while (k < tokens.length
-    && tokens[k].kind !== SyntaxKind.EqualsGreaterThanToken
-    && tokens[k].kind !== SyntaxKind.OpenBraceToken
-    && tokens[k].kind !== SyntaxKind.CommaToken
-    && tokens[k].kind !== SyntaxKind.CloseParenToken) k += 1;
-  return k;
-}
-
-type CallVerdict = Readonly<{
-  found: Readonly<{ helper: string; local: string; completion: "await" | "return"; start: number }> | undefined;
-  reasons: readonly string[];
-}>;
-
-/**
- * The warm-up call on the callback's own direct path.
- *
- * Direct means depth zero inside the callback body: a call one brace deeper sits in a nested
- * function or a guarded block, and the judge refuses both rather than deciding which. A concise
- * arrow body is the implicit-return form and is accepted, because the hook does receive the promise.
- */
-function warmupCallIn(
-  tokens: readonly Token[],
-  body: CallbackBody,
-  bindings: ReadonlyMap<string, string>,
-  source: string,
-): CallVerdict {
-  if (body.expression) {
-    let k = body.start;
-    let completion: "await" | "return" = "return";
-    if (tokens[k] !== undefined && tokens[k].kind === SyntaxKind.AwaitKeyword) {
-      completion = "await";
-      k += 1;
-    }
-    const call = tokens[k];
-    const helper = call === undefined ? undefined : bindings.get(call.text);
-    if (call !== undefined && helper !== undefined && call.kind === SyntaxKind.Identifier
-      && tokens[k + 1] !== undefined && tokens[k + 1].kind === SyntaxKind.OpenParenToken) {
-      if (body.parameters.includes(call.text)) {
-        return { found: undefined, reasons: [shadowedByParameter(source, call)] };
-      }
-      // The hook returns the WHOLE expression. A warm-up that is only its left operand leaves the
-      // hook settling on something else, so the call has to be all there is.
-      const closes = matching(tokens, k + 1);
-      if (closes === undefined || closes + 1 !== body.end) {
-        return { found: undefined, reasons: [at(source, call.start) + call.text
-          + " is one part of a larger returned expression, so the hook does not settle on it"] };
-      }
-      return { found: { helper, local: call.text, completion, start: call.start }, reasons: [] };
-    }
-    return { found: undefined, reasons: [] };
-  }
-  const reasons: string[] = [];
-  let braces = 0;
-  let parens = 0;
-  let brackets = 0;
-  let conditional = false;
-  for (let k = body.start; k < body.end; k += 1) {
-    const token = tokens[k];
-    if (token.kind === SyntaxKind.CloseBraceToken) braces -= 1;
-    else if (token.kind === SyntaxKind.CloseParenToken) parens -= 1;
-    else if (token.kind === SyntaxKind.CloseBracketToken) brackets -= 1;
-    const direct = braces === 0 && parens === 0 && brackets === 0;
-    if (direct && CONDITIONAL_TOKENS.has(token.kind)) conditional = true;
-    if (direct && (token.kind === SyntaxKind.SemicolonToken || token.kind === SyntaxKind.OpenBraceToken
-      || token.kind === SyntaxKind.CloseBraceToken)) conditional = false;
-    const helper = bindings.get(token.text);
-    const opensCall = tokens[k + 1] !== undefined && tokens[k + 1].kind === SyntaxKind.OpenParenToken;
-    if (token.kind === SyntaxKind.Identifier && helper !== undefined && opensCall) {
-      const previous = tokens[k - 1];
-      const completion = previous === undefined ? undefined
-        : previous.kind === SyntaxKind.AwaitKeyword ? "await" as const
-        : previous.kind === SyntaxKind.ReturnKeyword ? "return" as const
-        : undefined;
-      if (!direct) {
-        reasons.push(at(source, token.start) + token.text
-          + " is called inside a nested function or block, where the judge cannot tell the hook reaches it");
-      } else if (conditional) {
-        reasons.push(at(source, token.start) + token.text
-          + " is reached only through a condition, so the hook does not always pay the warm-up");
-      } else if (previous !== undefined && previous.kind === SyntaxKind.EqualsGreaterThanToken) {
-        reasons.push(at(source, token.start) + token.text
-          + " is the body of an inner arrow function the hook never calls");
-      } else if (completion === undefined) {
-        reasons.push(at(source, token.start) + token.text
-          + " is neither awaited nor returned, so the hook finishes before the warm-up does");
-      } else if (body.parameters.includes(token.text)) {
-        reasons.push(shadowedByParameter(source, token));
-      } else if (completion === "return" && !returnsNothingElse(tokens, k, body)) {
-        reasons.push(at(source, token.start) + token.text
-          + " is one part of a larger returned expression, so the hook does not settle on it");
-      } else {
-        return { found: { helper, local: token.text, completion, start: token.start }, reasons: [] };
-      }
-    }
-    if (token.kind === SyntaxKind.OpenBraceToken) braces += 1;
-    else if (token.kind === SyntaxKind.OpenParenToken) parens += 1;
-    else if (token.kind === SyntaxKind.OpenBracketToken) brackets += 1;
-  }
-  return { found: undefined, reasons };
-}
-
-function shadowedByParameter(source: string, token: Token): string {
-  return at(source, token.start) + token.text
-    + " is a parameter of this callback, which shadows the import for the whole body";
-}
-
-/** Whether a returned call is the entire returned expression rather than one operand of it. */
-function returnsNothingElse(tokens: readonly Token[], call: number, body: CallbackBody): boolean {
-  const closes = matching(tokens, call + 1);
-  if (closes === undefined) return false;
-  if (closes + 1 === body.end) return true;
-  const after = tokens[closes + 1];
-  return after !== undefined && after.kind === SyntaxKind.SemicolonToken;
-}
-
-/** Index of the delimiter that closes the one at open, or undefined when the file is unbalanced. */
-function matching(tokens: readonly Token[], open: number): number | undefined {
-  const closer = OPENERS.get(tokens[open].kind);
-  if (closer === undefined) return undefined;
-  let depth = 0;
-  for (let i = open; i < tokens.length; i += 1) {
-    if (OPENERS.has(tokens[i].kind)) depth += 1;
-    else if (CLOSERS.has(tokens[i].kind)) {
-      depth -= 1;
-      if (depth === 0) return tokens[i].kind === closer ? i : undefined;
-    }
-  }
-  return undefined;
-}
-
-/** Where the argument beginning at start ends: its comma, or the closing paren of the call. */
-function argumentEnd(tokens: readonly Token[], start: number): number {
-  let depth = 0;
-  for (let i = start; i < tokens.length; i += 1) {
-    const kind = tokens[i].kind;
-    if (OPENERS.has(kind)) depth += 1;
-    else if (CLOSERS.has(kind)) {
-      if (depth === 0) return i;
-      depth -= 1;
-    } else if (kind === SyntaxKind.CommaToken && depth === 0) return i;
-  }
-  return tokens.length;
-}
-
-function lineOf(source: string, offset: number): number {
-  let line = 1;
-  const bound = Math.min(offset, source.length);
-  for (let i = 0; i < bound; i += 1) if (source.charCodeAt(i) === 10) line += 1;
-  return line;
-}
-
-/** "line N: ", the prefix every complaint carries so a failure points at a place. */
-function at(source: string, offset: number): string {
-  return "line " + lineOf(source, offset) + ": ";
+/** Whether a block brace opens a callback written directly as an argument, arrow or function. */
+function opensArgumentCallback(tokens: readonly Token[], brace: number, matches: readonly number[]): boolean {
+  const pre = tokens[brace - 1];
+  if (pre === undefined) return false;
+  if (pre.kind === SyntaxKind.EqualsGreaterThanToken) return arrowIsArgument(tokens, brace - 1, matches);
+  if (pre.kind !== SyntaxKind.CloseParenToken) return false;
+  const open = matches[brace - 1];
+  if (open < 0) return false;
+  let k = open - 1;
+  if (tokens[k] !== undefined && tokens[k].kind === SyntaxKind.Identifier) k -= 1;
+  if (tokens[k] === undefined || tokens[k].kind !== SyntaxKind.FunctionKeyword) return false;
+  k -= 1;
+  if (tokens[k] !== undefined && tokens[k].kind === SyntaxKind.AsyncKeyword) k -= 1;
+  const before = tokens[k];
+  return before !== undefined
+    && (before.kind === SyntaxKind.OpenParenToken || before.kind === SyntaxKind.CommaToken);
 }
