@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { COALESCE_MAX_CHUNK_LENGTH, createAdapterEventQueue, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents } from "../../src/adapters/run-turn-queue";
+import { COALESCE_MAX_CHUNK_LENGTH, createAdapterEventQueue, DEFAULT_MAX_BACKLOG_CODE_UNITS, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents } from "../../src/adapters/run-turn-queue";
 import type { AdapterEvent } from "../../src/types";
 
 const text = (value: string): AdapterEvent => ({ type: "text_delta", text: value });
@@ -113,6 +113,56 @@ describe("run-turn adapter event queue", () => {
     expect(collected[0]).toEqual(thinking(Array.from({ length: 5_000 }, (_, i) => String(i % 10)).join("")));
   });
 
+  test("coalesced deltas cannot exceed the aggregate string backlog budget", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      maxBacklogCodeUnits: 4,
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    queue.push(text("ab"));
+    queue.push(text("cd"));
+    queue.push(text("e"));
+
+    expect(backlogExceeded).toBe(1);
+    expect(await queue.collect()).toEqual([
+      text("abcd"),
+      { type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" },
+    ]);
+  });
+
+  test("an oversized individual event is rejected before it is retained", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    queue.push(text("x".repeat(DEFAULT_MAX_BACKLOG_CODE_UNITS + 1)));
+
+    expect(backlogExceeded).toBe(1);
+    expect(await queue.collect()).toEqual([
+      { type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" },
+    ]);
+  });
+
+  test("consuming buffered events releases aggregate string budget", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      maxBacklogCodeUnits: 4,
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+    queue.push(text("abcd"));
+
+    const iterator = queue.stream()[Symbol.asyncIterator]();
+    expect(await iterator.next()).toEqual({ done: false, value: text("abcd") });
+    queue.push(thinking("wxyz"));
+    queue.close();
+
+    expect(await iterator.next()).toEqual({ done: false, value: thinking("wxyz") });
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+    expect(backlogExceeded).toBe(0);
+  });
+
   test("coalescing splits past the combined-length threshold and preserves concatenation", async () => {
     const queue = createAdapterEventQueue();
     const chunk = "x".repeat(Math.floor(COALESCE_MAX_CHUNK_LENGTH / 3) + 1);
@@ -192,6 +242,47 @@ describe("run-turn adapter event queue", () => {
       phasedText("c1", "commentary"),
       text("bare1bare2"),
     ]);
+  });
+
+  test("same-phase text merges charge only the appended text, not the duplicate phase", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      maxBacklogCodeUnits: 16,
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    queue.push(phasedText("ab", "commentary"));
+    queue.push(phasedText("cd", "commentary"));
+    queue.push(phasedText("ef", "commentary"));
+
+    const iterator = queue.stream()[Symbol.asyncIterator]();
+    expect(await iterator.next()).toEqual({ done: false, value: phasedText("abcdef", "commentary") });
+
+    // Draining released the entire merged payload — a fresh phased delta fits again.
+    queue.push(phasedText("gh", "commentary"));
+    queue.close();
+
+    expect(backlogExceeded).toBe(0);
+    expect(await iterator.next()).toEqual({ done: false, value: phasedText("gh", "commentary") });
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+  });
+
+  test("maxBacklogCodeUnits must be a positive safe integer", () => {
+    const invalid = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0,
+      -4,
+      2.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ];
+    for (const maxBacklogCodeUnits of invalid) {
+      expect(() => createAdapterEventQueue({ maxBacklogCodeUnits })).toThrow(RangeError);
+      expect(() => createAdapterEventQueue({ maxBacklogCodeUnits })).toThrow(
+        "maxBacklogCodeUnits must be a positive safe integer",
+      );
+    }
   });
 
   test("empty-string deltas merge without corrupting concatenation", async () => {
