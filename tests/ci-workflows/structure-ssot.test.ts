@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadManifest, renderIndex, runStructureChecks, writeGeneratedIndex, type Manifest } from "../../scripts/structure-ssot";
@@ -589,5 +589,47 @@ describe("structure/ SSOT", () => {
     expect(result).toHaveProperty("error");
     expect((result as { error: string }).error).toContain("id must be a kebab-case string");
     expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
+  });
+
+  // The seam-level tests above prove the helper; these two drive the real CLI tail, which is
+  // where the original bug lived (parse + cast + render before validation). The script is
+  // copied into the scaffold so its import.meta.dir resolves to the synthetic root.
+  function scaffoldCli(root: string): void {
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    copyFileSync(join(repoRoot(), "scripts/structure-ssot.ts"), join(root, "scripts/structure-ssot.ts"));
+  }
+
+  test("CLI --fix fails malformed contracts with a named diagnostic and an unchanged index", () => {
+    const root = scaffold();
+    scaffoldCli(root);
+    const before = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    const manifest = manifestOf(root) as unknown as { contracts: unknown };
+    manifest.contracts = { version: 1, entries: "not-an-array" };
+    write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+    const result = Bun.spawnSync([process.execPath, "scripts/structure-ssot.ts", "--fix"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    const stderr = result.stderr.toString();
+    expect(stderr).toContain("contracts.entries must be an array");
+    expect(stderr).not.toContain("TypeError");
+    expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
+  });
+
+  test("CLI --fix regenerates a stale index for a valid manifest", () => {
+    const root = scaffold();
+    scaffoldCli(root);
+    write(root, "structure/INDEX.md", "# stale\n");
+    const result = Bun.spawnSync([process.execPath, "scripts/structure-ssot.ts", "--fix"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    const regenerated = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    expect(regenerated).not.toBe("# stale\n");
+    expect(regenerated).toBe(renderIndex(manifestOf(root)));
   });
 });
