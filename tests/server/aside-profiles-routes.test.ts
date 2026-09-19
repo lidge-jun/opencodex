@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { setIntegrationMutationFlightTestHooks, setIntegrationPathTestHooks } from "../../src/server/management/integration-routes";
+import { defaultIntegrationIO } from "../../src/integrations/config-io";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration } from "../../src/integrations/writer";
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
@@ -586,4 +587,72 @@ test("a confirmed drift restore does not rewrite a target edited while preferenc
   expect(readFileSync(path(1), "utf8")).toBe(edited);
   expect(treeWitness(profileStore)).toBe(profileStoreBefore);
   expect(treeWitness(join(root, "store"))).toBe(rootStoreBefore);
+});
+
+test("a target edited after the history copy is still not rewritten by the old confirmation", async () => {
+  /*
+   * The copy and the restore are two moments, and an edit can land between them: the coordinated
+   * restore has no writer lock to hold one out, and it still awaits before beginning. The check
+   * before the copy accepts the file as it was; the one inside the coordinated restore is what has
+   * to see the file as it became.
+   */
+  const enabled = await (await api("/api/client-integrations/aside?profile=1", "PUT", { enabled: true })).json();
+  expect(enabled.ok).toBe(true);
+  const opId = enabled.opId as string;
+
+  const profileStore = join(root, "store", "aside-profiles", "1");
+  const snapshotName = join("snapshots", "aside", opId);
+  writeFileSync(join(root, "store", "journal.jsonl"), readFileSync(join(profileStore, "journal.jsonl"), "utf8"));
+  mkdirSync(join(root, "store", "snapshots", "aside"), { recursive: true });
+  writeFileSync(join(root, "store", snapshotName), readFileSync(join(profileStore, snapshotName), "utf8"));
+  rmSync(join(profileStore, snapshotName));
+
+  writeFileSync(path(1), JSON.stringify({ theme: "drifted-before-the-preview" }));
+  await seedRoster();
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", {
+    operation: "restore", opId, confirmDrift: true,
+  });
+  const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+
+  /*
+   * The edit lands on the second reading of this profile's document. The first belongs to the
+   * check that runs before the copy, which therefore accepts the file the operator confirmed; by
+   * the second, which the coordinated restore's own check performs, the file is something else.
+   */
+  const edited = JSON.stringify({ theme: "edited-after-the-copy" });
+  let reads = 0;
+  /*
+   * A file-level seam only. The Aside layer rebinds the journal and record writers to the
+   * profile's own store whatever io it is handed, so the history assertions below still describe
+   * the store they name.
+   */
+  const base = defaultIntegrationIO(store);
+  setIntegrationMutationFlightTestHooks({
+    store,
+    io: {
+      ...base,
+      readText: (target: string) => {
+        if (target === path(1)) {
+          reads += 1;
+          if (reads === 2) writeFileSync(path(1), edited);
+        }
+        return base.readText(target);
+      },
+    },
+  });
+
+  const undo = await api("/api/client-integrations/aside/profiles/1/restore", "POST", {
+    opId, operation: "restore", confirmDrift: true, planFingerprint: plan.fingerprint,
+  });
+
+  expect(reads).toBeGreaterThan(1);
+  expect(undo.status).toBe(409);
+  expect((await undo.json() as { code: string }).code).toBe("integration_preview_stale");
+  // The editor's file survives: no restore transaction ran.
+  expect(readFileSync(path(1), "utf8")).toBe(edited);
+  // The copied history and the saved preference may remain; what must not is a restore row.
+  const profileRows = readFileSync(join(profileStore, "journal.jsonl"), "utf8")
+    .trim().split("\n").map(line => JSON.parse(line) as { kind: string });
+  expect(profileRows.some(row => row.kind === "restore")).toBe(false);
 });

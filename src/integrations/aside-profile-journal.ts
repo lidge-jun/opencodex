@@ -180,12 +180,13 @@ export function restoreAsideProfile(
   options?: {
     revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
     /**
-     * Checked again after the preference write and before anything of this operation is written.
+     * Checked after the preference write, once before the selected history is copied into this
+     * profile's store and once more immediately before the restore itself.
      *
-     * The preference write sits between the first check and the restore it authorizes, and Aside
-     * takes no writer lock. The snapshot checks below still hold, but they say nothing about the
-     * target file, which can be edited in that window; without this, a confirmation about the
-     * earlier file still overwrote the later one.
+     * The preference write and that copy both sit between the first check and the restore they
+     * authorize, and Aside takes no writer lock. The snapshot checks below still hold, but they
+     * say nothing about the target file, which can be edited in either window; without this, a
+     * confirmation about the earlier file still overwrote the later one.
      */
     revalidateBeforeWrite?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>;
   },
@@ -229,23 +230,37 @@ export function restoreAsideProfile(
         throw new AsideProfileError("aside_operation_changed", 409, "Aside operation or snapshot changed while saving preferences");
       }
       /*
-       * The last look at the target, taken here rather than under the coordinated write.
+       * Looked at twice, because the two moments answer different questions and neither covers
+       * the other.
        *
-       * The import below copies the selected row and its snapshot into this profile's own store,
-       * which is history, and the coordinated restore has no way to take that back: a refusal
-       * returned from inside it happens before the restore transaction begins, so its compensation
-       * never runs and the imported rows would simply stay. Refusing here instead means a stale
-       * confirmation writes nothing at all. What remains between this check and the restore's own
-       * read of the file is that import, which is local synchronous store work rather than
-       * anything that waits.
+       * Here, before the import, so that a confirmation already stale by this point is refused
+       * without copying anything: the import writes the selected row and its snapshot into this
+       * profile's own store, and a refusal from inside the coordinated restore returns before the
+       * restore transaction begins, so nothing would compensate that copy.
        */
-      const late = await options?.revalidateBeforeWrite?.(bound);
-      if (late) return late;
+      const beforeImport = await options?.revalidateBeforeWrite?.(bound);
+      if (beforeImport) return beforeImport;
       importOperation(row, scope);
       return {
         ...await restoreIntegrationCoordinated(
           { ...bound, opId: request.opId, confirmDrift: request.confirmDrift },
-          { lockSeams: input.lockSeams },
+          {
+            lockSeams: input.lockSeams,
+            /*
+             * And again inside the coordinated restore, immediately before it runs. The import
+             * sits between the two, and Aside takes no writer lock, so that path still awaits
+             * before the restore begins: a target edited after the copy would otherwise be
+             * rewritten by a confirmation that never described it.
+             *
+             * A refusal here leaves the copied history and the saved preference in place. That is
+             * deliberate: the copy is this operation's own history rather than a change to the
+             * operator's file, and unwinding it would need a transaction across two stores and a
+             * configuration write for no gain the operator can see.
+             */
+            ...(options?.revalidateBeforeWrite
+              ? { revalidate: (frozen: IntegrationWriteInput) => options.revalidateBeforeWrite!(frozen) }
+              : {}),
+          },
         ),
         profileId: profile.id,
       };
