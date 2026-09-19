@@ -2477,6 +2477,89 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread("model-gated-task", config, now + 2, "shared")).toBe("b");
   });
 
+  test("cache affinity preserves an over-threshold shared binding across a model detour", () => {
+    const config = orderedConfig({
+      accountPoolStrategy: "quota",
+      activeCodexAccountId: "a",
+      activeCodexAccountPinned: "a",
+      autoSwitchThreshold: 80,
+      pool: { cacheAffinity: true },
+    });
+    const now = Date.now();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThread("cache-affine-model-detour", config, now, "shared")).toBe("a");
+    updateAccountQuota("a", 90);
+    expect(resolveCodexAccountForThreadDetailed(
+      "cache-affine-model-detour",
+      config,
+      now + 1,
+      "shared",
+      { modelEligibleAccountIds: new Set(["b"]) },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThread("cache-affine-model-detour", config, now + 2, "shared")).toBe("a");
+  });
+
+  test("cache affinity releases a fully exhausted shared binding across a model detour", () => {
+    const config = orderedConfig({
+      accountPoolStrategy: "quota",
+      activeCodexAccountId: "a",
+      activeCodexAccountPinned: "a",
+      autoSwitchThreshold: 80,
+      pool: { cacheAffinity: true },
+    });
+    const now = Date.now();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThread("cache-affine-exhausted-detour", config, now, "shared")).toBe("a");
+    updateAccountQuota("a", 100);
+    expect(resolveCodexAccountForThreadDetailed(
+      "cache-affine-exhausted-detour",
+      config,
+      now + 1,
+      "shared",
+      { modelEligibleAccountIds: new Set(["b"]) },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+
+    // Genuine exhaustion is the live-binding bar: the shared cursor follows the account
+    // that actually served instead of staying parked on the drained one.
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(resolveCodexAccountForThread("cache-affine-exhausted-detour", config, now + 2, "shared")).toBe("b");
+  });
+
+  test("cache affinity releases an exhausted shared binding even with quota switching disabled", () => {
+    const config = orderedConfig({
+      accountPoolStrategy: "quota",
+      activeCodexAccountId: "a",
+      activeCodexAccountPinned: "a",
+      autoSwitchThreshold: 0,
+      pool: { cacheAffinity: true },
+    });
+    const now = Date.now();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThread("cache-affine-disabled-detour", config, now, "shared")).toBe("a");
+    updateAccountQuota("a", 100);
+    expect(resolveCodexAccountForThreadDetailed(
+      "cache-affine-disabled-detour",
+      config,
+      now + 1,
+      "shared",
+      { modelEligibleAccountIds: new Set(["b"]) },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+
+    // Genuine exhaustion drops the binding even when threshold switching is disabled --
+    // the same >=100% boundary a live binding gets -- and the shared selection follows
+    // the account that actually served.
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
+    expect(resolveCodexAccountForThread("cache-affine-disabled-detour", config, now + 2, "shared")).toBe("b");
+  });
+
   test("repeated model-gated round-robin requests reuse a separate detour affinity", () => {
     const now = 1_800_000_000_000;
     const threadId = "model-detour-affinity";
@@ -3174,7 +3257,7 @@ describe("codex account selection order", () => {
       activeCodexAccountPinned: "b",
     });
     updateAccountQuota("a", 10);
-    updateAccountQuota("b", 90);
+    updateAccountQuota("b", 100);
 
     expect(resolveCodexAccountForThreadDetailed(
       null,
@@ -3218,7 +3301,7 @@ describe("codex account selection order", () => {
       activeCodexAccountPinned: "b",
     });
     updateAccountQuota("a", 10);
-    updateAccountQuota("b", 90);
+    updateAccountQuota("b", 100);
 
     expect(resolveCodexAccountForThreadDetailed(
       null,
