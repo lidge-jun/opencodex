@@ -80,6 +80,7 @@ function endpointRequestUncertain(): OcxParsedRequest {
   return {
     modelId: "gemini-test-model",
     stream: false,
+    options: {},
     context: {
       messages: [{ role: "user", content: "use the tool", timestamp: 0 }],
       tools: [{
@@ -669,13 +670,8 @@ describe("Google tool-schema loss report", () => {
    }
  });
 
-  test("report-only mode emits one content-free diagnostic for an indeterminate comparison", async () => {
-    const adapter = createGoogleAdapter({
-      adapter: "google",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      apiKey: "test-key",
-      googleMode: "ai-studio",
-    } as OcxProviderConfig);
+  test.each(ENDPOINT_CASES)("report-only mode emits one content-free $endpointClass diagnostic for an indeterminate comparison", async ({ endpointClass, provider }) => {
+    const adapter = createGoogleAdapter(provider);
     const realError = console.error;
     console.error = () => {};
     try {
@@ -687,6 +683,7 @@ describe("Google tool-schema loss report", () => {
       expect(lines).toHaveLength(1);
       expect(lines[0]!).toContain(`"uncertainComparisons":1`);
       expect(lines[0]!).toContain(`"lossy":false`);
+      expect(lines[0]!).toContain(`"endpointClass":"` + `${endpointClass}` + `"`);
       expect(built.body).toBeDefined();
       for (const canary of [
         "ENDPOINT_TOOL_CANARY_5112",
