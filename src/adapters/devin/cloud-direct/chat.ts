@@ -37,6 +37,7 @@ import { buildMetadata } from './metadata.js';
 import { getCachedUserJwt } from './auth.js';
 import { getCachedCatalog, ModelNotAvailableError, type CacheEntry } from './catalog.js';
 import { anySignal, cancelBodyOnAbort } from '../../../lib/abort.js';
+import { parseRetryAfterFromMessage } from '../../../lib/retry-delay.js';
 import { resolveDevinApiBaseUrl } from '../../../oauth/devin/api-base.js';
 
 /**
@@ -1071,6 +1072,13 @@ export class CloudChatError extends Error {
      * a live rate limit was classified 502 and core's failover never rotated.
      */
     public readonly status?: number,
+    /**
+     * Provider-stated recovery delay in seconds. The trailer parser extracts
+     * it while the raw upstream text is still available, because the thrown
+     * message is content-free: the stated-reset retry reads this typed field
+     * instead of scraping untrusted trailer text out of error.message.
+     */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'CloudChatError';
@@ -1305,7 +1313,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // Bun + Node ReadableStream readers diverge on the type-level shape
   // (Bun's includes a `readMany` method); both work the same at runtime.
   const reader = resp.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
-  let trailerError: { code?: string; message: string; opaqueDenial: boolean; traceId?: string } | null = null;
+  let trailerError: { code?: string; message: string; opaqueDenial: boolean; retryAfterSeconds?: number; traceId?: string } | null = null;
   let sawEos = false;
 
   /**
@@ -1461,6 +1469,10 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
               code,
               message,
               opaqueDenial: /an internal error occurred/i.test(message),
+              // Parsed here, where the raw text still exists: the thrown error
+              // is content-free, so the stated-reset retry consumes this typed
+              // field rather than the upstream sentence.
+              retryAfterSeconds: parseRetryAfterFromMessage(message),
               traceId: traceMatch?.[1],
             };
           }
@@ -1518,6 +1530,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         trailerError.code,
         trailerError.traceId,
         connectTrailerHttpStatus(trailerError.code, trailerError.message),
+        trailerError.retryAfterSeconds,
       );
     }
     // Cognition also returns `permission_denied` when a tool description
@@ -1538,6 +1551,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         trailerError.code,
         trailerError.traceId,
         connectTrailerHttpStatus(trailerError.code, trailerError.message),
+        trailerError.retryAfterSeconds,
       );
     }
     // Raw trailer messages never leave this parser: they can reflect the
@@ -1549,6 +1563,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
       trailerError.code,
       trailerError.traceId,
       connectTrailerHttpStatus(trailerError.code, trailerError.message),
+      trailerError.retryAfterSeconds,
     );
   }
   // Truncation detection: the cloud always terminates a successful stream
