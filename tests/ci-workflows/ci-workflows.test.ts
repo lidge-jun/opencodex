@@ -495,6 +495,7 @@ describe("GitHub Actions hardening", () => {
       "Dockerfile",
       "LICENSE",
       "README.md",
+      "app/**",
       "assets/**",
       "bin/**",
       "bun.lock",

@@ -1,4 +1,5 @@
 {
+  "macos-build-script.test.ts": "gui",
   "server-combo-held-response.test.ts": "server",
   "key-attribution.test.ts": "usage",
   "provider-send-path-import.test.ts": "server",
@@ -17,6 +18,7 @@
   "hub-usage.test.ts": "server",
   "client-hub-usage.test.ts": "clients",
   "cli-usage-hub.test.ts": "cli",
+  "cli-companion.test.ts": "cli",
   "abort-idle-deadline.test.ts": "lib",
   "abort-race.test.ts": "adapters",
   "account-import.test.ts": "server",
@@ -1383,5 +1385,7 @@
   "responses-code-mode-patch-compile.test.ts": "responses",
   "gui-codex-usage-score-parity.test.ts": "gui",
   "web-search-sidecar-429.test.ts": "web-search",
-  "codex-shim-destroyed-probe.test.ts": "codex-integration"
+  "codex-shim-destroyed-probe.test.ts": "codex-integration",
+  "usage-timeline.test.ts": "usage",
+  "companion-settings.test.ts": "server"
 }

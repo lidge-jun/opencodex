@@ -33,6 +33,12 @@ native Anthropic passthrough branch that forwards without translation. The Live/
 different in kind — it resolves an OpenAI/ChatGPT relay and forwards to it directly, without the
 adapter bridge.
 
+`app/` is a second, optional surface: a native macOS menu bar companion. It is a client
+of the management API, not part of the proxy — it adds no endpoint and changes no
+routing. Treat it the way you treat `gui/`: it may consume what `src/` already exposes,
+and a change that requires a new endpoint is a change to the proxy first.
+Its persisted display contract is owned by `src/companion/`.
+
 The default install keeps native OpenAI/ChatGPT passthrough working through one option-aware
 `openai` provider. Pool is the default and selects across main plus added accounts; Direct uses only
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>OpenCodexMenuBar</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.opencodex.menubar</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>OpenCodex</string>
+  <key>CFBundleDisplayName</key>
+  <string>OpenCodex</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>OpenCodex</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.0.0</string>
+  <key>CFBundleVersion</key>
+  <string>0.0.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <!-- macOS 14 stopped allowing IP-address loads under App Transport Security by
+       default. The proxy is always plain HTTP on loopback, so without this the
+       packaged bundle cannot reach it at all — while `swift run` stays green because
+       it does not run under this plist. Local networking only; ATS stays enforced
+       for every non-local destination. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+  <key>NSHumanReadableCopyright</key>
+  <string>MIT — opencodex contributors</string>
+</dict>
+</plist>

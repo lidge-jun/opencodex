@@ -782,6 +782,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleComboCommand } = await import("./combo");
     return await handleComboCommand(deps.args.slice(1));
   },
+  companion: async deps => {
+    const { handleCompanionCommand } = await import("./companion");
+    return await handleCompanionCommand(deps.args.slice(1));
+  },
   route: async deps => {
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
       console.error("Usage: ocx route <combo|policy> <subcommand>");

@@ -315,6 +315,22 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["companion"],
+    summary: "Inspect and configure menu-bar and widget companion usage settings.",
+    routes: [
+      { method: "GET", path: "/api/companion/settings" },
+      { method: "GET", path: "/api/usage/timeline" },
+      { method: "PUT", path: "/api/companion/settings" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit companion settings as JSON." }],
+    mutates: true,
+    json: "payload",
+    details: [
+      "`show` (the default) reads settings; `set key=value ...` updates selected settings; `reset` restores defaults.",
+      "Values accepted by `set` are parsed as JSON when valid, so booleans, numbers, arrays, objects, and null can be passed directly.",
+    ],
+  },
+  {
     command: ["account", "history"],
     summary: "Cached quota observations for one stored Codex pool account.",
     routes: [{ method: "GET", path: "/api/codex-auth/quota/history" }],

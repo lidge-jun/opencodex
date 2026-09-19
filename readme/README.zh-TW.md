@@ -95,6 +95,17 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 行動裝置連線的會話不會在對話中途跳帳號——但配額重新評估、failover、
 帳號排除、親和性到期，或 401/403 與 429 復原，仍可能重新綁定。當其中一個帳號——通常是你的 Codex Desktop 登入——只應在其他帳號用盡後才被用到時，請為帳號設定選取順序。
 
+### macOS 選單列應用程式
+
+無需開啟儀表板即可查看代理狀態、用量與供應商配額的原生伴侶應用程式。原始碼位於
+[`app/`](../app)（Swift + AppKit，沒有第三方相依套件）。請從[發行頁面](https://github.com/lidge-jun/opencodex/releases)
+下載，或使用 `bun run build:macos` 在本機建置。
+
+應用程式未經公證且使用 ad hoc 簽章，首次啟動時請按右鍵並選擇「開啟」。詳情請參閱
+[macOS 選單列應用程式指南](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)。
+
+應用程式也包含 macOS 14 以上的小工具，可顯示代理狀態、今日用量與配額。
+
 ### 贊助
 
 贊助讓 opencodex 能跟上每一次上游協議變更。有興趣？

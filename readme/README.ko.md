@@ -96,6 +96,18 @@ round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레�
 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다. Codex Desktop 로그인처럼
 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면, 계정에 선택 순서를 지정하세요.
 
+### macOS 메뉴 막대 앱
+
+대시보드를 열지 않고 프록시 상태, 사용량, 제공자 쿼터를 확인하는 네이티브 동반 앱입니다.
+소스는 [`app/`](../app)에 있으며 Swift + AppKit으로 작성되었고 서드파티 의존성이 없습니다.
+[릴리스 페이지](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하거나
+`bun run build:macos`로 직접 빌드할 수 있습니다.
+
+앱은 공증되지 않은 애드혹 서명이므로 처음 실행할 때 마우스 오른쪽 버튼을 클릭하고 열기를 선택하세요.
+자세한 내용은 [macOS 메뉴 막대 앱 가이드](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)를 참조하세요.
+
+macOS 14 이상에서는 프록시 상태, 오늘의 사용량과 쿼터를 보여 주는 위젯도 포함됩니다.
+
 ### 스폰서
 
 업스트림 프로토콜이 바뀔 때마다 opencodex가 따라갈 수 있는 건 스폰서 덕분입니다. 관심이 있으면

@@ -92,6 +92,19 @@ Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
+### Application macOS dans la barre des menus
+
+Un compagnon natif pour l’état du proxy, l’utilisation et les quotas des fournisseurs sans ouvrir
+le tableau de bord. Le code source se trouve dans [`app/`](../app) (Swift + AppKit, sans dépendance
+tierce). Téléchargez-le depuis la
+[page des releases](https://github.com/lidge-jun/opencodex/releases) ou compilez-le localement avec
+`bun run build:macos`.
+
+Le premier lancement nécessite un clic droit → Ouvrir, car l’application est signée ad hoc et non
+notarisée. Consultez le [guide de l’application macOS dans la barre des menus](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
+pour l’explication complète.
+
+L’application inclut également un widget macOS 14+ affichant l’état du proxy, l’utilisation du jour et les quotas.
 Il peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
 comptes ChatGPT / Codex et actualisez leurs quotas 5 h / hebdomadaires / 30 j dans le tableau de bord.
 Avec le routage par quota, les nouvelles sessions peuvent utiliser le compte opérationnel le moins sollicité ;
