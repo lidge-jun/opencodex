@@ -1168,9 +1168,14 @@ describe("bot-owned control state", () => {
     assert.equal(decision.reason, "rate_limited_interval");
   });
 
-  it("defuses mention-shaped tokens without rewriting emails or mid-token at-signs", () => {
-    const out = sanitizeTranslationBody("see @octocat and user@example.com and npm:@scope");
+  it("defuses mention-shaped tokens at Markdown and punctuation boundaries", () => {
+    const out = sanitizeTranslationBody(
+      "see @octocat, comma,@team, [@user], >@org/team, user@example.com, npm:@scope",
+    );
     assert.match(out, /@\u200boctocat/);
+    assert.match(out, /,@\u200bteam/);
+    assert.match(out, /\[@\u200buser\]/);
+    assert.match(out, />@\u200borg\/team/);
     assert.ok(out.includes("user@example.com"));
     assert.ok(out.includes("npm:@scope"));
   });

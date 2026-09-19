@@ -805,9 +805,10 @@ function sanitizeTranslationBody(raw, maxChars = 60000) {
     .split(MARKER).join("")
     .split(END_MARKER).join("")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-    // Defuse pings only: @login / @org/team — not emails, scopes, or decorators.
+    // Defuse pings at Markdown/punctuation boundaries, but not emails, scopes,
+    // or other mid-token at-signs.
     .replace(
-      /(^|[\s(])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]+)?)/g,
+      /(^|[^A-Za-z0-9._%+:-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]+)?)/g,
       "$1@\u200b$2",
     )
     .trim()
