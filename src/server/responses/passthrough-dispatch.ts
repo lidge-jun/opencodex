@@ -112,7 +112,9 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
- prepareSameTarget429Wait,
+  refetchAfterProtocolSafeReset,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
+  prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
@@ -149,7 +151,8 @@ import {
   reasoningEffortRejectionText,
 } from "./core-opaque-recovery";
 import type { RequestLogContext } from "../request-log";
-import { preflightComboStreamResponse } from "./combo-stream-preflight";
+import { deferProtocolSafeResetRecovery, preflightComboStreamResponse } from "./combo-stream-preflight";
+import { isCodexWsUpstreamResponse } from "./ws-upstream";
 import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } from "../../lib/errors";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
@@ -179,6 +182,8 @@ export async function preparePassthroughExchange(
     | "genericFailoverAccountId"
     | "passiveQuotaWriterGeneration"
     | "oauthDispatch"
+    | "selectionIsCurrent"
+    | "requestBindings"
     | "resolveSelectionAdapter"
     | "isOAuth401ReplayProvider"
     | "sentOAuthSnapshot"
@@ -1543,6 +1548,79 @@ export async function preparePassthroughExchange(
         upstreamResponse = result;
         continue passthroughRecovery;
       }
+    }
+
+    const streamRecoveryContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() ?? "";
+    const protocolRecoveryCandidate = upstreamResponse.ok
+      && !!upstreamResponse.body
+      && !isNonReplayableResponse(upstreamResponse)
+      && !isCodexWsUpstreamResponse(upstreamResponse)
+      // A downstream WebSocket turn that fell back to HTTP must relay response.created
+      // immediately so the client can address the turn and receive explicit control
+      // refusal. The recovery preflight must retain that event until output commits, so
+      // the two contracts cannot share one body owner.
+      && !(options.nativeControl && options.inboundTransport === "websocket")
+      && remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS) > 0
+      && (streamRecoveryContentType.includes("text/event-stream") || (!streamRecoveryContentType && parsed.stream));
+    if (protocolRecoveryCandidate) {
+      upstreamResponse = deferProtocolSafeResetRecovery(
+        upstreamResponse,
+        { model: logCtx.model, provider: logCtx.provider },
+        error => refetchAfterProtocolSafeReset(
+          (_recovery, signal = upstream.signal) => fetchWithTransientRetry(
+            () => fetchWithHeaderTimeout(
+              request.url,
+              applyUpstreamRecoveryInit({
+                method: request.method,
+                headers: request.headers,
+                body: request.body,
+              }, "connection-reset"),
+              signal,
+              connectMs,
+              true,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                httpOnly: true,
+                providerName: route.providerName,
+                modelId: route.modelId,
+                dispatchOverride: oauthDispatch(request),
+                beforeDispatch: headers => {
+                  if (signal.aborted) throw signal.reason;
+                  if (!transportState.selectionIsCurrent(transportState.requestBindings.get(request))) {
+                    throw new Error("Credential selection changed before pre-output stream recovery");
+                  }
+                  if (isCanonicalOpenAiForwardProvider(route.provider)) {
+                    createCodexReserveDispatchGuard(
+                      admissionState.authCtx,
+                      options.codexAuthPolicy ?? config,
+                      route.modelId,
+                      options.admission,
+                      options.visionDescribeTerminal === true,
+                    )?.(headers);
+                  }
+                  transportState.noteRoutedAttemptSend(passthroughEstimate, "connection-reset");
+                },
+              }),
+              route.provider.authMode === "forward",
+            ).then(adoptObservedResponse),
+            {
+              abortSignal: signal,
+              label: safeHostLabel(request.url),
+              attempts: Math.min(1, remainingTransientSendBudget(TRANSIENT_RETRY_MAX_ATTEMPTS)),
+              onSendsConsumed: noteTransientSends,
+            },
+          ),
+          error,
+          {
+            abortSignal: upstream.signal,
+            label: safeHostLabel(request.url),
+            acceptResponse: candidate => {
+              const type = candidate.headers.get("content-type")?.toLowerCase() ?? "";
+              return type.includes("text/event-stream") || (!type && parsed.stream);
+            },
+          },
+        ),
+        { allowMissingContentType: !streamRecoveryContentType && parsed.stream },
+      );
     }
     break;
     }

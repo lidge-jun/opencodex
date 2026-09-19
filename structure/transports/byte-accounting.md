@@ -156,4 +156,6 @@ Schema size still determines traversal work and the cost of copying a changed br
 `tests/adapters/openai/openai-chat-hardening.test.ts` covers wide, deep and mixed-array schemas;
 `tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.
 
+During [protocol-gated HTTP recovery](streaming-health.md#protocol-gated-http-stream-recovery), the deferred body preflight retains only its existing bounded prefix. Rejected replacement bodies are cancelled rather than accumulated.
+
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

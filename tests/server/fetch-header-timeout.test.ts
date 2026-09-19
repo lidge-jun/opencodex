@@ -141,6 +141,35 @@ describe("#2567 the upstream fetch disables Bun's per-request idle timeout", () 
     expect((calls[0] as { timeout?: number }).timeout).toBe(0);
   });
 
+  test("providerFetch httpOnly keeps an eligible replacement send on HTTP", async () => {
+    const { providerFetch } = await import("../../src/server/responses/fetch-helpers");
+    const { calls, fetch } = recordingFetch();
+    const provider = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      fetch,
+    } as unknown as Parameters<typeof providerFetch>[0];
+    const originalWebSocket = globalThis.WebSocket;
+    let websocketAttempts = 0;
+    globalThis.WebSocket = class {
+      constructor() {
+        websocketAttempts += 1;
+        throw new Error("replacement must stay on HTTP");
+      }
+    } as unknown as typeof WebSocket;
+    try {
+      const response = await providerFetch(provider, "1.4.0", { httpOnly: true })(
+        "https://chatgpt.com/backend-api/codex/responses",
+        { method: "POST", body: JSON.stringify({ model: "fixture", stream: true }) },
+      );
+      expect(await response.text()).toBe("ok");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+    expect(calls).toHaveLength(1);
+    expect(websocketAttempts).toBe(0);
+  });
+
   test("fetchWithHeaderTimeout passes timeout: 0 while keeping its abort signal", async () => {
     const server = startHeaderEchoServer();
     const seen: RequestInit[] = [];

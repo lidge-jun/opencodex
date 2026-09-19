@@ -880,6 +880,8 @@ export type SseInspectorHandlers = {
    * with an empty `output`.
    */
   onParsedPayload?: (payload: unknown) => void;
+  /** A complete data payload that was not parsed as a JSON event, including [DONE]. */
+  onOpaquePayload?: () => void;
   onFirstOutput?: () => void;
   /**
    * Provider-scoped compatibility: persist the completed snapshot under the
@@ -1059,6 +1061,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       } catch {
         /* malformed SSE payloads remain best-effort/no-throw */
       }
+    }
+    if (parsed === undefined && handlers.onOpaquePayload) {
+      try { handlers.onOpaquePayload(); } catch { /* inspection must never throw into the pump */ }
     }
     if (!reported && handlers.logCtx) {
       inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);

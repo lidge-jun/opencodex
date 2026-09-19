@@ -174,6 +174,8 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
+Native xAI Responses uses shared [protocol-gated HTTP recovery](../transports/streaming-health.md#protocol-gated-http-stream-recovery) without bypassing the selected OAuth binding or choosing another account.
+
 Shared startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](../runtime.md).
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

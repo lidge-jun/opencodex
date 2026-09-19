@@ -615,3 +615,13 @@ WebSocket control paths. See the canonical guide for
 [supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings-and-public-api),
 [typed result and approval continuations](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion),
 and [confirmation deadlines and retained context](../../guides/codex-integration.md#steering-confirmation-deadlines-and-retained-context).
+
+## Protocol-gated Responses stream recovery
+
+Native HTTP Responses can replace one stream after response headers when protocol inspection during
+downstream body consumption has parsed `response.created`, has observed no output or tool event,
+and then receives a connection-reset read error. Response headers do not wait for the first SSE
+event. The replacement uses the request's remaining send allowance and the same selected
+credential. A reset before `response.created`, after any output, on the replacement, over WebSocket,
+or on native Chat is never replayed. An incompatible or unsuccessful replacement is discarded and
+the original stream failure is preserved. This behavior is independent of `emptyCompletionRetry`.

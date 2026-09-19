@@ -7,6 +7,7 @@ import {
   isNonReplayableResponse,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
+  refetchAfterProtocolSafeReset,
   releaseResponseBodyBestEffort,
   retryBackoffDelayMs,
   sleepWithHeartbeats,
@@ -64,6 +65,54 @@ describe("isConnectionResetError", () => {
     err.name = "TimeoutError";
     (err as Error & { code: string }).code = "ECONNRESET";
     expect(isConnectionResetError(err)).toBe(false);
+  });
+});
+
+describe("refetchAfterProtocolSafeReset", () => {
+  test("accepts one compatible replacement for caller-proved protocol-safe reset", async () => {
+    silenceWarn();
+    const calls: string[] = [];
+    const replacement = new Response("replacement", {
+      headers: { "content-type": "text/event-stream" },
+    });
+    const result = await refetchAfterProtocolSafeReset(async recovery => {
+      calls.push(recovery ?? "none");
+      return replacement;
+    }, bunResetError(), {
+      acceptResponse: response => response.headers.get("content-type") === "text/event-stream",
+    });
+    expect(result).toBe(replacement);
+    expect(calls).toEqual(["connection-reset"]);
+  });
+
+  test("rejects non-reset errors and incompatible or non-success replacements", async () => {
+    silenceWarn();
+    let calls = 0;
+    expect(await refetchAfterProtocolSafeReset(async () => {
+      calls += 1;
+      return new Response("unused");
+    }, new Error("other"))).toBeNull();
+    expect(calls).toBe(0);
+
+    const wrongType = Response.json({ error: "wrong wire" });
+    expect(await refetchAfterProtocolSafeReset(async () => wrongType, bunResetError(), {
+      acceptResponse: response => response.headers.get("content-type") === "text/event-stream",
+    })).toBeNull();
+    expect(wrongType.bodyUsed).toBe(true);
+
+    const unavailable = new Response("busy", { status: 503 });
+    expect(await refetchAfterProtocolSafeReset(async () => unavailable, bunResetError())).toBeNull();
+    expect(unavailable.bodyUsed).toBe(true);
+  });
+
+  test("does not dispatch with zero allowance or after cancellation", async () => {
+    let calls = 0;
+    const execute = async () => { calls += 1; return new Response("unused"); };
+    expect(await refetchAfterProtocolSafeReset(execute, bunResetError(), { attempts: 0 })).toBeNull();
+    const abort = new AbortController();
+    abort.abort();
+    expect(await refetchAfterProtocolSafeReset(execute, bunResetError(), { abortSignal: abort.signal })).toBeNull();
+    expect(calls).toBe(0);
   });
 });
 

@@ -8,13 +8,15 @@
  * becomes a terminal, non-replayable response unless the operation is explicitly safe.
  *
  * Deliberately narrow: timeouts, aborts, ECONNREFUSED/DNS/TLS failures, and HTTP error
- * statuses (returned as Response, never thrown) are NOT retried. Mid-stream SSE resets are
- * out of scope — the response has already resolved by then.
+ * statuses (returned as Response, never thrown) are NOT retried. The Responses transport
+ * separately permits one post-header replacement only after its eager SSE preflight has
+ * observed response.created and no protocol output event.
  *
  * MUST stay a leaf module: imports nothing from server.ts or adapters (kiro-retry imports
  * the shared abort helpers from here).
  */
 import { clearableDeadline } from "./abort";
+import { redactSecretString } from "./redact";
 
 /**
  * Responses the origin may already be executing. RFC 9110 §9.2.2 forbids an intermediary
@@ -660,4 +662,48 @@ export async function fetchWithTransientRetry(
   } finally {
     opts.onSendsConsumed?.(sent);
   }
+}
+
+export type ProtocolSafeRefetch = (
+  recovery?: UpstreamSendRecovery,
+  signal?: AbortSignal,
+) => Promise<Response>;
+
+export interface ProtocolSafeRefetchOptions extends ResetRetryOptions {
+  /** The replacement must match the response contract already selected for the client. */
+  acceptResponse?: (response: Response) => boolean;
+}
+
+/**
+ * Attempt one caller-authorized replacement after protocol inspection proved that no output
+ * event was observed. The caller owns that proof and the physical-send budget.
+ */
+export async function refetchAfterProtocolSafeReset(
+  doFetch: ProtocolSafeRefetch,
+  err: unknown,
+  opts: ProtocolSafeRefetchOptions = {},
+): Promise<Response | null> {
+  if (!isConnectionResetError(err) || opts.abortSignal?.aborted || opts.attempts === 0) return null;
+  const label = opts.label
+    ? " (" + redactSecretString(opts.label).replace(/[\r\n\u0000-\u001f\u007f]/g, "").slice(0, 128) + ")"
+    : "";
+  let replacement: Response;
+  try {
+    replacement = await doFetch("connection-reset", opts.abortSignal);
+  } catch {
+    console.warn("[upstream-retry] protocol-safe refetch failed" + label + "; preserving original stream error");
+    return null;
+  }
+  const body = replacement.body;
+  let accepted = !opts.abortSignal?.aborted && replacement.ok && body !== null
+    && !replacement.bodyUsed && !body.locked && !isNonReplayableResponse(replacement);
+  try { if (accepted && opts.acceptResponse) accepted = opts.acceptResponse(replacement); }
+  catch { accepted = false; }
+  if (!accepted || opts.abortSignal?.aborted || body?.locked) {
+    try { void body?.cancel().catch(() => {}); } catch { /* already locked or closed */ }
+    console.warn("[upstream-retry] protocol-safe refetch rejected" + label + "; preserving original stream error");
+    return null;
+  }
+  console.warn("[upstream-retry] pre-output Responses reset" + label + "; using one replacement stream");
+  return replacement;
 }

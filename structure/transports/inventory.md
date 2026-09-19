@@ -220,6 +220,8 @@ the same routed model during account rotation, without bypassing their send-budg
 admission or account-snapshot pairing. The forwarding contract is covered in
 `tests/oauth/oauth-account-quota-rank.test.ts`; the core facade remains orchestration-only.
 
+The shared fetch executor has an HTTP-only mode for [protocol-gated HTTP recovery](streaming-health.md#protocol-gated-http-stream-recovery); pacing, dispatch overrides and credential checks still precede the physical send.
+
 ## SOCKS5 dispatch boundary
 
 `src/config/proxy-env.ts` activates configured SOCKS5 through `src/lib/proxy-env.ts`;

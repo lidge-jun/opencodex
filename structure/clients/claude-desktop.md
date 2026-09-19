@@ -189,4 +189,6 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
+Desktop routing continues through the existing ingress; [protocol-gated HTTP stream recovery](../transports/streaming-health.md#protocol-gated-http-stream-recovery) changes no client setup and never repeats a sent WebSocket exchange.
+
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

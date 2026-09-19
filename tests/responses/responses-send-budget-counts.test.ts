@@ -72,6 +72,51 @@ function responsesRequest(model: string): Request {
   });
 }
 
+function streamingResponsesRequest(model: string): Request {
+  return new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, stream: true, input: "hello" }),
+  });
+}
+
+function responseStreamThenReset(payloads: unknown[], error: Error): Response {
+  let sent = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!sent) {
+        sent = true;
+        if (payloads.length > 0) {
+          controller.enqueue(new TextEncoder().encode(
+            payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
+          ));
+          return;
+        }
+      }
+      controller.error(error);
+    },
+  }, { highWaterMark: 0 });
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
+function completedStream(text: string): Response {
+  return new Response(`data: ${JSON.stringify({
+    type: "response.completed",
+    response: {
+      id: "resp-recovered",
+      status: "completed",
+      output: [{
+        type: "message",
+        id: "msg-recovered",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    },
+  })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+}
+
 function alwaysFailing(status: number, message: string): { authorizations: string[] } {
   const authorizations: string[] = [];
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
@@ -237,6 +282,77 @@ describe("ambiguous reset safety across Responses recovery", () => {
     const response = await handleResponses(responsesRequest("combo/fan"), config, { model: "", provider: "" });
     expect(response.status).toBe(429);
     expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(sends).toBe(1);
+  });
+
+  test("native Responses refetches once after a created-only protocol prefix", async () => {
+    const config = comboOverTargets(1);
+    config.providers.t0!.adapter = "openai-responses";
+    const authorizations: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (authorizations.length === 1) {
+        return responseStreamThenReset([{
+          type: "response.created",
+          response: { id: "resp-first", status: "in_progress", output: [] },
+        }], Object.assign(new Error("socket connection was closed unexpectedly"), { code: "ECONNRESET" }));
+      }
+      return completedStream("recovered once");
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(streamingResponsesRequest("t0/model-t0"), config, logCtx);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("recovered once");
+    expect(authorizations).toEqual(["Bearer sk-t0", "Bearer sk-t0"]);
+    expect(totalSends(logCtx)).toBe(2);
+  });
+
+  test("native Responses does not refetch after a tool item commits the stream", async () => {
+    const config = comboOverTargets(1);
+    config.providers.t0!.adapter = "openai-responses";
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      return responseStreamThenReset([
+        { type: "response.created", response: { id: "resp-first", status: "in_progress", output: [] } },
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "function_call", id: "call_1", call_id: "call_1", name: "side_effect" },
+        },
+      ], Object.assign(new Error("socket connection was closed unexpectedly"), { code: "ECONNRESET" }));
+    }) as typeof fetch;
+
+    const response = await handleResponses(
+      streamingResponsesRequest("t0/model-t0"),
+      config,
+      { model: "", provider: "" },
+    );
+    const body = await response.text();
+    expect(body).toContain("response.output_item.added");
+    expect(body).toContain("response.failed");
+    expect(sends).toBe(1);
+  });
+
+  test("native Responses does not refetch a reset before response.created", async () => {
+    const config = comboOverTargets(1);
+    config.providers.t0!.adapter = "openai-responses";
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      return responseStreamThenReset([], Object.assign(
+        new Error("socket connection was closed unexpectedly"),
+        { code: "ECONNRESET" },
+      ));
+    }) as typeof fetch;
+
+    const response = await handleResponses(
+      streamingResponsesRequest("t0/model-t0"),
+      config,
+      { model: "", provider: "" },
+    );
+    expect(await response.text()).toContain("response.failed");
     expect(sends).toBe(1);
   });
 });

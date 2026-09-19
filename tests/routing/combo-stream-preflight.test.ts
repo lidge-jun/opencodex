@@ -51,6 +51,9 @@ const createdPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
 describe("combo stream preflight", () => {
   test("keeps only lifecycle preamble replayable and treats unknown output conservatively", () => {
     expect(comboStreamPayloadCommitsOutput({ type: "response.created" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({
+      type: "response.created", response: { output: [{ type: "function_call" }] },
+    })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "response.heartbeat" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.failed" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.incomplete" })).toBe(false);
@@ -538,7 +541,7 @@ describe("combo stream preflight", () => {
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
   });
 
-  test("replayReadErrors accepts a reconstructed prefix and the same reader.read error", async () => {
+  test("replayReadErrors exposes protocol-safe reset evidence after response.created", async () => {
     const readError = new Error("preflight-read-reset");
     const source = prefixThenReadError(createdPrefix, readError);
     const result = await preflightComboStreamResponse(
@@ -547,7 +550,9 @@ describe("combo stream preflight", () => {
       undefined,
       { replayReadErrors: true },
     );
-    expect(result.kind).toBe("accepted");
+    expect(result.kind).toBe("read-error-before-output");
+    if (result.kind !== "read-error-before-output") throw new Error("expected protocol reset evidence");
+    expect(result.error).toBe(readError);
     expect(source.cancelSpy()).toBeDefined();
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
     const reader = result.response.body!.getReader();
@@ -558,5 +563,57 @@ describe("combo stream preflight", () => {
     expect(source.cancelSpy()).toBeDefined();
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
   });
+
+  test("replayReadErrors does not expose recovery evidence before response.created", async () => {
+    const readError = new Error("preflight-read-reset");
+    const source = prefixThenReadError(new TextEncoder().encode(": heartbeat\n\n"), readError);
+    const result = await preflightComboStreamResponse(
+      source.response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(result.kind).toBe("accepted");
+    const reader = result.response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(": heartbeat\n\n");
+    await expect(reader.read()).rejects.toBe(readError);
+  });
+
+  test("replayReadErrors stays committed after a tool item event", async () => {
+    const readError = new Error("preflight-read-reset");
+    const prefix = new TextEncoder().encode(
+      new TextDecoder().decode(createdPrefix)
+      + `data: ${JSON.stringify({
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { type: "function_call", id: "call_1", call_id: "call_1", name: "side_effect" },
+      })}\n\n`,
+    );
+    const source = prefixThenReadError(prefix, readError);
+    const result = await preflightComboStreamResponse(
+      source.response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.body!.getReader().read()).toMatchObject({ done: false });
+  });
+
+  for (const opaque of ["data: {not-json}\n\n", "data: [DONE]\n\n"]) {
+    test(`replayReadErrors stays committed after opaque payload ${JSON.stringify(opaque.trim())}`, async () => {
+      const readError = new Error("preflight-read-reset");
+      const source = prefixThenReadError(new TextEncoder().encode(
+        new TextDecoder().decode(createdPrefix) + opaque,
+      ), readError);
+      const result = await preflightComboStreamResponse(
+        source.response,
+        { model: "m1", provider: "a" },
+        undefined,
+        { replayReadErrors: true },
+      );
+      expect(result.kind).toBe("accepted");
+    });
+  }
 
 });

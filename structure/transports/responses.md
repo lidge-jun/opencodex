@@ -619,7 +619,8 @@ is unchanged; only the native recovery caller supplies the exact error predicate
 
 Both shapes carry the inbound caller-abort signal separately from the turn/shutdown
 controller. A caller-driven read rejection is 499/client_cancel without pool penalty;
-a genuine upstream reset seen while reading the stream remains synthetic 502; the
+a genuine upstream reset seen after protocol commitment remains synthetic 502; the
+created-only preflight exception and the distinct
 pre-header case is a different verdict and is covered by
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
 An already received terminal, including
@@ -733,7 +734,8 @@ becomes the terminal refusal described in
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
 Reusable request bytes were never the test: a string body makes a send mechanically
 repeatable, not idempotent, and a model POST is not idempotent. Timeouts, aborts,
-`ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never retried at all.
+`ECONNREFUSED` and HTTP error statuses are never reset-retried. One post-header Responses
+exception is defined by [protocol-gated HTTP stream recovery](streaming-health.md#protocol-gated-http-stream-recovery).
 
 The opted-in callers are the sidecars, whose work is a tool call rather than a turn: the
 vision describers, the web-search executors and loop, and the image loop. The model-POST
@@ -1069,17 +1071,26 @@ was never processed, so the decision not to replay is ours, made before any resp
 existed — the same shape as `request_send_budget_exhausted`, and it takes the same status
 for the same reason. Only an explicitly replay-safe operation opts into reset retries.
 
-**An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
-The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
+**An upstream reset after protocol output or after a terminal keeps its existing behaviour.**
+The passthrough read path still settles such a reset as a synthetic 502, and the
 Codex WebSocket transport still settles `upstream_closed_before_response` (socket closed
 after the create frame) and `upstream_no_response` (origin never produced an event) as 502
 and 504. Those describe something the upstream did after our send, they are the contract the
-public server reference already documents, and this release does not move them.
+public server reference already documents. Native HTTP Responses has one narrower exception:
+the body-consumption preflight may replace the stream once after it parsed `response.created`,
+observed no output, tool, unknown or terminal event, and then received a reset-shaped read
+rejection. Response headers remain progressive because inspection starts on downstream body
+consumption. This positive protocol gate replaces the unsafe raw-byte-count test; a reset before
+`response.created` is not enough evidence, and native Chat has no equivalent gate. A downstream
+WebSocket turn that fell back to HTTP keeps ordinary progressive SSE instead of entering this
+preflight, because withholding `response.created` would make the turn unaddressable to that client.
 
 This reclassification is the recorded behaviour change: before it, the pre-header refusal
 borrowed `upstream_closed_before_response` and its 502, which multiplied the duplicate send
 the refusal exists to prevent. The distinct code is what keeps the two separable afterwards —
 both are non-replayable, but only one is ours to restate.
+
+> Decision record: [ADR-3389](../decisions/ADR-3389-ambiguous-connection-reset-replay-boundary.md)
 
 Because the refusal now carries 429, a 429 is no longer sufficient evidence of a provider
 rate limit. Every same-target replay, key rotation, account rotation and pool-quota recorder

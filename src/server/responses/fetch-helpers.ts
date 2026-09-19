@@ -112,6 +112,8 @@ export function sendWithConnectionPolicy(
 }
 
 export interface ProviderFetchOptions {
+  /** A replacement HTTP body must not initiate a fresh WebSocket exchange. */
+  httpOnly?: boolean;
   nativeControl?: NativeResponseControl;
   providerName?: string;
   modelId?: string;
@@ -164,7 +166,7 @@ export function providerFetch(
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket === true;
-    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
+    if (!options.httpOnly && typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
