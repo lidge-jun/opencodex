@@ -1,0 +1,399 @@
+import type { OcxProviderConfig } from "../types";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
+import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
+import type {
+  InboundWire,
+  ModelWireDefault,
+  ProviderRegistryEntry,
+  ResponsesTerminalRepairPolicy,
+} from "./registry/types";
+export type StaticPolicySource = "operator" | "registry" | "hard-pin" | "provider-default" | "unknown";
+
+export type StaticProviderPolicyField =
+  | "adapter" | "baseUrl" | "apiKeyTransport" | "headers" | "authMode" | "codexAccountMode"
+  | "responsesPath" | "chatCompletionsPath" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip"
+  | "defaultModel" | "models" | "liveModels" | "contextWindow" | "modelContextWindows"
+  | "modelDisplayNames" | "modelInputModalities" | "modelMaxInputTokens" | "defaultMaxOutputTokens"
+  | "modelMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts"
+  | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
+  | "reasoningWireFormat" | "noVisionModels" | "noReasoningModels" | "noTemperatureModels"
+  | "noTopPModels" | "noPenaltyModels" | "noJsonSchemaModels" | "parallelToolCalls"
+  | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "statelessResponses"
+  | "requiresAdjacentResponsesToolResults" | "requiresPairedResponsesToolResults" | "annotateEmptyToolOutputs"
+  | "fastWire" | "supportsServiceTier" | "modelSupportsServiceTier" | "supportsOpenAiWebSearchToolFields"
+  | "supportsResponsesCustomTools" | "preserveResponsesReasoningContent" | "modelSupportsReasoningSummaries"
+  | "supportsVerbosity" | "modelSupportsVerbosity" | "responsesItemIdRepair" | "autoToolChoiceOnlyModels"
+  | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels"
+  | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "showThinkingSummary"
+  | "escapeBuiltinToolNames" | "googleMode" | "project" | "location" | "modelCapabilities"
+  | "modelAutoCompactTokenLimits" | "modelSuppressSyntheticMax" | "modelReasoningSummaryDelivery"
+  | "codexToolMode" | "modelAdapters";
+type StaticProviderPolicyShape = Pick<OcxProviderConfig, StaticProviderPolicyField>;
+export type ResolvedProviderStaticPolicy = Readonly<Partial<StaticProviderPolicyShape>> & Readonly<{
+  adapter: string;
+  baseUrl: string;
+}>;
+export interface ResolvedPerModelStaticPolicy {
+  readonly adapter: string;
+  readonly contextWindow?: number;
+  readonly inputModalities?: readonly string[];
+  readonly maxInputTokens?: number;
+  readonly maxOutputTokens?: number;
+  readonly reasoningEfforts?: readonly string[];
+  readonly defaultReasoningEffort?: string;
+  readonly supportsReasoningSummaries?: boolean;
+  readonly supportsVerbosity?: boolean;
+  readonly supportsServiceTier?: boolean;
+  readonly fastTierDescription?: string;
+  readonly directReasoningEffort?: boolean;
+  readonly responsesUpstreamStreaming?: boolean;
+  readonly responsesTerminalRepair?: Readonly<ResponsesTerminalRepairPolicy>;
+}
+export interface ResolvedModelPolicy {
+  readonly version: 1;
+  readonly providerName: string;
+  readonly modelId: string;
+  readonly transportMatchedRegistry: boolean;
+  readonly effectiveAlias?: string | null;
+  readonly provider: ResolvedProviderStaticPolicy;
+  readonly model: Readonly<ResolvedPerModelStaticPolicy>;
+  readonly provenance: Readonly<{
+    alias: StaticPolicySource;
+    provider: Readonly<Partial<Record<StaticProviderPolicyField, StaticPolicySource>>>;
+    model: Readonly<Partial<Record<keyof ResolvedPerModelStaticPolicy, StaticPolicySource>>>;
+  }>;
+}
+export interface ResolveModelPolicyInput {
+  readonly providerName: string;
+  readonly modelId: string;
+  readonly provider: Readonly<OcxProviderConfig>;
+  readonly registryEntry?: Readonly<ProviderRegistryEntry>;
+  readonly transportMatchedRegistry: boolean;
+  readonly inboundWire?: InboundWire;
+  /** Capture-time collision-aware alias decision. Omit to use provider then registry fallback. */
+  readonly effectiveAlias?: string | null;
+  readonly effectiveAliasSource?: Exclude<StaticPolicySource, "hard-pin" | "provider-default">;
+}
+export interface ObservedModelLimits {
+  readonly contextWindow?: number;
+  readonly maxInputTokens?: number;
+  readonly maxOutputTokens?: number;
+}
+/** Call-local projection: observed values stay outside ResolvedModelPolicy and may only narrow caps. */
+export function clampObservedModelLimits(
+  policy: Readonly<Pick<ResolvedPerModelStaticPolicy, "contextWindow" | "maxInputTokens" | "maxOutputTokens">>,
+  observed: Readonly<ObservedModelLimits>,
+): Readonly<ObservedModelLimits> {
+  const clamp = (staticCap: number | undefined, observedValue: number | undefined): number | undefined => {
+    if (observedValue === undefined) return staticCap;
+    return staticCap === undefined ? observedValue : Math.min(staticCap, observedValue);
+  };
+  return Object.freeze({
+    ...(clamp(policy.contextWindow, observed.contextWindow) !== undefined
+      ? { contextWindow: clamp(policy.contextWindow, observed.contextWindow) }
+      : {}),
+    ...(clamp(policy.maxInputTokens, observed.maxInputTokens) !== undefined
+      ? { maxInputTokens: clamp(policy.maxInputTokens, observed.maxInputTokens) }
+      : {}),
+    ...(clamp(policy.maxOutputTokens, observed.maxOutputTokens) !== undefined
+      ? { maxOutputTokens: clamp(policy.maxOutputTokens, observed.maxOutputTokens) }
+      : {}),
+  });
+}
+function detachedClone<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => detachedClone(item)) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([key, nested]) => [key, detachedClone(nested)])) as T;
+  }
+  return value;
+}
+function recursivelyFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value as Record<string, unknown>)) recursivelyFreeze(nested);
+  return Object.freeze(value);
+}
+function scalar<T>(operator: T | undefined, registry: T | undefined): [T | undefined, StaticPolicySource] {
+  if (operator !== undefined) return [detachedClone(operator), "operator"];
+  if (registry !== undefined) return [detachedClone(registry), "registry"];
+  return [undefined, "unknown"];
+}
+function mapFill<T>(
+  registry: Readonly<Record<string, T>> | undefined,
+  operator: Readonly<Record<string, T>> | undefined,
+): [Record<string, T> | undefined, StaticPolicySource] {
+  if (!registry && !operator) return [undefined, "unknown"];
+  return [
+    detachedClone({ ...(registry ?? {}), ...(operator ?? {}) }),
+    operator ? "operator" : "registry",
+  ];
+}
+function nestedMapFill(
+  registry: Readonly<Record<string, Record<string, string>>> | undefined,
+  operator: Readonly<Record<string, Record<string, string>>> | undefined,
+): [Record<string, Record<string, string>> | undefined, StaticPolicySource] {
+  if (!registry && !operator) return [undefined, "unknown"];
+  const merged: Record<string, Record<string, string>> = {};
+  for (const [key, value] of Object.entries(registry ?? {})) merged[key] = { ...value };
+  for (const [key, value] of Object.entries(operator ?? {})) {
+    merged[key] = { ...(merged[key] ?? {}), ...value };
+  }
+  return [merged, operator ? "operator" : "registry"];
+}
+function positiveCapMap(
+  registry: Readonly<Record<string, number>> | undefined,
+  operator: Readonly<Record<string, number>> | undefined,
+): [Record<string, number> | undefined, StaticPolicySource] {
+  if (!registry && !operator) return [undefined, "unknown"];
+  const merged = { ...(registry ?? {}) };
+  for (const [key, value] of Object.entries(operator ?? {})) {
+    merged[key] = typeof merged[key] === "number" ? Math.min(merged[key]!, value) : value;
+  }
+  return [merged, operator ? "operator" : "registry"];
+}
+function stableUnion(
+  registry: readonly string[] | undefined,
+  operator: readonly string[] | undefined,
+): [string[] | undefined, StaticPolicySource] {
+  if (!registry && !operator) return [undefined, "unknown"];
+  return [[...new Set([...(registry ?? []), ...(operator ?? [])])], operator ? "operator" : "registry"];
+}
+
+function staticHeaders(
+  registry: Readonly<Record<string, string>> | undefined,
+  operator: Readonly<Record<string, string>> | undefined,
+): [Record<string, string> | undefined, StaticPolicySource] {
+  if (!registry && !operator) return [undefined, "unknown"];
+  if (!registry) return [{ ...(operator ?? {}) }, "operator"];
+  if (!operator) return [{ ...registry }, "registry"];
+  const claimed = new Set(Object.keys(operator).map(name => name.toLowerCase()));
+  const merged: Record<string, string> = { ...operator };
+  for (const [name, value] of Object.entries(registry)) {
+    if (!claimed.has(name.toLowerCase())) merged[name] = value;
+  }
+  return [merged, "operator"];
+}
+
+function resolvedBaseUrl(entry: Readonly<ProviderRegistryEntry> | undefined, provider: Readonly<OcxProviderConfig>): string {
+  if (!entry) return provider.baseUrl;
+  const configured = provider.baseUrl.trim();
+  const configuredIsResolved = configured.length > 0 && !/\{[^}]*\}/.test(configured);
+  return (/\{[^}]*\}/.test(entry.baseUrl) || entry.allowBaseUrlOverride) && configuredIsResolved
+    ? configured
+    : entry.baseUrl;
+}
+
+function wireDefault(
+  declared: ModelWireDefault | undefined,
+  provider: Readonly<OcxProviderConfig>,
+  entry: Readonly<ProviderRegistryEntry> | undefined,
+  inbound: InboundWire,
+): string | undefined {
+  if (declared === undefined || !MODEL_ADAPTER_OVERRIDE_ALLOWED.has(provider.adapter)) return undefined;
+  if (typeof declared !== "string") {
+    if (!declared.inbound.includes(inbound)) return undefined;
+    const authMode = provider.authMode ?? entry?.authKind;
+    if (declared.authModes && authMode && !declared.authModes.includes(authMode)) return undefined;
+  }
+  const wire = typeof declared === "string" ? declared : declared.wire;
+  return MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire) ? wire : undefined;
+}
+
+export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedModelPolicy {
+  const entry = input.transportMatchedRegistry ? input.registryEntry : undefined;
+  const provider = input.provider;
+  const providerPolicy: Partial<StaticProviderPolicyShape> = {};
+  const providerProvenance: Partial<Record<StaticProviderPolicyField, StaticPolicySource>> = {};
+
+  const put = <K extends StaticProviderPolicyField>(key: K, value: StaticProviderPolicyShape[K] | undefined, source: StaticPolicySource): void => {
+    if (value !== undefined) providerPolicy[key] = detachedClone(value) as never;
+    providerProvenance[key] = source;
+  };
+  const putScalar = <K extends StaticProviderPolicyField>(key: K, registryValue: StaticProviderPolicyShape[K] | undefined): void => {
+    const [value, source] = scalar(provider[key], registryValue);
+    put(key, value, source);
+  };
+  const putUnion = (key: StaticProviderPolicyField, registryValue: readonly string[] | undefined): void => {
+    const [value, source] = stableUnion(registryValue, provider[key] as string[] | undefined);
+    put(key, value as never, source);
+  };
+  const putMergedMap = <K extends StaticProviderPolicyField, T>(
+    key: K,
+    registryValue: Readonly<Record<string, T>> | undefined,
+    operatorValue: Readonly<Record<string, T>> | undefined,
+  ): void => {
+    const [value, source] = mapFill(registryValue, operatorValue);
+    put(key, value as StaticProviderPolicyShape[K], source);
+  };
+
+  put("adapter", entry?.adapter ?? provider.adapter, entry ? "registry" : "operator");
+  put("baseUrl", resolvedBaseUrl(entry, provider), entry ? "registry" : "operator");
+  putScalar("apiKeyTransport", entry?.apiKeyTransport);
+  const [headers, headersSource] = staticHeaders(entry?.staticHeaders, provider.headers);
+  put("headers", headers, headersSource);
+  const resolvedAuthMode = entry?.authKind === "forward" || entry?.authKind === "oauth"
+    ? entry.authKind
+    : provider.authMode === "forward" ? undefined : provider.authMode ?? entry?.authKind;
+  put("authMode", resolvedAuthMode, entry?.authKind === "forward" || entry?.authKind === "oauth"
+    ? "registry"
+    : provider.authMode !== undefined ? "operator" : entry ? "registry" : "unknown");
+  putScalar("codexAccountMode", entry?.codexAccountMode);
+  for (const key of [
+    "responsesPath", "chatCompletionsPath", "keyOptional", "freeTier", "modelSuffixBracketStrip",
+    "defaultModel", "models", "liveModels", "contextWindow", "defaultMaxOutputTokens",
+    "reasoningEfforts", "reasoningWireFormat", "parallelToolCalls", "promptCacheKey",
+    "chatServiceTier", "openaiChatEofTolerance", "statelessResponses",
+    "requiresAdjacentResponsesToolResults", "requiresPairedResponsesToolResults",
+    "annotateEmptyToolOutputs", "fastWire", "supportsServiceTier",
+    "supportsOpenAiWebSearchToolFields", "supportsResponsesCustomTools",
+    "preserveResponsesReasoningContent", "supportsVerbosity", "responsesItemIdRepair",
+    "showThinkingSummary", "escapeBuiltinToolNames", "googleMode", "project", "location",
+  ] as const) putScalar(key, entry?.[key] as StaticProviderPolicyShape[typeof key] | undefined);
+  putMergedMap("modelDisplayNames", entry?.modelDisplayNames, provider.modelDisplayNames);
+  putMergedMap("modelInputModalities", entry?.modelInputModalities, provider.modelInputModalities);
+  putMergedMap("modelMaxOutputTokens", entry?.modelMaxOutputTokens, provider.modelMaxOutputTokens);
+  putMergedMap("modelReasoningEfforts", entry?.modelReasoningEfforts, provider.modelReasoningEfforts);
+  putMergedMap("modelDefaultReasoningEfforts", entry?.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
+  const registryServiceTier = !entry?.modelServiceTierCapabilityBaseUrlGuard
+    || entry.modelServiceTierCapabilityBaseUrlGuard(provider.baseUrl)
+    ? entry?.modelSupportsServiceTier
+    : undefined;
+  putMergedMap("modelSupportsServiceTier", registryServiceTier, provider.modelSupportsServiceTier);
+  putMergedMap("modelSupportsReasoningSummaries", entry?.modelSupportsReasoningSummaries, provider.modelSupportsReasoningSummaries);
+  putMergedMap("modelSupportsVerbosity", entry?.modelSupportsVerbosity, provider.modelSupportsVerbosity);
+  for (const key of [
+    "modelCapabilities", "modelAutoCompactTokenLimits", "modelSuppressSyntheticMax",
+    "modelReasoningSummaryDelivery", "codexToolMode", "modelAdapters",
+  ] as const) putScalar(key, undefined);
+  for (const key of ["modelContextWindows", "modelMaxInputTokens"] as const) {
+    const [value, source] = input.providerName === "openai-apikey"
+      ? positiveCapMap(entry?.[key], provider[key])
+      : mapFill(entry?.[key], provider[key]);
+    put(key, value, source);
+  }
+  const [effortMap, effortMapSource] = mapFill(entry?.reasoningEffortMap, provider.reasoningEffortMap);
+  put("reasoningEffortMap", effortMap, effortMapSource);
+  const [modelEffortMap, modelEffortMapSource] = nestedMapFill(entry?.modelReasoningEffortMap, provider.modelReasoningEffortMap);
+  put("modelReasoningEffortMap", modelEffortMap, modelEffortMapSource);
+  for (const key of [
+    "noVisionModels", "noReasoningModels", "noTemperatureModels", "noTopPModels",
+    "noPenaltyModels", "noJsonSchemaModels", "autoToolChoiceOnlyModels",
+    "preserveReasoningContentModels", "requiresReasoningPlaceholderModels",
+    "reasoningSplitModels", "reasoningDetailsModels", "thinkingToggleModels", "thinkingBudgetModels",
+  ] as const) putUnion(key, entry?.[key]);
+
+  const foldedModel = input.modelId.toLowerCase();
+  const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined => (
+    record?.[input.modelId] ?? Object.entries(record ?? {}).find(([key]) => key.toLowerCase() === foldedModel)?.[1]
+  );
+  const modelSource = <T>(
+    operator: Readonly<Record<string, T>> | undefined,
+    registry: Readonly<Record<string, T>> | undefined,
+  ): StaticPolicySource => modelValue(operator) !== undefined
+    ? "operator"
+    : modelValue(registry) !== undefined ? "registry" : "unknown";
+  const modelOrProviderSource = <T>(
+    operatorMap: Readonly<Record<string, T>> | undefined,
+    registryMap: Readonly<Record<string, T>> | undefined,
+    operatorDefault: T | undefined,
+    registryDefault: T | undefined,
+  ): StaticPolicySource => {
+    const exact = modelSource(operatorMap, registryMap);
+    return exact !== "unknown" ? exact : operatorDefault !== undefined ? "operator" : registryDefault !== undefined ? "registry" : "unknown";
+  };
+  const configuredAdapter = provider.modelAdapters?.[input.modelId];
+  const pin = pinnedWireAdapter(input.providerName, input.modelId);
+  const normalizedModelId = input.modelId.trim().toLowerCase();
+  const registryWire = wireDefault(
+    entry?.modelWireDefaults?.[normalizedModelId],
+    provider,
+    entry,
+    input.inboundWire ?? "responses",
+  );
+  const explicitWire = configuredAdapter && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configuredAdapter)
+    ? configuredAdapter
+    : undefined;
+  const providerAdapter = providerPolicy.adapter ?? provider.adapter;
+  const adapter = pin
+    ?? (!isCanonicalOpenAiForwardProvider(provider) ? explicitWire ?? registryWire : undefined)
+    ?? providerAdapter;
+  const adapterSource: StaticPolicySource = pin
+    ? "hard-pin"
+    : explicitWire && !isCanonicalOpenAiForwardProvider(provider)
+      ? "operator"
+      : registryWire && !isCanonicalOpenAiForwardProvider(provider)
+        ? "registry"
+        : "provider-default";
+  const modelContextWindow = modelValue(providerPolicy.modelContextWindows) ?? providerPolicy.contextWindow;
+  const modelReasoningEfforts = modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
+  const modelSupportsReasoningSummaries = modelValue(providerPolicy.modelSupportsReasoningSummaries)
+    ?? (modelValue(providerPolicy.modelReasoningSummaryDelivery) !== undefined ? true : undefined);
+  const modelSupportsVerbosity = modelValue(providerPolicy.modelSupportsVerbosity) ?? providerPolicy.supportsVerbosity;
+  const modelSupportsServiceTier = modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
+
+  const model: ResolvedPerModelStaticPolicy = {
+    adapter,
+    ...(modelContextWindow !== undefined ? { contextWindow: modelContextWindow } : {}),
+    ...(modelValue(providerPolicy.modelInputModalities) !== undefined ? { inputModalities: modelValue(providerPolicy.modelInputModalities) } : {}),
+    ...(modelValue(providerPolicy.modelMaxInputTokens) !== undefined ? { maxInputTokens: modelValue(providerPolicy.modelMaxInputTokens) } : {}),
+    ...(modelValue(providerPolicy.modelMaxOutputTokens) !== undefined ? { maxOutputTokens: modelValue(providerPolicy.modelMaxOutputTokens) } : {}),
+    ...(modelReasoningEfforts !== undefined ? { reasoningEfforts: modelReasoningEfforts } : {}),
+    ...(modelValue(providerPolicy.modelDefaultReasoningEfforts) !== undefined ? { defaultReasoningEffort: modelValue(providerPolicy.modelDefaultReasoningEfforts) } : {}),
+    ...(modelSupportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: modelSupportsReasoningSummaries } : {}),
+    ...(modelSupportsVerbosity !== undefined ? { supportsVerbosity: modelSupportsVerbosity } : {}),
+    ...(modelSupportsServiceTier !== undefined ? { supportsServiceTier: modelSupportsServiceTier } : {}),
+    ...(modelSupportsServiceTier === true && entry?.fastTierDescription !== undefined
+      ? { fastTierDescription: entry.fastTierDescription }
+      : {}),
+    ...(entry?.directReasoningEffortModels?.includes(input.modelId) ? { directReasoningEffort: true } : {}),
+    ...(entry?.modelResponsesUpstreamStreaming?.[normalizedModelId] !== undefined
+      ? { responsesUpstreamStreaming: entry.modelResponsesUpstreamStreaming[normalizedModelId] }
+      : {}),
+    ...(entry?.modelResponsesTerminalRepair?.[normalizedModelId] !== undefined
+      ? { responsesTerminalRepair: entry.modelResponsesTerminalRepair[normalizedModelId] }
+      : {}),
+  };
+  const modelProvenance: Partial<Record<keyof ResolvedPerModelStaticPolicy, StaticPolicySource>> = {
+    adapter: adapterSource,
+  };
+  modelProvenance.contextWindow = modelOrProviderSource(provider.modelContextWindows, entry?.modelContextWindows, provider.contextWindow, entry?.contextWindow);
+  modelProvenance.inputModalities = modelSource(provider.modelInputModalities, entry?.modelInputModalities);
+  modelProvenance.maxInputTokens = modelSource(provider.modelMaxInputTokens, entry?.modelMaxInputTokens);
+  modelProvenance.maxOutputTokens = modelSource(provider.modelMaxOutputTokens, entry?.modelMaxOutputTokens);
+  modelProvenance.reasoningEfforts = modelOrProviderSource(provider.modelReasoningEfforts, entry?.modelReasoningEfforts, provider.reasoningEfforts, entry?.reasoningEfforts);
+  modelProvenance.defaultReasoningEffort = modelSource(
+    provider.modelDefaultReasoningEfforts,
+    entry?.modelDefaultReasoningEfforts,
+  );
+  modelProvenance.supportsReasoningSummaries = modelSource(provider.modelSupportsReasoningSummaries, entry?.modelSupportsReasoningSummaries);
+  if (modelProvenance.supportsReasoningSummaries === "unknown" && modelValue(provider.modelReasoningSummaryDelivery) !== undefined) {
+    modelProvenance.supportsReasoningSummaries = "operator";
+  }
+  modelProvenance.supportsVerbosity = modelOrProviderSource(provider.modelSupportsVerbosity, entry?.modelSupportsVerbosity, provider.supportsVerbosity, entry?.supportsVerbosity);
+  modelProvenance.supportsServiceTier = modelOrProviderSource(provider.modelSupportsServiceTier, registryServiceTier, provider.supportsServiceTier, entry?.supportsServiceTier);
+  modelProvenance.responsesUpstreamStreaming = model.responsesUpstreamStreaming === undefined ? "unknown" : "registry";
+  modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
+  modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";
+  modelProvenance.directReasoningEffort = model.directReasoningEffort === undefined ? "unknown" : "registry";
+
+  const alias = input.effectiveAlias !== undefined
+    ? input.effectiveAlias
+    : provider.alias !== undefined
+      ? provider.alias
+      : entry?.alias;
+  const aliasSource: StaticPolicySource = input.effectiveAlias !== undefined
+    ? input.effectiveAliasSource ?? "operator"
+    : provider.alias !== undefined
+      ? "operator"
+    : entry?.alias !== undefined ? "registry" : "unknown";
+  return recursivelyFreeze(detachedClone({
+    version: 1 as const,
+    providerName: input.providerName,
+    modelId: input.modelId,
+    transportMatchedRegistry: entry !== undefined,
+    ...(alias !== undefined ? { effectiveAlias: alias } : {}),
+    provider: providerPolicy as ResolvedProviderStaticPolicy,
+    model,
+    provenance: { alias: aliasSource, provider: providerProvenance, model: modelProvenance },
+  }));
+}

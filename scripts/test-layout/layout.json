@@ -1161,6 +1161,7 @@
     "relay-eager.test.ts": "server",
     "release-helper.test.ts": "ci-workflows",
     "release-notes.test.ts": "ci-workflows",
+    "resolved-model-policy.test.ts": "providers",
     "release-version-line.test.ts": "ci-workflows",
     "remote-catalog.test.ts": "clients",
     "remote-workspace-activation.test.ts": "clients",

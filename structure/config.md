@@ -309,6 +309,16 @@ Both fields must stay positive finite integers at disk-config and management val
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
 and `routeModel`, but user config overrides registry defaults per field/key.
 
+`src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
+contract. It preserves each field's existing rule rather than assigning one global priority:
+operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key,
+selected hard caps use the lower positive value, restriction lists form a stable union, and hard
+wire pins precede valid operator overrides and registry wire defaults. Its output is recursively
+frozen and carries field/model provenance. It never persists resolved policy and excludes API keys,
+account selection, quota, health, cooldowns, discovered availability, and request-owned evidence.
+Observed context/input/output values are combined only in a call-local projection that can narrow a
+captured static cap but cannot write observations into the static result.
+
 ## Provider validation ownership
 
 `src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
