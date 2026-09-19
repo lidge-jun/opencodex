@@ -13,6 +13,11 @@ import {
   type IntegrationMutationPlan,
 } from "./integration-api";
 
+interface BoundRestorePlan {
+  plan: IntegrationMutationPlan;
+  confirmDrift: boolean;
+}
+
 /**
  * Restore confirmation, including the drift second step.
  *
@@ -47,12 +52,13 @@ export default function RestoreDialog({
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const restoreFallbackRef = useRef<HTMLElement | null>(null);
   const restoredRef = useRef(false);
-  const [plan, setPlan] = useState<IntegrationMutationPlan | null>(null);
+  const [boundPlan, setBoundPlan] = useState<BoundRestorePlan | null>(null);
   const [previewPending, setPreviewPending] = useState(true);
   const [stale, setStale] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const scopedProfileId = row.clientId === "aside" ? profileId ?? row.profileId : undefined;
+  const plan = boundPlan?.plan ?? null;
   const drift = plan?.foreignEdit === "drift";
 
   useEffect(() => {
@@ -105,11 +111,13 @@ export default function RestoreDialog({
       setPreviewPending(true);
       setFailure(null);
       try {
-        let next = await previewIntegrationRestore(apiBase, row.opId, false, controller.signal, scopedProfileId);
+        let confirmDrift = false;
+        let next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
         if (next.refusalReason === "drift_requires_confirm") {
-          next = await previewIntegrationRestore(apiBase, row.opId, true, controller.signal, scopedProfileId);
+          confirmDrift = true;
+          next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
         }
-        setPlan(next);
+        setBoundPlan({ plan: next, confirmDrift });
       } catch (error) {
         if (controller.signal.aborted) return;
         if (isIntegrationPreviewUnavailable(error)) {
@@ -132,15 +140,16 @@ export default function RestoreDialog({
   }, [onClose, pending, previewPending]);
 
   const submit = async () => {
-    if (pending || previewPending || !plan || !plan.canApply) return;
+    if (pending || previewPending || !boundPlan || !boundPlan.plan.canApply) return;
+    const attemptedConfirmDrift = boundPlan.confirmDrift;
     setPending(true);
     setFailure(null);
     try {
       await restoreIntegration(apiBase, {
         opId: row.opId,
-        confirmDrift: drift,
+        confirmDrift: attemptedConfirmDrift,
         profileId: scopedProfileId,
-        binding: bindingFor(plan),
+        binding: bindingFor(boundPlan.plan),
       });
       restoredRef.current = true;
       onRestored();
@@ -151,9 +160,11 @@ export default function RestoreDialog({
       if (row.clientId === "aside") onReconcile?.();
       if (error instanceof IntegrationApiError && error.stalePlan) {
         let fresh = error.stalePlan;
+        let freshConfirmDrift = attemptedConfirmDrift;
         try {
           if (fresh.refusalReason === "drift_requires_confirm") {
-            fresh = await previewIntegrationRestore(apiBase, row.opId, true, undefined, scopedProfileId);
+            freshConfirmDrift = true;
+            fresh = await previewIntegrationRestore(apiBase, row.opId, freshConfirmDrift, undefined, scopedProfileId);
           }
         } catch (previewError) {
           if (isIntegrationPreviewUnavailable(previewError)) {
@@ -165,7 +176,7 @@ export default function RestoreDialog({
           setPending(false);
           return;
         }
-        setPlan(fresh);
+        setBoundPlan({ plan: fresh, confirmDrift: freshConfirmDrift });
         setStale(true);
         setPending(false);
         return;

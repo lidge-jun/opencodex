@@ -265,19 +265,21 @@ export function parseIntegrationMutationPlan(value: unknown): IntegrationMutatio
   const changes: IntegrationPlanChange[] = [];
   let previousOrder = -1;
   let previousPath = "";
-  const seen = new Set<string>();
+  const seenByKind = new Map<IntegrationPlanChangeKind, Set<string>>();
   for (const item of value.changes) {
     if (!isRecord(item) || !hasOnlyKeys(item, PLAN_CHANGE_KEYS)
       || !PLAN_CHANGE_KINDS.includes(item.kind as IntegrationPlanChangeKind)
       || typeof item.path !== "string" || !isSafePlanPath(item.path)) throw invalidPreviewResponse();
     const order = PLAN_CHANGE_KINDS.indexOf(item.kind as IntegrationPlanChangeKind);
     if (order < previousOrder || (order === previousOrder && item.path <= previousPath)) throw invalidPreviewResponse();
-    const identity = `${item.kind}\u0000${item.path}`;
-    if (seen.has(identity)) throw invalidPreviewResponse();
-    seen.add(identity);
+    const kind = item.kind as IntegrationPlanChangeKind;
+    const paths = seenByKind.get(kind) ?? new Set<string>();
+    if (paths.has(item.path)) throw invalidPreviewResponse();
+    paths.add(item.path);
+    seenByKind.set(kind, paths);
     previousOrder = order;
     previousPath = item.path;
-    changes.push({ kind: item.kind as IntegrationPlanChangeKind, path: item.path });
+    changes.push({ kind, path: item.path });
   }
   if ((value.willChange && (!value.canApply || changes.length === 0))
     || (!value.willChange && changes.length !== 0)

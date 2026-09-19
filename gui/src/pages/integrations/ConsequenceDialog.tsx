@@ -45,15 +45,16 @@ export default function ConsequenceDialog({
   const triggerRef = useRef<HTMLElement | null>(null);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [activePlan, setActivePlan] = useState(plan);
-  const [stale, setStale] = useState(false);
+  const [staleOverride, setStaleOverride] = useState<{
+    sourceFingerprint: string | null;
+    plan: IntegrationMutationPlan;
+  } | null>(null);
   const titleId = "integration-consequence-dialog-title";
   const planRequired = plan !== null || planLoading || planFailure !== null || plans !== undefined;
-
-  useEffect(() => {
-    setActivePlan(plan);
-    setStale(false);
-  }, [plan]);
+  const activePlan = staleOverride?.sourceFingerprint === (plan?.fingerprint ?? null)
+    ? staleOverride.plan
+    : plan;
+  const stale = staleOverride?.sourceFingerprint === (plan?.fingerprint ?? null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -79,15 +80,14 @@ export default function ConsequenceDialog({
       await onConfirm(activePlan ?? undefined);
     } catch (error) {
       if (error instanceof IntegrationApiError && error.stalePlan) {
-        setActivePlan(error.stalePlan);
-        setStale(true);
+        setStaleOverride({ sourceFingerprint: plan?.fingerprint ?? null, plan: error.stalePlan });
         setPending(false);
         return;
       }
       setFailure(error instanceof Error ? error.message : t("integrations.error.generic"));
       setPending(false);
     }
-  }, [activePlan, onConfirm, pending, t]);
+  }, [activePlan, onConfirm, pending, plan?.fingerprint, t]);
 
   const slots: ReactNode[] = [
     <CopySlot key="changes" copyKey={copy.changesKey} vars={copy.vars} />,

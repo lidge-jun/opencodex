@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import ConsequenceDialog from "../src/pages/integrations/ConsequenceDialog";
 import IntegrationPlanDetails from "../src/pages/integrations/IntegrationPlanDetails";
+import RestoreDialog from "../src/pages/integrations/RestoreDialog";
 import { IntegrationApiError, type IntegrationMutationPlan } from "../src/pages/integrations/integration-api";
 
 const copy = {
@@ -43,7 +44,7 @@ beforeEach(() => {
   windowValue = new Window({ url: "http://localhost/#integrations" });
   container = windowValue.document.createElement("div") as unknown as HTMLElement;
   windowValue.document.body.appendChild(container as unknown as Node);
-  for (const key of ["window", "document", "navigator", "localStorage", "sessionStorage"] as const) {
+  for (const key of ["window", "document", "navigator", "localStorage", "sessionStorage", "fetch"] as const) {
     previous.set(key, Reflect.get(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, value: Reflect.get(windowValue, key) });
   }
@@ -51,6 +52,14 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   root = createRoot(container);
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1500;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`State did not settle: ${container.textContent}`);
+    await act(async () => { await new Promise<void>(resolve => windowValue.setTimeout(resolve, 0)); });
+  }
+}
 
 afterEach(async () => {
   if (root) await act(async () => { root?.unmount(); root = null; });
@@ -133,4 +142,82 @@ test("keyboard cancel closes an idle dialog and restores its trigger", async () 
   expect(closed).toBe(1);
   await act(async () => { root?.unmount(); root = null; });
   expect(windowValue.document.activeElement).toBe(trigger);
+});
+
+test("restore retains confirmDrift when stale drift becomes non-drift", async () => {
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let mutations = 0;
+  const restorePlan = (
+    fingerprint: string,
+    foreignEdit: "none" | "drift",
+    allowed = true,
+  ): IntegrationMutationPlan => ({
+    ...plan(fingerprint),
+    operation: "restore",
+    state: "current",
+    foreignEdit,
+    changes: allowed ? [
+      { kind: "replace", path: "providers.opencodex" },
+      { kind: "snapshot", path: "$snapshot" },
+      { kind: "ownership", path: "$ownership" },
+      { kind: "journal", path: "$journal" },
+    ] : [],
+    canApply: allowed,
+    willChange: allowed,
+    ...(allowed ? {} : { refusalReason: "drift_requires_confirm" as const }),
+  });
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    requests.push({ url, body });
+    if (url.endsWith("/restore/preview")) {
+      return Response.json(body.confirmDrift === true
+        ? restorePlan(`p1:${"7".repeat(32)}`, "drift")
+        : restorePlan(`p1:${"6".repeat(32)}`, "drift", false));
+    }
+    mutations += 1;
+    if (mutations === 1) {
+      return Response.json({
+        code: "integration_preview_stale",
+        plan: restorePlan(`p1:${"8".repeat(32)}`, "none"),
+      }, { status: 409 });
+    }
+    return Response.json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
+  }) as typeof fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
+  Object.defineProperty(windowValue, "fetch", { configurable: true, value: mockFetch });
+  let closed = 0;
+  await act(async () => {
+    root?.render(
+      <LanguageProvider>
+        <RestoreDialog
+          apiBase=""
+          row={{
+            opId: "op-drift-to-clean", clientId: "hermes", kind: "apply",
+            at: "2026-09-20T00:00:00.000Z", configPath: "/tmp/hermes.yaml",
+            snapshot: "stored", undoable: true, deletable: false,
+          }}
+          onClose={() => { closed += 1; }}
+          onRestored={() => {}}
+        />
+      </LanguageProvider>,
+    );
+  });
+  await waitFor(() => Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Back up newer edits and restore" && !button.disabled));
+  const driftConfirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Back up newer edits and restore") as HTMLButtonElement;
+  await act(async () => { driftConfirm.click(); });
+  await waitFor(() => container.textContent?.includes("Review the updated plan") === true);
+  expect(requests.filter(request => request.url.endsWith("/restore"))).toHaveLength(1);
+  expect(requests.filter(request => request.url.endsWith("/restore"))[0]?.body.confirmDrift).toBe(true);
+
+  const cleanConfirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Restore") as HTMLButtonElement;
+  await act(async () => { cleanConfirm.click(); });
+  await waitFor(() => closed === 1);
+  const mutationsSent = requests.filter(request => request.url.endsWith("/restore"));
+  expect(mutationsSent).toHaveLength(2);
+  expect(mutationsSent[1]?.body).toMatchObject({
+    confirmDrift: true,
+    operation: "restore",
+    planFingerprint: `p1:${"8".repeat(32)}`,
+  });
 });
