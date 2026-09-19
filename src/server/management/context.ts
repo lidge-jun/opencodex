@@ -19,6 +19,7 @@ import type {
   performCodexRestart,
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
+import type { RequestMetricsSnapshotter } from "../request-metrics";
 
 import type { RemoteWorkspaceHub } from "../../remote-control/workspace-hub";
 import type { RemoteWorkspaceSessionService } from "../../remote-control/workspace-sessions";
@@ -31,6 +32,8 @@ export type RemoteWorkspaceSessionsApi = Pick<RemoteWorkspaceSessionService,
   "availability" | "list" | "create" | "prompt" | "submitPrompt" | "stop" | "shutdown">;
 
 export interface ManagementApiDeps {
+  /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
+  requestMetrics?: RequestMetricsSnapshotter;
   remoteWorkspaceHub?: RemoteWorkspaceHubApi;
   remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
   /** The listener retains and awaits teardown only after this optional subsystem activates. */

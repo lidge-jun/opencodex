@@ -37,6 +37,7 @@ import {
   type WsData,
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
+import { metricsExportEnabled } from "../../config/feature-flags";
 import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -84,6 +85,7 @@ import {
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { responseWithDeferredRequestLog } from "../relay";
+import { createRequestMetricsOwner } from "../request-metrics";
 import {
   corsHeaders,
   managementCorsHeaders,
@@ -266,6 +268,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     port,
   } = ctx;
   void port;
+  const requestMetrics = metricsExportEnabled(config) ? createRequestMetricsOwner() : undefined;
+  const requestMetricsLogContext = requestMetrics ? { requestMetricsRecorder: requestMetrics } : {};
+  const requestManagementApiDeps: ManagementApiDeps = requestMetrics
+    ? { ...managementApiDeps, requestMetrics: { snapshot: () => requestMetrics.snapshot() } }
+    : managementApiDeps;
   const serveOptions = {
       idleTimeout: 255,
       // Bun rejects an oversized body before `fetch` runs, so the listener has to be raised
@@ -616,7 +623,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }), req, config);
           }
         }
-        const mgmtResponse = await handleManagementAPI(req, url, config, managementApiDeps, principal, managementSessionControl);
+        const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl);
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
@@ -1197,6 +1204,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
@@ -1233,6 +1241,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "image_gen",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
@@ -1290,6 +1299,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "context_history",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1316,6 +1326,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "web_search",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1340,6 +1351,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
@@ -1414,6 +1426,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "messages",
         };
@@ -1443,6 +1456,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "chat",
         };
@@ -1466,7 +1480,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = { model: TRANSCRIPTION_MODEL, provider: "unknown", ...admissionFields(admission) };
+        const logCtx: RequestLogContext = {
+          model: TRANSCRIPTION_MODEL,
+          provider: "unknown",
+          ...requestMetricsLogContext,
+          ...admissionFields(admission),
+        };
         return runAdmittedHttpTurn(req, policy, async lease => {
           const response = await handleAudioTranscriptions(req, config, logCtx, admission, lease);
           addFinalRequestLog(requestId, start, logCtx, response.status);
@@ -1497,6 +1516,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "gpt-live",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1544,6 +1564,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "gpt-live",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         const turnAdmissionLease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
@@ -1760,7 +1781,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
 
       return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
     },
-    websocket: createWebsocketHandler(ctx),
+    websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
   return serveOptions;
 }

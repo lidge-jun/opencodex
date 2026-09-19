@@ -483,6 +483,17 @@ The text-only consumer reads exact inputModalities declarations before legacy hi
 
 `catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
 
+## Aggregate request metrics export
+
+`metricsExport` on `src/types/config.ts` is an optional strict object with one optional boolean,
+`enabled`. `src/config/feature-flags.ts` treats only literal `true` as enabled; absence, false, or a
+malformed persisted value is off. `src/config/schema/config-schema.ts` degrades a malformed hand edit
+to absence so an optional monitoring typo cannot discard providers or credentials. The live-write
+boundary runs `metricsExportConfigError` in `src/config/diagnostics.ts` before the degrading schema,
+so wrong types and unknown nested fields are rejected rather than silently saved. Activation is read
+when the server process creates its serve options and therefore requires restart; it adds no setting
+to the live `/api/settings` mutation surface.
+
 Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
 
 ## SOCKS5 activation owner

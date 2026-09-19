@@ -85,13 +85,17 @@ import {
   resolveLiveSidebandUpgrade,
 } from "../live";
 import type { ServeOptionsContext } from "./serve-options";
+import type { RequestMetricsRecorder } from "../request-metrics";
 
 /**
  * The WebSocket half of the Bun.serve options, split out of serve-options.ts to keep that file
  * under the 2,000-line ratchet threshold. The body is the original handler verbatim; it reads the
  * same startServer context the HTTP half does, so it takes the same context object.
  */
-export function createWebsocketHandler(ctx: ServeOptionsContext) {
+export function createWebsocketHandler(
+  ctx: ServeOptionsContext,
+  requestMetricsRecorder?: RequestMetricsRecorder,
+) {
   const { config, deps } = ctx;
   return {
       maxPayloadLength: MAX_WS_FRAME_BYTES,
@@ -283,6 +287,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           const logCtx: RequestLogContext = {
             model: "unknown",
             provider: "unknown",
+            ...(requestMetricsRecorder ? { requestMetricsRecorder } : {}),
             ...(wsAdmission ? admissionFields(wsAdmission) : {}),
             inboundProtocol: "responses",
           };
