@@ -125,7 +125,7 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 
 儀表板連線測試與即時模型探索使用有界的 GET-only 傳輸。在沒有對外代理的情況下，opencodex 解析主機名稱一次並僅連接到該已驗證位址。HTTPS 保留原始 Host、SNI 與憑證驗證；供應商設定無法停用憑證檢查。
 
-當 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 適用時，這些操作保留 Bun 的原生 fetch。URL 與字面位址檢查仍會執行，但代理選擇最終路由、DNS 答案與對等端，因此 opencodex 無法 pin 或驗證該對等端。這是明確的安全限制。
+這些操作使用[伺服器設定的對外 fetch](/zh-tw/reference/configuration/server/)。伺服器明確設定的 `socks5://` 或 `socks5h://` 代理使用 OpenCodex 的內建通道；繼承的 SOCKS5 `ALL_PROXY` 在目標不符合 `NO_PROXY` 時也使用該通道。`HTTP_PROXY` 與 `HTTPS_PROXY` 保留 Bun 的原生 HTTP(S) 處理，而非 SOCKS 的 `ALL_PROXY` 不是原生 HTTP fetch 路由。URL 與字面位址檢查仍會執行，但所選代理會決定最終路由、DNS 答案與對等端，因此 opencodex 無法 pin 或驗證該對等端。這是明確的安全限制。
 
 私有／本機目的地需要 `allowPrivateNetwork: true`，且當對外代理活躍時需要相符的 `NO_PROXY` 項目。回送會自動加入；請明確列出每個 LAN 主機，因為 CIDR 項目不被解讀。比對器支援精確主機、網域後綴、可選連接埠、方括號 IPv6 與 `*`；例如，明確列出 `192.168.1.50`。中繼資料與 link-link 目標保持被封鎖。診斷請求拒絕重新導向並回報已剝離憑證的目標。普通供應商請求的重新導向審查與此診斷防護分開。
 

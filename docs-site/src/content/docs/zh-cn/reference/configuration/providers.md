@@ -155,7 +155,7 @@ API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者�
 
 仪表板连接测试和实时模型发现使用受限的、仅 GET 传输。没有出站代理时，opencodex 只会解析一次主机名，并仅连接到该已验证地址。HTTPS 仍会保留原始 Host、SNI 和证书验证；提供者配置不能关闭证书检查。
 
-当 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 生效时，这些操作会继续使用 Bun 的原生 fetch。URL 和字面量地址检查仍会执行，但最终路由、DNS 解析结果和对端由代理决定，因此 opencodex 无法固定或验证该对端。这是一个明确的安全限制。
+这些操作使用[服务器配置的出站 fetch](/zh-cn/reference/configuration/server/)。服务器显式设置的 `socks5://` 或 `socks5h://` 代理使用 OpenCodex 的内置隧道；继承的 SOCKS5 `ALL_PROXY` 在目标不匹配 `NO_PROXY` 时也使用该隧道。`HTTP_PROXY` 和 `HTTPS_PROXY` 保留 Bun 的原生 HTTP(S) 处理，而非 SOCKS 的 `ALL_PROXY` 不是原生 HTTP fetch 路由。URL 和字面量地址检查仍会执行，但所选代理会决定最终路由、DNS 解析结果和对端，因此 opencodex 无法固定或验证该对端。这是一个明确的安全限制。
 
 私有/本地目标需要 `allowPrivateNetwork: true`，并且在出站代理启用时，还需要匹配的 `NO_PROXY` 条目。回环地址会自动加入；每个 LAN 主机都必须显式列出，因为 CIDR 条目不会被解释。匹配器支持精确主机、域后缀、可选端口、带方括号的 IPv6 以及 `*`；例如，应显式列出 `192.168.1.50`。元数据和链路本地目标仍会被阻止。诊断请求会拒绝重定向，并报告一个已剥离凭据的目标。普通提供者请求的重定向审查仍然独立于这个诊断保护。
 

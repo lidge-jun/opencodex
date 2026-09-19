@@ -36,6 +36,8 @@ served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-
 
 Server-configuration credential rows in English and every locale copy distinguish data-plane `apiKeys` from the independent management admin credential and link the matching locale management reference. Credential setup instructions themselves stay in the management reference; the rows only name the separation.
 
+Proxy-format, adapter, and provider documentation distinguishes server-level SOCKS5 configured outbound fetch from scheme-specific HTTP(S) routing, and every locale copy carrying that claim stays aligned. The public pages own the runtime detail rather than duplicating it here.
+
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 

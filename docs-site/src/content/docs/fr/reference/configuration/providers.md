@@ -168,9 +168,7 @@ proxy sortant, opencodex résout le nom d'hôte une seule fois et se connecte ex
 HTTPS conserve l'hôte d'origine, le SNI et la vérification du certificat ; la configuration du fournisseur ne peut pas désactiver
 ces contrôles.
 
-Lorsque `HTTP_PROXY`, `HTTPS_PROXY` ou `ALL_PROXY` s'applique, ces opérations conservent la fonction de récupération native de Bun.
-Les vérifications de l'URL et de l'adresse littérale sont toujours exécutées, mais le proxy choisit la route finale, la réponse DNS et l'homologue ;
-opencodex ne peut donc ni épingler ni vérifier cet homologue. Il s'agit d'une limitation de sécurité explicite.
+Ces opérations utilisent le [fetch sortant configuré du serveur](/fr/reference/configuration/server/). Un proxy `socks5://` ou `socks5h://` explicite au niveau du serveur utilise le tunnel intégré d'OpenCodex ; un `ALL_PROXY` SOCKS5 hérité fait de même lorsque la cible ne correspond pas à `NO_PROXY`. `HTTP_PROXY` et `HTTPS_PROXY` conservent le traitement HTTP(S) natif de Bun, tandis qu'un `ALL_PROXY` non SOCKS n'est pas une route du fetch HTTP natif. Les vérifications de l'URL et de l'adresse littérale sont toujours exécutées, mais le proxy sélectionné choisit la route finale, la réponse DNS et l'homologue ; opencodex ne peut donc ni épingler ni vérifier cet homologue. Il s'agit d'une limitation de sécurité explicite.
 
 Les destinations privées ou locales nécessitent `allowPrivateNetwork: true` et, lorsqu'un proxy sortant est actif,
 une entrée `NO_PROXY` correspondante. Le bouclage est ajouté automatiquement ; indiquez explicitement chaque hôte du réseau local, car

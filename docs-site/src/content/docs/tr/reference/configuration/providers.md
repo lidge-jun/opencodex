@@ -177,9 +177,12 @@ kez çözer ve yalnızca bu doğrulanmış adrese bağlanır. HTTPS orijinal Hos
 ve sertifika doğrulamasını korur; sağlayıcı yapılandırması sertifika
 denetimlerini devre dışı bırakamaz.
 
-`HTTP_PROXY`, `HTTPS_PROXY` veya `ALL_PROXY` geçerli olduğunda bu işlemler
-Bun'ın yerel getirmesini korur. URL ve değişmez adres denetimleri hala çalışır,
-ancak proxy son rotayı, DNS yanıtını ve eşi seçer, bu nedenle opencodex bu eşi
+Bu işlemler [sunucunun yapılandırılmış giden fetch yolunu](/tr/reference/configuration/server/)
+kullanır. Sunucuda açıkça ayarlanan `socks5://` veya `socks5h://` proxy, OpenCodex'in yerleşik
+tünelini kullanır; devralınan SOCKS5 `ALL_PROXY` de hedef `NO_PROXY` ile eşleşmediğinde aynı yolu
+kullanır. `HTTP_PROXY` ve `HTTPS_PROXY`, Bun'ın yerel HTTP(S) işlemesini korur; SOCKS olmayan bir
+`ALL_PROXY` ise yerel HTTP fetch rotası değildir. URL ve değişmez adres denetimleri hâlâ çalışır,
+ancak seçilen proxy son rotayı, DNS yanıtını ve eşi belirler; bu nedenle opencodex bu eşi
 sabitleyemez veya doğrulayamaz. Bu açık bir güvenlik sınırlamasıdır.
 
 Özel/yerel hedefler `allowPrivateNetwork: true` ve giden bir proxy etkin

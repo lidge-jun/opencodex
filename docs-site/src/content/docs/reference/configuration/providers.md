@@ -516,9 +516,13 @@ outbound proxy, opencodex resolves the hostname once and connects only to that v
 HTTPS retains the original Host, SNI, and certificate verification; provider config cannot disable
 certificate checks.
 
-When `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` applies, these operations keep Bun's native fetch.
-URL and literal-address checks still run, but the proxy chooses the final route, DNS answer, and peer,
-so opencodex cannot pin or verify that peer. This is an explicit security limitation.
+These operations use the [server's configured outbound fetch](/reference/configuration/server/).
+An explicit server `socks5://` or `socks5h://` proxy uses OpenCodex's built-in tunnel; an inherited
+SOCKS5 `ALL_PROXY` does the same when `NO_PROXY` does not match. Scheme-specific `HTTP_PROXY` and
+`HTTPS_PROXY` retain Bun's native HTTP(S) handling, while a non-SOCKS `ALL_PROXY` is not a native
+HTTP fetch route. URL and literal-address checks still run, but a selected proxy chooses the final
+route, DNS answer, and peer, so opencodex cannot pin or verify that peer. This is an explicit
+security limitation.
 
 Private/local destinations require `allowPrivateNetwork: true` and, when an outbound proxy is active,
 a matching `NO_PROXY` entry. Loopback is added automatically; list each LAN host explicitly because
