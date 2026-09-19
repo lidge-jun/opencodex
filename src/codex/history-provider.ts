@@ -448,18 +448,25 @@ export function preflightCodexHistoryInjection(
         ? resumeHistory ? "model_provider IN ('openai', 'opencodex')" : "0"
         : "model_provider = 'opencodex'"}
     `).all();
+    // No ORDER BY: a paginated opencodex row can precede a paginated openai one, so the
+    // verdict waits for the full scan instead of standing down on the first paginated row.
+    let foundPaginatedRow = false;
+    let foundPaginatedOpenaiRow = false;
     for (const row of rows) {
       if (paginatedColumn || row.history_mode === "paginated") {
-        // A provider-table transition removes the root openai_base_url. Standing this case
-        // down would leave an openai-tagged thread routed to Codex's built-in OpenAI endpoint.
-        if (providerTableMode && row.model_provider === "openai") {
-          return "history_paginated_openai_requires_native_writer";
+        foundPaginatedRow = true;
+        // A provider-table transition removes the root openai_base_url, and a row already
+        // paginated cannot be relabeled: standing it down would route the openai-tagged
+        // thread to Codex's built-in OpenAI endpoint. A still-legacy row only stands down.
+        if (providerTableMode && row.history_mode === "paginated" && row.model_provider === "openai") {
+          foundPaginatedOpenaiRow = true;
         }
-        return HISTORY_RELABEL_STANDS_DOWN;
+        continue;
       }
       assertLegacyHistoryWritable(row.rollout_path);
     }
-    return null;
+    if (foundPaginatedOpenaiRow) return "history_paginated_openai_requires_native_writer";
+    return foundPaginatedRow ? HISTORY_RELABEL_STANDS_DOWN : null;
   } catch (error) {
     return error instanceof CodexHistoryIntegrityError
       ? error.message
