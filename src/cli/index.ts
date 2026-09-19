@@ -597,11 +597,11 @@ async function handleStart(options: { block?: boolean } = {}) {
       try {
         const { fetchAllModels } = await import("../server/management-api");
         const { desktopVisibleNativeSlugs } = await import("../codex/catalog");
-        const { resolveCodexModelEntitlements } = await import("../codex/model-entitlements");
+        const { resolveAdmittedCodexModelEntitlements } = await import("../codex/model-entitlement-admission");
         const { buildDesktopDiscoveryInputs } = await import("../claude/desktop-discovery-inputs");
         const [models, modelEntitlements] = await Promise.all([
           fetchAllModels(config),
-          resolveCodexModelEntitlements(config, { clientVersion: null }),
+          resolveAdmittedCodexModelEntitlements(config, { clientVersion: null }),
         ]);
         const inputs = buildDesktopDiscoveryInputs({
           config, models, modelEntitlements,

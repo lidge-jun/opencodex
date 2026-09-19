@@ -49,8 +49,8 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
-  resolveCodexModelEntitlements,
 } from "../../codex/model-entitlements";
+import { resolveAdmittedCodexModelEntitlements } from "../../codex/model-entitlement-admission";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import {
   registerCodexWebSocket,
@@ -819,7 +819,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).
-            resolveCodexModelEntitlements(config, { clientVersion: url.searchParams.get("client_version") }),
+            resolveAdmittedCodexModelEntitlements(config, { clientVersion: url.searchParams.get("client_version") }),
           ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {

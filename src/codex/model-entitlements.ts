@@ -13,6 +13,7 @@ import {
   MAIN_CODEX_ACCOUNT_ID,
   type NativeMainRefreshDependencies,
 } from "./main-account";
+import { withNativeMainCredentialAdmission } from "./native-main-admission";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_ASTRA_MODEL,
@@ -452,6 +453,8 @@ export interface CodexEntitlementFreshnessOptions extends Pick<
   | "signal"
 > {
   readonly waitMs?: number;
+  /** Test seam for the native-main admission fence around the refresh workset. */
+  readonly nativeMainCredentialAdmission?: typeof withNativeMainCredentialAdmission;
 }
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
@@ -911,38 +914,49 @@ async function refreshCodexEntitlementWorkset(
   mutationEpoch: number,
   options: CodexEntitlementFreshnessOptions,
 ): Promise<void> {
-  const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
-  const observations = await Promise.all(workset.map(async accountId => {
-    const credential = await credentialSnapshot(accountId, options);
-    return {
-      accountId,
-      credential,
-      absenceObservedAt: options.now ?? Date.now(),
-    };
-  }));
-  const credentials = observations.flatMap(observation => observation.credential
-    ? [observation.credential]
-    : []);
-  if (credentials.length > 0) {
-    await resolveCodexModelEntitlements(config, {
-      ...options,
-      clientVersion,
-      credentialMutationEpoch: mutationEpoch,
-      credentials,
-    });
-  }
+  const run = async (excludedAccountIds: ReadonlySet<string>): Promise<void> => {
+    // An excluded main is filtered before the snapshot phase, not just before the
+    // roster fetch: it never produces an absence observation, so a denied
+    // admission cannot memoize a credential read that never happened.
+    const admittedWorkset = excludedAccountIds.size === 0
+      ? workset
+      : workset.filter(accountId => !excludedAccountIds.has(accountId));
+    const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
+    const observations = await Promise.all(admittedWorkset.map(async accountId => {
+      const credential = await credentialSnapshot(accountId, options);
+      return {
+        accountId,
+        credential,
+        absenceObservedAt: options.now ?? Date.now(),
+      };
+    }));
+    const credentials = observations.flatMap(observation => observation.credential
+      ? [observation.credential]
+      : []);
+    if (credentials.length > 0) {
+      await resolveCodexModelEntitlements(config, {
+        ...options,
+        clientVersion,
+        credentialMutationEpoch: mutationEpoch,
+        credentials,
+      });
+    }
 
-  for (const observation of observations) {
-    if (observation.credential) continue;
-    const capturedIdentity = identityVector.get(observation.accountId) ?? null;
-    if (codexCredentialMutationEpoch() !== mutationEpoch) continue;
-    if ((currentCredentialIdentity(observation.accountId) ?? null) !== capturedIdentity) continue;
-    boundedNegativeCredentialMemoSet(observation.accountId, {
-      credentialIdentity: capturedIdentity,
-      mutationEpoch,
-      expiresAt: observation.absenceObservedAt + MODEL_ROSTER_NEGATIVE_CREDENTIAL_TTL_MS,
-    });
-  }
+    for (const observation of observations) {
+      if (observation.credential) continue;
+      const capturedIdentity = identityVector.get(observation.accountId) ?? null;
+      if (codexCredentialMutationEpoch() !== mutationEpoch) continue;
+      if ((currentCredentialIdentity(observation.accountId) ?? null) !== capturedIdentity) continue;
+      boundedNegativeCredentialMemoSet(observation.accountId, {
+        credentialIdentity: capturedIdentity,
+        mutationEpoch,
+        expiresAt: observation.absenceObservedAt + MODEL_ROSTER_NEGATIVE_CREDENTIAL_TTL_MS,
+      });
+    }
+  };
+  if (!workset.includes(MAIN_CODEX_ACCOUNT_ID)) return run(new Set<string>());
+  const admission = options.nativeMainCredentialAdmission ?? withNativeMainCredentialAdmission;
+  return admission(run);
 }
 
 function waitForEntitlementEnsureFlight(
