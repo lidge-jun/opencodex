@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -89,6 +89,33 @@ describe("spend ledger file journal", () => {
     expect(createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME)).read()).toEqual([]);
   });
 
+  test("a journal whose entry cannot be inspected refuses on every platform", () => {
+    const dir = ownedHome("ocx-spend-journal-stat-fault-");
+    const journalPath = join(dir, SPEND_LEDGER_JOURNAL_FILENAME);
+    const journal = createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME));
+    journal.append(line("alias-one"));
+    const original = readFileSync(journalPath, "utf8");
+    const before = readdirSync(dir).sort();
+
+    // The chmod case above is real but POSIX-only and meaningless as root. This one is the same
+    // contract proved everywhere: only the JOURNAL's own inspection fails, the salt stays
+    // readable, and every other filesystem step is real.
+    for (const code of ["EACCES", "EIO"] as const) {
+      setSpendJournalFaultForTests((step, target) => {
+        if (step !== "stat" || target !== journalPath) return;
+        throw Object.assign(new Error(`injected ${code}`), { code });
+      });
+      expect(() => journal.read()).toThrowError(SpendLedgerOwnerError);
+      expect(() => journal.append(line("alias-two"))).toThrow(/could not be inspected safely/);
+      setSpendJournalFaultForTests(undefined);
+    }
+
+    // Refused, not reset: no truncation, no new entries, and the salt is still mintable.
+    expect(readFileSync(journalPath, "utf8")).toBe(original);
+    expect(readdirSync(dir).sort()).toEqual(before);
+    expect(loadOrCreateSpendLedgerSalt(mintSpendLedgerStorage(SPEND_LEDGER_SALT_FILENAME))).toMatch(/^[0-9a-f]{32,}$/);
+  });
+
   test.skipIf(!posixModes)("a journal that already exists is re-hardened, not trusted", () => {
     const dir = ownedHome("ocx-spend-journal-");
     const path = join(dir, SPEND_LEDGER_JOURNAL_FILENAME);
@@ -166,10 +193,14 @@ describe("spend ledger file journal", () => {
     const original = readFileSync(path, "utf8");
 
     // The entry already exists by the time the write runs, which is the case the exclusive
-    // create exists to make unambiguous: a short write still leaves a file that is ours.
+    // create exists to make unambiguous. A real prefix goes in first, so this is a SHORT write
+    // rather than a failure before any byte landed: the residue that must be cleaned is a file
+    // with content in it.
     setSpendJournalFaultForTests((actual, temp) => {
       if (actual !== "write") return;
       expect(existsSync(temp)).toBe(true);
+      appendFileSync(temp, line("half-written").slice(0, 12), { encoding: "utf8" });
+      expect(readFileSync(temp, "utf8").length).toBeGreaterThan(0);
       throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
     });
     for (let attempt = 0; attempt < 3; attempt += 1) {

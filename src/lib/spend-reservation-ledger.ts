@@ -403,7 +403,7 @@ function hardenLedgerFile(path: string, options: { readonly force?: boolean } = 
  * portable way to make a validate, harden or rename fail on demand. Without a seam the cleanup
  * would ship asserted by reading alone, which is how a failure path stays broken.
  */
-export type SpendJournalFaultStep = "create" | "write" | "validate" | "harden" | "rename";
+export type SpendJournalFaultStep = "stat" | "create" | "write" | "validate" | "harden" | "rename";
 
 let journalFaultForTests: ((step: SpendJournalFaultStep, temp: string) => void) | undefined;
 
@@ -422,6 +422,7 @@ export function setSpendJournalFaultForTests(
  */
 function ledgerEntryExists(path: string): boolean {
   try {
+    journalFaultForTests?.("stat", path);
     lstatSync(path);
     return true;
   } catch (error) {

@@ -78,17 +78,29 @@ test("startServer acquires before serving and final stop releases", async () => 
   expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
 });
 
-test("a partial start that bound public before an auxiliary failure releases ownership", () => {
+/** Bounded wait: the rollback returns the directory on a continuation, not in the throw's turn. */
+async function waitForOwnership(expected: "held" | "unheld"): Promise<void> {
+  for (let turn = 0; turn < 200; turn += 1) {
+    if (spendLedgerOwnerSnapshot().ownership === expected) return;
+    await Bun.sleep(5);
+  }
+  expect(spendLedgerOwnerSnapshot().ownership).toBe(expected);
+}
+
+test("a partial start that bound public before an auxiliary failure releases ownership", async () => {
   const blocker = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("blocked") });
   try {
     const candidate = config();
     candidate.unauthenticatedLoopbackListener = { enabled: true, port: blocker.port };
     saveConfig(candidate);
     expect(() => startServer(0)).toThrow();
-    expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
+    // The rollback stops the listener it already bound BEFORE it gives the directory back, so
+    // ownership returns once that stop settles rather than in the same turn as the throw.
+    // Asserting it synchronously passed only while the rollback discarded the stop promise.
+    await waitForOwnership("unheld");
     const next = acquireSpendLedgerOwner();
     next.release();
   } finally {
-    blocker.stop(true);
+    await blocker.stop(true);
   }
 });
