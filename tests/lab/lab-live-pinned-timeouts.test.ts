@@ -134,11 +134,13 @@ describe("CL-03 pinned live transport failure classification", () => {
       res.end("not really brotli");
     });
 
-    await expect(send(port, { firstByteTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 })).rejects.toMatchObject({
-      name: "TransportError",
-      code: "unreadable_response",
-    });
-    expect(classifyTransportError(new TransportError("unreadable_response", "unreadable"))).toEqual({
+    // Classify the error the sender actually rejected with. Building a second TransportError and
+    // classifying that would pass even if the sender raised something else entirely.
+    const error = await send(port, { firstByteTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 })
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ name: "TransportError", code: "unreadable_response" });
+    expect(classifyTransportError(error)).toEqual({
       classification: "protocol_failure",
       secondaryCode: "unreadable_response",
     });
@@ -150,9 +152,13 @@ describe("CL-03 pinned live transport failure classification", () => {
       res.end("this is not gzip at all");
     });
 
-    await expect(send(port, { firstByteTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 })).rejects.toMatchObject({
-      name: "TransportError",
-      code: "unreadable_response",
+    const error = await send(port, { firstByteTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 })
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ name: "TransportError", code: "unreadable_response" });
+    expect(classifyTransportError(error)).toEqual({
+      classification: "protocol_failure",
+      secondaryCode: "unreadable_response",
     });
   });
 
