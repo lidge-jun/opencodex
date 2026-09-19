@@ -654,4 +654,53 @@ describe("provider outbound default User-Agent", () => {
     expect(response.status).toBe(200);
     expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
   });
+  test("a Headers object without a User-Agent gets the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: new Headers({ authorization: "Bearer test-key" }) },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("an array-form header list without a User-Agent gets the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: [["authorization", "Bearer test-key"]] },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("a Headers object keeps its own User-Agent", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: new Headers({ "user-agent": "vendor-agent/1.0" }) },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("vendor-agent/1.0");
+  });
 });
