@@ -1,10 +1,10 @@
 ---
 title: Intégrations
-description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast et omo depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
+description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI et Factory Droid depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
 L'onglet **Intégrations** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
-puis peut le retirer. Quinze clients fonctionnent ainsi, chacun avec son propre commutateur :
+puis peut le retirer. Seize clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
@@ -23,6 +23,11 @@ puis peut le retirer. Quinze clients fonctionnent ainsi, chacun avec son propre 
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immédiatement à l'enregistrement — Raycast surveille le fichier | aucun — bouclage uniquement |
 | omo | `~/.omo/agent/models.json` | JSON | nouvelles sessions | espace réservé de bouclage |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | après arrêt et redémarrage | bouclage uniquement |
+| Factory Droid | `~/.factory/settings.json` | JSON | nouvelles sessions et actualisation du sélecteur de modèles | aucun — bouclage uniquement |
+
+Factory Droid reçoit une entrée `customModels` par modèle OpenCodex actif via le dialecte
+`generic-chat-completion-api` de Factory. L'intégration ne possède que ses identifiants stables,
+préserve les modèles de l'utilisateur et ne fonctionne qu'en bouclage.
 
 La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. OpenCodex ne possède que le fragment
 `llm-pi-ai.providers.opencodex` : **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne
@@ -207,8 +212,8 @@ ocx mcode
 ```
 
 Une fois l’intégration connectée, `ocx sync` et `POST /api/sync` actualisent les catalogues MCode,
-Pi, Aside, Raycast et omo gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
-Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast et omo.
+Pi, Aside, Raycast, omo et Factory Droid gérés. Le démarrage du proxy actualise aussi le catalogue Raycast géré.
+Les changements de visibilité, de fournisseur ou de préréglage actualisent Pi, Aside, Raycast, omo et Factory Droid.
 Les blocs absents, modifiés par un tiers, non sûrs ou supprimés manuellement restent intacts ;
 réactivez explicitement l’intégration lorsque vous souhaitez la reconnecter.
 

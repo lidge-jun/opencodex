@@ -2890,4 +2890,7 @@ export const ru: Record<TKey, string> = {
   "remote.event.status": "Состояние",
   "remote.event.tool": "Удалённый инструмент",
   "remote.event.error": "Ошибка",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Управляет активными моделями OpenCodex в settings.json Factory Droid. Синхронизация обновляет только записи OpenCodex, отключение удаляет их, а отмена восстанавливает предыдущий файл.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

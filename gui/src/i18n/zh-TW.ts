@@ -2853,4 +2853,7 @@ export const zhTW: Record<TKey, string> = {
   "remote.event.status": "狀態",
   "remote.event.tool": "遠端工具",
   "remote.event.error": "錯誤",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "管理 Factory Droid settings.json 中啟用的 OpenCodex 模型。同步只更新 OpenCodex 項目，停用會移除這些項目，復原會還原先前檔案。",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

@@ -30,8 +30,8 @@ function panelDomId(tab: IntegrationTab): string {
 }
 
 /*
- * The strip carries 18 tabs on one row, which is precisely where a mark earns
- * its place: the eye finds a logo faster than it reads the tenth label. Two
+ * The crowded strip is where a mark earns its place: the eye finds a logo
+ * faster than it reads the tenth label. Two
  * tabs have no client behind them -- `overview` is the page itself and `keys`
  * is a credential surface, not an integration -- so they stay text-only rather
  * than borrowing a mark that would imply a client.
