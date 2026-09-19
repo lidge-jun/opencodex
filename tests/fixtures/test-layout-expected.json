@@ -752,6 +752,7 @@
   "management-client-config-route.test.ts": "server",
   "management-integration-journal-delete.test.ts": "server",
   "management-integration-routes.test.ts": "server",
+  "management-model-roster-gather-race.test.ts": "server",
   "management-model-roster.test.ts": "server",
   "management-origin-tls.test.ts": "server",
   "management-provider-pinsless-validation.test.ts": "server",
