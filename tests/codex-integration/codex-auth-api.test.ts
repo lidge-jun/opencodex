@@ -2100,10 +2100,15 @@ describe("codex-auth API", () => {
 
     const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1");
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
-    const data = await resp!.json() as { accounts: Array<{ id: string; reauthReason?: string }> };
+    const data = await resp!.json() as {
+      accounts: Array<{ id: string; reauthReason?: string; health?: { status: string; reason?: string } }>;
+    };
 
     expect(data.accounts.find(account => account.id === "pool-quota-rejected"))
-      .toMatchObject({ reauthReason: "quota_unauthorized" });
+      .toMatchObject({
+        reauthReason: "quota_unauthorized",
+        health: { status: "reauth_required", reason: "unauthorized" },
+      });
   });
 
   test("pool token refresh rejection reports refresh failure as the reauthentication cause", async () => {
@@ -2113,6 +2118,7 @@ describe("codex-auth API", () => {
       email: "pool-refresh-rejected@example.com",
       expiresAt: Date.now() - 1,
     });
+    setAccountQuotaFromParsed("pool-refresh-rejected", { weeklyPercent: 12 }, captureConfigGeneration());
     const urls: string[] = [];
     globalThis.fetch = (async input => {
       urls.push(String(input));
@@ -2121,11 +2127,52 @@ describe("codex-auth API", () => {
 
     const req = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
-    const data = await resp!.json() as { accounts: Array<{ id: string; reauthReason?: string }> };
+    const data = await resp!.json() as {
+      accounts: Array<{ id: string; needsReauth?: boolean; reauthReason?: string }>;
+    };
 
     expect(urls).toEqual(["https://auth.openai.com/oauth/token"]);
     expect(data.accounts.find(account => account.id === "pool-refresh-rejected"))
       .toMatchObject({ reauthReason: "refresh_failed" });
+
+    // A dead grant stays dead: the cached-quota listing performs no refresh at all, so only
+    // the persisted reauth mark keeps the cause visible instead of flipping back to healthy.
+    const cachedReq = new Request("http://localhost/api/codex-auth/accounts");
+    const cachedResp = await handleCodexAuthAPI(cachedReq, new URL(cachedReq.url), config);
+    const cachedData = await cachedResp!.json() as {
+      accounts: Array<{ id: string; needsReauth?: boolean; reauthReason?: string }>;
+    };
+    expect(urls).toEqual(["https://auth.openai.com/oauth/token"]);
+    expect(cachedData.accounts.find(account => account.id === "pool-refresh-rejected"))
+      .toMatchObject({ needsReauth: true, reauthReason: "refresh_failed" });
+  });
+
+  test("a transient pool token refresh failure does not raise reauthentication", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-refresh-transient",
+      email: "pool-refresh-transient@example.com",
+      expiresAt: Date.now() - 1,
+    });
+    // A token-endpoint 5xx classifies as `unknown`, which the account store treats as
+    // transient: the credential may still be fine, so no reauth cause may surface (#2887).
+    globalThis.fetch = (async () => Response.json({ error: "server_error" }, { status: 500 })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts/refresh", { method: "POST" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as {
+      accounts: Array<{
+        id: string;
+        needsReauth?: boolean;
+        reauthReason?: string;
+        health?: { status: string; reason?: string };
+      }>;
+    };
+
+    const account = data.accounts.find(row => row.id === "pool-refresh-transient");
+    expect(account?.needsReauth).toBe(false);
+    expect(account?.reauthReason).toBeUndefined();
+    expect(account?.health?.status).not.toBe("reauth_required");
   });
 
   test("pool plan refresh batches multiple authoritative changes into one config save", async () => {
@@ -5375,14 +5422,17 @@ describe("codex-auth API", () => {
     if (restart) clearAccountNeedsReauth(accountId);
     const rows = await listCodexAuthAccounts(config, false);
     const authFailed = !replace && (status === 401 || status === 403);
+    // A bare runtime mark only knows the refresh failed; once volatile state is cleared the
+    // stored verdict's own http status names the cause instead.
+    const expectedReason = restart ? (status === 403 ? "forbidden" : "unauthorized") : "refresh_failed";
     const row = rows.find(entry => entry.id === accountId);
     expect(row).toMatchObject({
       needsReauth: authFailed,
-      health: { status: authFailed ? "reauth_required" : "warning", reason: authFailed ? "refresh_failed" : "validation_pending" },
+      health: { status: authFailed ? "reauth_required" : "warning", reason: authFailed ? expectedReason : "validation_pending" },
     });
     // The reason travels with the state, so an operator reading the account surface can tell a
     // failed refresh from a pending validation without inferring it from `health` (#4212).
-    if (authFailed) expect(row).toMatchObject({ reauthReason: "refresh_failed" });
+    if (authFailed) expect(row).toMatchObject({ reauthReason: expectedReason });
     else expect(row).not.toHaveProperty("reauthReason");
     fail = false;
     await refresh();

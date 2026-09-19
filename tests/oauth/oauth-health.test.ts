@@ -166,6 +166,25 @@ describe("projectCodexAccountHealth", () => {
       .toEqual({ status: "healthy" });
   });
 
+  test.each([
+    ["http_status:401", "unauthorized"],
+    ["http_status:403", "forbidden"],
+  ] as const)("a stored verification failure surfaces %s as %s", async (validationError, reason) => {
+    withPoolStoreDir();
+    const { markCodexAccountValidationFailed, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../../src/codex/account-store");
+    const accountId = "pool-stored-" + reason;
+    saveCodexAccountCredential(accountId, {
+      accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, chatgptAccountId: "cg",
+    }, { validationPending: true });
+    markCodexAccountValidationFailed(accountId, validationError, {
+      expectedGeneration: readCodexAccountRecord(accountId)!.generation,
+    });
+
+    expect(projectCodexAccountHealth({ accountId, needsReauth: false }))
+      .toEqual({ status: "reauth_required", reason });
+  });
+
   test("the CLI collector reports the terminal verdict too", async () => {
     withPoolStoreDir();
     const { markCodexAccountValidationFailed, readCodexAccountRecord, saveCodexAccountCredential } =

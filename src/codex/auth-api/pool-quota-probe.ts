@@ -1,4 +1,4 @@
-import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
+import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
 import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
@@ -401,7 +401,13 @@ export async function fetchFreshPoolAccountQuota(
         quotaProbeSkipped: true,
       }, quotaProbeEvidence);
     }
-    if (e instanceof TokenRefreshError) {
+    // Terminal means the grant itself is dead or missing; an `unknown` refresh failure (a
+    // token-endpoint 5xx, a transport blip) may clear, so it reports transient like the
+    // 401-recovery path instead of quarantining a healthy account (#2887). The dead grant is
+    // marked so the next listing still names the cause rather than flipping back to healthy
+    // once this response's quota snapshot is cached.
+    if (isTerminalCodexPoolRefreshFailure(e)) {
+      markAccountNeedsReauth(accountId, captureConfigGeneration(), requestCredentialGeneration);
       return withQuotaProbeEvidence(
         { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: requestCredentialGeneration },
         quotaProbeEvidence,
