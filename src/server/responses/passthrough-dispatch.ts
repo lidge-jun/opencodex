@@ -863,7 +863,7 @@ export async function preparePassthroughExchange(
       recovery: AttemptRecoveryKind,
     ): Promise<Response | { failed: Response }> => {
       const retryAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+        resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
       if (!("passthrough" in retryAdapter) || !retryAdapter.passthrough) {
@@ -989,7 +989,7 @@ export async function preparePassthroughExchange(
       route.provider = replay.provider;
       requestState.selectedForwardHeaders = withClaudeNativeSession(replay.headers, replay.provider, options.claudeNativeSessionId);
       const replayAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
+        resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
       if (!("passthrough" in replayAdapter) || !replayAdapter.passthrough) {
@@ -1110,7 +1110,7 @@ export async function preparePassthroughExchange(
       );
       route.provider = refreshedProvider;
       const refreshedAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+        resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
       if (!("passthrough" in refreshedAdapter) || !refreshedAdapter.passthrough) {

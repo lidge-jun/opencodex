@@ -345,6 +345,13 @@ resolved context window.
 Legacy model maps resolve exact id, then the base before a colon suffix, then case-folded exact id;
 the separately captured explicit capability row remains exact-only. Per-model provenance is assigned
 from the key that wins that same merged lookup, not from an independent source search.
+the separately captured explicit capability row remains exact-only.
+Provider seed/enrichment and request routing consume the same field-level resolver. Persisted config
+still stores operator intent rather than the frozen result; registry-only policy is applied at
+capture/route time and explicit false or empty declarations retain their field-specific meaning.
+
+
+
 
 ## Provider validation ownership
 

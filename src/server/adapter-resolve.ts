@@ -3,6 +3,7 @@ import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
+import type { ResolvedModelPolicy } from "../providers/resolved-model-policy";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -22,7 +23,13 @@ export function resolveWireProtocolOverride(
   modelId: string,
   providerConfig: OcxProviderConfig,
   inbound: InboundWire = "responses",
+  staticPolicy?: ResolvedModelPolicy,
 ): OcxProviderConfig {
+  if (staticPolicy) {
+    return staticPolicy.model.adapter !== providerConfig.adapter
+      ? { ...providerConfig, adapter: staticPolicy.model.adapter }
+      : providerConfig;
+  }
   const pinned = pinnedWireAdapter(providerName, modelId);
   if (pinned && providerConfig.adapter !== pinned) {
     return { ...providerConfig, adapter: pinned };

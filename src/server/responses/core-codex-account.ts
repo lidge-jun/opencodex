@@ -681,7 +681,7 @@ export async function retryCodexPoolOnAlternateAccount(
     "pool",
   );
   const retryAdapter = resolveAdapter(
-    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
+    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire, route.staticPolicy),
     config.cacheRetention,
     route.providerName,
   );

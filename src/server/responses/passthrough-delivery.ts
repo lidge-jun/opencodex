@@ -36,10 +36,6 @@ import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import {
-  providerModelResponsesTerminalRepair,
-  providerModelResponsesUpstreamStreaming,
-} from "../../providers/registry";
-import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
   createPassthroughWebSearchBridgeStream,
@@ -361,11 +357,7 @@ export async function deliverPassthroughResponse(
       // before relay starts. Waiting for SSE completion would retain request state across the whole
       // stream; a later body failure does not undo that this destination accepted and served the turn.
       commitReasoningReplayServingRoute(nativeExchange.request.headers);
-      const terminalRepairPolicy = providerModelResponsesTerminalRepair(
-        route.providerName,
-        route.provider,
-        route.modelId,
-      );
+      const terminalRepairPolicy = route.staticPolicy.model.responsesTerminalRepair;
       // #3761: opt-in hosted-web-search bridge. Codex always declares the hosted web_search tool,
       // and this branch relays that declaration on the assumption the destination executes it.
       // A KEY-auth gateway that does not (Ollama Cloud GLM) answers with a function_call named
@@ -830,7 +822,7 @@ export async function deliverPassthroughResponse(
       // stream that never closes. Non-streaming clients keep the plain JSON.
       if (clientRequestedStream === true
         && options.inboundTransport !== "websocket"
-        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+        && route.staticPolicy.model.responsesUpstreamStreaming === false
         && route.provider.adapter === "openai-responses") {
         let completed: Record<string, unknown> | undefined;
         try {
@@ -877,7 +869,7 @@ export async function deliverPassthroughResponse(
       // WS turns reframe this JSON into events in the bridge, which is the
       // other relay-free path — normalize ids so both bounded-JSON paths agree.
       const outboundJson = options.inboundTransport === "websocket"
-        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+        && route.staticPolicy.model.responsesUpstreamStreaming === false
         && hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)
         ? (() => {
           try {
