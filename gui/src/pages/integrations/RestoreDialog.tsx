@@ -148,8 +148,9 @@ export default function RestoreDialog({
   }, [apiBase, onClose, onReconcile, row.opId, scopedProfileId, t]);
 
   useEffect(() => {
-    void loadPreview();
+    const timeout = window.setTimeout(() => { void loadPreview(); }, 0);
     return () => {
+      window.clearTimeout(timeout);
       previewGenerationRef.current += 1;
       previewAbortRef.current?.abort();
       previewAbortRef.current = null;
