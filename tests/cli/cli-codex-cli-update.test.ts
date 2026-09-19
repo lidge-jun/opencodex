@@ -415,7 +415,7 @@ describe("Codex CLI update plan and apply grammar", () => {
         applicable: false, refusal: "not_managed", planId: null,
         provenance: "app-bundle", managed: false, installedVersion: null,
         versionEvidence: "unavailable", location: null,
-        targetVersion: null, targetIntegrity: null, shimEligible: false,
+        targetVersion: null, targetIntegrity: null,
         session: { state: "not-evaluated", matches: null }, command: null,
       }),
     });
@@ -432,7 +432,7 @@ describe("Codex CLI update plan and apply grammar", () => {
         return {
           schemaVersion: 1, status: "refused", refusal: "plan_stale", planId: null,
           targetVersion: null, installedVersionBefore: null, installedVersionAfter: null,
-          installerExitCode: null, shim: { attempted: false, restored: false, status: null },
+          installerExitCode: null,
         };
       },
     });
@@ -445,7 +445,7 @@ describe("Codex CLI update plan and apply grammar", () => {
       applyPlan: async () => ({
         schemaVersion: 1, status: "applied", refusal: null, planId: PLAN_ID,
         targetVersion: "1.1.0", installedVersionBefore: "1.0.0", installedVersionAfter: "1.1.0",
-        installerExitCode: 0, shim: { attempted: false, restored: false, status: null },
+        installerExitCode: 0,
       }),
     });
     expect(code).toBe(0);

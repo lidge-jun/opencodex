@@ -84,8 +84,6 @@ export interface CodexCliUpdatePlan {
   readonly location: string | null;
   readonly targetVersion: string | null;
   readonly targetIntegrity: string | null;
-  /** True when the pre-update shim was `matched`, i.e. this install owns a live shim. */
-  readonly shimEligible: boolean;
   readonly session: CodexCliUpdateSession;
   /** Indicative install argv for the operator to read before approving; apply actually runs `npm pack`, verifies the bound sha512, and installs the verified tarball. */
   readonly command: readonly string[] | null;
@@ -94,7 +92,6 @@ export interface CodexCliUpdatePlan {
 export type CodexCliUpdateApplyStatus =
   | "applied"
   | "not_applied"
-  | "applied_shim_repair_required"
   | "ambiguous"
   | "refused";
 
@@ -110,7 +107,6 @@ export interface CodexCliUpdateApplyResult {
   readonly installedVersionAfter: string | null;
   /** Evidence only. The readback classifies the outcome; the exit code never does. */
   readonly installerExitCode: number | null;
-  readonly shim: Readonly<{ attempted: boolean; restored: boolean; status: string | null }>;
 }
 
 export interface CodexCliUpdateInstallerResult {
@@ -118,10 +114,6 @@ export interface CodexCliUpdateInstallerResult {
   readonly exitCode: number | null;
   /** True when the fetched artifact's sha512 did not match the plan-bound integrity. */
   readonly integrityMismatch?: boolean;
-}
-
-export interface CodexCliUpdateShimRestoreResult {
-  readonly status: string;
 }
 
 export interface CodexCliUpdatePlanDeps {
@@ -136,7 +128,6 @@ export interface CodexCliUpdatePlanDeps {
 
 export interface CodexCliUpdateApplyDeps extends CodexCliUpdatePlanDeps {
   readonly runInstaller?: (version: string, expectedIntegrity: string | null) => CodexCliUpdateInstallerResult;
-  readonly restoreShim?: () => Promise<CodexCliUpdateShimRestoreResult>;
 }
 
 const PLAN_ID_LENGTH = 32;
@@ -156,7 +147,7 @@ export function codexCliUpdateCommand(version: string): readonly string[] {
  * Session blockers are deliberately absent: a session that starts or ends between dry-run
  * and apply must not invalidate an otherwise identical plan, and it is re-read at apply
  * time where it can only ever refuse. Everything else — ownership, installed version,
- * location, resolved target, integrity, shim eligibility — is bound, so any drift produces
+ * location, resolved target, integrity — is bound, so any drift produces
  * a different id and `apply` refuses instead of installing something the operator did not
  * read.
  */
@@ -168,7 +159,6 @@ export function codexCliUpdatePlanId(bound: {
   readonly channel: CodexCliUpdateChannel;
   readonly targetVersion: string;
   readonly targetIntegrity: string;
-  readonly shimEligible: boolean;
 }): string {
   // Ordered pairs, not object key order: the digest must not depend on how a caller
   // happened to build the record.
@@ -182,7 +172,6 @@ export function codexCliUpdatePlanId(bound: {
     ["channel", bound.channel],
     ["targetVersion", bound.targetVersion],
     ["targetIntegrity", bound.targetIntegrity],
-    ["shimEligible", bound.shimEligible ? "1" : "0"],
   ];
   const hash = createHash("sha256");
   for (const [key, value] of fields) hash.update(`${key}=${value}\n`);
@@ -290,14 +279,6 @@ function defaultRunInstaller(version: string, expectedIntegrity: string | null):
   }
 }
 
-async function defaultRestoreShim(): Promise<CodexCliUpdateShimRestoreResult> {
-  // Imported lazily: the plan engine stays a pure module that tests can drive without
-  // pulling in the shim state store and the config directory graph.
-  const { autoRestoreCodexShim } = await import("./shim");
-  const result = autoRestoreCodexShim({ enabled: () => true });
-  return Object.freeze({ status: result.status });
-}
-
 function refusedPlan(
   refusal: CodexCliUpdateRefusal,
   report: CodexCliInstallReport,
@@ -319,7 +300,6 @@ function refusedPlan(
     location: report.location,
     targetVersion: target?.kind === "resolved" ? target.version : null,
     targetIntegrity: target?.kind === "resolved" ? target.integrity : null,
-    shimEligible: report.shim.status === "matched",
     session,
     command: null,
   });
@@ -392,7 +372,6 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("blocked_active_session", report, channel, target, Object.freeze({ state: "active" as const, matches }));
   }
 
-  const shimEligible = report.shim.status === "matched";
   return Object.freeze({
     schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
     package: CODEX_CLI_PACKAGE,
@@ -407,7 +386,6 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
       channel,
       targetVersion: target.version,
       targetIntegrity: target.integrity,
-      shimEligible,
     }),
     provenance: report.provenance,
     managed: report.managed,
@@ -416,7 +394,6 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     location: report.location,
     targetVersion: target.version,
     targetIntegrity: target.integrity,
-    shimEligible,
     session: Object.freeze({ state: "none" as const, matches: 0 }),
     command: codexCliUpdateCommand(target.version),
   });
@@ -435,7 +412,6 @@ function refusedApply(
     installedVersionBefore: plan?.installedVersion ?? null,
     installedVersionAfter: null,
     installerExitCode: null,
-    shim: Object.freeze({ attempted: false, restored: false, status: null }),
   });
 }
 
@@ -457,8 +433,8 @@ export async function applyCodexCliUpdatePlan(
   if (!plan.applicable || !plan.planId || !plan.targetVersion || !plan.installedVersion) {
     return refusedApply(plan.refusal ?? "plan_unknown", plan);
   }
-  // Any drift in ownership, installed version, location, target or shim eligibility
-  // changes the id. Refuse rather than regenerate: the operator would otherwise approve
+  // Any drift in ownership, installed version, location or target changes the id.
+  // Refuse rather than regenerate: the operator would otherwise approve
   // one plan and install another.
   if (plan.planId !== planId) return refusedApply("plan_stale", plan);
 
@@ -482,10 +458,7 @@ export async function applyCodexCliUpdatePlan(
     ? readback.packageVersion
     : null;
 
-  const result = (
-    status: CodexCliUpdateApplyStatus,
-    shim: { attempted: boolean; restored: boolean; status: string | null },
-  ): CodexCliUpdateApplyResult => Object.freeze({
+  const result = (status: CodexCliUpdateApplyStatus): CodexCliUpdateApplyResult => Object.freeze({
     schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
     status,
     refusal: null,
@@ -494,32 +467,17 @@ export async function applyCodexCliUpdatePlan(
     installedVersionBefore: before,
     installedVersionAfter: after,
     installerExitCode: installer.exitCode,
-    shim: Object.freeze({ ...shim }),
   });
 
-  const noShim = { attempted: false, restored: false, status: null };
   if (after !== targetVersion) {
     // A failed readback, an unchanged version and a third version are all reported
     // as-is. None of them is retried, and none of them is rolled back.
-    if (after !== null && after === before) return result("not_applied", noShim);
-    return result("ambiguous", noShim);
+    if (after !== null && after === before) return result("not_applied");
+    return result("ambiguous");
   }
 
-  // The shim is touched only when this installation owned a matched shim before the
-  // update and npm replaced it. A shim that was never tracked stays untracked.
-  if (!plan.shimEligible || readback?.shim.status === "matched") {
-    return result("applied", noShim);
-  }
-  let restore: CodexCliUpdateShimRestoreResult;
-  try {
-    restore = await (deps.restoreShim ?? defaultRestoreShim)();
-  } catch {
-    restore = Object.freeze({ status: "failed" });
-  }
-  const restored = restore.status === "restored" || restore.status === "healthy";
-  return result(restored ? "applied" : "applied_shim_repair_required", {
-    attempted: true,
-    restored,
-    status: restore.status,
-  });
+  // A matched shim never reaches this point: the inspector reports a shim-owned
+  // candidate as standalone-unverified and the plan refuses `not_managed`, so an
+  // applied update never owned a shim npm could have replaced.
+  return result("applied");
 }
