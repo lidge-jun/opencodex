@@ -419,6 +419,65 @@ describe("bounded parallel first pass (WP170)", () => {
     expect(g.stats().peak).toBe(IMAGE_NORMALIZE_CONCURRENCY);
   });
 
+  test("a pre-aborted request rejects before any decode starts", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("client disconnected"));
+    let encodeCalls = 0;
+    await expect(normalizeAnthropicImages(
+      [userMsg([imageBlock(fakePngBase64(2100, 1500, 8192))])],
+      {
+        abortSignal: controller.signal,
+        encode: async () => {
+          encodeCalls++;
+          return { data: "unexpected", mediaType: "image/webp" };
+        },
+      },
+    )).rejects.toThrow("client disconnected");
+    expect(encodeCalls).toBe(0);
+  });
+
+  test("a request cancelled between dequeue and decode-start never begins decoding", async () => {
+    // Admission removes the waiter's abort listener, so an abort landing after the
+    // gate hands over a slot is only caught by the re-check before processAt. The
+    // blocker request parks every slot; the queued request is aborted from the
+    // blocker's replace callback — after admission, before its continuation runs.
+    const g = gatedEncoder();
+    const controller = new AbortController();
+    const images = distinctImages(IMAGE_NORMALIZE_CONCURRENCY + 1);
+    const blockerTargets: NormalizeTarget[] = images.slice(0, IMAGE_NORMALIZE_CONCURRENCY).map(b64 => ({
+      base64: b64,
+      mediaType: "image/png",
+      replace: () => controller.abort(new Error("client disconnected")),
+      drop: () => {},
+    }));
+    let queuedEncodes = 0;
+    const queuedTargets: NormalizeTarget[] = [{
+      base64: images[IMAGE_NORMALIZE_CONCURRENCY],
+      mediaType: "image/png",
+      replace: () => {},
+      drop: () => {},
+    }];
+
+    const blocker = normalizeImageTargets(blockerTargets, { encode: g.encode });
+    await g.waitForArrivals(IMAGE_NORMALIZE_CONCURRENCY);
+    const queued = normalizeImageTargets(queuedTargets, {
+      encode: async () => {
+        queuedEncodes++;
+        return { data: "unexpected", mediaType: "image/webp" };
+      },
+      abortSignal: controller.signal,
+    });
+    // Let the queued request's worker reach the decode queue before the gate releases.
+    await Bun.sleep(10);
+    g.release();
+    await blocker;
+    // Construct .rejects only once queued has settled: an unawaited .rejects on a
+    // still-pending promise starves the event loop (Bun busy-waits the assertion),
+    // so Bun.sleep/g.release() would never run — a deadlock, not an assertion failure.
+    await expect(queued).rejects.toThrow("client disconnected");
+    expect(queuedEncodes).toBe(0);
+  });
+
   test("a thrown target callback rejects the call, settles in-flight work, and stops new pulls", async () => {
     // processAt swallows encode/validate throws into {kind:"failed"} (its own catch),
     // so the production escape hatch is a throwing target callback (drop/replace).

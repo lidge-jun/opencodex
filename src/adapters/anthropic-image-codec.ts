@@ -52,6 +52,8 @@ const PASSTHROUGH_MEDIA = new Set(["image/jpeg", "image/png", "image/gif", "imag
 export interface NormalizeOptions {
   /** Shift every image's starting ladder position down (413 retry tightening; 030). */
   tierBias?: number;
+  /** Cancels queued native decode work and stops pulling more images. */
+  abortSignal?: AbortSignal;
   /** Test seam: replaces the Bun.Image encode path (audit round 1, blocker 6). */
   encode?: EncodeFn;
   /** Test seam: replaces the pass-through decode validation (C-gate round 1, blocker 1). */
