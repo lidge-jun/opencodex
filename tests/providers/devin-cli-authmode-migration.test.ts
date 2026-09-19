@@ -25,7 +25,7 @@ describe("devin-cli retired-adapter migration", () => {
     expect(p.warnings.join(" ")).toContain("devin-cli -> devin");
   });
 
-  test("leaves a custom-named ACP row disabled pending explicit authentication", () => {
+  test("leaves a custom-named ACP row unchanged pending explicit authentication", () => {
     const config = {
       providers: {
         "devin-acp": { adapter: "devin-cli", baseUrl: "https://cli.devin.ai" },
@@ -37,7 +37,8 @@ describe("devin-cli retired-adapter migration", () => {
       adapter: "devin-cli",
       baseUrl: "https://cli.devin.ai",
     });
-    expect(p.warnings.join(" ")).toContain('left custom provider "devin-acp" disabled');
+    expect(p.warnings.join(" ")).toContain('left custom provider "devin-acp" unchanged');
+    expect(p.warnings.join(" ")).toContain("not migrated");
     expect(p.warnings.join(" ")).toContain("configure Devin authentication explicitly");
   });
 

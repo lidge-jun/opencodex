@@ -57,8 +57,9 @@ export function projectDevinCliAuthMode(config: OcxConfig): DevinCliAuthModeProj
     if (!row || row.adapter !== RETIRED_ACP_ADAPTER) continue;
     if (name !== RETIRED_ACP_ADAPTER) {
       warnings.push(
-        `left custom provider "${name}" disabled because adapter ${RETIRED_ACP_ADAPTER} was removed: `
-        + "choose adapter devin and configure Devin authentication explicitly before using this provider.",
+        `left custom provider "${name}" unchanged because adapter ${RETIRED_ACP_ADAPTER} was removed: `
+        + "the row was not migrated; switch its adapter to devin and configure Devin authentication "
+        + "explicitly before using this provider.",
       );
       continue;
     }
