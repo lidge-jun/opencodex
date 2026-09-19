@@ -30,6 +30,8 @@ const USAGE = `Usage:
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]
+  ocx agent dictation <status|set> [--default <target|->] [--by-model <json|->]
+      [--providers <json|->] [--list] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -213,6 +215,65 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`${section} sidecar settings updated.`]);
 }
 
+function parseDictationObject(raw: string | undefined): Record<string, unknown> | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "-") return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new CliUsageError("expected a JSON object or -", USAGE); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new CliUsageError("expected a JSON object or -", USAGE);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function dictation(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const action = (args.shift() ?? "status").toLowerCase();
+  const wantsJson = takeFlag(args, "--json");
+  const wantsList = takeFlag(args, "--list");
+  if (wantsList) {
+    if (action !== "status" && action !== "set") throw new CliUsageError(`unknown dictation action ${action}`, USAGE);
+    rejectArgs(args, USAGE);
+    const settings = await runtimeRequest("/api/dictation-settings", {}, deps) as { models?: string[] };
+    const models = settings.models ?? [];
+    printData(models, wantsJson, models.length === 0 ? ["no available models"] : models);
+    return;
+  }
+  if (action === "status") {
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest("/api/dictation-settings", {}, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action !== "set") throw new CliUsageError(`unknown dictation action ${action}`, USAGE);
+  const defaultTarget = clearable(takeOption(args, "--default"));
+  const byModel = parseDictationObject(takeOption(args, "--by-model"));
+  const providers = parseDictationObject(takeOption(args, "--providers"));
+  rejectArgs(args, USAGE);
+  if (defaultTarget === undefined && byModel === undefined && providers === undefined) {
+    throw new CliUsageError("at least one dictation option is required", USAGE);
+  }
+  // PUT replaces the whole block, so merge onto the server's current value: a partial
+  // `set --default` must not silently drop an existing byModel map or provider table.
+  const current = await runtimeRequest("/api/dictation-settings", {}, deps) as { dictation?: Record<string, unknown> };
+  const merged: Record<string, unknown> = { ...(current.dictation ?? {}) };
+  if (defaultTarget !== undefined) {
+    if (defaultTarget === null) delete merged.default;
+    else merged.default = defaultTarget;
+  }
+  if (byModel !== undefined) {
+    if (byModel === null) delete merged.byModel;
+    else merged.byModel = byModel;
+  }
+  if (providers !== undefined) {
+    if (providers === null) delete merged.providers;
+    else merged.providers = providers;
+  }
+  const result = await runtimeRequest("/api/dictation-settings", { method: "PUT", body: JSON.stringify({ dictation: merged }) }, deps);
+  printData(result, wantsJson, ["Dictation settings updated."]);
+}
+
 export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const [sub = "status", ...rest] = argv;
@@ -222,6 +283,7 @@ export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = 
     else if (sub === "subagents" || sub === "roster") await subagents(rest, deps);
     else if (sub === "fallback") await fallback(rest, deps);
     else if (sub === "sidecar") await sidecar(rest, deps);
+    else if (sub === "dictation") await dictation(rest, deps);
     // Lives here rather than as a top-level verb because it is an agent-behavior feature flag:
     // it controls whether default mode may ask the operator a question mid-task.
     else if (sub === "request-user-input") {

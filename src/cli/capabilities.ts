@@ -877,6 +877,27 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
     details: ["A bare invocation reads and never writes."],
   },
+  {
+    command: ["agent", "dictation"],
+    summary: "Show or set the per-model dictation backend and its custom WebSocket providers.",
+    routes: [
+      { method: "GET", path: "/api/dictation-settings" },
+      { method: "PUT", path: "/api/dictation-settings" },
+    ],
+    flags: [
+      { name: "--default", value: "string", summary: "Default backend target (openai or a configured provider); \"-\" clears it." },
+      { name: "--by-model", value: "string", summary: "JSON object mapping provider/model ids to backend targets; \"-\" clears it." },
+      { name: "--providers", value: "string", summary: "JSON object of custom backend definitions; \"-\" clears them." },
+      { name: "--list", value: "boolean", summary: "List currently-available model ids." },
+      { name: "--json", value: "boolean", summary: "Emit the settings as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Targets are \"openai\" (the existing ChatGPT dictation stream) or a key in providers.",
+      "Custom providers are WebSocket endpoints speaking the same frame protocol; frames relay verbatim.",
+    ],
+  },
 ];
 
 /** Capabilities that drive `route`, for `ocx capabilities --route`. */

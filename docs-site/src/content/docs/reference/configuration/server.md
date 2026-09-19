@@ -676,6 +676,27 @@ Remote `https:` images and failed or empty descriptions are not cached.
 Anthropic OAuth sidecars reuse opencodex's existing Claude Code OAuth fingerprint. Soak-test the
 intended account and workload.
 
+### `dictation` (`OcxDictationConfig`)
+
+Selects the backend for Codex dictation on `/v1/audio/transcriptions/stream`. The default
+`openai` target keeps the historical ChatGPT dictation stream unchanged.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `default?` | `string` | `openai` | Backend for a model with no `byModel` entry: `openai` or a key in `providers`. |
+| `byModel?` | `Record<string, string>` | `{}` | Per active `provider/model` override (for example `zai/glm-5.3-flash`). |
+| `providers?` | `Record<string, object>` | `{}` | Custom backends: `url` (`ws://` or `wss://`), optional `headers` whose values may each be a whole `${ENV_VAR}` reference resolved from the environment, and optional `protocols`. |
+
+A custom provider is any WebSocket endpoint that speaks the **same frame protocol** Codex already
+uses with ChatGPT dictation (`session.start`, `audio.append`, `session.close` inbound;
+`transcript.*` outbound). opencodex relays frames verbatim and never resolves a ChatGPT account for
+a custom target, so no Codex login is required there. `openai` is always the reserved built-in
+stream and is never treated as a provider key, even when a provider is named `openai`.
+
+The active model is resolved for the thread from the request log using the `thread-id` and
+`x-codex-parent-thread-id` upgrade headers; when no lookup succeeds, `default` applies. Invalid
+`dictation` values are rejected on write by `ocx config` and by `PUT /api/dictation-settings`.
+
 ## Remote Hub keys and defaults
 
 `runtimeRole` defaults to `standalone`. A hub uses `hub.managementPublicOrigin`, loopback-only `hub.managementIngress` (`enabled:false` when absent), and exact `remoteGui.allowedTailscaleUsers` (empty when absent). A client data key lives in `service-api-token`, never `config.json`; rotation may temporarily create `service-api-token.prev`. Usage stores are not mirrored.

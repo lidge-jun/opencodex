@@ -928,8 +928,30 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 
+### `ocx agent dictation`
+
+Show or set the per-model dictation backend and its custom WebSocket providers.
+
+| Method | Route |
+|---|---|
+| GET | `/api/dictation-settings` |
+| PUT | `/api/dictation-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--default` | string | Default backend target (openai or a configured provider); "-" clears it. |
+| `--by-model` | string | JSON object mapping provider/model ids to backend targets; "-" clears it. |
+| `--providers` | string | JSON object of custom backend definitions; "-" clears them. |
+| `--list` | boolean | List currently-available model ids. |
+| `--json` | boolean | Emit the settings as JSON. |
+
+JSON mode: `payload`.
+
+- Targets are "openai" (the existing ChatGPT dictation stream) or a key in providers.
+- Custom providers are WebSocket endpoints speaking the same frame protocol; frames relay verbatim.
+
 ## Counts
 
-- declared capabilities: 50
-- of those, state-changing: 25
+- declared capabilities: 51
+- of those, state-changing: 26
 - head-resolved invocations: 2
