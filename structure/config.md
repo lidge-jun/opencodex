@@ -312,8 +312,10 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 `src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
 contract. It preserves each field's existing rule rather than assigning one global priority:
 operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key,
-selected hard caps use the lower positive value, restriction lists form a stable union, and hard
-wire pins precede valid operator overrides and registry wire defaults. Its output is recursively
+restriction lists form a stable union, and hard wire pins precede valid operator overrides and
+registry wire defaults. Only the canonical `openai-apikey` provider merges
+`modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value; other
+providers use ordinary operator-per-key fill. Its output is recursively
 frozen and carries field/model provenance. It never persists resolved policy and excludes API keys,
 account selection, quota, health, cooldowns, discovered availability, and request-owned evidence.
 Observed context/input/output values are combined only in a call-local projection that can narrow a
@@ -323,6 +325,9 @@ The resolver's model id is the post-alias, post-virtual-rewrite wire identity. A
 an empty declaration is non-authoritative and falls through. OAuth/key override admission remains a
 live caller decision: the resolver accepts only its credential-free effective auth mode and records
 that provenance, never the key, reference, or usability evidence that produced it.
+Canonical static catalogs force live discovery off, narrowly recognized generated reasoning shapes
+are repaired before freezing, key-auth service-tier defaults apply only to a captured key
+authority, and a model max-input value is bounded by its resolved context window.
 
 ## Provider validation ownership
 

@@ -8,6 +8,7 @@ import { resolveOpenAiVirtualModel } from "../../src/providers/openai-virtual-mo
 import { routedProviderConfig } from "../../src/router";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
+import { captureFastPolicyAuthority } from "../../src/providers/service-tier";
 import {
   clampObservedModelLimits,
   resolveModelPolicy,
@@ -473,6 +474,191 @@ describe("resolved static model policy parity", () => {
     expect(first.model.inputModalities).not.toBe(second.model.inputModalities);
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(second)).toBe(true);
+  });
+
+  test("stale direct-effort budget classification matches current route repair", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "alibaba-token-plan")!;
+    const directModel = entry.directReasoningEffortModels![0]!;
+    const configured = provider({
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+      authMode: entry.authKind,
+      thinkingBudgetModels: [directModel, ...(entry.thinkingBudgetModels ?? [])],
+    });
+    const current = routedProviderConfig(entry.id, configured);
+    const policy = resolveModelPolicy({
+      providerName: entry.id, modelId: directModel, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    });
+    expect(policy.provider.thinkingBudgetModels).toEqual(current.thinkingBudgetModels);
+    expect(policy.provider.modelReasoningEfforts?.[directModel]).toEqual(current.modelReasoningEfforts?.[directModel]);
+    expect(policy.provider.modelDefaultReasoningEfforts?.[directModel]).toEqual(current.modelDefaultReasoningEfforts?.[directModel]);
+    expect(policy.provider.modelReasoningEffortMap?.[directModel]).toEqual(current.modelReasoningEffortMap?.[directModel]);
+  });
+
+  test.each(["cline-pass", "mimo-free"])("%s stale live discovery matches static route authority", id => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id)!;
+    const configured = provider({ adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: entry.authKind, liveModels: true });
+    const current = routedProviderConfig(id, configured);
+    const policy = resolveModelPolicy({
+      providerName: id, modelId: entry.defaultModel ?? MODEL, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+      effectiveAuth: { authMode: current.authMode! },
+    });
+    expect(policy.provider.liveModels).toBe(current.liveModels);
+    expect(policy.provider.liveModels).toBe(false);
+  });
+
+  test("historical ClinePass ladder matches current route repair", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "cline-pass")!;
+    const configured = provider({
+      adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: entry.authKind,
+      reasoningWireFormat: "gateway-object", reasoningEfforts: ["low"],
+    });
+    const current = routedProviderConfig(entry.id, configured);
+    const policy = resolveModelPolicy({
+      providerName: entry.id, modelId: entry.defaultModel!, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    });
+    expect(policy.provider.reasoningEfforts).toEqual(current.reasoningEfforts);
+  });
+
+  test("Anthropic numeric-family context matches current catalog fallback", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => (
+      candidate.adapter === "anthropic" && Object.keys(candidate.modelContextWindows ?? {}).length > 0
+    ))!;
+    const family = Object.keys(entry.modelContextWindows!)[0]!;
+    const pointRelease = `${family}-20260919`;
+    const configured = provider({
+      adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: entry.authKind,
+      modelContextWindows: { ...entry.modelContextWindows },
+    });
+    const current = applyProviderConfigHints(entry.id, configured, { provider: entry.id, id: pointRelease });
+    const policy = resolveModelPolicy({
+      providerName: entry.id, modelId: pointRelease, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    });
+    expect(policy.model.contextWindow).toBe(current.contextWindow);
+  });
+
+  test("resolved max input never exceeds the resolved context", () => {
+    const configured = provider({ modelContextWindows: { [MODEL]: 70_000 }, modelMaxInputTokens: { [MODEL]: 90_000 } });
+    const policy = resolveModelPolicy({
+      providerName: "custom", modelId: MODEL,
+      provider: configured,
+      transportMatchedRegistry: false,
+    });
+    const current = applyProviderConfigHints("custom", configured, { provider: "custom", id: MODEL });
+    expect(policy.model.maxInputTokens).toBe(current.maxInputTokens);
+    expect(policy.model).toMatchObject({ contextWindow: 70_000, maxInputTokens: 70_000 });
+    expect(clampObservedModelLimits(policy.model, { maxInputTokens: 80_000 }))
+      .toMatchObject({ contextWindow: 70_000, maxInputTokens: 70_000 });
+  });
+
+  test("override URL rejection and template fallback match current routing", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.allowBaseUrlOverride === true)!;
+    const configured = provider({ adapter: entry.adapter, baseUrl: "{unresolved}", authMode: entry.authKind });
+    expect(() => routedProviderConfig(entry.id, configured)).toThrow(/Invalid baseUrl/);
+    expect(() => resolveModelPolicy({
+      providerName: entry.id, modelId: entry.defaultModel ?? MODEL, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    })).toThrow(/Invalid baseUrl/);
+    const template = registry({ baseUrl: "https://{region}.invalid/v1", allowBaseUrlOverride: false });
+    const fallback = resolveModelPolicy({
+      providerName: template.id, modelId: MODEL,
+      provider: provider({ baseUrl: "{unresolved}" }), registryEntry: template, transportMatchedRegistry: true,
+    });
+    expect(fallback.provider.baseUrl).toBe(template.baseUrl);
+    expect(fallback.provenance.provider.baseUrl).toBe("registry");
+  });
+
+  test("captured key-auth service-tier overlay matches current authority and preserves false", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.keyAuthServiceTier !== undefined)!;
+    const modelId = Object.keys(entry.keyAuthServiceTier?.modelSupportsServiceTier ?? entry.modelSupportsServiceTier ?? {})[0] ?? MODEL;
+    const keyConfigured = provider({ adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: "key" });
+    const keyAuthority = captureFastPolicyAuthority(entry.id, keyConfigured, true);
+    const keyPolicy = resolveModelPolicy({
+      providerName: entry.id, modelId, provider: keyConfigured,
+      registryEntry: entry, transportMatchedRegistry: true, effectiveAuth: { authMode: "key" },
+    });
+    const oauthPolicy = resolveModelPolicy({
+      providerName: entry.id, modelId,
+      provider: provider({ adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: "oauth" }),
+      registryEntry: entry, transportMatchedRegistry: true, effectiveAuth: { authMode: "oauth" },
+    });
+    expect(keyPolicy.provider.supportsServiceTier).toBe(keyAuthority.capability.provider);
+    expect(keyPolicy.provider.supportsServiceTier).not.toBe(oauthPolicy.provider.supportsServiceTier);
+    const configured = provider({
+      adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: "key",
+      supportsServiceTier: false, chatServiceTier: false,
+      modelSupportsServiceTier: { [modelId]: false },
+    });
+    const authority = captureFastPolicyAuthority(entry.id, configured, true);
+    const policy = resolveModelPolicy({
+      providerName: entry.id, modelId, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true, effectiveAuth: { authMode: "key" },
+    });
+    expect(policy.provider.supportsServiceTier).toBe(authority.capability.provider);
+    expect(policy.provider.chatServiceTier).toBe(authority.capability.chatServiceTier);
+    expect(policy.model.supportsServiceTier).toBe(authority.capability.models[modelId]);
+    expect(policy.model.supportsServiceTier).toBe(false);
+  });
+
+  test("provider default output fallback and provenance match current route", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.defaultMaxOutputTokens !== undefined)!;
+    const configured = provider({ adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: entry.authKind });
+    const current = routedProviderConfig(entry.id, configured);
+    const policy = resolveModelPolicy({
+      providerName: entry.id, modelId: entry.defaultModel ?? MODEL, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    });
+    expect(policy.model.maxOutputTokens).toBe(current.defaultMaxOutputTokens);
+    expect(policy.provenance.model.maxOutputTokens).toBe("registry");
+  });
+
+  test("lower-cap merge is scoped to the canonical API-key provider", () => {
+    const apiEntry = PROVIDER_REGISTRY.find(candidate => candidate.id === "openai-apikey")!;
+    const apiModel = Object.keys(apiEntry.modelMaxInputTokens ?? {})[0]!;
+    const apiConfigured = provider({
+      adapter: apiEntry.adapter, baseUrl: apiEntry.baseUrl, authMode: apiEntry.authKind,
+      modelContextWindows: { [apiModel]: apiEntry.modelContextWindows![apiModel]! + 1_000 },
+      modelMaxInputTokens: { [apiModel]: apiEntry.modelMaxInputTokens![apiModel]! + 1_000 },
+    });
+    const apiCurrent = routedProviderConfig(apiEntry.id, apiConfigured);
+    const api = resolveModelPolicy({
+      providerName: apiEntry.id, modelId: apiModel, provider: apiConfigured,
+      registryEntry: apiEntry, transportMatchedRegistry: true,
+    });
+    expect(api.model.contextWindow).toBe(apiCurrent.modelContextWindows?.[apiModel]);
+    expect(api.model.maxInputTokens).toBe(apiCurrent.modelMaxInputTokens?.[apiModel]);
+    const entry = PROVIDER_REGISTRY.find(candidate => (
+      candidate.id !== "openai-apikey" && Object.keys(candidate.modelContextWindows ?? {}).length > 0
+    ))!;
+    const modelId = Object.keys(entry.modelContextWindows!)[0]!;
+    const configured = provider({
+      adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: entry.authKind,
+      modelContextWindows: { [modelId]: entry.modelContextWindows![modelId]! + 1_000 },
+    });
+    const ordinaryCurrent = routedProviderConfig(entry.id, configured);
+    const ordinary = resolveModelPolicy({
+      providerName: entry.id, modelId, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    });
+    expect(ordinary.model.contextWindow).toBe(ordinaryCurrent.modelContextWindows?.[modelId]);
+  });
+
+  test("selected base URL carries operator provenance", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.allowBaseUrlOverride === true)!;
+    const configured = provider({
+      adapter: entry.adapter, baseUrl: "https://operator.invalid/v1", authMode: entry.authKind,
+    });
+    const current = routedProviderConfig(entry.id, configured);
+    const policy = resolveModelPolicy({
+      providerName: entry.id, modelId: MODEL, provider: configured,
+      registryEntry: entry, transportMatchedRegistry: true,
+    });
+    expect(policy.provider.baseUrl).toBe(current.baseUrl);
+    expect(policy.provenance.provider.baseUrl).toBe("operator");
   });
 
   test("result is detached, recursively frozen, and excludes mutable request evidence", () => {
