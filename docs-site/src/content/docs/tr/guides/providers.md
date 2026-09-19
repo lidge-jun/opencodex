@@ -155,7 +155,7 @@ bir `lossy` göstergesini, sınırlı bir belirsiz karşılaştırma sayısını
 taşır. Araç ve özellik adları, yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Politika
 yoksa veya `compatible` ise dönüşüm reddedilmeden gözlemlenir. `reject-lossy` altında, ilk derleme
 kayıplıysa veya sınırlı karşılaştırmanın sonucu belirsizse gönderimden önce reddedilir; reddedilen
-istek için ayrı bir kayıp kaydı yayınlanmaz ve politika hatası aynı sınırlı olguları taşır.
+istek için ayrı bir kayıp kaydı yayınlanmaz.
 `reject-lossy` altında, kısıtları kaldıracak bir Vertex veya Cloud Code Assist onarımı
 aynı şekilde içeriksiz bir `google-tool-schema-repair` kaydı üretir ve değiştirilmiş gönderim yapmadan
 özgün 400 yanıtını döndürür; politika yoksa veya `compatible` ise onarılan istek daha önce olduğu gibi

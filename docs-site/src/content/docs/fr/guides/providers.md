@@ -143,8 +143,7 @@ comparaisons indéterminées, des catégories de perte fixes avec des compteurs 
 propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
 absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. Sous `reject-lossy`,
 une compilation initialement avec perte ou dont la comparaison bornée est indéterminée est refusée
-avant l’envoi ; aucun enregistrement de perte distinct n’est émis pour la requête refusée, et l’erreur
-de politique porte les mêmes faits bornés. Sous `reject-lossy`, une
+avant l’envoi ; aucun enregistrement de perte distinct n’est émis pour la requête refusée. Sous `reject-lossy`, une
 réparation Vertex ou Cloud Code Assist qui supprimerait des contraintes émet un enregistrement
 `google-tool-schema-repair` également sans contenu et renvoie le 400 d’origine sans nouvel envoi ;
 avec une politique absente ou `compatible`, la requête réparée est rejouée comme auparavant. AI Studio direct ne tente jamais cette réparation. Les schémas

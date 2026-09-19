@@ -219,8 +219,7 @@ carrying only the report version, endpoint class, a `lossy` indicator, a bounded
 fixed loss categories with bounded counts, and a truncation flag. Tool and property names, paths, values, and schema text are
 never included. With an omitted or `compatible` policy, this diagnostic observes the existing
 conversion without rejecting it. Under `reject-lossy`, an initially lossy or comparison-indeterminate
-compilation is refused before dispatch; no separate loss record is emitted for the refused request,
-and the policy error carries the same bounded facts. Under
+compilation is refused before dispatch; no separate loss record is emitted for the refused request. Under
 `reject-lossy`, a Vertex or Cloud Code Assist repair that would erase constraints emits a similarly
 content-free `google-tool-schema-repair` record and returns the original 400 without a changed send;
 with an omitted or `compatible` policy, the repaired request is replayed as before. Direct AI
