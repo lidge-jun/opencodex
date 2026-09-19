@@ -23,10 +23,10 @@ export function acquireOwnedSpendHome(): () => void {
   return () => {
     if (released) return;
     released = true;
+    // A rollback or close failure is a real defect in the thing under test, so it is allowed to
+    // fail the case. Swallowing it would leave a green run over a lease that never let go.
     try {
       lease.release();
-    } catch {
-      /* a failed release must not mask the case's own result */
     } finally {
       resetSharedSpendLedgerForTest();
     }
