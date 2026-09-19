@@ -1302,9 +1302,15 @@ describe("integration previews are reads", () => {
      * hardest to notice: after the request captured its input and before the guard runs under the
      * lock. A check that re-read the roster at that moment would validate the new one and write
      * the old, which is the failure this ordering exists to make impossible.
+     *
+     * The replacement has to be a different roster. Reloading the same rows publishes nothing an
+     * operator could see, and a confirmation is not stale because an unrelated read rebuilt the
+     * list it was already holding.
      */
     const lockSeams: IntegrationWriterLockSeams = {
-      writeFile: async () => { await loadExportModels(config, []); },
+      writeFile: async () => {
+        await loadExportModels(config, [{ id: "published-under-the-lock", provider: "a" }]);
+      },
       removeFile: async () => {},
       now: () => 0,
       delay: async () => {},
@@ -1323,6 +1329,36 @@ describe("integration previews are reads", () => {
     // The race has to leave the store alone too: a snapshot or journal row written before the
     // guard refused would be invisible to a target-bytes check.
     expect(storeContentWitness(storeRoot)).toBe(storeBefore);
+  });
+
+  test("a roster rebuilt unchanged while the lock is taken is not a replacement", async () => {
+    const configPath = installDsh();
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+
+    const preview = await previewApi("/api/client-integrations/preview", { clientId: "dsh", operation: "apply" });
+    const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+    expect(plan.canApply).toBe(true);
+
+    // The Integrations collection performs an ordinary load on every visit, and one can land in
+    // this window. It rebuilds the same rows, so the confirmation an operator is submitting still
+    // describes what they were shown, and refusing it would be a conflict they cannot act on.
+    const lockSeams: IntegrationWriterLockSeams = {
+      writeFile: async () => { await loadExportModels(config, []); },
+      removeFile: async () => {},
+      now: () => 0,
+      delay: async () => {},
+      pid: 12,
+    };
+    setIntegrationMutationFlightTestHooks({ store, lockSeams });
+
+    const commit = await api("/api/client-integrations/dsh", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply", planFingerprint: plan.fingerprint }),
+    });
+    expect(commit.status).toBe(200);
+    expect(existsSync(configPath)).toBe(true);
   });
 
   test("a previewed undo commits with its binding", async () => {
