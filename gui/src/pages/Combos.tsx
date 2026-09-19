@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ComboWorkspace from "../components/ComboWorkspace";
+import { comboVisionSidecarTargets } from "../combo-capabilities";
 import {
   type ComboItem,
   comboModelId,
@@ -280,7 +281,14 @@ export default function Combos({
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(toPutBody(item, renameFrom ? { renameFrom } : {})),
+        body: JSON.stringify(toPutBody(item, {
+          ...(renameFrom ? { renameFrom } : {}),
+          // Enabling images declares text-only members for the Vision Sidecar so the
+          // operator never has to hand-edit provider config for a multimodal combo.
+          ...(item.imageInput !== "disabled"
+            ? { visionSidecarTargets: comboVisionSidecarTargets(item.targets, models) }
+            : {}),
+        })),
       });
       const data = res.ok
         ? await res.json() as unknown

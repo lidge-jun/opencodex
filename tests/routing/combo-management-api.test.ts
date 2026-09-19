@@ -427,6 +427,71 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT visionSidecarTargets declares exact members text-only and never persists the request field", async () => {
+    await withTempHome(async () => {
+      const base = baseConfig();
+      const config = baseConfig({
+        providers: {
+          ...base.providers,
+          b: {
+            ...base.providers.b!,
+            modelCapabilities: { m2: { contextTier: "long_context" } },
+          },
+        },
+        combos: undefined,
+      });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        visionSidecarTargets: [
+          { provider: "b", model: "m2" },
+          { provider: "b", model: "m2" }, // exact duplicates are deduplicated
+        ],
+        combo: {
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+        },
+      });
+      expect(response?.status).toBe(200);
+      // Exact text-only declaration added; the sibling capability axis survives.
+      expect(config.providers?.b?.modelCapabilities).toEqual({
+        m2: { contextTier: "long_context", inputModalities: ["text"] },
+      });
+      // Untouched member provider gains no declaration.
+      expect(config.providers?.a?.modelCapabilities).toBeUndefined();
+      // Request-only field never leaks into the persisted combo.
+      expect(config.combos?.mixed).not.toHaveProperty("visionSidecarTargets");
+    });
+  });
+
+  test("PUT rejects invalid visionSidecarTargets without mutating config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+      const bodies: unknown[] = [
+        { id: "x", visionSidecarTargets: "nope", combo: VALID_COMBO },
+        { id: "x", visionSidecarTargets: [{ provider: "a" }], combo: VALID_COMBO },
+        // Not a target of the submitted combo.
+        { id: "x", visionSidecarTargets: [{ provider: "c", model: "m3" }], combo: VALID_COMBO },
+        // Enrollment only makes sense while images are accepted.
+        {
+          id: "x",
+          visionSidecarTargets: [{ provider: "a", model: "m1" }],
+          combo: { targets: [{ provider: "a", model: "m1" }], imageInput: "disabled" },
+        },
+      ];
+      for (const body of bodies) {
+        const response = await comboApi(config, "PUT", "/api/combos", body);
+        expect(response?.status).toBe(400);
+      }
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+      expect(config.providers?.a?.modelCapabilities).toBeUndefined();
+    });
+  });
+
   test("reasoningEffortMode survives a management round-trip and stays sparse when strict", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });
