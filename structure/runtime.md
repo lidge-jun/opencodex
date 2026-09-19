@@ -400,7 +400,7 @@ Account quota surfaces use [safe probe diagnostics](transports/inventory.md#acco
 
 Translated Chat request construction uses the [inline-image budget](transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
 
-OpenCode catalog discovery in `src/cli/opencode.ts` uses the local admin credential and a validated numeric-loopback management origin. It dials through `src/server/direct-local-http.ts`, rejects redirects and preserves the request/body deadline. Hub ingress selection stays separate from exported inference settings.
+OpenCode catalog discovery in `src/cli/opencode.ts` derives a catalog-only bearer from the local admin credential and uses a validated numeric-loopback management origin. `src/server/management-auth.ts` accepts that derived bearer only for the exact `GET /api/models` read, so a spoofed listener cannot capture reusable administrator authority; that read can still finalize a pending initial model selection, so the bearer is catalog-scoped rather than strictly read-only. The launcher dials through `src/server/direct-local-http.ts`, rejects redirects and preserves the request/body deadline. Hub ingress selection stays separate from exported inference settings.
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture. Vision dispatch consumes those declarations together with registry/vendor metadata before any image-bearing upstream send.
 
