@@ -74,30 +74,39 @@ describe("resolved static policy consumers", () => {
     expect(parsed._openAiVirtualSelectedModelId).toBe(resolution.selectedModelId);
   });
 
-  test("OpenAI API gather capture and catalog rows retain lower configured limits", async () => {
+  test("OpenAI API gather capture and catalog rows apply positive context and input caps", async () => {
     const modelId = "gpt-6-astra";
-    const captured = captureProviderGather("openai-apikey", {
-      adapter: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      authMode: "key",
-      apiKey: "test-key",
-      liveModels: false,
-      models: [modelId],
-      modelContextWindows: { [modelId]: 200_000 },
-      modelMaxOutputTokens: { [modelId]: 8_000 },
-    }, refreshingModelsAuthResolver);
-
-    const { models } = await fetchProviderModelsWithAuth(captured, 0, undefined, refreshingModelsAuthResolver);
-    const row = models.find(model => model.id === modelId);
-    const limits = [
-      ["contextWindow", captured.provider.modelContextWindows?.[modelId], row?.contextWindow, 200_000],
-      ["maxOutputTokens", captured.provider.modelMaxOutputTokens?.[modelId], row?.maxOutputTokens, 8_000],
+    const cases = [
+      { name: "below", configuredContext: 200_000, configuredInput: 150_000, expectedContext: 200_000, expectedInput: 150_000 },
+      { name: "above", configuredContext: 1_100_000, configuredInput: 950_000, expectedContext: 1_050_000, expectedInput: 922_000 },
     ] as const;
-    for (const [field, capturedValue, emittedValue, expected] of limits) {
-      expect({ field, capturedValue, emittedValue }).toEqual({
-        field,
-        capturedValue: expected,
-        emittedValue: expected,
+
+    for (const limits of cases) {
+      const captured = captureProviderGather("openai-apikey", {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authMode: "key",
+        apiKey: "test-key",
+        liveModels: false,
+        models: [modelId],
+        modelContextWindows: { [modelId]: limits.configuredContext },
+        modelMaxInputTokens: { [modelId]: limits.configuredInput },
+      }, refreshingModelsAuthResolver);
+      const { models } = await fetchProviderModelsWithAuth(captured, 0, undefined, refreshingModelsAuthResolver);
+      const row = models.find(model => model.id === modelId);
+
+      expect({
+        name: limits.name,
+        capturedContext: captured.provider.modelContextWindows?.[modelId],
+        capturedInput: captured.provider.modelMaxInputTokens?.[modelId],
+        emittedContext: row?.contextWindow,
+        emittedInput: row?.maxInputTokens,
+      }).toEqual({
+        name: limits.name,
+        capturedContext: limits.expectedContext,
+        capturedInput: limits.expectedInput,
+        emittedContext: limits.expectedContext,
+        emittedInput: limits.expectedInput,
       });
     }
   });
