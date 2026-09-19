@@ -133,6 +133,26 @@ function fixture(configName = "opencodex", includePool = true): Fixture {
   return { root, codexHome, configDir, key, manager };
 }
 
+/**
+ * The same fixture with its own state directory, for a successor launched while the owner still
+ * listens.
+ *
+ * These cases deliberately overlap two live proxies to prove the contended, admission-denied,
+ * hard-kill and takeover sequence. They cannot share one OPENCODEX_HOME: the spend journal
+ * allows one writer per state directory, so the successor would be refused before it ever bound
+ * and the case would report a startup failure instead of the transition it is about. CODEX_HOME
+ * is unchanged, and the native-main lock, recovery journal and vault all derive from that, so
+ * every assertion in these cases still observes the same shared native state.
+ */
+function successorConfig(f: Fixture, configName: string, includePool: boolean): Fixture {
+  const configDir = join(f.root, configName);
+  const parentConfigDir = process.env.OPENCODEX_HOME;
+  writeConfig(f.codexHome, configDir, MAIN_CODEX_ACCOUNT_ID, includePool);
+  if (parentConfigDir === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = parentConfigDir;
+  return { ...f, configDir };
+}
+
 // Each wait bounds a real child proxy doing real work: spawning Bun, opening the
 // owner SQLite database, and acquiring or releasing the lease. On the Windows
 // shards four Bun pools share one runner, so the fixed 10s bounds were reporting
@@ -465,7 +485,7 @@ describe("native-main process owner lease", () => {
     const target = await f.manager.finishStage(stage.stageId, stage.writerToken, "target");
     expect(source.profile.state).toBe("active");
 
-    const successorFixture = { ...f };
+    const successorFixture = successorConfig(f, "crash-a-successor", false);
     const owner = new ChildHarness(f, { NATIVE_OWNER_HOLD_SWITCH_BOUNDARY: "auth-replaced" });
     let successor: ChildHarness | undefined;
     try {
@@ -532,7 +552,7 @@ describe("native-main process owner lease", () => {
       expect(readFileSync(tempPath, "utf8")).toContain("access-target");
       expect(probeNativeProfileRecoveryState(f.manager.context)).toBe("journal");
 
-      successor = new ChildHarness(f, { NATIVE_OWNER_HOLD_RECOVERY: "1" });
+      successor = new ChildHarness(successorConfig(f, "temp-crash-successor", false), { NATIVE_OWNER_HOLD_RECOVERY: "1" });
       await successor.waitFor(event => event.event === "listening");
       await successor.snapshot(isContended);
       await owner.hardKill();
