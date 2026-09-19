@@ -12,7 +12,9 @@ import {
 } from "../../integrations/aside-profile-journal";
 import type { AsideOperation } from "../../integrations/aside-profile-journal";
 import type { WriteRefused } from "../../integrations/writer";
+import type { IntegrationWriteInput } from "../../integrations/writer";
 import type { IntegrationMutationPlan, IntegrationPlanOperation } from "../../integrations/mutation-plan";
+import { previewIntegration } from "../../integrations/mutation-plan";
 import { previewExportModels, previewExportSnapshot } from "./model-rows";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -53,15 +55,22 @@ function asideBinding(
  * happen before any writer lock is taken, so a check under that lock would fire after the thing it
  * was meant to prevent.
  */
+/**
+ * The check a bound Aside change runs, against the input that change is about to write from.
+ *
+ * It plans the prepared input it is given rather than building one of its own. Rebuilding meant
+ * reading the live configuration a second time, so a configuration edited to something else and
+ * back again while this action was in flight produced a check that agreed with a plan the write
+ * never described.
+ */
 function asideGuardFor(
-  boundInput: AsideProfilesInput,
   profileIdValue: number,
   binding: { operation: IntegrationPlanOperation; fingerprint: string },
   request: { opId?: string; confirmDrift?: boolean; resolved?: AsideOperation },
   capture: { plan: IntegrationMutationPlan | null },
-): () => Promise<AsideProfileWriteOutcome | null> {
-  return async () => {
-    const plan = await previewAsideProfile(boundInput, {
+): (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> {
+  return async prepared => {
+    const plan = previewIntegration(prepared, {
       profileId: profileIdValue,
       operation: binding.operation,
       ...(request.opId === undefined ? {} : { opId: request.opId }),
@@ -266,7 +275,7 @@ export async function handleAsideProfileRoutes(
     const binding = asideBinding(body, expected);
     const capture: { plan: IntegrationMutationPlan | null } = { plan: null };
     let mutationInput = options.input();
-    let revalidate: (() => Promise<AsideProfileWriteOutcome | null>) | undefined;
+    let revalidate: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
     if (binding !== null && id !== undefined) {
       const roster = previewExportModels(ctx.config);
       if (roster === null) {
@@ -277,7 +286,7 @@ export async function handleAsideProfileRoutes(
       }
       // One roster for the guard and the mutation, so they cannot disagree by construction.
       mutationInput = { ...mutationInput, models: roster };
-      revalidate = asideGuardFor(mutationInput, id, binding, {}, capture);
+      revalidate = asideGuardFor(id, binding, {}, capture);
     }
     const batch = await mutateAsideProfiles(
       mutationInput,
@@ -354,7 +363,7 @@ export async function asideRestoreResponse(
     const restoreBinding = asideBinding(body, "restore");
     const capture: { plan: IntegrationMutationPlan | null } = { plan: null };
     let restoreInput = input;
-    let revalidate: (() => Promise<AsideProfileWriteOutcome | null>) | undefined;
+    let revalidate: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
     if (restoreBinding !== null) {
       const roster = previewExportModels(ctx.config);
       if (roster === null) {
@@ -364,7 +373,7 @@ export async function asideRestoreResponse(
         }, 409, ctx.req, ctx.config);
       }
       restoreInput = { ...restoreInput, models: roster };
-      revalidate = asideGuardFor(restoreInput, operation.profileId, restoreBinding, {
+      revalidate = asideGuardFor(operation.profileId, restoreBinding, {
         opId: body.opId,
         confirmDrift: body.confirmDrift === true,
         resolved: operation,

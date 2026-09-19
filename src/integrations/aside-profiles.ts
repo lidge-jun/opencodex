@@ -8,6 +8,7 @@ import { readIntegrationState, type IntegrationState, type IntegrationStatus } f
 import {
   applyIntegrationCoordinated, disableIntegrationCoordinated,
   overwriteIntegrationCoordinated, refreshIntegrationCoordinated,
+  type IntegrationWriteInput,
 } from "./writer";
 import {
   asideProfileEnabled, asideProfileFailure, asideProfileScope, asideWriteInput,
@@ -148,12 +149,26 @@ export async function getAsideProfileState(input: AsideProfilesInput, id: number
 export function mutateAsideProfiles(
   input: AsideProfilesInput,
   change: { enabled: boolean; profileId?: number; overwriteConflict?: boolean },
-  options?: { revalidate?: () => Promise<AsideProfileWriteOutcome | null> },
+  options?: { revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> },
 ): Promise<AsideProfileMutationResult> {
   return runAsideProfileAction<AsideProfileMutationResult>(input, change.profileId, `${change.enabled ? "enable" : "disable"}:${Boolean(change.overwriteConflict)}`, async (ctx, profiles) => {
     const refused = new Map<number, AsideProfileWriteOutcome>();
     for (const profile of profiles) {
       try { asideProfileScope(ctx, profile); }
+      catch (error) { refused.set(profile.id, asideProfileFailure(profile.id, error)); }
+    }
+    /*
+     * The input each profile will be written from, prepared before the check and handed to it.
+     *
+     * A check that built its own view from the live configuration was answering about a different
+     * input than the one that would be written: the context copies the configuration when it is
+     * created, so live could be edited to something else and then back again while this action was
+     * in flight, and a check reading live would agree with a plan this write never described.
+     */
+    const prepared = new Map<number, IntegrationWriteInput>();
+    for (const profile of profiles) {
+      if (refused.has(profile.id)) continue;
+      try { prepared.set(profile.id, await asideWriteInput(ctx, asideProfileScope(ctx, profile))); }
       catch (error) { refused.set(profile.id, asideProfileFailure(profile.id, error)); }
     }
     /*
@@ -163,17 +178,30 @@ export function mutateAsideProfiles(
      * that waited for the lock would fire after the thing it was meant to prevent. Profile and
      * path selection is frozen by this point, which is everything the check needs.
      */
-    const stale = await options?.revalidate?.();
-    if (stale) {
-      return {
-        ok: false,
-        clientId: "aside",
-        changed: false,
-        state: "conflict",
-        message: "that confirmation no longer describes this profile",
-        results: [stale],
-        result: stale,
-      };
+    if (options?.revalidate) {
+      const guarded = change.profileId === undefined
+        ? [...prepared.values()][0]
+        : prepared.get(change.profileId);
+      // Nothing prepared is nothing to check and nothing to write; refusing keeps a binding from
+      // being dropped on the way to a write that would then be unchecked.
+      const stale = guarded === undefined
+        ? {
+          ok: false as const, reason: "unsafe" as const, state: "conflict" as const, clientId: "aside" as const,
+          message: "that profile cannot be prepared for this change",
+          ...(change.profileId === undefined ? {} : { profileId: change.profileId }),
+        }
+        : await options.revalidate(guarded);
+      if (stale) {
+        return {
+          ok: false,
+          clientId: "aside",
+          changed: false,
+          state: "conflict",
+          message: "that confirmation no longer describes this profile",
+          results: [stale],
+          result: stale,
+        };
+      }
     }
     // This await precedes model loading, writer preflight, snapshots and all client writes.
     await persistAsidePolicy(ctx, change);
@@ -182,8 +210,8 @@ export function mutateAsideProfiles(
       const refusal = refused.get(profile.id);
       if (refusal) { results.push(refusal); continue; }
       try {
-        const scope = asideProfileScope(ctx, profile);
-        const bound = await asideWriteInput(ctx, scope);
+        const bound = prepared.get(profile.id);
+        if (bound === undefined) throw new AsideProfileErrorClass("aside_profile_unsafe", 409, "Aside profile was not prepared for this change");
         const operation = !change.enabled ? disableIntegrationCoordinated
           : change.overwriteConflict ? overwriteIntegrationCoordinated : applyIntegrationCoordinated;
         results.push({ ...await operation(bound, { lockSeams: input.lockSeams }), profileId: profile.id });

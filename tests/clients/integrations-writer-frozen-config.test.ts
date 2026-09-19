@@ -6,7 +6,8 @@ import type { ExportModel } from "../../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegrationCoordinated } from "../../src/integrations/writer";
-import { mutateAsideProfiles } from "../../src/integrations/aside-profiles";
+import { mutateAsideProfiles, previewAsideProfile } from "../../src/integrations/aside-profiles";
+import { previewIntegration } from "../../src/integrations/mutation-plan";
 import { loadExportModels, previewExportModels, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -264,4 +265,102 @@ test("a committed Aside change retires the roster, and an ordinary load brings i
   // Recovery is the ordinary flow rather than a special step.
   await loadExportModels(config, []);
   expect(previewExportModels(config)).not.toBeNull();
+});
+
+function seedAsideProfile(): string {
+  mkdirSync(join(home, ".aside", "u", "0"), { recursive: true });
+  writeFileSync(join(home, ".aside", "accounts.json"), JSON.stringify({
+    currentAccountId: 0, accounts: [{ id: 0, name: "Primary" }],
+  }));
+  const profilePath = join(home, ".aside", "u", "0", "models.json");
+  writeFileSync(profilePath, JSON.stringify({ theme: "keep", providers: { personal: { models: [] } } }));
+  return profilePath;
+}
+
+function asideFixtureConfig(hostname: string): OcxConfig {
+  return {
+    port: 10100,
+    hostname,
+    defaultProvider: "fixture",
+    providers: { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", liveModels: false, models: ["one", "two"] } },
+  } as unknown as OcxConfig;
+}
+
+/**
+ * The check has to be about the input that will be written, not about whatever the live
+ * configuration says at the moment it runs.
+ *
+ * A configuration can be edited to something else and back again while an action is in flight. A
+ * check that rebuilt its own view from the live object would then plan the configuration the
+ * operator confirmed, agree with the confirmation, and let the write proceed from the copy the
+ * action actually holds, which is the other one.
+ */
+test("the Aside check plans the prepared input, not the configuration that is live when it runs", async () => {
+  const profilePath = seedAsideProfile();
+  const before = readFileSync(profilePath, "utf8");
+  const config = asideFixtureConfig(CHECKED_HOST);
+  const asideInput = { config, models: MODELS, port: 10100, env: {} as NodeJS.ProcessEnv, home, store, persistConfig: () => {} };
+
+  // A: what the operator confirmed.
+  const confirmed = await previewAsideProfile(asideInput, { profileId: 0, operation: "apply" });
+  expect(confirmed.canApply).toBe(true);
+
+  // B: what the action will hold, because the context copies the configuration when it is created.
+  config.hostname = LATER_HOST;
+
+  const checked: string[] = [];
+  const result = await mutateAsideProfiles(
+    asideInput,
+    { profileId: 0, enabled: true },
+    {
+      revalidate: async prepared => {
+        // Live is A again by the time the check runs. Only the prepared input still says B.
+        config.hostname = CHECKED_HOST;
+        const plan = previewIntegration(prepared, { profileId: 0, operation: "apply" });
+        checked.push(plan.fingerprint);
+        return plan.fingerprint === confirmed.fingerprint ? null : {
+          ok: false, reason: "conflict", state: plan.state, clientId: "aside",
+          message: "that confirmation no longer describes this profile", profileId: 0,
+        };
+      },
+    },
+  );
+
+  expect(checked).toHaveLength(1);
+  expect(checked[0]).not.toBe(confirmed.fingerprint);
+  expect(result.ok).toBe(false);
+  // Refused before the preference write and before any client write.
+  expect(config.asideProfileSync).toBeUndefined();
+  expect(readFileSync(profilePath, "utf8")).toBe(before);
+});
+
+/**
+ * The roster is resolved and copied once, before the check.
+ *
+ * It used to be resolved lazily at each profile write, which happens after the preference write. A
+ * caller still holding those model objects could edit them in that window, and the document
+ * carried the edit while the plan vouched for what it read earlier.
+ */
+test("a roster edited during the preference write is not the roster written", async () => {
+  const profilePath = seedAsideProfile();
+  const config = asideFixtureConfig(CHECKED_HOST);
+  const models: ExportModel[] = [
+    { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000 },
+  ];
+
+  const result = await mutateAsideProfiles(
+    {
+      config, models, port: 10100, env: {} as NodeJS.ProcessEnv, home, store,
+      persistConfig: () => {
+        models[0]!.id = "edited-during-the-preference-write";
+        models[0]!.namespaced = "anthropic/edited-during-the-preference-write";
+      },
+    },
+    { profileId: 0, enabled: true },
+  );
+
+  expect(result.ok).toBe(true);
+  const written = readFileSync(profilePath, "utf8");
+  expect(written).toContain("claude-opus-4-8");
+  expect(written).not.toContain("edited-during-the-preference-write");
 });

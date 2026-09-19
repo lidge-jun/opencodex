@@ -177,7 +177,7 @@ export function restoreAsideProfile(
      */
     selectedOperation?: AsideOperation;
   },
-  options?: { revalidate?: () => Promise<AsideProfileWriteOutcome | null> },
+  options?: { revalidate?: (prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null> },
 ): Promise<AsideProfileWriteOutcome> {
   return runAsideProfileAction<AsideProfileWriteOutcome>(input, request.profileId, `restore:${request.opId}:${Boolean(request.confirmDrift)}`, async ctx => {
     const row = request.selectedOperation ?? requiredOperation(ctx, request.opId, request.profileId);
@@ -204,7 +204,9 @@ export function restoreAsideProfile(
      * checked under the writer lock would already have rewritten the user's preference and their
      * history by the time it was consulted.
      */
-    const stale = await options?.revalidate?.();
+    // The input this restore will actually write from, so the check cannot be answering about a
+    // view it rebuilt from the live configuration while the write uses this one.
+    const stale = await options?.revalidate?.(bound);
     if (stale) return stale;
     await persistAsidePolicy(ctx, { profileId: profile.id, enabled: snapshotWasOwned(row.entry, restoredText, bound) });
     try {

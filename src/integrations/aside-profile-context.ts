@@ -3,6 +3,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { ClientPathError, type ExportModel } from "../clients/config-export";
 import { assertAsideProfileBoundary, guardAsideProfileIO, listAsideProfiles, type AsideProfile } from "../clients/aside-profiles";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
+import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
 import { type IntegrationIO } from "./config-io";
 import type { JournalEntry } from "./journal";
@@ -161,7 +162,20 @@ export function createAsideProfileContext(input: AsideProfilesInput): AsideProfi
   return {
     input: { ...input, env: { ...(input.env ?? process.env) } }, profiles, rootStore, legacyProfileId, scopes: new Map(),
     defaultEnabled: input.config.asideProfileSync?.allProfiles ?? Boolean(matched),
-    models: () => loaded ??= Promise.resolve().then(() => typeof input.models === "function" ? input.models() : input.models),
+    /*
+     * Resolved once and copied, so every profile in one action writes the same roster and a
+     * caller editing the model objects it passed cannot change what a checked plan described.
+     * The copy is taken here rather than at each write because the check reads it too.
+     */
+    models: () => loaded ??= Promise.resolve()
+      .then(() => typeof input.models === "function" ? input.models() : input.models)
+      .then(rows => {
+        const copied = copyPlainData([...rows]);
+        if (!copied.ok) {
+          throw new AsideProfileError("aside_profiles_unavailable", 409, "The model roster could not be captured for this change");
+        }
+        return copied.value;
+      }),
     boundConfig,
   };
 }
