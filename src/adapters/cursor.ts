@@ -264,7 +264,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               ...(_parsed._providerContinuation?.cursor ?? {}),
               conversationId: activeRequest.conversationId,
               // A tool-suspended checkpoint is only usable by the immediate trailing-toolResult
-              // continuation; the request-builder guard keys on checkpointUsable=false for that.
+              // continuation; the request-builder guard keys on this checkpointUsable=false and
+              // the snapshot's persisted toolSuspended flag for that.
               checkpointUsable: !toolSuspendedCommit,
               checkpointRef,
             },
