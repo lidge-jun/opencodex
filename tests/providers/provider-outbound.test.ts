@@ -633,7 +633,7 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
 });
 
 describe("effectiveProxyFor picks the variable Bun fetch actually honours", () => {
-  test("scheme-matched selection; HTTP ALL_PROXY is never consulted", async () => {
+  test("scheme-matched selection; HTTP ALL_PROXY only counts for http: targets", async () => {
     const { effectiveProxyFor } = await import("../../src/lib/proxy-env");
     const https = new URL("https://opencode.ai/zen/v1/models");
     const http = new URL("http://ollama.lan:11434/v1/models");
@@ -644,6 +644,11 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(https, { ALL_PROXY: "socks5://127.0.0.1:1080" })).toBe("socks5://127.0.0.1:1080");
     expect(effectiveProxyFor(http, { HTTP_PROXY: "http://p:5" })).toBe("http://p:5");
     expect(effectiveProxyFor(http, { HTTPS_PROXY: "http://p:6" })).toBeNull();
+    // Bun's native fetch honours a non-SOCKS ALL_PROXY for plain http: targets on
+    // POSIX but not on Windows; https: targets only ever use the socks5 wrapper.
+    expect(effectiveProxyFor(http, { ALL_PROXY: "http://p:7" }))
+      .toBe(process.platform === "win32" ? null : "http://p:7");
+    expect(effectiveProxyFor(http, { ALL_PROXY: "ftp://p:8" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
     expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
   });
