@@ -113,6 +113,7 @@ const MODEL_ID_LISTS = [
   "noPenaltyModels",
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",
+  "inlineThinkTagModels",
   "thinkingBudgetModels",
   "directReasoningEffortModels",
 ] as const;

@@ -349,6 +349,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
   const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
   const reasoningSplitModels = mergeStringArray(registryEntry.reasoningSplitModels, provider.reasoningSplitModels);
+  const inlineThinkTagModels = mergeStringArray(registryEntry.inlineThinkTagModels, provider.inlineThinkTagModels);
   const reasoningDetailsModels = mergeStringArray(registryEntry.reasoningDetailsModels, provider.reasoningDetailsModels);
   const thinkingToggleModels = mergeStringArray(registryEntry.thinkingToggleModels, provider.thinkingToggleModels);
   const thinkingBudgetModels = mergeStringArray(registryEntry.thinkingBudgetModels, provider.thinkingBudgetModels);
@@ -488,6 +489,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
     ...(reasoningSplitModels ? { reasoningSplitModels } : {}),
+    ...(inlineThinkTagModels ? { inlineThinkTagModels } : {}),
     ...(reasoningDetailsModels ? { reasoningDetailsModels } : {}),
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),

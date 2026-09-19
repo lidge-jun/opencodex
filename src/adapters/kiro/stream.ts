@@ -16,7 +16,7 @@ import {
 } from "../kiro-errors";
 import { parseKiroEvent } from "../kiro-events";
 import { noteKiroTransientThrottle } from "../kiro-retry";
-import { KiroThinkingParser } from "../kiro-thinking";
+import { InlineThinkTagParser } from "../inline-think-tags";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "../kiro-truncation";
 import { isValidKiroConversationId } from "../kiro-wire";
 import { tagKiroReasoningBlob } from "./reasoning";
@@ -319,7 +319,7 @@ async function* parseKiroAttemptEvents(
   let authoritativeUsage: OcxUsage | undefined;
   let stopReason: string | undefined;
   const fallbackEvents: AdapterEvent[] = [];
-  const thinking = new KiroThinkingParser(budget);
+  const thinking = new InlineThinkTagParser(budget);
 
   const retainedEventBytes = (event: AdapterEvent): number => Buffer.byteLength(JSON.stringify(event));
   const retainEvent = (event: AdapterEvent): void => {

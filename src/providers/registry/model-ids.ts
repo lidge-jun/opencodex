@@ -117,6 +117,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   requiresReasoningPlaceholderModels: NONE,
   showThinkingSummary: NONE,
   reasoningSplitModels: NONE,
+  inlineThinkTagModels: NONE,
   reasoningDetailsModels: NONE,
   thinkingToggleModels: NONE,
   thinkingBudgetModels: NONE,

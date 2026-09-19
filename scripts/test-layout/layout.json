@@ -1039,6 +1039,7 @@
     "openai-chat-eof.test.ts": "adapters/openai",
     "openai-chat-hardening.test.ts": "adapters/openai",
     "openai-chat-image-normalization.test.ts": "adapters/openai",
+    "openai-chat-inline-think-tags.test.ts": "adapters/openai",
     "openai-chat-invalid-tool-call-diagnostics.test.ts": "adapters/openai",
     "openai-chat-model-suffix.test.ts": "adapters/openai",
     "openai-chat-native-policy.test.ts": "adapters/openai",
