@@ -310,13 +310,14 @@
       ]
     },
     {
-      "path": "adapters/compatibility-lab.md",
-      "tier": 4,
-      "title": "Compatibility Lab",
-      "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
-      "documents": [
-        "src/lab/"
-      ]
+    "path": "adapters/compatibility-lab.md",
+    "tier": 4,
+    "title": "Compatibility Lab",
+    "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
+    "documents": [
+      "src/lab/",
+      "src/server/index.ts"
+    ]
     },
     {
       "path": "gui-and-management-api.md",
