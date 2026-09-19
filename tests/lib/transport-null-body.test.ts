@@ -69,8 +69,9 @@ function socksProxy(): TcpServer {
  * streams a null-body status settles only when the peer closes, so a peer that never closes is
  * what separates "resolved with no body" from "resolved because the connection went away".
  */
-function replyingTarget(reply: string): TcpServer {
+function replyingTarget(reply: string, capture?: (socket: Socket) => void): TcpServer {
   return createTcpServer(socket => {
+    capture?.(socket);
     socket.once("error", () => { /* the caller may reset this peer */ });
     let request = Buffer.alloc(0);
     socket.on("data", chunk => {
@@ -79,6 +80,19 @@ function replyingTarget(reply: string): TcpServer {
       socket.write(reply);
     });
   });
+}
+
+/**
+ * Wait for a socket to be observably destroyed, under a bounded deadline.
+ *
+ * The contract is that the transport releases the connection, not that it does so inside any
+ * particular window, so this waits for the state the contract promises and fails only when it
+ * never arrives. A fixed sleep would assert something about machine load instead.
+ */
+async function awaitDestroyed(socket: Socket | undefined, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (socket?.destroyed !== true && Date.now() < deadline) await Bun.sleep(5);
+  return socket?.destroyed === true;
 }
 
 function pinnedGet(port: number, path: string): Promise<Response> {
@@ -137,7 +151,11 @@ describe("null-body statuses on the raw outbound transports", () => {
   });
 
   test("the SOCKS transport answers 205 with no body and releases the tunnel", async () => {
-    const target = replyingTarget("HTTP/1.1 205 Reset Content\r\nConnection: keep-alive\r\n\r\n");
+    let targetConnection: Socket | undefined;
+    const target = replyingTarget(
+      "HTTP/1.1 205 Reset Content\r\nConnection: keep-alive\r\n\r\n",
+      socket => { targetConnection = socket; },
+    );
     const proxy = socksProxy();
     const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
     try {
@@ -148,7 +166,11 @@ describe("null-body statuses on the raw outbound transports", () => {
       );
       expect(response.status).toBe(205);
       expect(response.body).toBeNull();
+      // The peer asked to keep the connection alive, so an observed close is the transport
+      // releasing it rather than the fixture tearing it down.
+      expect(await awaitDestroyed(targetConnection)).toBe(true);
     } finally {
+      targetConnection?.destroy();
       await Promise.all([close(proxy), close(target)]);
     }
   });
