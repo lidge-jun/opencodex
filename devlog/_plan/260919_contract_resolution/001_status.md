@@ -1,6 +1,6 @@
 # Campaign status
 
-Status: ACTIVE. Thirteen of the sixteen original issues are resolved and closed. Remaining: #5114, #5117, #5118. Supplementary sideband recovery #5161 and send-assertion follow-up #5170 are merged. Runtime ownership #5157 is merged. Strict-policy child #5167 is merged. Static-policy resolver/consumer stack #5171/#5174 and metrics #5183 remain under review and hosted verification; preview #5185 is a draft. Latest integration recorded here: #5167 at `96a6de86b71cf8a8f78959e0bf626dac642510a7`.
+Status: ACTIVE. Thirteen of the sixteen original issues are resolved and closed. Remaining: #5114, #5117, #5118. Supplementary sideband recovery #5161 and send-assertion follow-up #5170 are merged. Runtime ownership #5157 is merged. Strict-policy child #5167 is merged. Static-policy resolver/consumer stack #5171/#5174 and metrics #5183 remain under review and hosted verification; preview #5185 is a draft. Integration snapshot at 2026-09-19T15:27:51Z: #5167 at `96a6de86b71cf8a8f78959e0bf626dac642510a7`.
 
 ## Owners
 

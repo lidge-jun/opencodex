@@ -27,4 +27,4 @@ Publication review checkpoint: independent re-review accepted the corrected Engl
 
 Public checkpoint #5175 landed as `57b1df792ef7e66e17b0110727eefdd5387e164d` at 2026-09-19T14:13:30Z after reviewed head `128a47ea9db9b93ffc80fc2d42a2f4cddcc8f8c0` passed all applicable hosted checks and public review. Runtime checks were change-inapplicable, not executed. The original coordinator checkout staging was retained. Future implementation outcomes still require ledger updates and independent completion proof.
 
-Updated checkpoint: #5123 now closed after verified #5157 landing. Current total is eleven closed and five open; earlier ten-issue ancestry checkpoint remains historical evidence.
+At the #5123 checkpoint, the total was eleven closed and five open; this earlier checkpoint remains historical evidence.
