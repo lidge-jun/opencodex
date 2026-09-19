@@ -136,13 +136,30 @@ describe("grok reset coupons", () => {
     expect(tokens[0].validityEnd).toBe(new Date(1728788400 * 1000).toISOString());
   });
 
-  it("rejects oversized and truncated protobuf lengths without losing parser progress", () => {
+  it("rejects oversized and truncated protobuf lengths", () => {
     const oversizedLength = new Uint8Array([0x52, 0x80, 0x80, 0x80, 0x80, 0x08]);
     expect(() => decodeGetRemainingResetsResponse(oversizedLength)).toThrow(
       "Invalid protobuf length-delimited field",
     );
 
     expect(() => decodeVarint(new Uint8Array([0x80]), 0)).toThrow("Truncated protobuf varint");
+  });
+
+  it("rejects protobuf varints beyond the JavaScript safe integer range", () => {
+    const maxSafe = decodeVarint(encodeVarint(BigInt(Number.MAX_SAFE_INTEGER)), 0);
+    expect(maxSafe.value).toBe(Number.MAX_SAFE_INTEGER);
+
+    const unsafeVarint = encodeVarint(BigInt(Number.MAX_SAFE_INTEGER) + 1n);
+    expect(() => decodeVarint(unsafeVarint, 0)).toThrow(
+      "Protobuf varint exceeds JavaScript safe integer range",
+    );
+
+    const unsafeLength = new Uint8Array(1 + unsafeVarint.length);
+    unsafeLength[0] = 0x52; // field 10, wire type 2
+    unsafeLength.set(unsafeVarint, 1);
+    expect(() => decodeGetRemainingResetsResponse(unsafeLength)).toThrow(
+      "Protobuf varint exceeds JavaScript safe integer range",
+    );
   });
 
   it("asserts auth headers and tokenAuth compatibility header on request", async () => {
