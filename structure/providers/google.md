@@ -72,3 +72,40 @@ a claim about what the upstream can do); an image-capable model, whose `response
 configuration contradicts JSON-constrained text; and a `json_schema` format carrying
 no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
 with no structured-output request keeps its existing `responseModalities` behavior.
+
+## Google wire-shape projection
+
+`src/adapters/google-wire-shape.ts` describes a compiled Google request without carrying any of
+it. `summarizeGoogleWireShape` reads the body after `compileGoogleWireBody` and after Antigravity
+replay and signature adjustment, which is the object the envelope sends, and returns per-role turn
+counts, function call and response counts and their pairing, the position and class of the first
+ordering violation, signature presence and sentinel-only signing, the session anchor class, and a
+bounded upstream error class. Tool-call identity survives only as a request-internal ordinal in
+first-appearance order.
+
+What it must never retain is the point of the module: prompt or system text, tool arguments and
+results, tool and function names, original or wire call ids, signature text or any hash of it,
+inline file bytes, project and account identifiers, the request id, the Cloud Code Assist session
+id, Codex thread and session ids, and the first user message. Totals stay exact for the whole
+request while per-turn detail stops at a fixed ceiling and sets `truncated`, so a long agentic
+session still reports its real counts.
+
+It is a projection, not a validator. Nothing in the request path consults its output.
+`antigravitySessionAnchor` in `google-antigravity-wire.ts` is the matching content-free read of
+the session boundary: it reports which of the four anchor classes produced the session id without
+reporting the id, and it reads the same decision the id derivation reads, so the two cannot
+disagree about which regime a request is in.
+
+The adapter passes a builder to `debugProviderDiagnosticLazy`, never a built object. That gates
+before invoking it, so a request with provider debug off never pays the walk, and it evaluates
+the projection inside the logger's own try/catch, so a throw in a diagnostic cannot turn a built
+request into a rejected one. With provider debug ON the projection runs synchronously on the
+dispatch path before the request is sent, and its cost is linear in history length — largest for
+exactly the long sessions it exists to describe. Observing the real outbound body rather than a
+reconstruction is what that buys.
+
+Two ceilings bound the output, and both are needed. The item ceilings cap retained turns and the
+per-turn ordinal lists; the serialized ceiling, held at half `MAX_DEBUG_LINE_BYTES`, then trims
+turn detail from the tail until the summary fits. Without the second, a worst case inside the
+first serializes past the debug buffer's per-line cap, and the buffer truncates at a byte
+boundary: the consumer gets unparseable JSON whose retained prefix still reads `truncated: false`.

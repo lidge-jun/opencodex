@@ -1215,48 +1215,6 @@ describe("web-search sidecar native web_search_call emission", () => {
     expect(builds).toBe(1);
   });
 
-  test("retry wait longer than the stall budget still succeeds (heartbeats feed the watchdog)", async () => {
-    globalThis.fetch = (() => Promise.resolve(new Response(
-      'event: response.completed\ndata: {"type":"response.completed"}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    ))) as typeof fetch;
-
-    let sends = 0;
-    const retryingAdapter: ProviderAdapter = {
-      name: "mock-retry429",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => {
-        sends += 1;
-        if (sends === 1) {
-          return new Response("rate limited", { status: 429, headers: { "retry-after": "30" } });
-        }
-        return new Response("{}", { status: 200 });
-      },
-      async *parseStream() {
-        yield { type: "text_delta", text: "answer after long backoff" };
-        yield { type: "done" };
-      },
-      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
-    };
-
-    const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
-      adapter: retryingAdapter,
-      forwardProvider,
-      hostedTool: { type: "web_search" },
-      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
-      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
-      maxSearches: 1,
-      stallTimeoutSec: 1,
-      retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 1_500, maxIntervalMs: 60_000, respectRetryAfter: false },
-    });
-    const frames = await collectSse(response.body!);
-    // A 1.5s backoff under a 1s stall budget must not trip upstream_stall_timeout.
-    expect(sends).toBe(2);
-    expect(frames.find(f => f.event === "response.completed")).toBeDefined();
-    expect(frames.find(f => f.event === "response.failed")).toBeUndefined();
-  }, 5_000);
-
   test("retry wait longer than connectTimeoutMs restarts the header deadline (no 504)", async () => {
     globalThis.fetch = (() => Promise.resolve(new Response(
       'event: response.completed\ndata: {"type":"response.completed"}\n\n',

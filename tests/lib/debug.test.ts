@@ -3,7 +3,7 @@ import { appendDebugLogLine, debugBufferMetrics, getDebugLogEntries, resetDebugL
 import { ResourceAdmissionError, RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes, truncateRetainedUtf8 } from "../../src/lib/admission";
 import { getInjectionDebugLogEntries, injectionDebugLog, resetInjectionDebugLogBufferForTests } from "../../src/lib/injection-debug-log";
 import { markActivity, activityBreadcrumb } from "../../src/lib/sidecar-tracker";
-import { debugDroppedFrame, debugProviderDiagnostic } from "../../src/lib/debug";
+import { debugDroppedFrame, debugProviderDiagnostic, debugProviderDiagnosticLazy } from "../../src/lib/debug";
 import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debug-settings";
 
 describe("retained UTF-8 sizing", () => {
@@ -137,6 +137,53 @@ describe("debug frame logging", () => {
     try {
       debugProviderDiagnostic("cursor", "dial", { host: "api2.cursor.sh" });
       expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  // The eager form builds its details in argument position, so an expensive or fallible
+  // projection runs outside both the gate and the try/catch. The lazy form is what a caller on
+  // the request path has to use, and these are the two properties it exists for.
+  test("debugProviderDiagnosticLazy never invokes its builder while disabled", () => {
+    delete process.env.OCX_DEBUG;
+    delete process.env.OCX_DEBUG_FRAMES;
+    let built = 0;
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      debugProviderDiagnosticLazy("google", "wire-shape", () => { built += 1; return { turns: 1 }; });
+      expect(built).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("debugProviderDiagnosticLazy swallows a builder that throws", () => {
+    delete process.env.OCX_DEBUG;
+    setDebugSettings({ debug: true });
+    resetDebugLogBufferForTests();
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => debugProviderDiagnosticLazy("google", "wire-shape", () => {
+        throw new Error("projection boom");
+      })).not.toThrow();
+      // Nothing reached the console or the ring: a failed diagnostic is a silent one.
+      expect(error).not.toHaveBeenCalled();
+      expect(getDebugLogEntries()).toEqual([]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("debugProviderDiagnosticLazy emits the built details when enabled", () => {
+    delete process.env.OCX_DEBUG;
+    setDebugSettings({ debug: true });
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      debugProviderDiagnosticLazy("google", "wire-shape", () => ({ turns: 7 }));
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(String(error.mock.calls[0]?.[0] ?? "")).toContain("[ocx:google:wire-shape] {\"turns\":7}");
     } finally {
       error.mockRestore();
     }

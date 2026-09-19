@@ -30,7 +30,9 @@ export interface EffortRowOptions {
 }
 
 export function isKnownId(knownIds: EffortRowKnownIds | undefined, id: string): boolean {
-  return typeof knownIds === "function" ? knownIds(id) : knownIds?.has(id) === true;
+  return typeof knownIds === "function"
+    ? knownIds(id)
+    : knownIds?.has(id) === true || knownIds?.has(id.toLowerCase()) === true;
 }
 
 export function effortRowId(baseId: string, effort: string): string {
@@ -43,6 +45,12 @@ export function effortRowId(baseId: string, effort: string): string {
  */
 export function knownEffortRowIds(config: OcxConfig): Set<string> {
   const ids = new Set<string>();
+  const addAlias = (id: string): void => {
+    ids.add(id);
+    // Model aliases are resolved case-insensitively. Preserve that contract here so an
+    // alias cannot be mistaken for a synthetic effort row before ordinary routing runs.
+    ids.add(id.toLowerCase());
+  };
   for (const [providerName, provider] of Object.entries(config.providers)) {
     const known = knownModelIdsForProvider(providerName, provider, config);
     const namespaces = [providerName, provider.alias].filter((value): value is string => (
@@ -54,8 +62,8 @@ export function knownEffortRowIds(config: OcxConfig): Set<string> {
       for (const namespace of namespaces) ids.add(`${namespace}/${id}`);
     }
     for (const alias of Object.values(provider.modelAliases ?? {})) {
-      ids.add(alias);
-      for (const namespace of namespaces) ids.add(`${namespace}/${alias}`);
+      addAlias(alias);
+      for (const namespace of namespaces) addAlias(`${namespace}/${alias}`);
     }
   }
   for (const [id, combo] of Object.entries(config.combos ?? {})) {
