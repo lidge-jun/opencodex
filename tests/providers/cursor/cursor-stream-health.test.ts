@@ -130,7 +130,13 @@ function manualStreamHealthClock() {
     },
     /** Move virtual time to `target`, running every timer due at or before it in deadline order. */
     advanceTo(target: number): void {
-      for (;;) {
+      // The bound is deliberate. A watchdog that re-armed an ALREADY expired deadline would keep
+      // scheduling a zero-delay timer, and this loop is synchronous, so Bun's per-test timeout could
+      // never interrupt it: one mutation would wedge the whole lane instead of reddening one case.
+      for (let fired = 0; ; fired += 1) {
+        if (fired > 1_000) {
+          throw new Error("stream-health clock fired 1000 timers without draining: an expired deadline is being re-armed");
+        }
         const due = [...pending.entries()]
           .filter(([, timer]) => timer.at <= target)
           .sort((left, right) => left[1].at - right[1].at)[0];
@@ -252,6 +258,8 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
     expect(failure).toBeDefined();
     expect(failure!.message).toContain("no inbound frames");
     expect(failure!.message).not.toContain("heartbeat-only");
+    // The watchdog identifies itself: the two branches share this prefix.
+    expect(failure!.message).toContain("Cursor stream stalled");
     // Armed one tick before S and gone at S: the deadline was S, not the progress budget.
     expect(armedBeforeDeadline).toBe(1);
     expect(armedAtDeadline).toBe(0);
@@ -343,6 +351,7 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
     // "the heartbeat-only watchdog is broken" when the real story was the silence watchdog firing first.
     expect(failure!.message).toContain("heartbeat-only");
     expect(failure!.message).not.toContain("no inbound frames");
+    expect(failure!.message).toContain("Cursor stream stalled");
     // The heartbeat-only deadline fired at exactly 2S: nothing was left armed behind it.
     expect(armedAfterDeadline).toBe(0);
     // Liveness frames refreshed the silence clock and left one timer armed, never a stacked pair.
@@ -352,10 +361,12 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
 
   test("the progress clock fires on real timers when the silence budget is out of reach", async () => {
     // The firing half needs no seam. With a silence budget two orders of magnitude beyond the
-    // progress budget, the only deadline in reach is the progress one, so load can make this case
-    // later but never wrong — and the production default clock (Date.now plus the global timers)
-    // stays on the heartbeat-only path. What this pins is that the progress budget alone can fail a
-    // turn through that clock, and that the reported branch is selected by which budget was crossed
+    // progress budget, the only deadline in reach is the progress one, so ordinary load delays this
+    // case rather than changing its outcome: a pause long enough to cross 60s of silence as well,
+    // and so be reported as silence instead, has already blown the case's own 15s limit. The
+    // production default clock (Date.now plus the global timers) stays on the heartbeat-only path.
+    // What this pins is that the progress budget alone can fail a turn through that clock, and that
+    // the reported branch is selected by which budget was crossed
     // rather than by whether liveness frames were seen. What it cannot state is stated under the
     // injected clock above: that the deadline is the minimum of both clocks, and that liveness
     // frames refresh the silence clock. Both of those are "a deadline did not expire" claims.
