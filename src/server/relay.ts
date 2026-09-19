@@ -826,6 +826,9 @@ export function responseWithDeferredRequestLog(
           // convention for a client cancellation or upstream read failure.
           const status = reason === "cancel" ? 499 : reason === "read_error" ? 502 : response.status;
           addFinalRequestLog(requestId, start, logCtx, status, {
+            ...(reason === "eof" && logCtx.observedTerminalStatus
+              ? { terminalStatus: logCtx.observedTerminalStatus }
+              : {}),
             closeReason: reason === "cancel" ? "client_cancel" : "non_stream",
           }, addLog);
         },

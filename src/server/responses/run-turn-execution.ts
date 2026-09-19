@@ -294,6 +294,7 @@ export async function executeResponsesRunTurn(
           route.modelId,
           route.provider,
           inboundWire,
+          route.staticPolicy,
         );
         const rotatedAdapter = resolveSelectionAdapter(rotatedProvider, config.cacheRetention);
         if (!rotatedAdapter.runTurn) {

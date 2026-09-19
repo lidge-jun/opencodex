@@ -41,7 +41,7 @@ import type {
 } from "../clients/config-export";
 import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
-import { configuredAdminToken } from "../lib/admin-secrets";
+import { configuredAdminToken, opencodeCatalogToken } from "../lib/admin-secrets";
 import { localManagementOrigin } from "../lib/local-destinations";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import { loadServiceTokenFromFile, serviceApiTokenFilePath } from "../lib/service-secrets";
@@ -684,7 +684,7 @@ export async function cmdOpencode(args: string[]): Promise<number> {
   try {
     const managementToken = configuredAdminToken();
     if (!managementToken) throw new Error("No local admin token is available; check the running proxy's home.");
-    proxyModels = await fetchOpencodeProxyModels(live, managementToken, {
+    proxyModels = await fetchOpencodeProxyModels(live, opencodeCatalogToken(managementToken), {
       managementOrigin: localManagementOrigin({ ...startupConfig, hostname: live.hostname }, live.port),
     });
   } catch (error) {

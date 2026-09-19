@@ -52,6 +52,8 @@ export interface HandleResponsesOptions {
   admission?: DataPlaneAdmission;
   /** Called at most once after the complete client body is read and accepted for dispatch. */
   onRequestBodyRead?: () => void;
+  /** Internal handoff for retry wrappers that must reuse the already-accounted request body. */
+  onRequestBodyParsed?: (body: unknown) => void;
   forceEmptyResponseId?: boolean;
   /** Internal, connection-owned control channel; never reconstructed from headers. */
   nativeControl?: NativeResponseControl;

@@ -752,6 +752,7 @@
   "main-quota-provenance.test.ts": "codex-integration",
   "main-quota-window-observation.test.ts": "codex-integration",
   "management-api-logs-metrics.test.ts": "server",
+  "management-metrics-export.test.ts": "server",
   "management-client-config-route.test.ts": "server",
   "management-google-tool-schema-policy.test.ts": "server",
   "management-integration-journal-delete.test.ts": "server",
@@ -994,6 +995,7 @@
   "relay-eager.test.ts": "server",
   "release-helper.test.ts": "ci-workflows",
   "release-notes.test.ts": "ci-workflows",
+  "resolved-model-policy-consumers.test.ts": "routing",
   "resolved-model-policy.test.ts": "providers",
   "release-version-line.test.ts": "ci-workflows",
   "remote-catalog.test.ts": "clients",
@@ -1393,5 +1395,6 @@
   "responses-code-mode-patch-compile.test.ts": "responses",
   "gui-codex-usage-score-parity.test.ts": "gui",
   "web-search-sidecar-429.test.ts": "web-search",
-  "codex-shim-destroyed-probe.test.ts": "codex-integration"
+  "codex-shim-destroyed-probe.test.ts": "codex-integration",
+  "client-runtime.test.ts": "clients"
 }
