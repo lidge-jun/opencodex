@@ -426,6 +426,15 @@ describe("manual compaction reuses existing handlers", () => {
       adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
     };
     settings.compactionRouting = { model: "openai-apikey/gpt-5.6-luna" };
+    // The handoff route is keyed by (admission principal, lane): an admission-less caller is
+    // deliberately ineligible, so the control half of this case needs a real principal to have
+    // anything to borrow. See tests/responses/responses-compact-handoff-admission.test.ts.
+    const admission = {
+      kind: "configured", keyId: "compaction-override-client", source: "dedicated",
+      contextPrincipalId: "principal-compaction-override",
+    } as const;
+    const compact = (value: unknown, trigger: string) =>
+      handleResponsesCompact(request(value, trigger), settings, { model: "", provider: "" }, undefined, admission);
     const calls: string[] = [];
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(init?.body));
@@ -434,15 +443,15 @@ describe("manual compaction reuses existing handlers", () => {
         ? Response.json({ error: { message: "quota exceeded", code: "insufficient_quota" } }, { status: 429 })
         : upstreamCompletion(input);
     }) as typeof fetch;
-    const seed = await handleResponsesCompact(request(body(false), "auto"), settings, { model: "", provider: "" });
+    const seed = await compact(body(false), "auto");
     expect(seed.status).toBe(200);
     await seed.text();
-    const manual = await handleResponsesCompact(request({ ...body(false), model: "openai-apikey/gpt-6-astra" }, "manual"), settings, { model: "", provider: "" });
+    const manual = await compact({ ...body(false), model: "openai-apikey/gpt-6-astra" }, "manual");
     expect(manual.status).toBe(429);
     await manual.text();
     expect(calls).toEqual(["normal", "gpt-5.6-luna"]);
 
-    const automatic = await handleResponsesCompact(request({ ...body(false), model: "openai-apikey/gpt-6-astra" }, "auto"), settings, { model: "", provider: "" });
+    const automatic = await compact({ ...body(false), model: "openai-apikey/gpt-6-astra" }, "auto");
     expect(automatic.status).toBe(200);
     await automatic.text();
     expect(calls).toEqual(["normal", "gpt-5.6-luna", "gpt-6-astra", "normal"]);
