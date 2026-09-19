@@ -15,6 +15,7 @@ import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oa
 import { clearAccountQuotaCache, getCachedProviderAccountQuota, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { useOwnedSpendHome } from "../../helpers/owned-spend-home";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testHome = "";
@@ -109,6 +110,9 @@ afterEach(() => {
   resetProviderQuotaReconcileStateForTests();
   removeTreeWithRetry(testHome);
 });
+
+// Dispatches without starting a server, so it takes the spend-journal lease itself.
+useOwnedSpendHome();
 
 afterAll(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;

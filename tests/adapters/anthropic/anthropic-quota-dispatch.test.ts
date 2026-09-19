@@ -1,5 +1,6 @@
 /** Physical response attribution through the real adapter and response/search loops. */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { useOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +59,10 @@ beforeEach(() => {
   resetProviderQuotaReconcileStateForTests();
   clearResponseStateForTests();
 });
+
+// This case dispatches without starting a server, so it takes the spend-journal lease itself.
+// Registered after the hook above so the isolated home is already in place.
+useOwnedSpendHome();
 
 afterEach(() => {
   adapterRequestsFollow = false;
