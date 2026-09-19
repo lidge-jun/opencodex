@@ -646,6 +646,7 @@
   "integrations-merge.test.ts": "clients",
   "integrations-serialize.test.ts": "clients",
   "integrations-state.test.ts": "clients",
+  "integrations-writer-frozen-config.test.ts": "clients",
   "integrations-writer.test.ts": "clients",
   "interactive-confirm.test.ts": "cli",
   "issue-452-empty-503.test.ts": "codex-integration",

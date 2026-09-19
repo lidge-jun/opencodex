@@ -68,6 +68,24 @@ export function captureExportConfigAdmission(live: OcxConfig): ExportConfigAdmis
 }
 
 /**
+ * A plain-data copy of a configuration for a consumer that must not observe later edits.
+ *
+ * The integration writer is the case this exists for. It freezes every other resolution seam
+ * before its first await and then held the configuration by reference, so a plan checked under one
+ * configuration could be written from another: the check and the document it authorizes were
+ * reading the same object at two different moments. One copy taken before the await gives both of
+ * them the same configuration.
+ *
+ * A configuration this cannot copy as plain data is returned as the caller's own object. That is
+ * deliberate and is never worse than the reference the caller already had; it is the export
+ * admission above, not this, that has to refuse what it cannot prove.
+ */
+export function detachedConfigSnapshot(config: OcxConfig): OcxConfig {
+  const detached = detachConfig(config);
+  return detached === null ? config : withExecutors(detached);
+}
+
+/**
  * Whether an admission still describes the configuration in hand and the file it was taken beside.
  *
  * Three things are checked because three things can move: the file can be rewritten, the resident

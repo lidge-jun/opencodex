@@ -15,6 +15,7 @@ import { serializeClineDocument, preserveClineSelection } from "./cline-document
 import { dirname } from "node:path";
 import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
+import { detachedConfigSnapshot } from "../config/admitted-identity";
 import type { OcxConfig } from "../types";
 import { defaultIntegrationIO, loadTarget, type IntegrationIO } from "./config-io";
 import {
@@ -712,7 +713,16 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
   const resolvedPaths = input.resolvedPaths
     ? { ...input.resolvedPaths }
     : resolveIntegrationPaths(input.clientId, env, home);
-  return { ...input, env, home, store, io, resolvedPaths };
+  /*
+   * The configuration is a seam like the others, and it was the one still held by reference. A
+   * coordinated write plans from this input, awaits the writer lock and a revalidation, and only
+   * then serializes the document from it. A management route editing the live configuration in
+   * that window would have been checked in one configuration and written from another, which is
+   * the substitution the fingerprint exists to prevent. Copying it here gives the plan and the
+   * document one configuration.
+   */
+  const config = detachedConfigSnapshot(input.config);
+  return { ...input, config, env, home, store, io, resolvedPaths };
 }
 
 function tryFreezeIntegrationInput(input: IntegrationWriteInput):
