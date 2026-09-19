@@ -314,6 +314,9 @@ test("a bound undo follows the copy resolution actually chose", async () => {
     opId, operation: "restore", planFingerprint: plan.fingerprint,
   });
   expect(undo.status).toBe(200);
+  const result = await undo.json() as { ok: boolean; changed: boolean; clientId: string; profileId: number; opId: string };
+  expect(result).toMatchObject({ ok: true, changed: true, clientId: "aside", profileId: 1 });
+  expect(typeof result.opId).toBe("string");
 
   // Restored from the copy that was chosen, byte for byte.
   expect(readFileSync(path(1), "utf8")).toBe(original);
@@ -322,12 +325,15 @@ test("a bound undo follows the copy resolution actually chose", async () => {
   // a substring of two files concatenated together.
   const profileRows = readFileSync(join(profileStore, "journal.jsonl"), "utf8")
     .trim().split("\n").map(line => JSON.parse(line) as { kind: string; opId: string });
-  expect(profileRows.some(row => row.kind === "restore")).toBe(true);
+  expect(profileRows.filter(row => row.kind === "restore")).toEqual([
+    expect.objectContaining({ kind: "restore", opId: result.opId }),
+  ]);
   expect(profileRows.some(row => row.opId === opId)).toBe(true);
 
   // The copy resolution chose is not rewritten, and the sibling profile is untouched in both its
   // document and its store.
   expect(readFileSync(join(root, "store", "journal.jsonl"), "utf8")).toBe(rows);
+  expect(readFileSync(join(root, "store", snapshotName), "utf8")).toBe(original);
   expect(readFileSync(path(2), "utf8")).toBe(sibling2Before);
   expect(treeWitness(join(root, "store", "aside-profiles", "2"))).toBe(siblingBefore);
 });
