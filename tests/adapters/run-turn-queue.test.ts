@@ -151,9 +151,9 @@ describe("run-turn adapter event queue", () => {
       maxBacklogCodeUnits: 4,
       onBacklogExceeded: () => { backlogExceeded += 1; },
     });
-    const iterator = queue.stream()[Symbol.asyncIterator]();
-
     queue.push(text("abcd"));
+
+    const iterator = queue.stream()[Symbol.asyncIterator]();
     expect(await iterator.next()).toEqual({ done: false, value: text("abcd") });
     queue.push(thinking("wxyz"));
     queue.close();
@@ -242,6 +242,47 @@ describe("run-turn adapter event queue", () => {
       phasedText("c1", "commentary"),
       text("bare1bare2"),
     ]);
+  });
+
+  test("same-phase text merges charge only the appended text, not the duplicate phase", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      maxBacklogCodeUnits: 16,
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    queue.push(phasedText("ab", "commentary"));
+    queue.push(phasedText("cd", "commentary"));
+    queue.push(phasedText("ef", "commentary"));
+
+    const iterator = queue.stream()[Symbol.asyncIterator]();
+    expect(await iterator.next()).toEqual({ done: false, value: phasedText("abcdef", "commentary") });
+
+    // Draining released the entire merged payload — a fresh phased delta fits again.
+    queue.push(phasedText("gh", "commentary"));
+    queue.close();
+
+    expect(backlogExceeded).toBe(0);
+    expect(await iterator.next()).toEqual({ done: false, value: phasedText("gh", "commentary") });
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+  });
+
+  test("maxBacklogCodeUnits must be a positive safe integer", () => {
+    const invalid = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0,
+      -4,
+      2.5,
+      Number.MAX_SAFE_INTEGER + 1,
+    ];
+    for (const maxBacklogCodeUnits of invalid) {
+      expect(() => createAdapterEventQueue({ maxBacklogCodeUnits })).toThrow(RangeError);
+      expect(() => createAdapterEventQueue({ maxBacklogCodeUnits })).toThrow(
+        "maxBacklogCodeUnits must be a positive safe integer",
+      );
+    }
   });
 
   test("empty-string deltas merge without corrupting concatenation", async () => {
