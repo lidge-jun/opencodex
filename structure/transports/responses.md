@@ -560,6 +560,24 @@ resolves to nothing declared stays refused by the #1700 guard, which is the pre-
 intended outcome: an invalid name that cannot be resolved must end the turn visibly rather than
 reach stored history.
 
+Stopping the emission is only half of it, because Codex stores what it received. A conversation
+that already contains one `default.`-prefixed call name is refused on every later turn that
+replays it, so the task cannot be compacted or continued at all and no upgrade reaches it.
+`repairLegacyDottedToolCallNames` (`src/responses/legacy-dotted-tool-name-repair.ts`) repairs the
+replayed item on the way out, in `buildRequest` beside `backfillWebSearchQueries` and again in
+`src/server/responses/compact.ts`, which forwards the caller's body directly. It runs before the
+canonical-destination split because the reported failure was a side chat on a plain OpenAI model
+inheriting history a routed provider had damaged.
+
+What it will resolve is bounded on purpose, and only replayed `input` items are eligible — the
+caller's tool catalog is never rewritten. A dotted spelling the catalog itself declares is a real
+tool identity and is left alone; a suffix claimed by two declared identities is ambiguous and is
+left alone; a suffix that names exactly one declared tool, or one of the code-mode helper spellings
+in `CODE_MODE_HELPER_WIRE_NAMES` (which a code-mode catalog never declares), resolves to that name.
+There is no rule that strips whatever precedes the first dot: a legitimate tool name may contain
+one in another provider's vocabulary, and a replayed item names a call that already happened, which
+is the worst place to guess.
+
 Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
 wire enforces. A routed provider that names a tool the request never declared ends the turn there:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
