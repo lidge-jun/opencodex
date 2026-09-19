@@ -127,13 +127,42 @@ therefore remain untouched. Foreign freeform grammars never receive that compati
 
 Progressive preview for those wrappers is decoded by
 `src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
-function-call restoration. A prefix that can still become a complete outer fence stays held so
-completion never removes bytes already published in a delta; ordinary raw input remains
-progressive, fallback fields wait for a complete parse, and JSON escapes emit only complete
-decoded units. Routed restoration additionally keeps its existing hold for an unrecognized JSON
-object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that
-become invalid only after a valid prefix was emitted remain bounded exceptions: completion is
-authoritative because preserving progressive canonical input leaves no rewind mechanism.
+function-call restoration, over the classification in `src/responses/freeform-wrapper-scan.ts`.
+A prefix that can still become a complete outer fence stays held so completion never removes
+bytes already published in a delta; a body that is not shaped like a wrapper object remains
+progressive, and JSON escapes emit only complete decoded units.
+
+Which wrapper applies is decided by scanning the prefix as JSON rather than matching it against
+a literal opening. `JSON.parse` decides the completed input, and it cares about neither property
+order nor how a name is spelled, so a canonical key arriving after other properties or written
+with an escape is the same wrapper and has to preview as one (#5151). The buffering policy that
+follows is: an own `input` with a string value streams progressively, because completion gives
+it precedence over everything else in the object whatever its position; an `input` with a
+non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
+all publish their own bytes, because that is what completion returns for them; every other
+object HOLDS until it parses, because a key that has not arrived yet can still change the
+answer. Fallback fields fall out of that last rule rather than being recognized separately:
+they only unwrap as the single string field, so no prefix decides them. Classification is
+bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which keeps the work per delta from growing with
+the arguments. Past the bound nothing is previewed at all: the authoritative parse still
+unwraps the wrapper at completion, so the bound costs preview and never agreement. The parse
+that releases a held object therefore runs only where the scan SAW the object close, which is
+what keeps a buffer whose deltas happen to end on a brace from being re-read on every one of
+them.
+
+What that policy costs is worth stating plainly, because it is a real narrowing. A body that IS
+a parseable JSON object but not a wrapper — `{"code":1}` or `{"code":"a","script":"b"}` — now
+reaches the direct bridge in one delta when the object closes, where it previously streamed as
+it arrived. That is not a tuning choice: `input` can still arrive after any property, so any
+prefix published before the object closes is a prefix that completion may unwrap away. Routed
+restoration has held exactly these bodies since #5047 and this is the two paths agreeing, not a
+new restriction invented for one of them. Bodies that are not objects, which is what an `exec`
+program or an `apply_patch` envelope actually looks like, are unaffected and still stream.
+
+Routed restoration additionally keeps its existing hold for an unrecognized JSON object and its
+separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid
+only after a valid prefix was emitted remain bounded exceptions: completion is authoritative
+because preserving progressive canonical input leaves no rewind mechanism.
 
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
