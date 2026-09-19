@@ -328,8 +328,9 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
         events.push({ type: "thinking_delta", thinking });
       }
     } else if (deltaType === "input_json_delta") {
-      // Tool-input streaming. Inert while tools are disabled (Codex's catalog is not advertised),
-      // but parsed so the seam is ready and an unexpected frame never crashes.
+      // Tool-input streaming. Live for capture-only bridge turns, where the advertised MCP
+      // catalog makes the CLI emit real tool_use blocks; parsed unconditionally so a stray
+      // frame on a tools-disabled turn is ignored rather than crashing.
       const partial = asString(delta?.partial_json);
       if (partial && state.openToolCallId) events.push({ type: "tool_call_delta", arguments: partial });
     }
@@ -360,6 +361,17 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
 
   if (eventType === "message_stop") {
     state.sawMessageStop = true;
+    return events;
+  }
+
+  if (eventType === "message_start") {
+    // Anthropic-shaped streams report input tokens on `message_start.message.usage` and output
+    // tokens later on `message_delta.usage`. A capture-only tool leg is terminated at
+    // `message_stop`, so without this branch the synthesized done(tool_use) undercounts input
+    // tokens whenever the CLI puts them here (and `message_stop` arrives before any assistant
+    // fallback frame that would otherwise carry them).
+    const messageRecord = asRecord(event.message);
+    observePartialUsage(state, messageRecord?.usage);
     return events;
   }
 

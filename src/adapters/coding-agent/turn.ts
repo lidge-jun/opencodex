@@ -122,6 +122,12 @@ export interface CodingAgentToolBridgeInput {
   emittedNameMap: Map<string, string>;
   /** Captured tool_use blocks accepted in one assistant message. */
   maxTurnToolCalls: number;
+  /**
+   * The request's `tool_choice` requires a tool call (`required`, or a named selection).
+   * The nested CLI has no documented force-tool flag, so this is enforced locally: a
+   * terminal text result on a required turn fails closed instead of silently succeeding.
+   */
+  requireToolCall?: boolean;
 }
 
 /**
@@ -261,6 +267,9 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       code: "cli_spawn_failed",
       retryable: false,
     });
+    // A synchronous spawn() throw skips the event-loop `finally` below, so the private
+    // bridge dir would leak unless it is removed here as well.
+    if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
     return;
   }
 
@@ -305,6 +314,9 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         return;
       } catch { /* fall back to terminating the direct child */ }
     }
+    // The capture-only MCP server is the CLI's child. Its stdin closes when the CLI dies, and
+    // mcp-server.ts exits on stdin EOF, so this ladder reaps the whole tree without knowing
+    // the grandchild pid.
     try { child.kill("SIGTERM"); } catch { /* already gone */ }
     killTimer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
@@ -418,6 +430,29 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             }
             emitOnce({ ...event, name: wireName });
             continue;
+          }
+          if (
+            toolBridge?.requireToolCall === true
+            && !terminalEmitted
+            && event.type === "done"
+            && event.stopReason !== "tool_use"
+            && (state.completedToolCalls ?? 0) === 0
+          ) {
+            // `tool_choice: required|named` on a bridge turn: a text-only terminal result must not
+            // become a successful completion the client can accept. The capture-only bridge has no
+            // way to force the nested CLI, so fail closed with the same stable error shape the
+            // other bridge contract violations use.
+            emitOnce({
+              type: "error",
+              message: "CodeBuddy finished without calling the required tool.",
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_call_required",
+              retryable: false,
+            });
+            failClosed = true;
+            kill();
+            break;
           }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }

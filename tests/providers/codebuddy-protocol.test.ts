@@ -280,6 +280,13 @@ describe("codebuddy stream-json event mapping", () => {
       state,
     );
     expect(state.partialUsage).toMatchObject({ inputTokens: 15, outputTokens: 9, totalTokens: 24 });
+    // message_start carries input tokens in Anthropic-shaped streams; a capture-only tool leg
+    // terminates at message_stop before any result frame, so this snapshot must be recorded.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 40, output_tokens: 0 } } } },
+      state,
+    );
+    expect(state.partialUsage).toMatchObject({ inputTokens: 40, outputTokens: 9, totalTokens: 49 });
     // A terminal result frame carries its own usage and does not consult partialUsage.
     const events = mapStreamMessageToEvents(
       { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 30, output_tokens: 2 } },

@@ -5,7 +5,7 @@ import {
   buildCodeBuddyToolBridge,
   codeBuddyToolAlias,
 } from "../../src/adapters/codebuddy/tool-bridge";
-import type { OcxParsedRequest, OcxTool, OcxToolChoice } from "../src/types";
+import type { OcxParsedRequest, OcxTool, OcxToolChoice } from "../../src/types";
 
 function tool(
   name: string,

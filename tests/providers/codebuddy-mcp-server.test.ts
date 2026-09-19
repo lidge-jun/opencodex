@@ -158,4 +158,27 @@ describe("CodeBuddy capture-only MCP server", () => {
       expect(stderr).toContain(expected);
     }
   });
+
+  test("exits when stdin closes instead of outliving the CLI", async () => {
+    // The pinned MCP SDK (1.30.0) does not detect stdin EOF itself. Without the explicit
+    // end/close handlers, this capture server would linger as an orphaned bun process
+    // whenever the parent terminates the CLI it serves.
+    const dir = mkdtempSync(join(tmpdir(), "opencodex-codebuddy-mcp-eof-"));
+    tempDirs.push(dir);
+    const catalogPath = join(dir, "tools.json");
+    writeFileSync(catalogPath, JSON.stringify([definition("lookup")]), { mode: 0o600 });
+    const child = Bun.spawn({
+      cmd: [process.execPath, serverPath, catalogPath],
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    child.stdin.end();
+    const exit = await Promise.race([
+      child.exited,
+      Bun.sleep(4_000).then(() => "timeout" as const),
+    ]);
+    if (exit === "timeout") child.kill();
+    expect(exit).toBe(0);
+  });
 });

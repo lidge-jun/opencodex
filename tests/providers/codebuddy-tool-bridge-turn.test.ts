@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
@@ -174,6 +175,68 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
       endTurn: false,
       usage: { inputTokens: 15, outputTokens: 5, totalTokens: 20, cachedInputTokens: 3, cacheReadInputTokens: 3 },
     });
+  });
+
+  test("a tool-bridge turn records input tokens from message_start", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const spawn: SpawnFn = (_cmd, _args) => fakeChild(frameLines([
+      INIT_OK,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 31, output_tokens: 0 } } } },
+      toolUseStart(cliName),
+      inputJsonDelta("{}"),
+      BLOCK_STOP,
+      { type: "stream_event", event: { type: "message_delta", delta: {}, usage: { input_tokens: 31, output_tokens: 6 } } },
+      MESSAGE_STOP,
+    ])) as unknown as ChildProcess;
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      stopReason: "tool_use",
+      usage: { inputTokens: 31, outputTokens: 6, totalTokens: 37 },
+    });
+  });
+
+  test("tool_choice required without a captured call fails closed instead of a text done", async () => {
+    const p = parsed([tool("exec")]);
+    p.options = { toolChoice: "required" } as OcxParsedRequest["options"];
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = (_cmd, _args) => {
+      child = fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]);
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "tool_call_required",
+      status: 502,
+      retryable: false,
+    });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("tool_choice auto keeps a text-only result as a normal done", async () => {
+    const p = parsed([tool("exec")]);
+    const spawn: SpawnFn = () => fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess;
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
+  });
+
+  test("a synchronous spawn throw still removes the private temp dir", async () => {
+    const p = parsed([tool("exec")]);
+    // Diff-based so a concurrently running proxy's own bridge dirs can never flake this.
+    const before = new Set(readdirSync(tmpdir()).filter(name => name.startsWith("ocx-coding-agent-tools-")));
+    const spawn: SpawnFn = () => { throw new Error("spawn exploded"); };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events[0]).toMatchObject({ type: "error", code: "cli_spawn_failed" });
+    const leftovers = readdirSync(tmpdir())
+      .filter(name => name.startsWith("ocx-coding-agent-tools-") && !before.has(name));
+    expect(leftovers).toEqual([]);
   });
 
   test("an init frame without the bridge server fails closed", async () => {
