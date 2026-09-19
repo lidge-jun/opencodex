@@ -24,6 +24,7 @@ import type { OcxConfig } from "../../src/types";
  */
 const ALPHA_HOST = "https://alpha.gather-race.test/v1";
 const BETA_HOST = "https://beta.gather-race.test/v1";
+const GAMMA_HOST = "https://gamma.gather-race.test/v1";
 
 const originalFetch = globalThis.fetch;
 let configRoot = "";
@@ -79,9 +80,11 @@ async function afterAlphaChoseItsRows(): Promise<void> {
  */
 async function loadWhileBetaIsHeld(
   during: (config: OcxConfig) => void | Promise<void>,
+  prepare?: (config: OcxConfig) => void,
 ): Promise<{ config: OcxConfig; exported: readonly ExportModel[] }> {
   const release = holdBetaOpen();
   const config = raceConfig();
+  prepare?.(config);
   const load = loadExportModels(config);
   const settled = load.catch(() => undefined);
   try {
@@ -163,13 +166,40 @@ describe("an export load retains what its rows were chosen under", () => {
   test("replacing a provider's transport executor retires the roster it gathered", async () => {
     const { config, exported } = await loadWhileBetaIsHeld(() => {});
     expect(previewExportModels(config)).toEqual(exported);
+    const executor = (config.providers.alpha as { fetch?: typeof fetch }).fetch;
+    expect(typeof executor).toBe("function");
+
+    // The same executor is the same configuration: this is an identity, so putting back the very
+    // object that was there changes nothing.
+    (config.providers.alpha as { fetch?: typeof fetch }).fetch = executor;
+    expect(previewExportModels(config)).toEqual(exported);
 
     // The executor is the one part of a provider that is not data, so it is held by reference
     // rather than compared as content. A different executor can answer differently, so a roster
     // gathered through the previous one is no longer a roster for this configuration.
-    // The executor is not part of the configuration's declared shape; the transport reads it off
-    // the provider at call time, which is exactly why it is held by reference here.
-    (config.providers.alpha as { fetch?: typeof fetch }).fetch = (async () => new Response("{}")) as typeof fetch;
+    // A wrapper that defers to the previous one would serialize identically and is still a
+    // different answer waiting to happen, which is why nothing here compares what it looks like.
+    (config.providers.alpha as { fetch?: typeof fetch }).fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+      executor!(input, init)) as typeof fetch;
+    expect(previewExportModels(config)).toBeNull();
+  });
+
+  test("a provider fetch value that is not an executor is ordinary configuration", async () => {
+    const { config, exported } = await loadWhileBetaIsHeld(() => {}, prepared => {
+      // A provider schema passes unknown keys through, so a configuration file can carry this and
+      // the transport never calls it. Refusing the admission over it would take previews away for
+      // a field nothing reads.
+      prepared.providers.gamma = {
+        adapter: "openai-chat", baseUrl: GAMMA_HOST, liveModels: false, models: ["gamma-static"],
+      } as OcxConfig["providers"][string];
+      (prepared.providers.gamma as { fetch?: unknown }).fetch = "https://not-an-executor.test/v1";
+    });
+
+    expect(exported.some(model => model.namespaced === "gamma/gamma-static")).toBe(true);
+    expect(previewExportModels(config)).toEqual(exported);
+
+    // Data, and compared as data: editing it is a configuration change like any other.
+    (config.providers.gamma as { fetch?: unknown }).fetch = "https://also-not-an-executor.test/v1";
     expect(previewExportModels(config)).toBeNull();
   });
 
