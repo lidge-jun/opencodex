@@ -147,19 +147,21 @@ export function registryModelIdKeys(entry: ProviderRegistryEntry): readonly stri
     seen.add(key);
     ids.push(key);
   };
-  for (const [field, role] of Object.entries(REGISTRY_FIELD_MODEL_ID_ROLES)) {
+  for (const field of Object.keys(REGISTRY_FIELD_MODEL_ID_ROLES) as (keyof ProviderRegistryEntry)[]) {
+    const role = REGISTRY_FIELD_MODEL_ID_ROLES[field];
     if (role.kind === "none") continue;
-    const value: unknown = (entry as Record<string, unknown>)[field];
-    if (typeof value !== "object" || value === null) continue;
     if (role.kind === "record-keys") {
-      for (const key of Object.keys(value as Record<string, unknown>)) add(key);
+      const map = entry[field];
+      if (typeof map !== "object" || map === null) continue;
+      for (const key of Object.keys(map)) add(key);
       continue;
     }
-    const nested: unknown = (value as Record<string, unknown>)[role.key];
-    if (typeof nested === "object" && nested !== null) {
-      for (const key of Object.keys(nested as Record<string, unknown>)) add(key);
-    }
+    // The nested role belongs to keyAuthServiceTier alone, so its owner is read by name.
+    // ProviderRegistryEntry is an interface and carries no implicit index signature, so a
+    // by-name read is what keeps this loop typed instead of asserted through unknown.
+    const nested = entry.keyAuthServiceTier?.[role.key];
+    if (typeof nested !== "object" || nested === null) continue;
+    for (const key of Object.keys(nested)) add(key);
   }
   return Object.freeze(ids);
 }
-
