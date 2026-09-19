@@ -105,6 +105,30 @@ function post(port: number, proxyPort: number, body: ReadableStream<Uint8Array>,
   return socks5Fetch(`http://provider.invalid:${port}/upload`, init, `socks5://127.0.0.1:${proxyPort}`);
 }
 
+/** A peer that completes the request head and then reports the first body byte it receives. */
+function uploadObserver(): { server: TcpServer; uploading: Promise<void> } {
+  let markUploading: () => void = () => { /* replaced below */ };
+  const uploading = new Promise<void>(resolve => { markUploading = resolve; });
+  const server = createTcpServer(socket => {
+    socket.once("error", () => { /* the caller resets this peer on abort */ });
+    let head = Buffer.alloc(0);
+    let headComplete = false;
+    socket.on("data", chunk => {
+      if (headComplete) {
+        markUploading();
+        return;
+      }
+      head = Buffer.concat([head, chunk]);
+      const end = head.indexOf("\r\n\r\n");
+      if (end < 0) return;
+      headComplete = true;
+      if (head.byteLength > end + 4) markUploading();
+    });
+    // Never answer: a fetch here can only settle through the abort path.
+  });
+  return { server, uploading };
+}
+
 // A peer may answer a request it has not finished receiving, and a request body may stall. The
 // upload loop used to await the caller's body reader before looking at the socket at all, so
 // those two facts together produced a fetch that never settled with the answer already buffered.
@@ -148,28 +172,10 @@ describe("SOCKS5 upload lifecycle", () => {
   });
 
   test("a caller abort settles a fetch waiting on a body chunk that never arrives", async () => {
-    // Abort is driven by the upstream actually receiving a body byte, not by the stream having
-    // produced one. A caller's stream can be pulled before the tunnel is even established, so
-    // aborting on that signal would not prove the fetch was waiting mid-upload.
-    let markUploading: () => void = () => { /* replaced below */ };
-    const uploading = new Promise<void>(resolve => { markUploading = resolve; });
-    const target = createTcpServer(socket => {
-      socket.once("error", () => { /* the caller resets this peer on abort */ });
-      let head = Buffer.alloc(0);
-      let headComplete = false;
-      socket.on("data", chunk => {
-        if (headComplete) {
-          markUploading();
-          return;
-        }
-        head = Buffer.concat([head, chunk]);
-        const end = head.indexOf("\r\n\r\n");
-        if (end < 0) return;
-        headComplete = true;
-        if (head.byteLength > end + 4) markUploading();
-      });
-      // Never answer: the fetch can only settle through the abort path.
-    });
+    // Abort is driven by the upstream actually receiving a body byte, not by the caller's
+    // stream having produced one. A stream can be pulled before the tunnel is established, so
+    // aborting on that signal would not prove the fetch was parked mid-upload.
+    const { server: target, uploading } = uploadObserver();
     const proxy = socksProxy();
     const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
     const body = stallingBody(new TextEncoder().encode("first chunk"));
@@ -180,11 +186,31 @@ describe("SOCKS5 upload lifecycle", () => {
       const outcome = pending.then(() => "resolved" as const, (error: unknown) => error);
       // The upload is now parked on a read the caller's stream will never fulfil.
       expect(await settlesWithin(uploading)).toBe(true);
-      expect(await settlesWithin(body.delivered)).toBe(true);
       controller.abort(reason);
       expect(await settlesWithin(outcome)).toBe(true);
       expect(await outcome).toBe(reason);
       expect(await settlesWithin(body.cancelled)).toBe(true);
+    } finally {
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
+  test("an abort reason that is not an Error reaches the caller unchanged", async () => {
+    // `AbortSignal.reason` is whatever the caller passed. The socket reader already preserves a
+    // string or an object, so wrapping one here would make the same abort look different
+    // depending on which race won it.
+    const { server: target, uploading } = uploadObserver();
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    const body = stallingBody(new TextEncoder().encode("first chunk"));
+    const controller = new AbortController();
+    try {
+      const pending = post(targetPort, proxyPort, body.stream, controller.signal);
+      const outcome = pending.then(() => "resolved" as const, (error: unknown) => error);
+      expect(await settlesWithin(uploading)).toBe(true);
+      controller.abort("caller gave up");
+      expect(await settlesWithin(outcome)).toBe(true);
+      expect(await outcome).toBe("caller gave up");
     } finally {
       await Promise.all([close(proxy), close(target)]);
     }

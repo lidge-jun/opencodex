@@ -557,7 +557,10 @@ async function finalResponseHead(
 function abortRejection(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
   let onAbort = (): void => { /* replaced below */ };
   const promise = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+    // The caller's reason is passed through whatever it is. `SocketReader` already preserves a
+    // string, an object or null here, and coercing only this path to an Error would make the
+    // same abort look different depending on which race happened to win it.
+    onAbort = () => reject(signal.reason ?? new Error("The operation was aborted"));
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
   });
