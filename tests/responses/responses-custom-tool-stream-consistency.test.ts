@@ -19,16 +19,16 @@ type StreamResult = {
   identity: string[];
 };
 
-function restoreExecStream(argumentsText: string, fragments: readonly string[]): StreamResult {
-  const rewrite = createRoutedCustomToolRestoreBlockRewrite(new Set(["exec"]));
+function restoreExecStream(argumentsText: string, fragments: readonly string[], tool = "exec"): StreamResult {
+  const rewrite = createRoutedCustomToolRestoreBlockRewrite(new Set([tool]));
   try {
     const added = rewrite(frame("response.output_item.added", {
       output_index: 0,
       item: {
         type: "function_call",
-        id: "fc_exec",
-        call_id: "call_exec",
-        name: "exec",
+        id: `fc_${tool}`,
+        call_id: `call_${tool}`,
+        name: tool,
         arguments: "",
         status: "in_progress",
       },
@@ -38,7 +38,7 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[]):
     for (const delta of fragments) {
       const blocks = rewrite(frame("response.function_call_arguments.delta", {
         output_index: 0,
-        item_id: "fc_exec",
+        item_id: `fc_${tool}`,
         delta,
       }));
       for (const block of blocks) {
@@ -51,16 +51,16 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[]):
 
     const done = rewrite(frame("response.function_call_arguments.done", {
       output_index: 0,
-      item_id: "fc_exec",
+      item_id: `fc_${tool}`,
       arguments: argumentsText,
     }));
     const itemDone = rewrite(frame("response.output_item.done", {
       output_index: 0,
       item: {
         type: "function_call",
-        id: "fc_exec",
-        call_id: "call_exec",
-        name: "exec",
+        id: `fc_${tool}`,
+        call_id: `call_${tool}`,
+        name: tool,
         arguments: argumentsText,
         status: "completed",
       },
@@ -71,9 +71,9 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[]):
         status: "completed",
         output: [{
           type: "function_call",
-          id: "fc_exec",
-          call_id: "call_exec",
-          name: "exec",
+          id: `fc_${tool}`,
+          call_id: `call_${tool}`,
+          name: tool,
           arguments: argumentsText,
           status: "completed",
         }],
@@ -100,6 +100,28 @@ function restoreExecStream(argumentsText: string, fragments: readonly string[]):
 }
 
 describe("routed Responses custom-tool stream consistency", () => {
+  test("holds a raw decorated apply_patch envelope at every split boundary", () => {
+    // Completion rewrites a decorated envelope through `normalizeApplyPatchDelimiters`, so any
+    // decorated marker published as a delta is a byte the authoritative item does not contain.
+    // Raw input reaches this path only because ordinary raw bodies now stream; the older routed
+    // decoder held every non-canonical shape and so never exposed this case.
+    const argumentsText = "*** Begin Patch ***\n*** Update File: a.txt ***\n+one\n*** End Patch ***";
+    for (let split = 0; split <= argumentsText.length; split++) {
+      const result = restoreExecStream(
+        argumentsText,
+        [argumentsText.slice(0, split), argumentsText.slice(split)],
+        "apply_patch",
+      );
+      expect(result.preview, `split ${split}`).toBe("");
+      expect(result.doneInput, `split ${split}`).toBe(result.itemInput);
+      expect(result.itemInput, `split ${split}`).toBe(result.terminalInput);
+      // The authoritative input is the normalized envelope, not the decorated bytes.
+      expect(result.doneInput, `split ${split}`).not.toBe(argumentsText);
+      expect(result.doneInput, `split ${split}`).toContain("*** Begin Patch");
+      expect(result.doneInput, `split ${split}`).not.toContain("*** Begin Patch ***");
+    }
+  });
+
   test("holds a wrapped fenced exec body at every split boundary", () => {
     const argumentsText = JSON.stringify({ input: "```js\ntext(1)\n```" });
     for (let split = 0; split <= argumentsText.length; split++) {

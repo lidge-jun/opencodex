@@ -305,16 +305,21 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       // The shared decoder streams ordinary raw input, so retain the stricter routed rule
       // when no recognized wrapper transformed the accumulated object.
       if (fullInput === open.argumentsText && open.argumentsText.trimStart().startsWith("{")) return [];
-      // Hold a buffer that could still become a complete patch envelope. The done event
-      // recompiles such a body into an apply_patch helper call, so streaming the envelope
-      // bytes first and replacing them at completion is the rewind this path forbids.
-      // Mirrors the same hold in `src/bridge/sse.ts`.
-      if (
-        declaresCodeModeExec(declaredNames)
+      // Hold a buffer that could still become a complete patch envelope, for either of the two
+      // reasons completion rewrites one. Both are the same rewind this path forbids, and both
+      // mirror `src/bridge/sse.ts`.
+      //
+      // `exec`: the done event recompiles such a body into an apply_patch helper call.
+      // `apply_patch`: `normalizeApplyPatchDelimiters` rewrites a decorated
+      // `*** Begin Patch ***` envelope at completion, so the decorated markers would be
+      // published and then replaced by the normalized ones. Before the shared decoder, this
+      // path held every non-canonical shape and so never reached that case; now that ordinary
+      // raw input streams, the second reason has to be stated explicitly.
+      const mayCompile = declaresCodeModeExec(declaredNames)
         && itemName?.namespace === undefined
-        && itemName?.name === "exec"
-        && mayBecomePatchEnvelope(fullInput)
-      ) return [];
+        && itemName?.name === "exec";
+      const mayNormalize = ownsFreeformGrammar && itemName?.name === "apply_patch";
+      if ((mayCompile || mayNormalize) && mayBecomePatchEnvelope(fullInput)) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];
       const inputDelta = fullInput.slice(open.emittedInput.length);
       open.emittedInput = fullInput;
