@@ -25,7 +25,13 @@ let package = Package(
         .executableTarget(
             name: "OpenCodexWidget",
             dependencies: ["MenuBarCore"],
-            path: "Sources/OpenCodexWidget"
+            path: "Sources/OpenCodexWidget",
+            linkerSettings: [
+                // Widget extensions must enter through NSExtensionMain or chronod tears down
+                // the process before the WidgetBundle connects.
+                .linkedFramework("Foundation"),
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"]),
+            ]
         ),
         // An executable rather than a .testTarget: Xcode Command Line Tools ships
         // neither a usable XCTest module nor the swift-testing runtime, so a test bundle

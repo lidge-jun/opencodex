@@ -59,11 +59,17 @@ struct OpenCodexWidgetView: View {
             Text(Format.count(snapshot.today?.requests))
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-            if let title = snapshot.menuTitle {
-                Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            } else {
-                Text("requests today").font(.caption).foregroundStyle(.secondary)
+            Text("requests today").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(Format.tokens(snapshot.today?.totalTokens))
+                if let cost = snapshot.today?.estimatedCostUsd {
+                    Text("·")
+                    Text(Format.cost(cost))
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
             updated(snapshot)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -79,18 +85,43 @@ struct OpenCodexWidgetView: View {
                 updated(snapshot)
             }
             Divider()
-            quotaView(snapshot)
+            if hasQuota(snapshot) {
+                quotaView(snapshot)
+            } else if let chart = snapshot.chart {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Last \(windowLabel(chart))").font(.caption).foregroundStyle(.secondary)
+                    chartView(chart, flexible: false)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No quota sources").font(.caption).foregroundStyle(.secondary)
+                    Text("Quota appears for providers that report limits")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func large(_ snapshot: WidgetSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            medium(snapshot)
-            if let chart = snapshot.chart { chartView(chart) }
-            ForEach(Array(snapshot.quotas.prefix(4).enumerated()), id: \.offset) { _, quota in
-                quotaRow(quota)
+            status(snapshot)
+            metricsRow(snapshot)
+            if !snapshot.quotas.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(snapshot.quotas.prefix(4).enumerated()), id: \.offset) { _, quota in
+                        quotaRow(quota)
+                    }
+                }
             }
+            if let chart = snapshot.chart {
+                Text("Last \(windowLabel(chart)) · \(chart.series.count) models")
+                    .font(.caption).foregroundStyle(.secondary)
+                chartView(chart, flexible: true)
+                    .frame(maxHeight: .infinity)
+                legend(chart)
+            }
+            updated(snapshot)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -111,6 +142,26 @@ struct OpenCodexWidgetView: View {
             Spacer()
             Text(value).font(.system(.body, design: .monospaced))
         }
+    }
+
+    private func metricsRow(_ snapshot: WidgetSnapshot) -> some View {
+        HStack(spacing: 10) {
+            metricColumn("REQUESTS", Format.count(snapshot.today?.requests))
+            metricColumn("TOKENS", Format.tokens(snapshot.today?.totalTokens))
+            metricColumn("COST", Format.cost(snapshot.today?.estimatedCostUsd))
+        }
+    }
+
+    private func metricColumn(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.system(.body, design: .monospaced)).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func hasQuota(_ snapshot: WidgetSnapshot) -> Bool {
+        snapshot.quotas.contains { $0.percent != nil }
     }
 
     private func quotaView(_ snapshot: WidgetSnapshot) -> some View {
@@ -139,7 +190,7 @@ struct OpenCodexWidgetView: View {
         }
     }
 
-    private func chartView(_ chart: WidgetSnapshot.Chart) -> some View {
+    private func chartView(_ chart: WidgetSnapshot.Chart, flexible: Bool) -> some View {
         GeometryReader { geometry in
             if chart.style == "stackedBar" {
                 stackedBars(chart, in: geometry.size)
@@ -147,7 +198,21 @@ struct OpenCodexWidgetView: View {
                 lineChart(chart, in: geometry.size)
             }
         }
-        .frame(height: 72)
+        .frame(minHeight: 72, maxHeight: flexible ? .infinity : 72)
+    }
+
+    private func legend(_ chart: WidgetSnapshot.Chart) -> some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 4) {
+            ForEach(Array(chart.series.prefix(5).enumerated()), id: \.offset) { index, series in
+                HStack(spacing: 4) {
+                    Circle().fill(seriesColor(index)).frame(width: 6, height: 6)
+                    Text(series.id)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
     }
 
     private func lineChart(_ chart: WidgetSnapshot.Chart, in size: CGSize) -> some View {
@@ -163,7 +228,7 @@ struct OpenCodexWidgetView: View {
                         else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
                 }
-                .stroke(palette[index % palette.count], lineWidth: 1.5)
+                .stroke(seriesColor(index), lineWidth: 1.5)
             }
         }
     }
@@ -179,7 +244,7 @@ struct OpenCodexWidgetView: View {
                     ForEach(Array(chart.series.enumerated()), id: \.offset) { seriesIndex, series in
                         let value = series.points.indices.contains(index) ? series.points[index] : 0
                         Rectangle()
-                            .fill(palette[seriesIndex % palette.count])
+                            .fill(seriesColor(seriesIndex))
                             .frame(height: max(0, size.height * value / maxValue))
                     }
                 }
@@ -195,6 +260,16 @@ struct OpenCodexWidgetView: View {
         Color(red: 1, green: 69 / 255, blue: 58 / 255),
         Color(red: 100 / 255, green: 210 / 255, blue: 1)
     ]
+
+    private func seriesColor(_ index: Int) -> Color {
+        palette[index % palette.count]
+    }
+
+    private func windowLabel(_ chart: WidgetSnapshot.Chart) -> String {
+        let hours = chart.bucketSeconds * (chart.series.map(\.points.count).max() ?? 0) / 3600
+        if hours < 48 { return "\(hours)h" }
+        return "\(hours / 24)d"
+    }
 
     private func maxPoint(_ points: [Double]) -> Double { max(points.max() ?? 1, 1) }
 

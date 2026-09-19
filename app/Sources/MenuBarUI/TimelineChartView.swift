@@ -29,7 +29,12 @@ public final class TimelineChartView: NSView {
         let maxValue = settings.chartStyle == .stackedBar ? timeline.stackedMax : timeline.maxPoint
         drawText(Format.tokens(Int(maxValue.rounded())), in: NSRect(x: 0, y: chartHeight + 8, width: bounds.width, height: 14), font: Theme.micro, color: Theme.muted, alignment: .right)
         let window = timeline.buckets * timeline.bucketSeconds / 3600
-        let windowLabel = window >= 24 ? "\(window / 24)d" : "\(window)h"
+        let windowLabel: String
+        if window < 48 {
+            windowLabel = "\(window)h"
+        } else {
+            windowLabel = "\(window / 24)d"
+        }
         drawText(windowLabel, in: NSRect(x: 0, y: chartHeight + 8, width: 40, height: 14), font: Theme.micro, color: Theme.muted)
 
         let plot = NSRect(x: 0, y: 20, width: bounds.width, height: chartHeight)
@@ -46,10 +51,7 @@ public final class TimelineChartView: NSView {
             drawLines(timeline, in: plot, maxValue: maxValue)
         }
 
-        let legend = timeline.series.prefix(4).enumerated().map { "\($0.offset + 1). \($0.element.id)" }.joined(separator: "  ")
-        let extra = max(0, timeline.series.count - 4)
-        let legendText = extra > 0 ? "\(legend)  +\(extra) more" : legend
-        drawText(legendText, in: NSRect(x: 0, y: 0, width: bounds.width, height: 14), font: Theme.micro, color: Theme.muted)
+        drawLegend(timeline, in: NSRect(x: 0, y: 0, width: bounds.width, height: 14))
     }
 
     private func drawText(
@@ -90,6 +92,44 @@ public final class TimelineChartView: NSView {
                 NSRect(x: plot.minX + CGFloat(bucket) * (width + 1), y: y, width: width, height: height).fill()
                 y += height
             }
+        }
+    }
+
+    private func drawLegend(_ timeline: UsageTimeline, in rect: NSRect) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: Theme.micro,
+            .foregroundColor: Theme.muted,
+        ]
+        let separator: CGFloat = 10
+        let dotSize: CGFloat = 6
+        let entries = timeline.series.enumerated().map { index, series in
+            (index, NSAttributedString(string: "\(index + 1). \(series.id)", attributes: attributes))
+        }
+        var visible = entries.count
+        while visible > 0 {
+            let extra = entries.count - visible
+            let suffixWidth = extra > 0
+                ? NSAttributedString(string: "+\(extra) more", attributes: attributes).size().width + separator
+                : 0
+            let entryWidth = entries.prefix(visible).reduce(CGFloat.zero) { width, entry in
+                width + dotSize + 4 + entry.1.size().width + separator
+            }
+            if entryWidth + suffixWidth <= rect.width || visible == 0 { break }
+            visible -= 1
+        }
+        let extra = entries.count - visible
+        var x = rect.minX
+        for (index, text) in entries.prefix(visible) {
+            let dot = NSRect(x: x, y: rect.midY - dotSize / 2, width: dotSize, height: dotSize)
+            NSColor(hex: colors[index % colors.count]).setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            x += dotSize + 4
+            text.draw(at: NSPoint(x: x, y: rect.minY))
+            x += text.size().width + separator
+        }
+        if extra > 0 {
+            NSAttributedString(string: "+\(extra) more", attributes: attributes)
+                .draw(at: NSPoint(x: x, y: rect.minY))
         }
     }
 }

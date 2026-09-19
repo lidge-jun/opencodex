@@ -20,6 +20,7 @@ const script = repoPath("scripts", "build-macos-app.sh");
 const isMacOS = process.platform === "darwin";
 
 const scriptText = await Bun.file(script).text();
+const packageText = await Bun.file(repoPath("app", "Package.swift")).text();
 
 async function runScript(outputDir: string, cwd: string = repoRoot) {
   const proc = Bun.spawn(["bash", script], {
@@ -195,5 +196,6 @@ describe("macOS widget packaging", () => {
     expect(scriptText).toContain("Widget.entitlements");
     expect(scriptText).toContain("Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget");
     expect(scriptText).toContain("container fallback path");
+    expect(packageText).toContain("_NSExtensionMain");
   });
 });

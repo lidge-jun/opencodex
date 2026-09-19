@@ -3,12 +3,14 @@ import MenuBarCore
 
 final class ModelsListView: NSView {
     private let stack = NSStackView()
+    private let caption = makeLabel("MODELS", font: Theme.micro, color: Theme.faint)
 
     init() {
         super.init(frame: .zero)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = Theme.tightGap
+        stack.addArrangedSubview(caption)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -20,7 +22,7 @@ final class ModelsListView: NSView {
     required init?(coder: NSCoder) { nil }
 
     func apply(_ snapshot: ProxySnapshot) {
-        clear()
+        clearRows()
         let rows = snapshot.todayRows.sorted { ($0.totalTokens ?? 0) > ($1.totalTokens ?? 0) }.prefix(5)
         isHidden = !snapshot.settings.showModels || rows.isEmpty
         for row in rows {
@@ -33,19 +35,21 @@ final class ModelsListView: NSView {
         }
     }
 
-    private func clear() {
-        for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+    private func clearRows() {
+        for view in stack.arrangedSubviews.dropFirst() { stack.removeArrangedSubview(view); view.removeFromSuperview() }
     }
 }
 
 final class AccountsListView: NSView {
     private let stack = NSStackView()
+    private let caption = makeLabel("ACCOUNTS", font: Theme.micro, color: Theme.faint)
 
     init() {
         super.init(frame: .zero)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = Theme.tightGap
+        stack.addArrangedSubview(caption)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -57,7 +61,7 @@ final class AccountsListView: NSView {
     required init?(coder: NSCoder) { nil }
 
     func apply(_ snapshot: ProxySnapshot) {
-        clear()
+        clearRows()
         let rows = (snapshot.today?.accounts ?? []).sorted { ($0.totalTokens ?? 0) > ($1.totalTokens ?? 0) }
         isHidden = !snapshot.settings.showAccounts || rows.isEmpty
         for row in rows {
@@ -68,7 +72,7 @@ final class AccountsListView: NSView {
         }
     }
 
-    private func clear() {
-        for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+    private func clearRows() {
+        for view in stack.arrangedSubviews.dropFirst() { stack.removeArrangedSubview(view); view.removeFromSuperview() }
     }
 }
