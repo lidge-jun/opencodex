@@ -613,6 +613,22 @@ function withCredentialMutationLockSync<T>(fn: () => T): T {
 }
 
 type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
+type CodexRefreshGenerationHandoff = (accountId: string, fromGeneration: number, toGeneration: number) => void;
+// var (hoisted, initialized to undefined) rather than const: a registrar reached
+// through an import cycle can register while this module body is still evaluating,
+// and the lazily created Set must be reachable rather than in the temporal dead zone.
+var refreshGenerationHandoffs: Set<CodexRefreshGenerationHandoff> | undefined;
+function refreshHandoffs(): Set<CodexRefreshGenerationHandoff> {
+  return refreshGenerationHandoffs ??= new Set();
+}
+
+/** Register process-local state that must follow a credential refresh generation. */
+export function registerCodexRefreshGenerationHandoff(handoff: CodexRefreshGenerationHandoff): () => void {
+  const set = refreshHandoffs();
+  set.add(handoff);
+  return () => set.delete(handoff);
+}
+
 type CodexRefreshResult = CodexTokenResult & {
   credential?: CodexAccountCredentials;
   /**
@@ -1394,6 +1410,15 @@ async function resolveCodexToken(
    * committed result, for every waiter, including none.
    */
   const refreshPromise = fetchPromise.then(async (result): Promise<CodexRefreshResult> => {
+    // Generation-dependent completion belongs to the flight, not to its initiating
+    // request. The owner may stop waiting after a disconnect while this detached work
+    // still commits G+1; advance process-local affinities before any waiter observes
+    // the result (and even when there are no surviving waiters).
+    if (result.selfRefreshed) {
+      for (const handoff of refreshHandoffs()) {
+        handoff(id, result.generation - 1, result.generation);
+      }
+    }
     await notePlanFromRefreshedAccessToken(id, result.accessToken, result.generation);
     // One settlement path for the whole flight: the refreshing account, then any dormant alias that
     // adopted the same rotated JWT. An alias holds the identical access token, so a changed
