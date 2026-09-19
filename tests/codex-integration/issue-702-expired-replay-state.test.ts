@@ -793,12 +793,26 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.secondStatus).toBe(400);
     expect(JSON.parse(scenario.secondResponseText)).toEqual({
       error: {
-        message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+        message: "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
         type: "invalid_request_error",
         code: "previous_response_not_found",
       },
     });
     expect(scenario.upstreamRequests).toHaveLength(1);
+  });
+
+  test("a task-scope mismatch is indistinguishable from state this process never had", async () => {
+    // The refusal must not tell a caller which of the two happened. If a mismatch answered with
+    // its own message, the difference between that message and the one an unusable id already
+    // gets would itself disclose that retained state exists and belongs to another task.
+    const mismatch = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
+    const unusable = await runForwardScenario("expired");
+
+    expect(mismatch.secondStatus).toBe(unusable.secondStatus);
+    expect(mismatch.secondResponseText).toBe(unusable.secondResponseText);
+    // Neither answer reaches the model, so neither can be told apart by a side effect either.
+    expect(mismatch.upstreamRequests).toHaveLength(1);
+    expect(unusable.upstreamRequests).toHaveLength(1);
   });
 
   test("forward mode still sends an ordinary request without previous_response_id", async () => {

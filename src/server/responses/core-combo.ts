@@ -204,7 +204,9 @@ export async function executeComboResponses(
   if (replayFailure?.reason === "scope_mismatch") {
     console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
   }
-  if (replayFailure) {
+  // As on the ordinary path, a mismatch falls through so each member applies the same
+  // route-dependent rule an unknown id gets, rather than acquiring a distinguishable answer here.
+  if (replayFailure && replayFailure.reason !== "scope_mismatch") {
     return formatErrorResponse(
       400,
       "previous_response_not_found",
