@@ -327,51 +327,54 @@ describe("SOCKS5 upload lifecycle", () => {
     let markInterimAtClient: () => void = () => { /* replaced below */ };
     const interimAtClient = new Promise<void>(resolve => { markInterimAtClient = resolve; });
     const originalSetTimeout = Socket.prototype.setTimeout;
+    let transportSocket: Socket | undefined;
+    const observeInterim = (chunk: Buffer | string): void => {
+      clientSeen += typeof chunk === "string" ? chunk : chunk.toString("latin1");
+      if (clientSeen.includes("HTTP/1.1 100 Continue\r\n\r\n")
+        && clientSeen.includes("HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n")) {
+        markInterimAtClient();
+      }
+    };
 
     const encoder = new TextEncoder();
-    let released = false;
-    let settledAtRelease: boolean | undefined;
-    let cancelledAtRelease: boolean | undefined;
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
     let settled = false;
     let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
+        bodyController = controller;
         controller.enqueue(encoder.encode("hello "));
-      },
-      async pull(controller) {
-        if (released) return;
-        released = true;
-        await interimAtClient;
-        // One native checkpoint, which the reader's buffered-header continuations run ahead of.
-        await new Promise<void>(resolve => { setImmediate(resolve); });
-        settledAtRelease = settled;
-        cancelledAtRelease = cancelled;
-        controller.enqueue(encoder.encode("socks"));
-        controller.close();
       },
       cancel() { cancelled = true; },
     });
+    const abort = new AbortController();
+    let outcome: Promise<void> | undefined;
 
     try {
       Socket.prototype.setTimeout = function patched(this: Socket, ms: number, callback?: () => void) {
-        if (ms === RESPONSE_TIMEOUT_MS) {
-          this.on("data", chunk => {
-            clientSeen += chunk.toString("latin1");
-            if (clientSeen.includes("HTTP/1.1 100 Continue\r\n\r\n")
-              && clientSeen.includes("Link: </style.css>; rel=preload\r\n\r\n")) markInterimAtClient();
-          });
+        if (ms === RESPONSE_TIMEOUT_MS && transportSocket === undefined) {
+          transportSocket = this;
+          this.on("data", observeInterim);
         }
         return originalSetTimeout.call(this, ms, callback as never);
       } as typeof Socket.prototype.setTimeout;
 
-      const pending = post(targetPort, proxyPort, stream);
-      void pending.then(() => { settled = true; }, () => { settled = true; });
-      const response = await pending;
+      const pending = post(targetPort, proxyPort, stream, abort.signal);
+      // Both handlers are attached before waiting for receipt; outcome never rejects.
+      outcome = pending.then(() => { settled = true; }, () => { settled = true; });
+      expect(await settlesWithin(interimAtClient)).toBe(true);
+      // Complete client receipt followed by a native checkpoint drains the current parser's
+      // buffered-header promise continuations before another body chunk becomes available.
+      await new Promise<void>(resolve => { setImmediate(resolve); });
+      expect(settled).toBe(false);
+      expect(cancelled).toBe(false);
+      expect(received).not.toContain("socks");
+      expect(received).not.toContain("0\r\n\r\n");
+      bodyController.enqueue(encoder.encode("socks"));
+      bodyController.close();
 
-      // Still reading when the remainder was released: the transport had both interim heads and
-      // had treated neither as the answer.
-      expect(settledAtRelease).toBe(false);
-      expect(cancelledAtRelease).toBe(false);
+      expect(await settlesWithin(outcome)).toBe(true);
+      const response = await pending;
 
       /*
        * The final answer reaching the caller is the receipt that those heads were consumed rather
@@ -379,7 +382,9 @@ describe("SOCKS5 upload lifecycle", () => {
        * both of them.
        */
       expect(response.status).toBe(200);
-      expect(await response.text()).toBe("posted");
+      const responseText = response.text();
+      expect(await settlesWithin(responseText)).toBe(true);
+      expect(await responseText).toBe("posted");
 
       // Upload continuity, measured against the moment the interim answers were sent rather than
       // against the whole exchange.
@@ -393,7 +398,13 @@ describe("SOCKS5 upload lifecycle", () => {
       expect(await settlesWithin(peerClosed)).toBe(true);
     } finally {
       Socket.prototype.setTimeout = originalSetTimeout;
-      await Promise.all([close(proxy), close(target)]);
+      transportSocket?.removeListener("data", observeInterim);
+      try {
+        abort.abort(new Error("informational fixture teardown"));
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+        if (outcome) await settlesWithin(outcome);
+      }
     }
   });
 
