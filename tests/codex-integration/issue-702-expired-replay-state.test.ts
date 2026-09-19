@@ -801,6 +801,25 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.upstreamRequests).toHaveLength(1);
   });
 
+  test("every local replay failure answers the same on one route", async () => {
+    // Missing, corrupt and mismatched local state all mean the same thing to a client: replay
+    // in full. One envelope for all three keeps the answer from reporting which it was.
+    const mismatch = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
+    const missing = await runForwardScenario("expired");
+    const expected = {
+      error: {
+        message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+      },
+    };
+    expect(mismatch.secondStatus).toBe(400);
+    expect(missing.secondStatus).toBe(400);
+    expect(JSON.parse(mismatch.secondResponseText)).toEqual(expected);
+    expect(JSON.parse(missing.secondResponseText)).toEqual(expected);
+    expect(mismatch.secondResponseText).toBe(missing.secondResponseText);
+  });
+
   test("a WebSocket client whose task scope changed is refused and recovers by replaying in full", async () => {
     // The existing WebSocket coverage exercises expired and missing state. A scope mismatch is
     // the third way local replay becomes unusable, and it has to reach the client as the same

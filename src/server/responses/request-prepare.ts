@@ -247,9 +247,7 @@ export async function prepareResponsesRequest(
       // Bounded and content-free: no task scope and nothing about the retained entry.
       console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
     }
-    // Refuse here, before the route-dependent handling below. A mismatch is not an id this
-    // process cannot resolve: it is one it resolved to another task's state. Letting it reach a
-    // destination that owns the continuation chain would forward that task's conversation.
+    // Local replay failures require full client replay.
     if (replayFailure) {
       return formatErrorResponse(
         400,
@@ -929,7 +927,7 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(
       400,
       "previous_response_not_found",
-      "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
 
@@ -955,7 +953,7 @@ export async function prepareResponsesRequest(
       return formatErrorResponse(
         400,
         "previous_response_not_found",
-        "Routed continuation requires unavailable local history; resend the full conversation without previous_response_id.",
+        "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       );
     }
   }

@@ -204,8 +204,7 @@ export async function executeComboResponses(
   if (replayFailure?.reason === "scope_mismatch") {
     console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
   }
-  // Refused before dispatch, as on the ordinary path: resolved foreign state never reaches a
-  // member, including one whose destination owns the continuation chain.
+  // Local replay failures require full client replay.
   if (replayFailure) {
     return formatErrorResponse(
       400,
