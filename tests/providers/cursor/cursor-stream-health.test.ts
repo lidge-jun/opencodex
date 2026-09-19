@@ -12,7 +12,7 @@ import {
 import { encodeConnectFrame } from "../../../src/adapters/cursor/framing";
 import { createLiveCursorTransport } from "../../../src/adapters/cursor/live-transport";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
-import { isolationBudgetMs, watchdogMs } from "../../helpers/ci-watchdog";
+import { watchdogMs } from "../../helpers/ci-watchdog";
 import type { CursorRunRequest, CursorServerMessage } from "../../../src/adapters/cursor/types";
 
 /**
@@ -180,13 +180,9 @@ async function drain(
 }
 
 describe("Cursor inbound stream-health watchdog (T04)", () => {
-  // Scale once: the load helper applies a floor, so scaling each deadline separately
-  // would collapse the two clocks to the same value in CI.
-  const silenceMs = isolationBudgetMs(1_000);
-  const heartbeatOnlyMs = 2 * silenceMs;
-  // Include the existing two-second first-frame allowance and leave time for cleanup.
-  const fixtureLimitMs = 4 * silenceMs + 2_000;
-  const timeoutMs = Math.max(watchdogMs(15_000), fixtureLimitMs + silenceMs);
+  // Bounds a hung case; no assertion here is stated against elapsed real time, so this
+  // never has to cover a synthetic server outrunning a deadline.
+  const caseTimeoutMs = watchdogMs(15_000);
 
   test("silence after the first frame fails the turn with the stall error", async () => {
     await withH2Server(stream => {
@@ -201,37 +197,98 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
     });
   }, 15_000);
 
-  test("heartbeat-only traffic survives the silence threshold but fails at the heartbeat-only threshold", async () => {
+  test("liveness-only traffic keeps the silence clock fresh and still fails at the heartbeat-only threshold", async () => {
+    // Which clock expires is the contract. Stating it against real timers also states that a real
+    // interval outran a real deadline: the case had to keep liveness frames arriving with no gap
+    // longer than the silence budget for the whole heartbeat-only window, and a runner that pauses
+    // longer than one budget made the SILENCE watchdog win while both watchdogs behaved correctly.
+    // Virtual time removes that term — timers fire only from `advanceTo`, so contention can delay a
+    // frame's arrival (which this case waits for) without any deadline passing. Same seam #5131 used
+    // for the re-arming case below; production budgets and every other timer are untouched.
+    const virtualSilenceMs = 1_000;
+    const virtualHeartbeatOnlyMs = 2 * virtualSilenceMs;
+    const timing = manualStreamHealthClock();
+    const connected = Promise.withResolvers<http2.ServerHttp2Stream>();
+    const messages: CursorServerMessage[] = [];
+    const armedAfterLiveness: number[] = [];
+    let armedAfterDeadline: number | undefined;
+    let failure: Error | undefined;
     await withH2Server(stream => {
       stream.on("error", () => {});
       stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
-      stream.write(Buffer.from(textDeltaFrame("hi")));
-      // Frequent heartbeats/checkpoints keep the silence clock fresh while the
-      // longer heartbeat-only clock must still expire under a loaded test runner.
-      const ping = setInterval(() => {
-        try {
-          stream.write(Buffer.from(heartbeatFrame()));
-          stream.write(Buffer.from(checkpointFrame()));
-        } catch { clearInterval(ping); }
-      }, 40);
-      const limit = setTimeout(() => stream.close(), fixtureLimitMs);
-      stream.on("close", () => {
-        clearInterval(ping);
-        clearTimeout(limit);
-      });
+      connected.resolve(stream);
     }, async baseUrl => {
-      const { failure } = await drain(baseUrl, {
-        streamSilenceFailMs: silenceMs,
-        streamHeartbeatOnlyFailMs: heartbeatOnlyMs,
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        // Stays on the real clock: it owns dial and first response, not this contract.
+        firstFrameTimeoutMs: watchdogMs(15_000),
+        streamSilenceFailMs: virtualSilenceMs,
+        streamHeartbeatOnlyFailMs: virtualHeartbeatOnlyMs,
+        streamHealthClock: timing.clock,
       });
-      expect(failure).toBeDefined();
-      // Assert on the message, and say which watchdog won when the wrong one does.
-      // A bare toContain here reported only the expected substring, which reads as
-      // "the heartbeat-only watchdog is broken" when the real story is that the
-      // silence watchdog fired first on a loaded runner.
-      expect(failure!.message).toContain("heartbeat-only");
+      const iterator = transport.run(runRequest())[Symbol.asyncIterator]();
+      try {
+        // The first next() dials and puts the request on the wire.
+        const opened = iterator.next();
+        const server = await connected.promise;
+        const nextOfType = async (
+          type: CursorServerMessage["type"],
+          pending?: Promise<IteratorResult<CursorServerMessage>>,
+        ) => {
+          let result = await (pending ?? iterator.next());
+          while (!result.done && result.value.type !== type) {
+            messages.push(result.value);
+            result = await iterator.next();
+          }
+          if (result.done) throw new Error(`stream ended before a ${type} message arrived`);
+          messages.push(result.value);
+        };
+        // One meaningful frame stamps both clocks and arms the watchdog.
+        server.write(Buffer.from(textDeltaFrame("hi")));
+        await nextOfType("text", opened);
+        // Advance BEFORE writing so each pair lands at that virtual instant, just under the silence
+        // deadline the previous frame set. A checkpoint is a progress frame, so it yields a
+        // `heartbeat` message; the bare heartbeat frame yields nothing outward. The frame chain is
+        // serialized, so awaiting the checkpoint's message proves both were decoded and the
+        // watchdog re-armed from the later of them.
+        for (const landing of [900, 1_800]) {
+          timing.advanceTo(landing);
+          server.write(Buffer.from(heartbeatFrame()));
+          server.write(Buffer.from(checkpointFrame()));
+          await nextOfType("heartbeat");
+          armedAfterLiveness.push(timing.armed());
+        }
+        // Silence was refreshed at 1800 and the progress clock never was, so 2S can only be the
+        // heartbeat-only deadline.
+        timing.advanceTo(virtualHeartbeatOnlyMs);
+        armedAfterDeadline = timing.armed();
+        // Had liveness frames wrongly refreshed the progress clock, nothing fires at 2S and the only
+        // surviving deadline is silence at 1800 + S. Cross it so this case reports which watchdog won
+        // instead of hanging to its own timeout.
+        timing.advanceTo(1_800 + virtualSilenceMs + 100);
+        for (;;) {
+          const result = await iterator.next();
+          if (result.done) break;
+          messages.push(result.value);
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
     });
-  }, timeoutMs);
+    expect(failure).toBeDefined();
+    // Say which watchdog won. A bare toContain reported only the expected substring, which reads as
+    // "the heartbeat-only watchdog is broken" when the real story was the silence watchdog firing first.
+    expect(failure!.message).toContain("heartbeat-only");
+    expect(failure!.message).not.toContain("no inbound frames");
+    // The heartbeat-only deadline fired at exactly 2S: nothing was left armed behind it.
+    expect(armedAfterDeadline).toBe(0);
+    // Liveness frames refreshed the silence clock and left one timer armed, never a stacked pair.
+    expect(armedAfterLiveness).toEqual([1, 1]);
+    expect(messages.some(message => message.type === "heartbeat")).toBe(true);
+  }, caseTimeoutMs);
 
   test("meaningful frames keep resetting both clocks; turnEnded finishes cleanly", async () => {
     // Virtual budgets: nothing here is scaled for CI, because no real interval has to beat them.
@@ -310,7 +367,7 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
     expect(armedAfterTurnEnded).toBe(0);
     timing.advanceTo(timing.now() + 10 * virtualHeartbeatOnlyMs);
     expect(failure).toBeUndefined();
-  }, timeoutMs);
+  }, caseTimeoutMs);
 
   test("turnEnded disarms the watchdog even when the server holds the stream open", async () => {
     await withH2Server(stream => {
