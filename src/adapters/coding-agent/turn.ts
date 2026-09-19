@@ -454,6 +454,31 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             kill();
             break;
           }
+          if (
+            toolBridge
+            && !terminalEmitted
+            && event.type === "done"
+            && toolCallStarts > 0
+            && (state.completedToolCalls ?? 0) !== toolCallStarts
+          ) {
+            // A terminal result that arrives while a captured tool call is still open must not
+            // become a successful completion the client can accept. The message_stop check after
+            // the event loop cannot cover this path: the CLI normally parks on the
+            // never-answering capture server, but a stream that delivers the result frame
+            // without (or before) message_stop emits done here, and started-but-unfinished
+            // calls slipped through as successful turns.
+            emitOnce({
+              type: "error",
+              message: "Coding-agent CLI ended with an incomplete tool call.",
+              status: 502,
+              errorType: "upstream_error",
+              code: "protocol_error",
+              retryable: false,
+            });
+            failClosed = true;
+            kill();
+            break;
+          }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }
             : event);
