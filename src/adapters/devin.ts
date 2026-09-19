@@ -312,8 +312,10 @@ function assistantText(message: OcxAssistantMessage): string {
  * signature_type on the assistant prompt.
  *
  * The wire has room for only one thinking/signature pair. Preserve that
- * association by replaying the last non-empty block as a unit rather than
- * combining independently signed blocks.
+ * association by replaying the last block with thinking text as a unit rather
+ * than combining independently signed blocks. A signature-only block attests
+ * encrypted thinking that is not being replayed, so it cannot sign a
+ * neighbour's text and is skipped.
  */
 function assistantThinking(
   message: OcxAssistantMessage,
@@ -321,7 +323,7 @@ function assistantThinking(
   const blocks = message.content.filter(
     (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
   );
-  const block = blocks.findLast(b => Boolean(b.thinking || b.signature));
+  const block = blocks.findLast(b => Boolean(b.thinking));
   if (!block) return {};
   return {
     ...(block.thinking ? { thinking: block.thinking } : {}),

@@ -522,6 +522,37 @@ describe("devin reasoning replay", () => {
     expect(unsignedLast[0]?.signature).toBeUndefined();
   });
 
+  test("a signature-only tail block cannot steal the pair or drop the turn", () => {
+    // Encrypted-only reasoning parts (thinking: "" + signature) are real: the
+    // Responses parser emits them for opaque blobs. Picking one as the replay
+    // unit used to send a signature with no thinking and drop a reasoning-only
+    // turn outright.
+    const history = mapOcxMessagesToDevin(parsedWith([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "signed thought", signature: "sig-signed" },
+          { type: "thinking", thinking: "", signature: "sig-orphan" },
+        ],
+      },
+    ]));
+    expect(history[0]?.thinking).toBe("signed thought");
+    expect(history[0]?.signature).toBe("sig-signed");
+
+    const trailingText = mapOcxMessagesToDevin(parsedWith([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "signed thought", signature: "sig-signed" },
+          { type: "thinking", thinking: "", signature: "sig-orphan" },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ]));
+    expect(trailingText[0]?.thinking).toBe("signed thought");
+    expect(trailingText[0]?.signature).toBe("sig-signed");
+  });
+
   test("the encoded prompt carries thinking at #11 and its signature at #12", () => {
     const req = buildGetChatMessageRequestForTests({
       apiKey: "devin-session-token$x",
