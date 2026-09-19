@@ -16,13 +16,13 @@ Evidence lives in this unit; previous implementation specifications remain in `d
 
 ## Ownership and dependencies
 
-| Lane | Sole issue ownership | File domains and sequence |
+| Lane | Issue and layer ownership | File domains and sequence |
 | --- | --- | --- |
-| Runtime | #5109 #5110 #5111 #5113 #5115 #5118 #5122 #5123 #5124 | Raw transport contract, custom input consistency, send accounting, journal ownership and continuation policy. Stack null-body/coding only if a real shared helper dependency exists; upload can stay independent. Keep stream and state changes separate. |
-| Policy and operator | #5112 #5114 #5116 #5117 #5119 #5120 #5121 | Schema reports before reject-lossy policy, static merge parity before consolidation, identity hints separate from availability, authority-map/tooling, optional metrics and pure preview, documentation alignment. Stack by these dependencies; independent docs can land separately. |
+| Runtime | #5109 #5110 #5111 #5113 #5115 #5118 (server) #5122 #5123 #5124 | Raw transport contract, custom input consistency, send accounting, journal ownership and continuation policy. Stack null-body/coding only if a real shared helper dependency exists; upload can stay independent. Keep stream and state changes separate. |
+| Policy and operator | #5112 #5114 #5116 #5117 #5118 (dashboard) #5119 #5120 #5121 | Schema reports before reject-lossy policy, static merge parity before consolidation, identity hints separate from availability, authority-map/tooling, optional metrics and pure preview, documentation alignment. Stack by these dependencies; independent docs can land separately. |
 | Coordinator | Review, CI, base/merge judgment and issue closure | Workers never merge or close issues. Cross-lane shared test-layout/structure changes are serialized at integration, with no cap increases or dropped regressions. |
 
-The user chose two different main-task models and a specific subagent model. Runtime/model selection provenance stays in task records rather than public repository artifacts. Workers may use unlimited useful subagent rounds; concurrent workers have disjoint writes and never perform branch-level git operations in parallel on one checkout.
+Workers may use unlimited useful subagent rounds; concurrent workers have disjoint writes and never perform branch-level git operations in parallel on one checkout.
 
 ## Integration policy
 
@@ -51,3 +51,5 @@ Ownership amendment: #5115 moved to the runtime owner after the policy owner con
 Independent preparation audit accepted the #5115 ownership amendment: `knownModelIdsForProvider` is byte-identical across #5174, the registry entry type is unchanged by that layer, and the new helper has no static-policy dependency. Expected later overlap is import ordering and line movement; integration must retain both independent changes and obtain new-head hosted proof.
 
 Second ownership amendment: #5118 transferred to the existing runtime owner after confirmation that no implementation writer, branch or commit existed. Server and dashboard delivery remain required, with the prior private pre-build audit incorporated before implementation. Metrics-to-preview shared-route integration is serialized; preparation can proceed in disjoint files. Dashboard evidence must satisfy the actual file-based screenshot gate using hosted artifacts under the no-local-build restriction. No third implementation owner was created.
+
+Ownership refinement for #5118: the runtime owner retains server/writer/routes/backend tests and documentation; the existing policy owner takes the dashboard and its tests after explicit release of the untouched layer. Delivery remains server parent #5185 followed by a manually chained dashboard child, with independent reviews, each required hosted gate and actual screenshot evidence. No acceptance criterion or execution restriction changes.

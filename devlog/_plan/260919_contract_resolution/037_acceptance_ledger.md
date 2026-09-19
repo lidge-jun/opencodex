@@ -9,11 +9,11 @@ This checkpoint does not declare the campaign complete. Current disposition: thi
 | #5111 | Closed; landed through #5126 | [`af4f744c75`](022_pr_5126.md); closure at 2026-09-19T10:01:05Z. |
 | #5112 | Closed; parent #5162 and child #5167 landed | [`96a6de86b7`](034_strict_schema_policy.md); current closure verified after both ancestries. |
 | #5113 | Closed; landed through #5129 | [`bb2fa5ab25`](024_pr_5129.md); closure at 2026-09-19T10:04:15Z. |
-| #5114 | Open; incomplete | Resolver #5171 passed hosted CI but has unresolved review findings; consumer #5174 has hosted failures under repair. Both layers must land. [Record](035_static_policy_resolver.md). |
+| #5114 | Open; incomplete | Resolver #5171 landed at efb55e71e5; consumer #5174 has an unresolved macOS startup timeout under diagnosis. Its current-head verification and landing remain required. [Record](035_static_policy_resolver.md). |
 | #5115 | Closed; landed through #5177 | [`838af40f1b`](039_decode_hint_review.md); closure at 2026-09-19T15:01:16Z. |
 | #5116 | Closed; landed through #5155 | [`6d42723387`](030_pr_5155.md); closure at 2026-09-19T11:07:05Z. |
-| #5117 | Open; incomplete | Opt-in metadata-only exporter is being implemented; full privacy/auth/counting/lifecycle acceptance remains unverified. [Record](000_plan.md). |
-| #5118 | Open; incomplete | Server-owned read-only preview, fingerprint validation and dialog integration still required. [Record](000_plan.md). |
+| #5117 | Open; incomplete | Metrics #5183 is implemented with reviewed terminal-path corrections; acquisition regression coverage and current-head hosted verification remain required. [Record](038_metrics_review.md). |
+| #5118 | Open; incomplete | Draft server #5185 and its dashboard child remain incomplete; source acceptance, hosted execution and actual visual evidence are required. [Record](040_preview_review.md). |
 | #5119 | Closed; landed through #5153 | [`f117c20d12`](029_pr_5153.md); closure at 2026-09-19T10:21:08Z. |
 | #5120 | Closed; landed through #5134 | [`1b54f2940b`](026_pr_5134.md); closure at 2026-09-19T09:02:10Z. |
 | #5121 | Closed; landed through #5138 | [`5ce51cb554`](027_pr_5138.md); closure at 2026-09-19T10:08:29Z. |
@@ -28,3 +28,5 @@ Publication review checkpoint: independent re-review accepted the corrected Engl
 Public checkpoint #5175 landed as `57b1df792ef7e66e17b0110727eefdd5387e164d` at 2026-09-19T14:13:30Z after reviewed head `128a47ea9db9b93ffc80fc2d42a2f4cddcc8f8c0` passed all applicable hosted checks and public review. Runtime checks were change-inapplicable, not executed. The original coordinator checkout staging was retained. Future implementation outcomes still require ledger updates and independent completion proof.
 
 At the #5123 checkpoint, the total was eleven closed and five open; this earlier checkpoint remains historical evidence.
+
+Second public checkpoint #5187 landed as `00ac9b6a6c0707b8e315b88f334c396162909b17` at2026-09-19T15:45:45Z after applicable hosted CI and all publication findings were resolved. It records thirteen completed issues and three open issues; later working updates remain pending publication.
