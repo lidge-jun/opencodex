@@ -205,6 +205,13 @@ test("Grok leaves an unrelated same-valued floating timestamp unchanged", () => 
   expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([block]);
 });
 
+test("Grok normalizes only the direct timestamp when a nested timestamp shares its value", () => {
+  const block = 'data: {"type":"response.created","response":{"created_at":1789740485.0,"metadata":{"created_at":1789740485.0}}}';
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([
+    'data: {"type":"response.created","response":{"created_at":1789740485,"metadata":{"created_at":1789740485.0}}}',
+  ]);
+});
+
 test.each([
   "data: not-json",
   "data: {\"type\":\"response.output_text.delta\",\"delta\":\"1789740485.0\"}",

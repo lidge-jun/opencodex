@@ -88,21 +88,43 @@ function findResponseObjectRange(payload: string): JsonRange | null {
 function rewriteIntegralTimestamp(payload: string, field: string, value: number, event: unknown): string | null {
   const responseRange = findResponseObjectRange(payload);
   if (responseRange === null) return null;
-  const fieldPattern = new RegExp(
-    `"${field}"(\\s*:\\s*)(-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*[,}])`,
-    "g",
-  );
-  let candidate: RegExpExecArray | null = null;
-  for (const match of payload.matchAll(fieldPattern)) {
-    if (match.index < responseRange.start || match.index >= responseRange.end) continue;
-    if (match[2] === String(value) || Number(match[2]) !== value) continue;
-    if (candidate !== null) return null;
-    candidate = match;
+  let cursor = responseRange.start + 1;
+  let candidate: { start: number; length: number } | null = null;
+  while (cursor < responseRange.end) {
+    cursor = skipJsonWhitespace(payload, cursor);
+    if (payload[cursor] === "}") break;
+    if (payload[cursor] !== '"') return null;
+    const keyEnd = findJsonStringEnd(payload, cursor);
+    if (keyEnd === undefined) return null;
+    let key: unknown;
+    try {
+      key = JSON.parse(payload.slice(cursor, keyEnd));
+    } catch {
+      return null;
+    }
+    cursor = skipJsonWhitespace(payload, keyEnd);
+    if (payload[cursor] !== ":") return null;
+    const valueStart = skipJsonWhitespace(payload, cursor + 1);
+    const valueEnd = findJsonValueEnd(payload, valueStart);
+    if (valueEnd === undefined || valueEnd > responseRange.end) return null;
+    const valueToken = payload.slice(valueStart, valueEnd).trimEnd();
+    if (
+      key === field &&
+      /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(valueToken) &&
+      valueToken !== String(value) &&
+      Number(valueToken) === value
+    ) {
+      if (candidate !== null) return null;
+      candidate = { start: valueStart, length: valueToken.length };
+    }
+    cursor = skipJsonWhitespace(payload, valueEnd);
+    if (payload[cursor] === "}") break;
+    if (payload[cursor] !== ",") return null;
+    cursor += 1;
   }
-  if (candidate?.index === undefined) return payload;
+  if (candidate === null) return payload;
 
-  const numberOffset = candidate.index + candidate[0].lastIndexOf(candidate[2]);
-  const rewritten = `${payload.slice(0, numberOffset)}${value}${payload.slice(numberOffset + candidate[2].length)}`;
+  const rewritten = `${payload.slice(0, candidate.start)}${value}${payload.slice(candidate.start + candidate.length)}`;
   try {
     return JSON.stringify(JSON.parse(rewritten)) === JSON.stringify(event) ? rewritten : null;
   } catch {
