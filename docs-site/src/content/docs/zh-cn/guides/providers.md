@@ -173,7 +173,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 94 个预设：78 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 95 个预设：79 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -246,7 +246,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
-火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
+火山方舟 Coding Plan 和 Agent Plan 都通过 `openai-responses` adapter 使用原生 Responses 端点。在已验证的 Ark Coding Plan 工具调用 continuation 中，回放上一次 Responses 返回的 `reasoning` item 会触发 `400 InvalidParameter`，因此 Coding Plan 预设会在转发 continuation input 前移除这类 replayed reasoning item；这会丢失该轮的 reasoning 状态，可用 `dropResponsesReasoningItems: false` 关闭。已经保存为 `openai-chat` 的 Coding Plan 配置不会被改写，仍按 Chat 走；如需切换，请手动把 `adapter` 改为 `openai-responses` 并把 `responsesPath` 设为 `/responses`，或删除后重新添加该预设。显式的逐模型 `openai-chat` override 仍可使用。
 内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE
 流式输出。如果该模型已经完成全部输出项却缺少最终 Responses 事件，opencodex 会应用模型级
 5 秒宽限修复；不完整或格式异常的流会以 incomplete 结束，不会被误报为成功。

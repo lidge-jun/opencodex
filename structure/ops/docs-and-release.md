@@ -45,10 +45,18 @@ Proxy-format, adapter, and provider documentation distinguishes server-level SOC
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
-Provider preset totals are recounted from the current registry when a preset lands. With Crusoe the
-documented split is 94 total: 78 key-based, 12 OAuth, three local, and one default ChatGPT-forward
-preset. The English provider guide and all seven translated copies carry the same counts and the
-same fixed-host discovery limits.
+Provider preset totals are recounted from the current registry when a preset lands. The documented
+split is 95 total: 79 key-based, 12 OAuth, three local, and one default ChatGPT-forward preset. The
+English provider guide, all seven translated copies, and all eight quickstarts carry the same
+counts, and the guides carry the same fixed-host discovery limits.
+
+That recount is no longer a manual obligation. Seventeen places restate these numbers and sixteen
+of them drifted once already — the English guide reached 95 while every translation and every
+quickstart, the English one included, still said 94. Both numbers read as plausible, so nothing
+caught it. `tests/ci-workflows/docs-provider-preset-counts.test.ts` now derives the total and the
+key-based split from `PROVIDER_REGISTRY` and asserts them against each page, so the next preset
+fails every locale at once instead of drifting. Each page is located by a locale-specific phrase
+rather than by its number, so rewording a sentence fails the check and asks to be re-anchored.
 
 Native retirement keeps active model/quota instructions aligned across locales with the
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers

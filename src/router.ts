@@ -17,6 +17,7 @@ import {
   PROVIDER_REGISTRY,
   mergeRegistryStaticHeaders,
   providerCodexAccountMode,
+  registryEntryForProviderDestination,
   registryModelServiceTierCapabilityApplies,
 } from "./providers/registry";
 // Imported from the module directly rather than through the registry facade, which is at its
@@ -297,7 +298,20 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
-    return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
+    // A row whose adapter no longer matches its registry entry still reaches the Responses
+    // adapter when one model opts in through `modelAdapters` — a Volcengine Coding Plan config
+    // saved on Chat, for instance. The replay-drop flag belongs to the DESTINATION rather than
+    // to the provider-wide wire, so it is filled here too; without it that continuation forwards
+    // the reasoning item the upstream answers 400 to. Destination matching refuses templated and
+    // overridable base URLs, so this cannot follow a retargeted row, and an explicit value wins.
+    const destination = registryEntryForProviderDestination(provider);
+    return {
+      ...provider,
+      apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
+        ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
+        : {}),
+    };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
@@ -411,6 +425,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       : {}),
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
+      : {}),
+    ...(provider.dropResponsesReasoningItems === undefined && registryEntry.dropResponsesReasoningItems !== undefined
+      ? { dropResponsesReasoningItems: registryEntry.dropResponsesReasoningItems }
       : {}),
     // The request path resolves through routedProviderConfig() and never calls
     // enrichProviderFromRegistry(), so a saved provider row written before the

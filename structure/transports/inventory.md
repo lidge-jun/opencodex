@@ -130,6 +130,14 @@ only a typed DNS-resolution failure degrades to proxy resolution; every literal,
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
 
+Every request through this wrapper is proxy-originated, so it fills a default
+`User-Agent: opencodex` when the request headers name no User-Agent of their own; registry
+static headers, provider `headers` values, and vendor-specific client fingerprints keep their
+value and are never given a second User-Agent. The value survives, not its spelling: the pinned
+and SOCKS transports rebuild the header set through `new Headers()`, which lowercases every name.
+Inference traffic never uses this wrapper, so client fingerprints on proxied traffic are
+unaffected (#5104).
+
 Two fake-IP DNS accommodations exist, both for resolved answers only (a literal address in the URL
 still rejects). The IANA benchmark range (198.18/15 and its IPv4-mapped IPv6 spellings) is admitted
 whenever any outbound proxy applies to the host, because the range itself marks the answer synthetic.

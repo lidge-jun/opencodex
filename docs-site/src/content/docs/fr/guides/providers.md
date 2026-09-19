@@ -283,7 +283,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 94 préréglages intégrés : 78 à clé, 12 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 95 préréglages intégrés : 79 à clé, 12 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -378,7 +378,7 @@ restriction. Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/do
 
 La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; quelques fournisseurs qui n'exposent
 qu'un point de terminaison compatible Anthropic, comme **Xiaomi MiMo**, emploient l'adaptateur `anthropic`
-(`x-api-key`). Volcengine Agent Plan utilise son point de terminaison Responses natif par `openai-responses`.
+(`x-api-key`). Volcengine Coding Plan et Agent Plan utilisent leur point de terminaison Responses natif par `openai-responses`. Lors des continuations d'outils validées sur Ark Coding Plan, renvoyer l'élément `reasoning` retourné par le tour précédent provoque `400 InvalidParameter` ; le préréglage Coding Plan retire donc ces éléments avant de transmettre l'entrée de continuation. Cela perd l'état de raisonnement de ce tour et se désactive avec `dropResponsesReasoningItems: false`. Une configuration Coding Plan déjà enregistrée en `openai-chat` n'est pas réécrite et reste sur Chat : pour basculer, passez `adapter` à `openai-responses` et `responsesPath` à `/responses`, ou supprimez puis rajoutez le préréglage.
 Le préréglage DeepSeek intégré route également `deepseek-v4-flash` par son point de terminaison Responses natif
 et conserve le streaming SSE en amont. Si ce modèle termine tous les éléments de sortie mais omet l'événement
 Responses final, opencodex applique une réparation après un délai de grâce de cinq secondes, limitée à ce
