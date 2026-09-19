@@ -841,7 +841,11 @@ export async function retryCodexPoolOnAlternateAccount(
         parsed.modelId,
       );
       if (retryModelDenial !== undefined) {
-        recordCodexModelDenialEvidence(retryAuthCtx.accountId, retryModelDenial);
+        recordCodexModelDenialEvidence(
+          retryAuthCtx.accountId,
+          retryModelDenial,
+          retryAuthCtx.kind === "pool" ? retryAuthCtx.generation : undefined,
+        );
       }
       if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
       // Caller-owned main is an alternate-account replay and can never enter the bounded
