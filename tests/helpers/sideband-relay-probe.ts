@@ -5,11 +5,16 @@ import { expect } from "bun:test";
  * Observable state of the mock sideband peer, for a case whose only symptom is a deadline.
  *
  * A relay case that exceeds its ceiling reports the ceiling and nothing else: not which leg was
- * slow, and not whether the peer's reply was actually handed to the socket. Both are knowable.
- * `ServerWebSocket.send` reports what it did with the payload — a positive byte count when it
- * went out, `-1` when it was enqueued behind backpressure, `0` when it was dropped — so a
- * 50MiB echo that never left is distinguishable from one still in flight, which is exactly the
- * ambiguity at a frame ceiling. See https://bun.com/docs/runtime/http/websockets.
+ * slow, and not whether the peer's reply was actually handed to the socket. The second one is
+ * knowable. `ServerWebSocket.send` reports what it did with the payload: a positive byte count
+ * when it was written, `-1` when it was enqueued behind backpressure, `0` when it was dropped.
+ * That separates a reply this peer never handed to the socket from one it did. It is not proof
+ * of delivery -- nothing on this side can observe what the client received.
+ *
+ * Note what the large frame actually is. The 50MiB payload travels client to peer; the reply is
+ * a short `bytes:<length>` acknowledgement, so `send=` on the reply says nothing about the big
+ * frame. What proves the peer saw all of it is the `recv=` count it recorded.
+ * See https://bun.com/docs/runtime/http/websockets.
  *
  * This records; it diagnoses nothing on its own and asserts nothing.
  */
@@ -20,6 +25,10 @@ export interface SidebandRelayProbe {
    * Handed to `phaseTimer` as its progress probe so a tick can say whether anything moved since
    * the last one. Without it every tick reads "no movement" and a stalled leg looks the same as
    * a slow runner.
+   *
+   * It counts milestones and nothing finer. A frame is one event whatever its size, so a tick
+   * that reports no movement means no further milestone was reached -- not that the transport
+   * stalled. A partially delivered frame and a runner busy with CPU work both look like this.
    */
   progress(): number;
   /** Advance from the client side of the relay, which this module cannot observe directly. */
@@ -75,7 +84,9 @@ export function sidebandRelayUpstream(maxPayloadLength: number): SidebandRelayUp
         const bytes = typeof message === "string" ? message.length : message.byteLength;
         note("recv=" + bytes);
         const sent = ws.send(typeof message === "string" ? `echo:${message}` : `bytes:${message.byteLength}`);
-        // Negative means queued behind backpressure and zero means dropped; neither is delivery.
+        // The reply is a short acknowledgement, not an echo of a large frame, and this number is
+        // about that reply only: negative is queued behind backpressure, zero is dropped, and a
+        // positive count is bytes written to the socket rather than bytes the client received.
         note("send=" + sent);
       },
       drain(ws: ServerWebSocket<unknown>) {
@@ -105,4 +116,29 @@ export function expectSidebandUpgrade(
   expect(upstream.seenUpgradeHeaders[0]?.get("openai-alpha")).toBe("quicksilver=v2");
   expect(upstream.seenUpgradeHeaders[0]?.get("x-session-id")).toBe("rts_side");
   expect(upstream.seenUpgradeHeaders[0]?.get("authorization")).toBe(`Bearer ${token}`);
+}
+
+/**
+ * Point ChatGPT sideband WebSocket targets at a local mock for the duration of one case.
+ *
+ * The configuration stays canonical: the relay still resolves api.openai.com, and only the
+ * socket the runtime opens on that host is redirected. The untouched constructor comes back
+ * with it because the case needs one that is NOT redirected to open its own client against the
+ * proxy under test.
+ */
+export function redirectSidebandWebSocket(port: number): {
+  readonly OriginalWebSocket: typeof WebSocket;
+  restore(): void;
+} {
+  const OriginalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = class extends OriginalWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target = parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+        ? `ws://127.0.0.1:${port}${parsed.pathname}${parsed.search}`
+        : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+  return { OriginalWebSocket, restore: () => { globalThis.WebSocket = OriginalWebSocket; } };
 }

@@ -34,7 +34,7 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { phaseTimer } from "../helpers/phase-timing";
-import { expectSidebandUpgrade, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
+import { expectSidebandUpgrade, redirectSidebandWebSocket, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -610,30 +610,21 @@ test("call-create and its sideband join bind to the same pool account (openai/co
 
 test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectionally", async () => {
   // The peer is a helper so it can report what it saw: this case's only symptom on failure is
-  // its own deadline, which names neither the slow leg nor whether the echo was ever sent.
+  // its own deadline, which names neither the slow leg nor whether the reply was ever sent.
   const { server: upstream, seenPaths, seenUpgradeHeaders, probe } = sidebandRelayUpstream(MAX_WS_FRAME_BYTES);
 
   saveConfig(forwardConfig());
 
   // Redirect ChatGPT sideband WebSocket targets to the local mock (config stays canonical).
-  const RealWebSocket = globalThis.WebSocket;
-  const upstreamPort = upstream.port;
-  globalThis.WebSocket = class extends RealWebSocket {
-    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
-      const parsed = new URL(String(url));
-      const target =
-        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
-          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
-          : String(url);
-      super(target, protocols as string[]);
-    }
-  } as typeof WebSocket;
+  // Extracted beside the peer rather than inlined: this case is at its size cap, and the repo
+  // answer to that is a sibling helper, not compressed control flow.
+  const { OriginalWebSocket, restore: restoreWebSocket } = redirectSidebandWebSocket(upstream.port);
 
   const server = startServer(0);
   try {
     const wsUrl = new URL(`/v1/live/rtc_sideband`, server.url);
     wsUrl.protocol = "ws:";
-    const client = new RealWebSocket(wsUrl.toString(), {
+    const client = new OriginalWebSocket(wsUrl.toString(), {
       headers: {
         authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
         "chatgpt-account-id": "acct-123",
@@ -642,15 +633,16 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
       },
     } as unknown as string[]);
 
-    // Each leg is its own segment, and the timer's ticks read the peer's event count, so a
-    // segment that stops moving is distinguishable from a runner that is merely slow.
+    // Each leg is its own segment and the timer's ticks read the peer's event count, so a
+    // segment that reaches no further milestone is visible as such. That is weaker than proof
+    // of a stall: a tick without movement says no milestone was reached, not that nothing moved.
     const phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
         const fail = (reason: string): void => reject(new Error(`${reason}; peer: ${probe.summary()}`));
         timer = setTimeout(() => fail("sideband timeout"), 15_000);
-        let sawPing = false;
+        let stage: "echo-roundtrip" | "await-ceiling-echo" | "done" = "echo-roundtrip";
         phase.split("upgrade");
         client.addEventListener("open", () => {
           probe.noteClient("open");
@@ -659,23 +651,31 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
         });
         client.addEventListener("close", event => {
           probe.noteClient("close=" + event.code);
-          // An early close is a distinct outcome from a deadline, and it used to read as one.
-          if (!sawPing) fail("sideband closed before the echo");
+          // ANY close before this case settles is its own outcome, not a deadline. Keying that
+          // on the first echo left the harder half unreported: a close after the ping and
+          // before the ceiling echo -- the disconnect a 50MiB frame is most likely to cause --
+          // fell through to the 15s timeout and read as a slow peer.
+          if (stage !== "done") fail(`sideband closed during ${stage}`);
         });
         client.addEventListener("message", (event) => {
           try {
             probe.noteClient("message");
-            if (!sawPing) {
+            if (stage === "echo-roundtrip") {
               expect(String(event.data)).toBe("echo:ping-sideband");
-              sawPing = true;
               phase.split("allocate-ceiling-frame");
               const frame = Buffer.alloc(MAX_WS_FRAME_BYTES);
-              phase.split("await-ceiling-echo");
+              // The send is synchronous, so allocating the frame, handing it to the socket and
+              // waiting for the acknowledgement are three separate costs. Timing them as one
+              // segment reported allocation time as wait time.
+              phase.split("send-ceiling-frame");
               client.send(frame);
+              stage = "await-ceiling-echo";
+              phase.split("await-ceiling-echo");
               return;
             }
             expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
             expectSidebandUpgrade({ seenPaths, seenUpgradeHeaders }, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+            stage = "done";
             resolve();
           } catch (err) {
             reject(err);
@@ -691,7 +691,7 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
       client.close();
     }
   } finally {
-    globalThis.WebSocket = RealWebSocket;
+    restoreWebSocket();
     await server.stop(true);
     await upstream.stop(true);
   }
