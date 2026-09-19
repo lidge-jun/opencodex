@@ -1,5 +1,6 @@
 import net, { type Socket } from "node:net";
 import tls, { type TLSSocket } from "node:tls";
+import { isNullBodyStatus } from "./http-response-semantics";
 
 const DEFAULT_SOCKS5_PORT = 1080;
 const SOCKS5_CONNECT_TIMEOUT_MS = 30_000;
@@ -510,7 +511,9 @@ function responseBody(
 
 /** Statuses and methods that carry no response body, whatever the headers say about one. */
 function bodylessResponse(method: string, status: number): boolean {
-  return method === "HEAD" || status === 204 || status === 304 || (status >= 100 && status < 200);
+  // 205 belongs here for the same reason 204 does, and leaving it out was not a judgement call:
+  // a peer that resets the caller's view sends no body, so the Response constructor rejects one.
+  return method === "HEAD" || isNullBodyStatus(status) || (status >= 100 && status < 200);
 }
 
 /**

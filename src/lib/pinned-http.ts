@@ -1,5 +1,6 @@
 import http, { type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
 import https from "node:https";
+import { isNullBodyStatus } from "./http-response-semantics";
 
 export type PinnedAddress = { address: string; family: number };
 
@@ -142,6 +143,21 @@ function pinnedHttpRequest(
       }
 
       if (status < 200 || status >= 300) {
+        try { response.destroy(); } catch { /* ignore */ }
+        try { req?.destroy(); } catch { /* ignore */ }
+        if (settled) return;
+        settled = true;
+        resolve(new Response(null, { status, headers: responseHeaders }));
+        return;
+      }
+
+      // A success status can still be null-body. `new Response(stream, { status: 204 })` throws a
+      // TypeError, so attaching the body below would turn a correct no-content answer into a
+      // construction failure raised inside this event handler rather than a resolved response.
+      // Nothing is coming on the socket either, so streaming one of these would hold the caller
+      // until the peer closed a connection it is entitled to keep alive. The headers still
+      // describe the representation the peer would have sent and are preserved as they arrived.
+      if (isNullBodyStatus(status)) {
         try { response.destroy(); } catch { /* ignore */ }
         try { req?.destroy(); } catch { /* ignore */ }
         if (settled) return;

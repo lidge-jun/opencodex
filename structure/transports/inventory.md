@@ -247,4 +247,15 @@ for `identity` unless the caller chose an `accept-encoding` itself, a `gzip` or 
 response is decoded and stops advertising the coding and the coded length, and any other coding
 is refused by name rather than surfaced as bytes no caller can read.
 
+## Raw transport null-body statuses
+
+`src/lib/http-response-semantics.ts` holds the null-body status set both raw outbound transports
+have to honor. `fetch` applies it below the Response constructor; `src/lib/pinned-http.ts` and
+`src/lib/socks5-fetch.ts` build a Response from a socket, so each one applied the rule on its own
+and the two disagreed — the SOCKS helper excluded 204 and the pinned helper excluded nothing.
+204, 205 and 304 resolve with a null body and release the connection instead of waiting for a
+peer that is entitled to keep it alive, and their representation headers are preserved as they
+arrived rather than decoded or refused, because there are no coded bytes to act on.
+`tests/lib/transport-null-body.test.ts` covers both transports against a keep-alive peer.
+
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

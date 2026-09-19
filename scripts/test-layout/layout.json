@@ -1403,6 +1403,7 @@
     "tool-choice-performance.test.ts": "adapters",
     "transient-budget-scope-source.test.ts": "lib",
     "translator-budget.test.ts": "adapters",
+    "transport-null-body.test.ts": "lib",
     "tray-proxy-deadline.test.ts": "windows",
     "tray-proxy.test.ts": "windows",
     "types-barrel-identity.test.ts": "config",
