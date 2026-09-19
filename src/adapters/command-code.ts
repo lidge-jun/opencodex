@@ -9,7 +9,7 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { debugDroppedFrame } from "../lib/debug";
 import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effort";
-import { commandCodeReasoningEfforts, commandCodeSeededReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
+import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
@@ -484,19 +484,19 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
 }
 
 /**
- * Has the operator actually chosen a ladder for this model, or is this the shipped one?
+ * Has the operator declared their own ladders authoritative for this provider?
  *
- * Both registry presets seed `modelReasoningEfforts` from the shipped Command Code table, so a
- * configured row is only evidence of a decision when it DIFFERS from what was seeded. Comparing
- * against the seeded value rather than the resolved one matters: a profile refresh may have
- * narrowed the live ladder, and that correction must not be mistaken for an operator edit.
+ * Comparing a configured row against the shipped table cannot answer this. `providerConfigSeed`
+ * copies the whole table into every materialized preset, and both enrichment and routing keep a
+ * persisted row over the current seed, so a row written by an older release keeps its old value
+ * and starts LOOKING like an operator edit the moment the shipped table is corrected — at which
+ * point the stale row would outrank the correction and disable the rejection repair below.
+ * Provenance has to be declared rather than inferred, so it is: `providerConfigSeed` never
+ * writes this flag, which makes its presence something only a human can have caused.
  */
 function operatorChoseCommandCodeLadder(provider: OcxProviderConfig, canonicalId: string): boolean {
-  const declared = modelRecordValue(provider.modelReasoningEfforts, canonicalId);
-  if (declared === undefined) return false;
-  const seeded = commandCodeSeededReasoningEfforts(canonicalId);
-  if (seeded === undefined) return true;
-  return declared.length !== seeded.length || declared.some((value, index) => value !== seeded[index]);
+  if (provider.modelReasoningEffortsAuthoritative !== true) return false;
+  return modelRecordValue(provider.modelReasoningEfforts, canonicalId) !== undefined;
 }
 
 /**
@@ -509,9 +509,10 @@ function operatorChoseCommandCodeLadder(provider: OcxProviderConfig, canonicalId
  * picker. An operator who widened a pinned row saw the wider ladder offered in Codex and then
  * watched the adapter strip the rung on the way out (#5096).
  *
- * An operator row now resolves through the same function the catalog uses, so the picker and the
- * wire agree, and sanitization, tier healing and learned-refusal dropping apply to it. Rows the
- * operator never touched keep the shipped table, including a value learned by a profile refresh.
+ * An operator who sets `modelReasoningEffortsAuthoritative` now resolves through the same
+ * function the catalog uses, so the picker and the wire agree, and sanitization, tier healing and
+ * learned-refusal dropping apply to it. Every other provider keeps the shipped table, including a
+ * value learned by a profile refresh.
  */
 function commandCodeEffortLadder(provider: OcxProviderConfig, canonicalId: string): readonly string[] | undefined {
   if (operatorChoseCommandCodeLadder(provider, canonicalId)) {
@@ -538,7 +539,11 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
     lower === "zai-org/glm-5.2";
   if (requested === "xhigh" && !supported.includes("xhigh") && supported.includes("max")) {
     wire = "max";
-  } else if (requested === "ultra" && needsAlias && supported.includes("max")) {
+  } else if (requested === "ultra" && needsAlias && !supported.includes("ultra") && supported.includes("max")) {
+    // The xhigh branch above already refuses to alias a rung the ladder advertises; ultra has to
+    // match it. No shipped row offers ultra, so this changes nothing for the built-in table — but
+    // an authoritative operator ladder that does offer it would otherwise advertise ultra in the
+    // picker and quietly send max, which is the catalog/wire disagreement this file just fixed.
     wire = "max";
   }
   return (supported as readonly string[]).includes(wire) ? wire : undefined;

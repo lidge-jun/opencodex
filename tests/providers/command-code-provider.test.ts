@@ -763,7 +763,7 @@ describe("Command Code provider", () => {
    * materialized preset, so "the config has a row for this model" proves nothing — only a row
    * that DIFFERS from the shipped value is an operator decision.
    */
-  test("an operator ladder that differs from the shipped row reaches the wire", async () => {
+  test("an authoritative operator ladder reaches the wire", async () => {
     // Shipped: deepseek/deepseek-v4.1-flash is ["high", "max"], so xhigh is aliased down to max.
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["high", "max"]);
     const shipped = await builtRequest({
@@ -774,6 +774,7 @@ describe("Command Code provider", () => {
 
     const widened = createCommandCodeAdapter({
       ...provider,
+      modelReasoningEffortsAuthoritative: true,
       modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["low", "medium", "high", "xhigh", "max"] },
     } as OcxProviderConfig);
     const built = await widened.buildRequest({
@@ -785,6 +786,7 @@ describe("Command Code provider", () => {
     // Narrowing works in the same direction: an operator who removes a rung loses it.
     const narrowed = createCommandCodeAdapter({
       ...provider,
+      modelReasoningEffortsAuthoritative: true,
       modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["high"] },
     } as OcxProviderConfig);
     const stripped = await narrowed.buildRequest({
@@ -792,14 +794,24 @@ describe("Command Code provider", () => {
       options: { reasoning: "max", maxOutputTokens: 100 },
     });
     expect(JSON.parse(stripped.body).params).not.toHaveProperty("reasoning_effort");
+
+    // ultra is aliased to max only when the ladder does NOT advertise it, matching xhigh. An
+    // authoritative ladder offering ultra therefore sends ultra rather than quietly sending max.
+    const withUltra = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEffortsAuthoritative: true,
+      modelReasoningEfforts: { "deepseek/deepseek-v4-flash": ["high", "max", "ultra"] },
+    } as OcxProviderConfig);
+    const ultra = await withUltra.buildRequest({ ...parsed(), options: { reasoning: "ultra", maxOutputTokens: 100 } });
+    expect(JSON.parse(ultra.body).params.reasoning_effort).toBe("ultra");
   });
 
-  test("a preset carrying the seeded table behaves exactly like the shipped table", async () => {
+  // The flag is what makes this safe. A preset carries the seeded table, and a row written by an
+  // older release keeps its old value through enrichment and routing, so a value comparison would
+  // start reading a stale seed as operator intent the moment the shipped table is corrected.
+  // Without the flag, a configured row — seeded, stale, or hand-written — changes nothing.
+  test("a configured ladder is inert without the authoritative flag", async () => {
     const entry = PROVIDER_REGISTRY.find(row => row.id === "command-code")!;
-    const seeded = createCommandCodeAdapter({
-      ...provider,
-      modelReasoningEfforts: { ...entry.modelReasoningEfforts },
-    } as OcxProviderConfig);
     const cases = [
       ["deepseek/deepseek-v4.1-flash", "xhigh"],
       ["deepseek/deepseek-v4-flash", "ultra"],
@@ -807,11 +819,24 @@ describe("Command Code provider", () => {
       ["zai-org/GLM-5.3", "low"],
       ["meta/muse-spark-1.3", "xhigh"],
     ] as const;
+    const seeded = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: { ...entry.modelReasoningEfforts },
+    } as OcxProviderConfig);
+    // A stale row: every shipped ladder widened, but nobody declared it authoritative.
+    const stale = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: Object.fromEntries(
+        Object.keys(entry.modelReasoningEfforts ?? {}).map(id => [id, ["low", "medium", "high", "xhigh", "max"]]),
+      ),
+    } as OcxProviderConfig);
     for (const [modelId, reasoning] of cases) {
-      const withSeed = await seeded.buildRequest({ ...parsed(modelId), options: { reasoning, maxOutputTokens: 100 } });
-      const withoutConfig = await builtRequest({ ...parsed(modelId), options: { reasoning, maxOutputTokens: 100 } });
-      expect(JSON.parse(withSeed.body).params.reasoning_effort, `${modelId} @ ${reasoning}`)
-        .toEqual(JSON.parse(withoutConfig.body).params.reasoning_effort);
+      const options = { reasoning, maxOutputTokens: 100 };
+      const expected = JSON.parse((await builtRequest({ ...parsed(modelId), options })).body).params.reasoning_effort;
+      for (const [label, adapter] of [["seeded", seeded], ["stale", stale]] as const) {
+        const built = await adapter.buildRequest({ ...parsed(modelId), options });
+        expect(JSON.parse(built.body).params.reasoning_effort, `${label} ${modelId} @ ${reasoning}`).toEqual(expected);
+      }
     }
   });
 
@@ -827,6 +852,7 @@ describe("Command Code provider", () => {
     const adapter = createCommandCodeAdapter({
       ...provider,
       fetch,
+      modelReasoningEffortsAuthoritative: true,
       modelReasoningEfforts: { "deepseek/deepseek-v4-flash": ["low", "medium", "high", "xhigh", "max"] },
     } as OcxProviderConfig);
     const request = await adapter.buildRequest({ ...parsed(), options: { reasoning: "xhigh", maxOutputTokens: 100 } });

@@ -943,6 +943,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelSupportsServiceTier: "editor",
   preserveResponsesReasoningContent: "editor",
   dropResponsesReasoningItems: "editor",
+  modelReasoningEffortsAuthoritative: "editor",
   decodesNativeCompactionBlobs: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
