@@ -150,11 +150,15 @@ describe("shouldUseCodexWsUpstream", () => {
     expect(shouldUseCodexWsUpstream(CODEX_URL, { method: "POST", body: "{\"stream\":true" })).toBe(false);
   });
 
-  test("opt-in upstream WebSocket only for configured OpenAI-compatible Responses endpoints", () => {
+  test("keeps configured provider endpoints on bounded HTTP SSE", () => {
     // The canonical backend ignores the flag.
     expect(shouldUseCodexWsUpstream(CODEX_URL, streamingInit(), false)).toBe(true);
-    // Configured providers join the WS lane on their own /v1/responses path.
-    expect(shouldUseCodexWsUpstream("https://sub2api.example.com/v1/responses", streamingInit(), true)).toBe(true);
+    // Bun cannot reject oversized messages before assembling them, so even an
+    // opted-in provider cannot join the WebSocket lane.
+    expect(shouldUseCodexWsUpstream("https://sub2api.example.com/v1/responses", streamingInit(), true)).toBe(false);
+    // The first-party api.openai.com lane still honors the operator opt-in.
+    expect(shouldUseCodexWsUpstream("https://api.openai.com/v1/responses", streamingInit(), true)).toBe(true);
+    expect(shouldUseCodexWsUpstream("https://api.openai.com/v1/responses", streamingInit(), false)).toBe(false);
     // Plain HTTP stays on SSE; never send credentials or request data through ws://.
     expect(shouldUseCodexWsUpstream("http://10.0.0.5:8080/v1/responses", streamingInit(), true)).toBe(false);
     expect(shouldUseCodexWsUpstream("https://sub2api.example.com/v1/responses", streamingInit(), false)).toBe(false);
@@ -297,11 +301,7 @@ describe("providerFetch routing", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  test("routes an opt-in provider's Responses streams over its upstream WS", async () => {
-    installFake(ws => {
-      ws.emit("open", {});
-      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
-    });
+  test("routes an opt-in provider's Responses streams over bounded HTTP SSE", async () => {
     const baseCalls: string[] = [];
     const sentinel = new Response("base");
     const provider = {
@@ -313,16 +313,15 @@ describe("providerFetch routing", () => {
     } as unknown as OcxProviderConfig;
     const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
 
-    const wsResponse = await wrapped("https://sub2api.example.com/v1/responses", streamingInit());
-    expect(wsResponse.headers.get("content-type")).toContain("text/event-stream");
-    expect(baseCalls).toHaveLength(0);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeWebSocket.instances[0]!.url).toBe("wss://sub2api.example.com/v1/responses");
+    const response = await wrapped("https://sub2api.example.com/v1/responses", streamingInit());
+    expect(await response.text()).toBe("base");
+    expect(baseCalls).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
 
     // The same provider's non-Responses paths (images/search/chat) stay on the base fetch.
     await wrapped("https://sub2api.example.com/v1/images", streamingInit());
-    expect(baseCalls).toHaveLength(1);
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(baseCalls).toHaveLength(2);
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
 
@@ -1064,12 +1063,12 @@ describe("codexWsUpstreamFetch", () => {
       });
 
     test("keeps noncanonical providers on the stream path", async () => {
-      const response = await receive(refusal, [], "https://gateway.example/v1/responses");
+      const response = await receive(refusal, [], "https://api.openai.com/v1/responses");
       expect(response.status).toBe(200);
       expect(await response.text()).toContain("event: error");
     });
 
-    test.each([CODEX_URL, "https://gateway.example/v1/responses"])(
+    test.each([CODEX_URL, "https://api.openai.com/v1/responses"])(
       "settles synchronous error/send-throw/close races and detaches deadlines for %s", async url => {
         jest.useFakeTimers();
         const abort = new AbortController();
@@ -1953,24 +1952,15 @@ describe("oversized Codex create frames", () => {
     expect(stage?.relayedEvents).toBeGreaterThan(0);
   });
 
-  test("dials the configured provider's own wss URL for an opt-in upstream", async () => {
-    process.env.HTTPS_PROXY = "http://proxy.example:8080";
-    process.env.NO_PROXY = "sub2api.example.com:443";
-    installFake(ws => {
-      ws.emit("open", {});
-      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r-ws" } }) });
-    });
+  test("falls back before dialing a custom upstream URL", async () => {
     const sentinel = new Response("fallback");
     const response = await codexWsUpstreamFetch(
       "https://sub2api.example.com/v1/responses",
       streamingInit(),
       (async () => sentinel) as typeof fetch,
     );
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeWebSocket.instances[0]!.url).toBe("wss://sub2api.example.com/v1/responses");
-    expect(FakeWebSocket.instances[0]!.options?.proxy).toBeUndefined();
-    expect(response.headers.get("content-type")).toContain("text/event-stream");
-    expect(await response.text()).toContain("response.completed");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(response).toBe(sentinel);
   });
 
   test("response.done normalization keeps unknown usage fields (#41980 parity)", async () => {
