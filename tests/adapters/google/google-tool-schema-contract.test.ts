@@ -801,7 +801,11 @@ describe("Google tool-schema loss report", () => {
       expect(response.status).toBe(400);
       const responseText = await response.text();
       expect(responseText).toContain("Vertex AI invalid request");
-      expect(responseText).not.toContain("REPAIR_ERROR_CANARY_5112");
+      // The withheld repair returns the ORIGINAL upstream 400 through the pre-existing
+      // normalization (safeGoogleHttpErrorMessage classification + credential/path redaction),
+      // which preserves ordinary upstream detail text. The canary exclusion applies to the NEW
+      // diagnostic record below, not to the preserved original response.
+      expect(responseText).toBe("Vertex AI invalid request: " + rawError);
       expect(fixture.calls).toHaveLength(1);
       const lines = getDebugLogEntries().map(entry => entry.line)
         .filter(line => line.includes("google-tool-schema-repair"));
