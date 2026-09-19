@@ -289,19 +289,18 @@ describe("SOCKS5 upload lifecycle", () => {
   test("interim informational answers are consumed and the upload runs to completion", async () => {
     /*
      * A peer may answer 100 and 103 before the request body is finished, and those are not the
-     * answer. The transport consumes them and reads on for the real one, while the upload keeps
+     * answer. The transport consumes them and reads on for the real one while the upload keeps
      * going; one that treated the first head it saw as final would hand the caller an empty 100
      * and stop writing mid-body.
      *
-     * The ordering is arranged rather than hoped for. The peer answers the request head before any
-     * body byte, and the caller's stream withholds its last chunk and the end of the body until
-     * that has happened, so everything asserted below about the rest of the upload genuinely
-     * happened after the interim answers were sent.
+     * The ordering is arranged rather than hoped for. The rest of the body is withheld until both
+     * interim heads have arrived at this side of the tunnel and the reader has had a scheduling
+     * turn to consume them, and the fetch is required to be unsettled at that moment. So
+     * everything asserted afterwards about the remainder of the upload genuinely happened after
+     * the transport had those answers in hand and had not mistaken either for the final one.
      */
     let received = "";
     let receivedWhenInformed: number | undefined;
-    let markInformed: () => void = () => { /* replaced below */ };
-    const informed = new Promise<void>(resolve => { markInformed = resolve; });
     let markPeerClosed: () => void = () => { /* replaced below */ };
     const peerClosed = new Promise<void>(resolve => { markPeerClosed = resolve; });
     const target = createTcpServer(socket => {
@@ -313,7 +312,6 @@ describe("SOCKS5 upload lifecycle", () => {
           socket.write("HTTP/1.1 100 Continue\r\n\r\n");
           socket.write("HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n");
           receivedWhenInformed = received.length;
-          markInformed();
         }
         if (!received.includes("0\r\n\r\n")) return;
         socket.write("HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nposted");
@@ -321,8 +319,21 @@ describe("SOCKS5 upload lifecycle", () => {
     });
     const proxy = socksProxy();
     const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+
+    // Both interim heads, seen arriving on this side of the tunnel rather than merely written by
+    // the peer. The reader is already in flowing mode, so this listener observes the same chunks
+    // it does and consumes nothing.
+    let clientSeen = "";
+    let markInterimAtClient: () => void = () => { /* replaced below */ };
+    const interimAtClient = new Promise<void>(resolve => { markInterimAtClient = resolve; });
+    const originalSetTimeout = Socket.prototype.setTimeout;
+
     const encoder = new TextEncoder();
     let released = false;
+    let settledAtRelease: boolean | undefined;
+    let cancelledAtRelease: boolean | undefined;
+    let settled = false;
+    let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode("hello "));
@@ -330,25 +341,48 @@ describe("SOCKS5 upload lifecycle", () => {
       async pull(controller) {
         if (released) return;
         released = true;
-        // Nothing more of this body exists until the peer has answered with both interim heads.
-        await informed;
+        await interimAtClient;
+        // One native checkpoint, which the reader's buffered-header continuations run ahead of.
+        await new Promise<void>(resolve => { setImmediate(resolve); });
+        settledAtRelease = settled;
+        cancelledAtRelease = cancelled;
         controller.enqueue(encoder.encode("socks"));
         controller.close();
       },
+      cancel() { cancelled = true; },
     });
+
     try {
-      const response = await post(targetPort, proxyPort, stream);
+      Socket.prototype.setTimeout = function patched(this: Socket, ms: number, callback?: () => void) {
+        if (ms === RESPONSE_TIMEOUT_MS) {
+          this.on("data", chunk => {
+            clientSeen += chunk.toString("latin1");
+            if (clientSeen.includes("HTTP/1.1 100 Continue\r\n\r\n")
+              && clientSeen.includes("Link: </style.css>; rel=preload\r\n\r\n")) markInterimAtClient();
+          });
+        }
+        return originalSetTimeout.call(this, ms, callback as never);
+      } as typeof Socket.prototype.setTimeout;
+
+      const pending = post(targetPort, proxyPort, stream);
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      const response = await pending;
+
+      // Still reading when the remainder was released: the transport had both interim heads and
+      // had treated neither as the answer.
+      expect(settledAtRelease).toBe(false);
+      expect(cancelledAtRelease).toBe(false);
 
       /*
-       * The final answer reaching the caller is the transport-side receipt: 200 with its body can
-       * only be read by something that consumed both interim heads and went on reading. A
-       * transport that stopped at the first head would answer 100 with nothing in it.
+       * The final answer reaching the caller is the receipt that those heads were consumed rather
+       * than merely delivered: 200 with its body can only be read by something that read past
+       * both of them.
        */
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("posted");
 
       // Upload continuity, measured against the moment the interim answers were sent rather than
-      // against the whole exchange: the rest of the body and its terminator arrived afterwards.
+      // against the whole exchange.
       expect(receivedWhenInformed).toBeDefined();
       const afterInterim = received.slice(receivedWhenInformed ?? 0);
       expect(received).toContain("hello ");
@@ -358,6 +392,7 @@ describe("SOCKS5 upload lifecycle", () => {
       // The exchange ends by itself, before anything here tears a peer down.
       expect(await settlesWithin(peerClosed)).toBe(true);
     } finally {
+      Socket.prototype.setTimeout = originalSetTimeout;
       await Promise.all([close(proxy), close(target)]);
     }
   });
