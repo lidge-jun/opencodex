@@ -95,6 +95,25 @@ function awaitObservation<T>(promise: Promise<T>): Promise<T | typeof OBSERVATIO
   });
 }
 
+async function describeUpgradeRefusal(wsUrl: URL): Promise<string> {
+  const httpUrl = new URL(wsUrl);
+  httpUrl.protocol = "http:";
+  try {
+    const response = await fetch(httpUrl, {
+      headers: {
+        connection: "upgrade",
+        upgrade: "websocket",
+        "sec-websocket-version": "13",
+        "sec-websocket-key": Buffer.from("0123456789abcdef").toString("base64"),
+      },
+      signal: AbortSignal.timeout(1_000),
+    });
+    return `HTTP ${response.status}: ${(await response.text()).slice(0, 512)}`;
+  } catch (error) {
+    return `HTTP refusal unavailable: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 function nextFinalRequestLog(
   predicate: (entry: RequestLogEntry) => boolean,
 ): { promise: Promise<RequestLogEntry>; dispose: () => void } {
@@ -561,11 +580,22 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       },
       websocket: { message() {} },
     });
-    saveConfig(runtimeConfig("openai-responses"));
+    const config = runtimeConfig("openai-responses");
+    config.providers["openai-apikey"] = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-metrics-fixture",
+      authMode: "key",
+    };
+    saveConfig(config);
     const upstreamUrl = new URL("/upstream", upstream.url);
     upstreamUrl.protocol = "ws:";
+    let factoryCalls = 0;
     const server = startMetricsServer({
-      liveSidebandWebSocketFactory: () => new WebSocket(upstreamUrl),
+      liveSidebandWebSocketFactory: () => {
+        factoryCalls += 1;
+        return new WebSocket(upstreamUrl);
+      },
     });
     const finalized = nextFinalRequestLog(entry => entry.status === 101);
     const url = new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url);
@@ -574,12 +604,15 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     try {
       await awaitBounded(new Promise<void>((resolve, reject) => {
         socket.addEventListener("open", () => resolve(), { once: true });
-        socket.addEventListener("error", () => reject(new Error("live sideband upgrade failed")), { once: true });
+        socket.addEventListener("error", () => {
+          void describeUpgradeRefusal(url).then(detail => reject(new Error(`live sideband upgrade failed; ${detail}`)));
+        }, { once: true });
       }), "live sideband client did not open");
       const observedRow = await awaitObservation(finalized.promise);
       expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
       if (observedRow === OBSERVATION_TIMEOUT) throw new Error("101 upgrade finalization was not observed");
       expect(observedRow.status).toBe(101);
+      expect(factoryCalls).toBe(1);
       const metrics = await scrapeServer(server);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(0);
