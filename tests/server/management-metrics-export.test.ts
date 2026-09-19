@@ -743,38 +743,47 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     saveConfig(liveMetricsConfig());
     const acquisitionStarted = Promise.withResolvers<void>();
     const resolver = stallAudioAcquisition(acquisitionStarted);
-    const server = startMetricsServer({
-      liveSidebandWebSocketFactory: () => { throw new Error("cancelled acquisition reached upstream dial"); },
-    });
-    const finalized = nextFinalRequestLog(entry => entry.status === 499);
-    const rows: RequestLogEntry[] = [];
-    const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
-    const clientAbort = new AbortController();
-    const clientOutcome = fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
-      headers: { ...upgradeRequestHeaders(), "x-opencodex-api-key": DATA_TOKEN },
-      signal: clientAbort.signal,
-    }).catch(error => error);
     try {
-      await awaitBounded(acquisitionStarted.promise, "audio acquisition did not start");
-      clientAbort.abort(new Error("metrics acquisition client cancellation"));
-      const observedRow = await awaitObservation(finalized.promise);
-      expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
-      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("acquisition cancellation was not finalized");
-      expect(observedRow.status).toBe(499);
-      expect(observedRow.closeReason).toBe("client_cancel");
-      expect(rows.map(entry => entry.status)).toEqual([499]);
-      await awaitBounded(clientOutcome, "cancelled acquisition client did not settle");
-      const metrics = await scrapeServer(server);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(1);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(0);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+      const server = startMetricsServer({
+        liveSidebandWebSocketFactory: () => { throw new Error("cancelled acquisition reached upstream dial"); },
+      });
+      try {
+        const finalized = nextFinalRequestLog(entry => entry.status === 499);
+        const rows: RequestLogEntry[] = [];
+        const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
+        try {
+          const clientAbort = new AbortController();
+          try {
+            const clientOutcome = fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
+              headers: { ...upgradeRequestHeaders(), "x-opencodex-api-key": DATA_TOKEN },
+              signal: clientAbort.signal,
+            }).catch(error => error);
+            await awaitBounded(acquisitionStarted.promise, "audio acquisition did not start");
+            clientAbort.abort(new Error("metrics acquisition client cancellation"));
+            const observedRow = await awaitObservation(finalized.promise);
+            expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+            if (observedRow === OBSERVATION_TIMEOUT) throw new Error("acquisition cancellation was not finalized");
+            expect(observedRow.status).toBe(499);
+            expect(observedRow.closeReason).toBe("client_cancel");
+            expect(rows.map(entry => entry.status)).toEqual([499]);
+            await awaitBounded(clientOutcome, "cancelled acquisition client did not settle");
+            const metrics = await scrapeServer(server);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(1);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(0);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+          } finally {
+            clientAbort.abort();
+          }
+        } finally {
+          disposeRows();
+          finalized.dispose();
+        }
+      } finally {
+        await stopMetricsServer(server);
+      }
     } finally {
-      clientAbort.abort();
-      disposeRows();
-      finalized.dispose();
       resolver.mockRestore();
-      await stopMetricsServer(server);
     }
   });
 
@@ -782,49 +791,58 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     saveConfig(liveMetricsConfig());
     const acquisitionStarted = Promise.withResolvers<void>();
     const resolver = stallAudioAcquisition(acquisitionStarted);
-    const server = startMetricsServer({
-      liveSidebandWebSocketFactory: () => { throw new Error("expired acquisition reached upstream dial"); },
-    });
-    const schedule = globalThis.setTimeout;
-    let expire: (() => void) | undefined;
-    const deadlineCaptured = Promise.withResolvers<void>();
-    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
-      if (delay === 120_000 && !expire) {
-        expire = () => callback(...args);
-        deadlineCaptured.resolve();
-      }
-      return schedule(callback, delay, ...args);
-    }) as typeof setTimeout);
-    const finalized = nextFinalRequestLog(entry => entry.status === 504);
-    const rows: RequestLogEntry[] = [];
-    const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
     try {
-      const pending = fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
-        headers: { ...upgradeRequestHeaders(), "x-opencodex-api-key": DATA_TOKEN },
-      }).then(response => ({ response }), error => ({ error }));
-      await awaitBounded(Promise.all([acquisitionStarted.promise, deadlineCaptured.promise]), "acquisition deadline was not armed");
-      expire!();
-      const outcome = await awaitBounded(pending, "expired acquisition did not return");
-      if (!("response" in outcome)) throw outcome.error;
-      const { response } = outcome;
-      expect(response.status).toBe(504);
-      await response.text();
-      const observedRow = await awaitObservation(finalized.promise);
-      expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
-      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("acquisition deadline was not finalized");
-      expect(observedRow.status).toBe(504);
-      expect(rows.map(entry => entry.status)).toEqual([504]);
-      const metrics = await scrapeServer(server);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(1);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(0);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+      const server = startMetricsServer({
+        liveSidebandWebSocketFactory: () => { throw new Error("expired acquisition reached upstream dial"); },
+      });
+      try {
+        const schedule = globalThis.setTimeout;
+        let expire: (() => void) | undefined;
+        const deadlineCaptured = Promise.withResolvers<void>();
+        const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+          if (delay === 120_000 && !expire) {
+            expire = () => callback(...args);
+            deadlineCaptured.resolve();
+          }
+          return schedule(callback, delay, ...args);
+        }) as typeof setTimeout);
+        try {
+          const finalized = nextFinalRequestLog(entry => entry.status === 504);
+          const rows: RequestLogEntry[] = [];
+          const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
+          try {
+            const pending = fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
+              headers: { ...upgradeRequestHeaders(), "x-opencodex-api-key": DATA_TOKEN },
+            }).then(response => ({ response }), error => ({ error }));
+            await awaitBounded(Promise.all([acquisitionStarted.promise, deadlineCaptured.promise]), "acquisition deadline was not armed");
+            expire!();
+            const outcome = await awaitBounded(pending, "expired acquisition did not return");
+            if (!("response" in outcome)) throw outcome.error;
+            const { response } = outcome;
+            expect(response.status).toBe(504);
+            await response.text();
+            const observedRow = await awaitObservation(finalized.promise);
+            expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+            if (observedRow === OBSERVATION_TIMEOUT) throw new Error("acquisition deadline was not finalized");
+            expect(observedRow.status).toBe(504);
+            expect(rows.map(entry => entry.status)).toEqual([504]);
+            const metrics = await scrapeServer(server);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(1);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(0);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+          } finally {
+            disposeRows();
+            finalized.dispose();
+          }
+        } finally {
+          timers.mockRestore();
+        }
+      } finally {
+        await stopMetricsServer(server);
+      }
     } finally {
-      disposeRows();
-      finalized.dispose();
-      timers.mockRestore();
       resolver.mockRestore();
-      await stopMetricsServer(server);
     }
   });
 
@@ -870,35 +888,41 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     saveConfig(liveMetricsConfig());
     const fixtureError = new Error("metrics acquisition resolver failure");
     const resolver = spyOn(audioUpstream, "resolveAudioUpstream").mockImplementation(async () => { throw fixtureError; });
-    const observedErrors: unknown[] = [];
-    const unexpectedErrors: unknown[] = [];
-    const server = startMetricsServerWithExpectedError(fixtureError, observedErrors, unexpectedErrors);
-    const finalized = nextFinalRequestLog(entry => entry.status === 500);
-    const rows: RequestLogEntry[] = [];
-    const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
     try {
-      const response = await fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
-        headers: { ...upgradeRequestHeaders(), "x-opencodex-api-key": DATA_TOKEN },
-      });
-      expect(response.status).toBe(500);
-      await response.text();
-      const observedRow = await awaitObservation(finalized.promise);
-      expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
-      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("resolver exception was not finalized");
-      expect(observedRow.status).toBe(500);
-      expect(rows.map(entry => entry.status)).toEqual([500]);
-      expect(observedErrors).toEqual([fixtureError]);
-      expect(unexpectedErrors).toEqual([]);
-      const metrics = await scrapeServer(server);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(1);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(0);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+      const observedErrors: unknown[] = [];
+      const unexpectedErrors: unknown[] = [];
+      const server = startMetricsServerWithExpectedError(fixtureError, observedErrors, unexpectedErrors);
+      try {
+        const finalized = nextFinalRequestLog(entry => entry.status === 500);
+        const rows: RequestLogEntry[] = [];
+        const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
+        try {
+          const response = await fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
+            headers: { ...upgradeRequestHeaders(), "x-opencodex-api-key": DATA_TOKEN },
+          });
+          expect(response.status).toBe(500);
+          await response.text();
+          const observedRow = await awaitObservation(finalized.promise);
+          expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+          if (observedRow === OBSERVATION_TIMEOUT) throw new Error("resolver exception was not finalized");
+          expect(observedRow.status).toBe(500);
+          expect(rows.map(entry => entry.status)).toEqual([500]);
+          expect(observedErrors).toEqual([fixtureError]);
+          expect(unexpectedErrors).toEqual([]);
+          const metrics = await scrapeServer(server);
+          expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(1);
+          expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(0);
+          expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
+          expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+        } finally {
+          disposeRows();
+          finalized.dispose();
+        }
+      } finally {
+        await stopMetricsServer(server);
+      }
     } finally {
-      disposeRows();
-      finalized.dispose();
       resolver.mockRestore();
-      await stopMetricsServer(server);
     }
   });
 
