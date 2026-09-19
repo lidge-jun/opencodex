@@ -749,6 +749,28 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(restoredRowBytes).toBe(rowBytes);
   });
 
+  test("a provider-table transition refuses rather than strand a paginated openai thread", () => {
+    const original = 'model_provider = "openai"\n# >>> opencodex managed openai_base_url >>>\nopenai_base_url = "http://127.0.0.1:10100/v1"\n# <<< opencodex managed openai_base_url <<<\n';
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, original);
+    const rollout = join(codexHome, "openai-paginated.jsonl");
+    const bytes = JSON.stringify({ ordinal: 0, type: "session_meta", payload: { id: "fixture", history_mode: "paginated", model_provider: "openai" } }) + "\n";
+    writeFileSync(rollout, bytes);
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('fixture', ?, 'openai', 'paginated')", rollout);
+    db.close();
+
+    const result = runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true }));
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: false,
+      historyPreflightFailureReason: "history_paginated_openai_requires_native_writer",
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(readFileSync(rollout, "utf8")).toBe(bytes);
+  });
+
   test("a paginated home still receives the model catalog path the picker reads", () => {
     // The user-visible regression this pins. A paginated rollout made the injector refuse
     // the whole write, so `model_catalog_json` never reached config.toml: the Codex app and

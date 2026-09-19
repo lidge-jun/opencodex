@@ -221,6 +221,12 @@ describes a store that may be relabelable on the next attempt, so those keep the
 and the compensating rollback. Recording them as a stand-down would mark the transition
 converged and suppress the relabel permanently.
 
+That stand-down applies only when the provider tags left in place still resolve through the
+resulting configuration. A provider-table transition that finds a paginated `openai` row returns
+`history_paginated_openai_requires_native_writer` and refuses the artifact transaction: removing
+the root `openai_base_url` without relabeling that row would route a resumed conversation through
+Codex's built-in OpenAI provider instead of this proxy.
+
 Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
 Apply retains that existing definition before building the candidate witness, even when
 history preflight passes. The root-override form still selects the built-in provider for new
