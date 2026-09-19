@@ -459,6 +459,24 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             : event);
         }
         if (failClosed) break;
+        if (
+          toolBridge
+          && !terminalEmitted
+          && state.sawMessageStop
+          && toolCallStarts > 0
+          && (state.completedToolCalls ?? 0) !== toolCallStarts
+        ) {
+          emitOnce({
+            type: "error",
+            message: "Coding-agent CLI ended with an incomplete tool call.",
+            status: 502,
+            errorType: "upstream_error",
+            code: "protocol_error",
+            retryable: false,
+          });
+          kill();
+          break;
+        }
         if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
           if (!initValidated) {
             emitOnce({
