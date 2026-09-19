@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { loadManifest, renderIndex, runStructureChecks, type Manifest } from "../../scripts/structure-ssot";
+import { loadManifest, renderIndex, runStructureChecks, writeGeneratedIndex, type Manifest } from "../../scripts/structure-ssot";
 import { repoRoot } from "../helpers/repo-root";
 
 /**
@@ -564,5 +564,30 @@ describe("structure/ SSOT", () => {
     manifest.absentPaths = ["go/"];
     write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
     fires(root, "absentPaths[0].path must be a string");
+  });
+
+  test("index generation validates the manifest before writing", () => {
+    const root = scaffold();
+    const before = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    const manifest = manifestOf(root) as unknown as { contracts: unknown };
+    manifest.contracts = { version: 1, entries: "not-an-array" };
+    write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+    const result = writeGeneratedIndex(root);
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("contracts.entries must be an array");
+    expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
+  });
+
+  test("index generation rejects a malformed contract entry without a renderer crash", () => {
+    const root = scaffold();
+    const before = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    const manifest = manifestOf(root) as unknown as { contracts: unknown };
+    // A bare string entry used to reach the renderer's id comparator and throw a TypeError.
+    manifest.contracts = { version: 1, entries: ["oops"] };
+    write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+    const result = writeGeneratedIndex(root);
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("id must be a kebab-case string");
+    expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
   });
 });

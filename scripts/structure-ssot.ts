@@ -640,11 +640,27 @@ export function runStructureChecks(repoRoot: string): string[] {
   return failures;
 }
 
+/**
+ * Rewrite the generated index only after the manifest validates. The renderer trusts the typed
+ * shape, so a malformed manifest (for example a string where `contracts.entries` belongs) would
+ * otherwise crash the renderer with a TypeError and could write a broken index before the checker
+ * ever ran. Validation failure is an actionable schema diagnostic and leaves INDEX.md untouched.
+ */
+export function writeGeneratedIndex(repoRoot: string): { wrote: true } | { error: string } {
+  const loaded = loadManifest(readFileSync(join(repoRoot, "structure", "manifest.json"), "utf8"));
+  if ("error" in loaded) return { error: loaded.error };
+  writeFileSync(join(repoRoot, "structure", "INDEX.md"), renderIndex(loaded.manifest), "utf8");
+  return { wrote: true };
+}
+
 if (import.meta.main) {
   const repoRoot = resolve(import.meta.dir, "..");
   if (process.argv.includes("--fix")) {
-    const manifest = JSON.parse(readFileSync(join(repoRoot, "structure/manifest.json"), "utf8")) as Manifest;
-    writeFileSync(join(repoRoot, "structure/INDEX.md"), renderIndex(manifest), "utf8");
+    const fixed = writeGeneratedIndex(repoRoot);
+    if ("error" in fixed) {
+      console.error(fixed.error);
+      process.exit(1);
+    }
     console.log("wrote structure/INDEX.md");
   }
   const failures = runStructureChecks(repoRoot);
