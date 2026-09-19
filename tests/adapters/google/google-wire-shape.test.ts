@@ -154,15 +154,21 @@ describe("google wire shape projection is inert", () => {
         });
         expect(response.status).toBe(200);
         const envelope = JSON.parse(dispatched[0]!) as Record<string, unknown>;
-        return { sends, request: JSON.stringify(envelope.request) };
+        const requestId = envelope.requestId;
+        // The envelope request id is a fresh uuid per build and has nothing to do with debug;
+        // normalizing it lets the rest of the dispatched body be compared byte for byte.
+        envelope.requestId = "<per-build uuid>";
+        return { sends, requestId, body: JSON.stringify(envelope) };
       };
       const off = await run(false);
       const on = await run(true);
       // Exactly one physical send either way, and the budget saw the same single dispatch.
       expect(off.sends).toEqual([1]);
       expect(on.sends).toEqual(off.sends);
-      // And the bytes that actually left are identical, not merely the bytes that were built.
-      expect(on.request).toBe(off.request);
+      // And every byte that actually left is identical apart from that uuid — not merely the
+      // bytes that were built.
+      expect(on.body).toBe(off.body);
+      expect(on.requestId).not.toBe(off.requestId);
     } finally {
       console.error = realError;
     }
@@ -365,7 +371,14 @@ describe("google wire shape projection describes structure", () => {
     expect(summary.unansweredCalls).toBe(0);
     expect(summary.orderingViolations).toBe(0);
     expect(summary.truncated).toBe(true);
-    expect(summary.turnShapes).toHaveLength(GOOGLE_WIRE_SHAPE_TURN_CEILING);
+    // Two ceilings bind, and the tighter one wins: the turn ceiling caps the retained detail,
+    // then the serialized budget trims further if the kept turns still do not fit a debug line.
+    expect(summary.turnShapes.length).toBeLessThanOrEqual(GOOGLE_WIRE_SHAPE_TURN_CEILING);
+    expect(summary.turnShapes.length).toBeGreaterThan(0);
+    expect(new TextEncoder().encode(JSON.stringify(summary)).length)
+      .toBeLessThanOrEqual(GOOGLE_WIRE_SHAPE_MAX_SERIALIZED_BYTES);
+    // The retained detail is still the head of the request, where a first-send violation lives.
+    expect(summary.turnShapes[0]?.index).toBe(0);
   });
 
   test("a parallel batch wider than the ordinal ceiling truncates the list, not the count", () => {
