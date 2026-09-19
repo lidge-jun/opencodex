@@ -788,6 +788,20 @@ compact, and native Chat — are deliberately not opted in. Adapters with their 
 `fetchResponse` (kiro, cursor, google) keep their own retry policies; kiro imports the shared
 abort/sleep helpers from this module.
 
+One operator opt-in reaches a model-POST path, and it is not `replaySafe`.
+`providers.<name>.retryOnReset` (`src/providers/key-failover.ts::resetReplayPolicyFor`) lets
+the native Responses passthrough pass `replayResets` on every send of a request —
+initial, rotation, refresh and same-target 429 legs alike — when the inbound body is one the
+proxy can judge self-contained: `store: false`, a complete `input`, only client-executed tools
+and no `previous_response_id`, `conversation`, `background` or `stream_id`
+(`src/server/responses/reset-replay.ts::selfContainedResponsesBody`, fail-closed on any
+unknown tool or item type). `replayResets` is a ceiling inside the leg's existing `attempts`,
+never an addition to it, and it settles differently from a replay-safe retry: once the
+ceiling is reached, or a later attempt of that leg fails any other way, the helper returns the
+same refusal a reset gets without the policy, so no exit of this path can hand the client a
+status that invites the turn to be sent again. The generic adapter dispatch, its
+continuation, compact and native Chat keep the refusal unconditionally.
+
 ## Console upload rejection recovery
 
 `src/providers/opencode-zen-rate-limit.ts` recognizes the complete Console upload-rejection envelope only at the effective HTTPS opencode.ai Zen/Go generation endpoint. A provider row name cannot authorize another destination. The two recovery loops in `src/server/responses/core.ts` wait 800 ms and replay the captured serialized request once; cancellation, nonreplayable responses, other errors and a second upload rejection keep their failure semantics. The recovery kind is persisted as `console-go-upload-retry` and has a localized Logs label.
@@ -1122,7 +1136,10 @@ turn up to four more times, and a 429 is where the client stops.
 `upstream_reset_replay_refused`. No response headers is not evidence that the model POST
 was never processed, so the decision not to replay is ours, made before any response
 existed — the same shape as `request_send_budget_exhausted`, and it takes the same status
-for the same reason. Only an explicitly replay-safe operation opts into reset retries.
+for the same reason. Only an explicitly replay-safe operation opts into reset retries, or a
+provider the operator opted in through `retryOnReset` for a request the proxy judged
+self-contained; that replay spends the leg's own send budget and ends in this refusal when
+it is spent (see [upstream reset retry](#upstream-reset-retry)).
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the

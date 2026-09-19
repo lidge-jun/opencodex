@@ -6,7 +6,7 @@ import {
   isTransientUpstreamStatus,
   markResponseNonReplayable,
 } from "../../src/lib/upstream-retry";
-import { transientRetryPolicyFor } from "../../src/providers/key-failover";
+import { resetReplayPolicyFor, transientRetryPolicyFor } from "../../src/providers/key-failover";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -68,6 +68,25 @@ describe("transientRetryPolicyFor", () => {
     // An omitted authMode is the documented key-auth default for custom providers.
     expect(transientRetryPolicyFor({ adapter: "openai-chat", transientRetryOn5xx: {} } as unknown as OcxProviderConfig))
       .toEqual({ enabled: true, attempts: 3 });
+  });
+});
+
+describe("resetReplayPolicyFor", () => {
+  test("is off unless the provider opts in", () => {
+    expect(resetReplayPolicyFor({} as OcxProviderConfig)).toBeNull();
+    expect(resetReplayPolicyFor({ retryOnReset: { enabled: false } } as OcxProviderConfig)).toBeNull();
+  });
+
+  test("a bare object opts in with one replay; attempts is a total-send ceiling", () => {
+    expect(resetReplayPolicyFor({ retryOnReset: {} } as OcxProviderConfig)).toEqual({ enabled: true, attempts: 2 });
+    expect(resetReplayPolicyFor({ retryOnReset: { attempts: 3 } } as OcxProviderConfig)).toEqual({ enabled: true, attempts: 3 });
+  });
+
+  test("no auth-mode or adapter gate: forward auth is the send it exists for", () => {
+    for (const authMode of ["forward", "oauth", "key", undefined]) {
+      expect(resetReplayPolicyFor({ authMode, retryOnReset: {} } as unknown as OcxProviderConfig))
+        .toEqual({ enabled: true, attempts: 2 });
+    }
   });
 });
 

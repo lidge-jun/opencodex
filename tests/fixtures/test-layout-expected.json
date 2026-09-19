@@ -1375,5 +1375,7 @@
   "devin-stated-reset-retry.test.ts": "providers",
   "ci-structure-gate.test.ts": "ci-workflows",
   "responses-code-mode-patch-compile.test.ts": "responses",
-  "gui-codex-usage-score-parity.test.ts": "gui"
+  "gui-codex-usage-score-parity.test.ts": "gui",
+  "responses-reset-replay.test.ts": "responses",
+  "management-provider-reset-replay.test.ts": "server"
 }

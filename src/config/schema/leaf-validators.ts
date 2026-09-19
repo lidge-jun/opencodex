@@ -71,6 +71,17 @@ const transientRetryOn5xxPolicySchema = z.object({
   attempts: z.number().int().min(1).max(10).optional(),
 }).strict();
 
+/**
+ * `retryOnReset` accepts only these keys. `attempts` is the TOTAL number of sends the replay
+ * may reach including the first, so the ceiling is the reset helper's own maximum
+ * (`RESET_RETRY_MAX_ATTEMPTS`, 3): a replay of a possibly-executed model POST is the one send
+ * this proxy otherwise refuses, and the operator gets at most two of them per leg.
+ */
+export const retryOnResetPolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  attempts: z.number().int().min(1).max(3).optional(),
+}).strict();
+
 const requestPacingRuleSchema = z.object({
   // Keep the RPM-derived timer within the same one-hour bound as minIntervalMs.
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
@@ -294,6 +305,10 @@ export const providerConfigSchema = z.object({
     .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
+  // Degrades to "absent" like `webSearchBridge`: a malformed hand edit of an opt-in feature
+  // that is off by default must not send the operator through invalid-config recovery. The
+  // management write boundary still rejects it loudly (`retryOnResetPolicyConfigError`).
+  retryOnReset: retryOnResetPolicySchema.optional().catch(undefined),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be

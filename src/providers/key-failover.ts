@@ -12,7 +12,7 @@ import { commitProviderApiKeySelection } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
-import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
+import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
@@ -321,6 +321,15 @@ const DEFAULT_TRANSIENT_RETRY = {
   attempts: 3,
 } as const satisfies Required<TransientRetryPolicy>;
 
+/**
+ * Default reset replay used when a provider opts in with a bare `retryOnReset: {}`: one
+ * replay. `attempts` is the TOTAL sends the replay may reach, not extra retries.
+ */
+const DEFAULT_RESET_REPLAY = {
+  enabled: true,
+  attempts: 2,
+} as const satisfies Required<ResetReplayPolicy>;
+
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
 const keyCooldowns = new Map<string, KeyCooldown>();
 
@@ -608,6 +617,23 @@ export function transientRetryPolicyFor(
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
+  };
+}
+
+/**
+ * Normalize a provider's `retryOnReset` policy, or return null when it is absent or
+ * explicitly disabled. No auth-mode gate: the canonical ChatGPT backend is `forward` auth and
+ * is the send this policy exists for. Whether a given request may actually be replayed is a
+ * per-body decision made by `selfContainedResponsesBody`, not by the provider.
+ */
+export function resetReplayPolicyFor(
+  provider: Pick<OcxProviderConfig, "retryOnReset">,
+): Required<ResetReplayPolicy> | null {
+  const policy = provider.retryOnReset;
+  if (!policy || policy.enabled === false) return null;
+  return {
+    enabled: policy.enabled ?? DEFAULT_RESET_REPLAY.enabled,
+    attempts: policy.attempts ?? DEFAULT_RESET_REPLAY.attempts,
   };
 }
 

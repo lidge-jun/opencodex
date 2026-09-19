@@ -66,6 +66,13 @@ it, nor does it record the refusal as rate-limit or quota evidence against the c
 was holding. Tool-call side requests such as vision and web search are replayed normally, because
 repeating them cannot duplicate a turn.
 
+A native Responses provider can opt into one replay of this case with
+[`retryOnReset`](providers.md#provider-fields). The proxy then sends the request again on a
+fresh connection when, and only when, the request is self-contained (`store: false`, complete
+input, client-executed tools only, no server-side continuation state). The replay spends the
+send budget the request already has, and when it is exhausted or fails in any other way the
+same refusal is returned. Any other request shape keeps the refusal.
+
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
 replacing an inherited `NO_PROXY`:
 

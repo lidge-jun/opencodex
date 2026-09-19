@@ -421,6 +421,19 @@ export interface ResetRetryOptions {
    * uncounted but UNCOUNTABLE: the callback existed on a type those call sites never reach.
    */
   onSendsConsumed?: (sends: number) => void;
+  /**
+   * Operator-policy replay of a pre-header connection reset on a model POST: the TOTAL
+   * number of sends the replay may reach, including the first. Never above `attempts`; it
+   * says how much of the budget the leg already has a reset may spend, and widens nothing.
+   *
+   * This is not `replaySafe`. A replay-safe operation cannot duplicate anything, so it may
+   * rethrow when its retries run out and let the caller's own error path take over. A policy
+   * replay is a possibly duplicated inference the operator chose to risk, so once the replays
+   * are spent, or a later attempt fails any other way, the leg settles as the same
+   * non-replayable refusal a reset gets without the policy. Nothing on this path may hand a
+   * client a status that invites the whole turn to be sent again.
+   */
+  replayResets?: number;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
@@ -495,6 +508,22 @@ export function applyUpstreamRecoveryInit<T extends RequestInit>(
 }
 
 /**
+ * The refusal this proxy returns for a pre-header reset it will not replay. The WeakSet
+ * markers protect in-process recovery; the code survives JSON re-wrapping. The raw exception
+ * is never exposed, because it can carry credentials or request data.
+ */
+function replayRefusalResponse(): Response {
+  const response = new Response(JSON.stringify({ error: {
+    type: "upstream_error",
+    code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+    message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+  } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
+  markResponseNonReplayable(response);
+  markReplayRefusalResponse(response);
+  return response;
+}
+
+/**
  * Run `doFetch` within one send budget. Connection-reset-shaped rejections are
  * terminal by default; only an explicitly replay-safe operation receives reset retries
  * with jittered backoff. HTTP responses retain the caller's existing retry policy.
@@ -509,6 +538,11 @@ export async function fetchWithResetRetry(
   // more send on every recovery leg, which is most of what made a bounded per-layer retry
   // compose into an unbounded per-request count.
   if (attempts === 0) throw new SendBudgetExhaustedError(opts.label);
+  // An operator replay spends the budget this leg already has; it never adds to it.
+  const replayCeiling = opts.replayResets === undefined
+    ? 0
+    : Math.min(attempts, normalizeSendAttempts(opts.replayResets, 0));
+  const policyReplay = opts.replaySafe !== true && replayCeiling > 0;
   let lastError: unknown;
   let sawReset = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -522,6 +556,10 @@ export async function fetchWithResetRetry(
     } catch (err) {
       if (opts.abortSignal?.aborted) throw err;
       if (!isConnectionResetError(err)) {
+        // A policy replay that already saw a reset is an ambiguous request whatever ended
+        // it: the first send may have run. Settle it as the refusal rather than throwing
+        // into a caller whose transport-failure path answers with a client-retryable 502.
+        if (sawReset && policyReplay) return replayRefusalResponse();
         // A reset that already reached the origin is credential-visible
         // evidence: keep it attached so the terminal rejection cannot be
         // downgraded to the pre-connection neutral class (#914 review).
@@ -529,24 +567,19 @@ export async function fetchWithResetRetry(
         throw err;
       }
       if (opts.replaySafe !== true) {
-        // Return evidence instead of throwing a generic transport error: outer catches
-        // otherwise turn it into a replayable 502 and a combo/account recovery resends it.
-        // The WeakSet protects in-process recovery; the code survives JSON re-wrapping.
-        // Never expose the raw exception, which can contain credentials or request data.
-        const response = new Response(JSON.stringify({ error: {
-          type: "upstream_error",
-          code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
-          message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
-        } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
-        markResponseNonReplayable(response);
-        markReplayRefusalResponse(response);
-        return response;
+        // Without an operator replay, or once its ceiling is reached: return evidence instead
+        // of throwing a generic transport error. Outer catches otherwise turn it into a
+        // replayable 502 and a combo/account recovery resends it.
+        if (!policyReplay || attempt + 1 >= replayCeiling) return replayRefusalResponse();
+      } else if (attempt === attempts - 1) {
+        throw err;
       }
-      if (attempt === attempts - 1) throw err;
       sawReset = true;
       lastError = err;
       console.warn(
-        `[upstream-retry] connection reset${opts.label ? ` (${opts.label})` : ""} — retrying (${attempt + 2}/${attempts})`,
+        `[upstream-retry] connection reset${opts.label ? ` (${opts.label})` : ""} — ${
+          policyReplay ? `replaying (${attempt + 2}/${replayCeiling}, retryOnReset)` : `retrying (${attempt + 2}/${attempts})`
+        }`,
       );
       await sleepWithAbort(retryBackoffDelayMs(attempt, {
         baseDelayMs: RESET_RETRY_BASE_DELAY_MS,

@@ -125,6 +125,7 @@ import {
   rateLimitRetryDelayMs,
   transientRetryPolicyFor,
 } from "../../providers/key-failover";
+import { resetReplayOptions } from "./reset-replay";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";
@@ -807,6 +808,11 @@ export async function preparePassthroughExchange(
     };
     const initialBodyRefusal = refuseOversizedOutboundBody(request);
     if (initialBodyRefusal) return initialBodyRefusal;
+    // Decided once for the request and carried by every leg below: the rotation, refresh and
+    // same-target 429 legs rebuild the request but send the same turn, so a reset on any of
+    // them is the same question. Empty unless the provider opted in AND the body is one the
+    // proxy can judge self-contained (see reset-replay.ts).
+    const resetReplay = resetReplayOptions(route.provider, parsed._rawBody);
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -841,7 +847,7 @@ export async function preparePassthroughExchange(
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(adoptObservedResponse);
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends, ...resetReplay },
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -939,7 +945,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: allowance.attempts, onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: allowance.attempts, onSendsConsumed: noteTransientSends, ...resetReplay },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -1172,7 +1178,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends, ...resetReplay },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1304,7 +1310,7 @@ export async function preparePassthroughExchange(
               route.provider.authMode === "forward")
               .then(adoptObservedResponse);
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends, ...resetReplay },
         );
       } catch (err) {
         return transportFailureResponse(err);

@@ -509,6 +509,86 @@ describe("ambiguous reset safety", () => {
   });
 });
 
+describe("operator reset replay (replayResets)", () => {
+  test("replays a reset once and returns the second attempt's response", async () => {
+    silenceWarn();
+    const reports: number[] = [];
+    const mock = mockDoFetch([bunResetError(), new Response("ok", { status: 200 })]);
+    const res = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3, replayResets: 2, label: "test", onSendsConsumed: count => reports.push(count),
+    });
+    expect(res.status).toBe(200);
+    expect(mock.calls).toHaveLength(2);
+    expect(reports).toEqual([1, 1]);
+    expect(warnSpies[0]).toHaveBeenCalledTimes(1);
+    expect(String(warnSpies[0]!.mock.calls[0]?.[0])).toContain("retryOnReset");
+  });
+
+  test("a spent ceiling settles as the refusal, never a throw", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([bunResetError(), bunResetError(), new Response("duplicate")]);
+    const response = await fetchWithResetRetry(mock.doFetch, { attempts: 3, replayResets: 2 });
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    // Two sends: the original and the one replay. The third result was never requested.
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("the ceiling never widens the leg's own budget", async () => {
+    const mock = mockDoFetch([bunResetError(), new Response("duplicate")]);
+    const response = await fetchWithResetRetry(mock.doFetch, { attempts: 1, replayResets: 3 });
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("a replay that fails any other way is still the refusal, not a transport rejection", async () => {
+    silenceWarn();
+    const refused = Object.assign(new Error("Unable to connect"), { code: "ECONNREFUSED" });
+    const mock = mockDoFetch([bunResetError(), refused]);
+    // Without the policy the same sequence rethrows as credential-visible evidence, and the
+    // caller's transport path would answer with a 502 the client is invited to resend.
+    const response = await fetchWithResetRetry(mock.doFetch, { attempts: 3, replayResets: 3 });
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("a zero ceiling is the plain refusal and a replay-safe caller is unaffected", async () => {
+    silenceWarn();
+    const off = mockDoFetch([bunResetError(), new Response("duplicate")]);
+    const refusal = await fetchWithResetRetry(off.doFetch, { attempts: 3, replayResets: 0 });
+    expect(refusal.status).toBe(429);
+    expect(off.calls).toHaveLength(1);
+    const safe = mockDoFetch([bunResetError(), bunResetError(), bunResetError()]);
+    await expect(fetchWithResetRetry(safe.doFetch, { replaySafe: true, replayResets: 1 }))
+      .rejects.toThrow("socket connection was closed unexpectedly");
+    expect(safe.calls).toHaveLength(3);
+  });
+
+  test("shares one budget with the transient layer", async () => {
+    silenceWarn();
+    const reports: number[] = [];
+    const mock = mockDoFetch([
+      new Response("busy", { status: 503 }), bunResetError(), new Response("ok", { status: 200 }),
+    ]);
+    const res = await fetchWithTransientRetry(mock.doFetch, {
+      attempts: 3, replayResets: 3, onSendsConsumed: count => reports.push(count),
+    });
+    expect(res.status).toBe(200);
+    expect(mock.calls).toHaveLength(3);
+    expect(reports).toEqual([3]);
+    const spent = mockDoFetch([
+      new Response("busy", { status: 503 }), new Response("busy", { status: 503 }), bunResetError(), new Response("ok"),
+    ]);
+    const response = await fetchWithTransientRetry(spent.doFetch, { attempts: 3, replayResets: 3 });
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(spent.calls).toHaveLength(3);
+  });
+});
+
 describe("ambiguous reset safety through error formatting", () => {
   test("every terminal code survives formatting without advertising Retry-After", async () => {
     for (const code of ["upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused"]) {

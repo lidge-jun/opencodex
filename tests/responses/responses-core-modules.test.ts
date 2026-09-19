@@ -16,7 +16,8 @@ const EXISTING_BOUNDARIES = new Set([
   "combo-session-recall.ts", "combo-stream-preflight.ts", "context-overflow.ts",
   "empty-completion-guard.ts", "encrypted-payload.ts", "fetch-helpers.ts",
   "input-admission.ts", "outbound-body-guard.ts", "passthrough-error.ts",
-  "responses-field-backfill.ts", "terminal-guard.ts", "upstream-error.ts", "ws-upstream.ts",
+  "reset-replay.ts", "responses-field-backfill.ts", "terminal-guard.ts", "upstream-error.ts",
+  "ws-upstream.ts",
 ]);
 
 function siblingImports(source: string): string[] {

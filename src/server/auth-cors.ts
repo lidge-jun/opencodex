@@ -11,6 +11,7 @@ import {
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
   retryOn429PolicyConfigError,
+  retryOnResetPolicyConfigError,
   sanitizeModelCostsForDisplay,
 } from "../config";
 import {
@@ -722,6 +723,9 @@ export function providerManagementConfigError(
     delete canonicalCandidate.modelCosts;
     // requestPacing is a user-owned transport overlay, not part of the canonical seed.
     delete canonicalCandidate.requestPacing;
+    // retryOnReset is the same kind of overlay and is meant for this provider's native
+    // Responses sends; it is validated below (retryOnResetPolicyConfigError).
+    delete canonicalCandidate.retryOnReset;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
     // narrowing what their own native rows advertise. They can only ever LOWER the measured
     // window (see nativeOpenAiContextWindow), so admitting them cannot widen what the proxy
@@ -767,6 +771,10 @@ export function providerManagementConfigError(
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const retryOnResetError = retryOnResetPolicyConfigError(raw.retryOnReset);
+  if (retryOnResetError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${retryOnResetError}`;
   }
   const requestPacingError = requestPacingConfigError(raw.requestPacing);
   if (requestPacingError) {
@@ -1030,6 +1038,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   showThinkingSummary: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
+  retryOnReset: "editor",
   reasoningSplitModels: "editor",
   reasoningDetailsModels: "editor",
   thinkingToggleModels: "editor",
