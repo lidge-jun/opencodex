@@ -36,6 +36,8 @@ import {
   startServer,
 } from "../../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { readUsageEntries } from "../../src/usage/log";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
@@ -753,6 +755,7 @@ describe("server local API auth", () => {
     };
     let acceptedCount = 0;
 
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -767,8 +770,10 @@ describe("server local API auth", () => {
       expect(response.status).toBe(429);
       expect(acceptedCount).toBe(1);
       expect(upstreamModels).toEqual(["first-model", "second-model"]);
+      await response.text();
     } finally {
       await upstream.stop(true);
+      releaseSpendHome();
     }
   });
 
@@ -3479,8 +3484,11 @@ describe("server local API auth", () => {
   });
 
   test("Activation E: both stream modes retry only before response relay construction", async () => {
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // The relay decision only, not the whole process. A global platform override also changes
+    // state-directory identity, which is lowercased on win32 and so names a different directory
+    // on a case-sensitive filesystem: the server's own writer lease stopped matching and the
+    // retry was refused before it could reach the second account.
+    setRelayPlatformForTests("win32");
     try {
       for (const streamMode of ["legacy-tee", "eager-relay"] as const) {
         const positive = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
@@ -3512,7 +3520,7 @@ describe("server local API auth", () => {
         }
       }
     } finally {
-      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+      setRelayPlatformForTests(undefined);
     }
   }, { timeout: SERVER_BUDGET_MS });
 
