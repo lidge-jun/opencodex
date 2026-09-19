@@ -10,7 +10,7 @@ import {
 } from "../src/api";
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
-const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
+const globals = ["document", "window", "navigator", "sessionStorage", "localStorage", "fetch"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let promptCalls: number;
@@ -23,6 +23,7 @@ beforeEach(() => {
     window: { configurable: true, value: testWindow },
     navigator: { configurable: true, value: testWindow.navigator },
     sessionStorage: { configurable: true, value: testWindow.sessionStorage },
+    localStorage: { configurable: true, value: testWindow.localStorage },
     fetch: { configurable: true, value: testWindow.fetch.bind(testWindow) },
   });
   promptCalls = 0;
@@ -401,4 +402,32 @@ test("the watchdog never bounds the prompt: slow user input stacks no dialogs an
   expect(resA.status).toBe(200);
   expect(resB.status).toBe(200);
   expect(promptCalls).toBe(1);
+});
+
+test("a hung remembered-token verification is bounded and falls back to the prompt", async () => {
+  // verifyAdminToken used to await rawFetch with no bound: a /api/settings that never
+  // settled wedged resolutionInFlight (and every /api waiter) for the page lifetime —
+  // the whole-resolution watchdog only races reBootstrapSessionToken. The bounded fetch
+  // must turn the hang into "unavailable": stored token preserved, prompt reached.
+  declareRuntimeRole("hub");
+  setRebootstrapTimeoutForTests(40);
+  // Bun (Windows) can starve native AbortSignal.timeout timers while the JS timer
+  // queue is empty; the watchdog that normally keeps it non-empty is cleared before
+  // remembered-token verification runs. Keep one timer armed so the bound under
+  // test actually fires instead of hanging the runner.
+  const keepalive = setTimeout(() => {}, 1_000);
+  localStorage.setItem("opencodex.remembered-admin-token", "remembered-token");
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (pathnameOf(input) === "/api/settings") return hangUntilAborted(init?.signal);
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  try {
+    expect((await fetch("/api/config")).status).toBe(401);
+    expect(promptCalls).toBe(1);
+    expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("remembered-token");
+  } finally {
+    clearTimeout(keepalive);
+  }
 });
