@@ -199,6 +199,28 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     });
   });
 
+  test("message_stop with an incomplete tool call fails with protocol_error", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const spawn: SpawnFn = (_cmd, _args) => fakeChild(frameLines([
+      INIT_OK,
+      toolUseStart(cliName),
+      inputJsonDelta("{}"),
+      // Missing BLOCK_STOP (tool_call_end not emitted, so toolCallStarts=1, completedToolCalls=0)
+      MESSAGE_STOP,
+    ])) as unknown as ChildProcess;
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "protocol_error",
+      status: 502,
+      retryable: false,
+    });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
   test("tool_choice required without a captured call fails closed instead of a text done", async () => {
     const p = parsed([tool("exec")]);
     p.options = { toolChoice: "required" } as OcxParsedRequest["options"];

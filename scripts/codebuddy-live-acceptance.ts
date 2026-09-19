@@ -180,6 +180,7 @@ export async function readResponseStream(response: Response, signal: AbortSignal
     buffer += decoder.decode();
     requireCondition(buffer.length === 0, "truncated_sse_frame");
     requireCondition(completed, "missing_completion");
+    requireCondition(done, "missing_done");
     requireCondition(completed.status === "completed" && completed.model === model
       && typeof completed.id === "string" && completed.id.length > 0 && Array.isArray(completed.output),
     "invalid_completed_response");
