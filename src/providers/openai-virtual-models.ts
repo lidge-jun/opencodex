@@ -84,8 +84,17 @@ export function applyOpenAiVirtualModel(
   logCtx: RequestLogContext,
   inboundWire: InboundWire = "responses",
 ): OpenAiVirtualModelResolution | undefined {
-  const selectedModelId = logCtx.model && logCtx.model !== route.modelId ? logCtx.model : route.modelId;
-  const resolution = resolveOpenAiVirtualModel(route.providerName, selectedModelId);
+  // Routing has already removed the provider namespace and resolved model aliases. Never use
+  // logCtx.model for identity: it is reporting state and can still contain a namespaced selector.
+  const resolution = resolveOpenAiVirtualModel(route.providerName, route.modelId)
+    ?? (() => {
+      // Preserve the public helper's idempotent second-call contract from its own mutation
+      // provenance, without promoting reporting state back into routing authority.
+      const selected = parsed._openAiVirtualSelectedModelId;
+      if (typeof selected !== "string") return undefined;
+      const remembered = resolveOpenAiVirtualModel(route.providerName, selected);
+      return remembered?.wireModelId === route.modelId ? remembered : undefined;
+    })();
   if (!resolution) return undefined;
 
   logCtx.model = resolution.selectedModelId;
