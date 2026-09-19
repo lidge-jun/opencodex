@@ -370,6 +370,12 @@ disk, and entry ceilings; this does not recover history the client no longer has
 must handle the error explicitly and resend their full context without `previous_response_id`.
 Retrying only the same ID cannot recover missing state.
 
+The same refusal applies when the referenced state belongs to a different client task scope,
+including when the new request appears to carry complete input. The proxy cannot prove that input
+is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
+exists. Retry with the complete conversation and omit `previous_response_id`; matching scopes and
+legacy continuations where both scopes are absent or blank continue to replay normally.
+
 The same recovery signal applies to every routed destination, because only the native Responses
 passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`
 to a backend that stored the chain. Every other wire rebuilds the conversation from each request's

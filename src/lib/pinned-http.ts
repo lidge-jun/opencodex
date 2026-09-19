@@ -1,5 +1,6 @@
 import http, { type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
 import https from "node:https";
+import { classifyContentCoding, isNullBodyStatus } from "./http-response-semantics";
 
 export type PinnedAddress = { address: string; family: number };
 
@@ -7,7 +8,9 @@ export type PinnedHttpErrorCode =
   | "connect_timeout"
   | "first_byte_timeout"
   | "inactivity_timeout"
-  | "output_byte_limit";
+  | "output_byte_limit"
+  | "unsupported_content_encoding"
+  | "content_decode_failed";
 
 export class PinnedHttpError extends Error {
   override readonly name = "PinnedHttpError";
@@ -32,6 +35,99 @@ export interface PinnedHttpRequestOptions {
 /** @deprecated Use {@link PinnedHttpRequestOptions}. */
 export type PinnedHttpGetOptions = PinnedHttpRequestOptions;
 
+/**
+ * Undo the content-coding this transport has to undo itself, under the caller's byte ceiling.
+ *
+ * `maxBytes` keeps its existing meaning for the bytes that arrive on the socket, and gains the
+ * same meaning for the bytes the caller ends up reading. Bounding only the coded side would let
+ * a small compressed response expand past a ceiling the caller set precisely so it would not
+ * have to hold an unbounded body in memory.
+ *
+ * A completed body is not torn down here. The response already ended, so there is nothing to
+ * release, and destroying it would take a connection the agent is entitled to reuse. That
+ * matches the identity path, which also only closes. Teardown belongs to the paths that end a
+ * response early: a decode failure, an exceeded ceiling, and a caller that cancels.
+ *
+ * Only a decoder failure is renamed. A mid-body reset, a stalled response and an exceeded
+ * socket-byte ceiling all reach this pipeline as "the stream failed", and calling any of them a
+ * decode failure would tell the caller the peer sent unreadable bytes when the truth is that the
+ * connection died. The source failure is recorded as it passes so the original error survives;
+ * what is left after that is the decompressor's own, and that one is named because the caller's
+ * alternative is a bare TypeError from a stream it never constructed.
+ */
+function decodedBody(
+  source: ReadableStream<Uint8Array>,
+  format: "gzip" | "deflate",
+  maxBytes: number | undefined,
+  context: string,
+  release: () => void,
+): ReadableStream<Uint8Array> {
+  // Interposed purely to attribute failures. Once bytes enter the decompressor, a transport
+  // error and a corrupt trailer are indistinguishable from the far side of the pipe.
+  let sourceFailure: { error: unknown } | undefined;
+  const sourceReader = source.getReader();
+  const attributed = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await sourceReader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
+        sourceFailure = { error };
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return sourceReader.cancel(reason);
+    },
+  });
+  // `DecompressionStream` declares its writable side as `WritableStream<BufferSource>`, and
+  // TypeScript measures `WritableStream` as invariant in its chunk type, so the pair is not
+  // assignable to `ReadableWritablePair<Uint8Array, Uint8Array>` even though every chunk this
+  // body produces is a valid `BufferSource`. The conversion states that relationship and
+  // nothing else; it does not widen what is actually written.
+  const decompressor = new DecompressionStream(format) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
+  const reader = attributed.pipeThrough(decompressor).getReader();
+  let decoded = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        decoded += next.value.byteLength;
+        if (maxBytes !== undefined && decoded > maxBytes) {
+          throw new PinnedHttpError("output_byte_limit", `${context} exceeds ${maxBytes} byte cap`);
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
+        // A failure the socket stream raised is the caller's answer, whatever shape it has.
+        // Only what the decompressor itself rejected is renamed.
+        const named = sourceFailure !== undefined
+          ? sourceFailure.error
+          : error instanceof PinnedHttpError
+            ? error
+            : new PinnedHttpError("content_decode_failed", `${context} could not decode its ${format} body`);
+        // Cancelling the decoded reader propagates back through the decompressor to the socket
+        // stream's own `cancel`, which destroys the request; `release` covers the case where
+        // that propagation is already finished.
+        await reader.cancel(named).catch(() => { /* already torn down */ });
+        controller.error(named);
+        release();
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => { /* already torn down */ });
+      release();
+    },
+  });
+}
+
 function pinnedHttpRequest(
   url: string,
   pinned: PinnedAddress,
@@ -55,6 +151,10 @@ function pinnedHttpRequest(
   const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
+  // This transport assembles the response itself, so a coding it did not ask for becomes its own
+  // problem to undo. Ask for none by default and leave an explicit caller choice alone, which is
+  // the same rule `src/lib/socks5-fetch.ts` applies to the other raw route.
+  if (!headers.has("accept-encoding")) headers.set("accept-encoding", "identity");
   if (body !== undefined && !headers.has("content-length")) {
     headers.set("content-length", String(Buffer.byteLength(body)));
   }
@@ -150,6 +250,39 @@ function pinnedHttpRequest(
         return;
       }
 
+      // A success status can still be null-body. `new Response(stream, { status: 204 })` throws a
+      // TypeError, so attaching the body below would turn a correct no-content answer into a
+      // construction failure raised inside this event handler rather than a resolved response.
+      // Nothing is coming on the socket either, so streaming one of these would hold the caller
+      // until the peer closed a connection it is entitled to keep alive. The headers still
+      // describe the representation the peer would have sent and are preserved as they arrived.
+      if (isNullBodyStatus(status)) {
+        try { response.destroy(); } catch { /* ignore */ }
+        try { req?.destroy(); } catch { /* ignore */ }
+        if (settled) return;
+        settled = true;
+        resolve(new Response(null, { status, headers: responseHeaders }));
+        return;
+      }
+
+      // The peer may have coded the body whatever this request asked for. Classify before the
+      // stream takes the socket so a coding this transport cannot undo fails on the ordinary
+      // error path rather than reaching the caller as bytes its parser cannot read.
+      const coding = classifyContentCoding(responseHeaders);
+      if (coding.kind === "unsupported") {
+        try { response.destroy(); } catch { /* ignore */ }
+        fail(new PinnedHttpError(
+          "unsupported_content_encoding",
+          `${context} returned an unsupported content-encoding: ${coding.coding}`,
+        ));
+        return;
+      }
+      if (coding.kind === "decodable") {
+        responseHeaders.delete("content-encoding");
+        // The declared length counted the coded bytes, not what the caller now reads.
+        responseHeaders.delete("content-length");
+      }
+
       let received = 0;
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -191,7 +324,14 @@ function pinnedHttpRequest(
 
       if (settled) return;
       settled = true;
-      resolve(new Response(stream, { status, headers: responseHeaders }));
+      const release = () => {
+        try { response.destroy(); } catch { /* ignore */ }
+        try { req?.destroy(); } catch { /* ignore */ }
+      };
+      const payload = coding.kind === "decodable"
+        ? decodedBody(stream, coding.format, maxBytes, context, release)
+        : stream;
+      resolve(new Response(payload, { status, headers: responseHeaders }));
     };
 
     const requestFn = parsed.protocol === "https:" ? https.request : http.request;

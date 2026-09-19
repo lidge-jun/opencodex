@@ -25,6 +25,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
+| Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
 | Meta Muse Responses tool names | `src/responses/muse-tool-name-alias.ts`, `src/adapters/openai-responses.ts` | `api.meta.ai` only: function names over 64 characters or containing characters outside `[a-zA-Z0-9_-]` become collision-safe wire aliases and are restored before the client sees them. |
 | Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts`, `src/adapters/google-wire-shape.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses the shared abort/deadline helpers (`src/lib/upstream-retry.ts`), wire-body repair, and upstream error normalization. `google-wire-shape.ts` sits outside that path entirely: it only reads the compiled body, and only when provider debug is on. |
 | Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
@@ -234,11 +235,21 @@ The tunnel reader keeps incomplete framing separate from queued socket bytes,
 waits for new input, and caps headers even when the terminating delimiter arrives
 in the same chunk. Cancellation removes the exact queued waiter; socket errors
 remain errors on later reads rather than turning into clean EOF. Buffered body
-reads pause the socket at the local high-water mark, and upload errors are observed
-before the response reader takes ownership. `tests/lib/socks5-fetch.test.ts` covers
+reads pause the socket at the local high-water mark, and an upload failure is observed
+by the caller rather than lost behind the answer. `tests/lib/socks5-fetch.test.ts` covers
 fragmented framing, header limits and explicit-route snapshot preservation.
 Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
 honor them and must not silently downgrade the provider contract.
+
+The upload and the answer are read together. One reader consumes the socket for the whole
+exchange, starting before the request body is finished, because a peer may answer a request it
+has not finished receiving and a caller's body stream may stall. Each body read and drain wait
+races the caller's abort and that pending answer, so an abort settles the fetch with its own
+reason rather than leaving a read the transport does not own, an early final response ends the
+upload without writing a terminating chunk into a finished conversation, and a socket failure
+during a stalled read surfaces as the failure instead of a promise that never settles. The
+request body is cancelled without being awaited, since a caller's cancel algorithm may itself
+never settle. `tests/lib/socks5-upload-lifecycle.test.ts` covers these four outcomes.
 
 Content-coding is this transport's own obligation. `fetch` decodes a coded body below the
 Response constructor; this tunnel assembles the body from a socket, so a response wrapped with
@@ -246,5 +257,35 @@ its upstream headers hands the coded bytes to whatever parses them. The request 
 for `identity` unless the caller chose an `accept-encoding` itself, a `gzip` or `deflate`
 response is decoded and stops advertising the coding and the coded length, and any other coding
 is refused by name rather than surfaced as bytes no caller can read.
+
+## Raw transport null-body statuses
+
+`src/lib/http-response-semantics.ts` holds the null-body status set both raw outbound transports
+have to honor. `fetch` applies it below the Response constructor; `src/lib/pinned-http.ts` and
+`src/lib/socks5-fetch.ts` build a Response from a socket, so each one applied the rule on its own
+and the two disagreed — the SOCKS helper excluded 204 and the pinned helper excluded nothing.
+204, 205 and 304 resolve with a null body and release the connection instead of waiting for a
+peer that is entitled to keep it alive, and their representation headers are preserved as they
+arrived rather than decoded or refused, because there are no coded bytes to act on.
+`tests/lib/transport-null-body.test.ts` covers both transports against a keep-alive peer.
+
+## Raw transport content coding
+
+Content coding is each raw transport's own obligation, and the pinned direct helper now carries
+the same one the tunnel does. Provider outbound picks between these two routes, so decoding on
+only one of them made the same gzip JSON readable or unreadable depending on operator egress
+configuration. Both ask for `identity` unless the caller chose an `accept-encoding` itself,
+decode `gzip` and `deflate`, drop the coding and the coded length once the bytes no longer match
+them, and refuse any other coding by name instead of surfacing bytes no caller can parse. Only
+the coding the response actually carries decides this; a preference list that mentions an
+alternative this code cannot undo is not a refusal.
+
+The pinned helper's `maxBytes` binds both sides of that decode: the bytes that arrive on the
+socket keep their existing meaning, and the decoded bytes are bounded by the same ceiling, so a
+small coded response cannot expand past the limit a caller set to bound what it holds. A decoder
+failure surfaces as a named `PinnedHttpError`. Connection teardown belongs to the responses that
+end early — a decode failure, an exceeded ceiling, a cancelled read; a response that completed
+is left to the HTTP agent, which may pool or destroy it.
+`tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

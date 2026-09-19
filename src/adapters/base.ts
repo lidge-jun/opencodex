@@ -31,10 +31,33 @@ export interface IncomingMeta {
    * behind it (#4546).
    */
   sendBudget?: RequestExecutionBudget;
+  /**
+   * Physical-send observations for runTurn adapters. Without the same callback carried by
+   * AdapterFetchContext, an adapter-owned replay spends the shared budget but remains absent
+   * from the request's sendCount.
+   */
+  onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
+  /**
+   * Recovery refusals for runTurn adapters. A refused replay is not a send, so this separate
+   * channel explains why recovery stopped without inflating physical-send telemetry.
+   */
+  onRecoveryWithheld?: (withheld: { reason: AttemptRecoveryWithheld }) => void;
 }
 
 export interface ProviderAdapter {
   name: string;
+
+  /**
+   * This adapter reports every physical inference send through `IncomingMeta.onPhysicalSend`,
+   * including its first.
+   *
+   * The caller normally logs the first send before handing control over, which is correct for a
+   * transport whose sends it can see. An adapter that admits its own sends through the shared
+   * budget can have that first send refused, and a send logged before admission is a send the
+   * log claims and the wire never made. Setting this moves the first send's accounting to the
+   * boundary where it is actually dispatched.
+   */
+  reportsPhysicalSends?: boolean;
 
   /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and

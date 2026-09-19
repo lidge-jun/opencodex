@@ -125,6 +125,16 @@ Function-call wrappers around freeform bodies are restored by
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
 
+Progressive preview for those wrappers is decoded by
+`src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
+function-call restoration. A prefix that can still become a complete outer fence stays held so
+completion never removes bytes already published in a delta; ordinary raw input remains
+progressive, fallback fields wait for a complete parse, and JSON escapes emit only complete
+decoded units. Routed restoration additionally keeps its existing hold for an unrecognized JSON
+object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that
+become invalid only after a valid prefix was emitted remain bounded exceptions: completion is
+authoritative because preserving progressive canonical input leaves no rewind mechanism.
+
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
@@ -480,7 +490,12 @@ receive `previous_response_not_found` before upstream dispatch and must resend c
 without `previous_response_id`. That refusal is not specific to the stateless flag: it covers every
 destination that cannot see the prefix this process failed to restore, which is every destination
 except the native Responses passthrough. The passthrough forwards the id and keeps its
-upstream-owned state. `PROVIDER_OWNED_CONTINUATION_WIRES` in
+upstream-owned state. A task-scope mismatch uses the same generic refusal even when the supplied
+input appears complete, because the proxy cannot prove that it contains the full conversation.
+The internal mismatch reason, stored scope and state contents never enter the client response;
+the caller retries explicitly with complete history and no `previous_response_id`. Matching
+normalized scopes replay, and two absent or blank scopes remain the legacy unscoped cohort.
+`PROVIDER_OWNED_CONTINUATION_WIRES` in
 `src/responses/continuation-ownership.ts` is deliberately empty and records why the three
 candidates do not qualify: devin re-sends the whole conversation each turn, cursor reads its
 `checkpointRef` out of the same expired store and otherwise falls back to `full-replay`, and kiro
@@ -941,13 +956,22 @@ The hop pays for a replay that some *other* layer dispatches, so which layer set
 reservation follows the dispatcher, not the ladder. A helper-routed replay reports the same
 physical send back through `onSendsConsumed`; that is what `countedExternally: true` names, and the
 reporter's first send settles the pending booking instead of adding a second charge. An adapter
-that owns its transport — Kiro's reset ladder, Cursor's transport ladder — reserves once per
-physical send instead, so no reporter ever arrives. Those ladders are handed
+that owns its transport — Kiro's reset ladder, Cursor's transport ladder, or Devin's bounded
+pre-output stated-reset replay — reserves once per physical send instead, so no reporter ever
+arrives. Those ladders are handed
 `adapterDispatchBudget`, a live delegating view of the same budget that spends a permit passed down
 through `pendingHopPermit` on the adapter's first reservation and closes the booking through
 `permit.assumeCharge()`. Letting both charge is how one physical send became two charges, and how a
 spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
 from (#4709).
+
+`run-turn-execution.ts` passes the same physical-send and recovery-withheld observers used by the
+request-building adapter path. Devin builds one `createAdapterPhysicalSend` for the whole
+`GetChatMessage` invocation, so its initial POST and at most two same-target replays report ordinals
+1, 2, and 3. The outer runTurn attempt already records ordinal 1, and the shared observer therefore
+adds only ordinals above 1 to `sendCount`; the execution budget still reserves every ordinal. A
+replay reserves only after its server-stated wait. If admission is refused, no inference I/O occurs,
+`retry-send-budget` is recorded, and the preceding provider 429 remains the returned error.
 
 Confirmation happens at the dispatch boundary rather than at the rotation. `adapter-dispatch.ts`
 passes an `onDispatch` callback that the rebuild invokes immediately before the wire, and skips it

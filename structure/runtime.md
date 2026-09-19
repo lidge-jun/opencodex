@@ -355,9 +355,7 @@ The relay is transparent in both directions, and that includes the close: a down
 
 `OCX_LIVE_FRAME_LOG` records both frame metadata and sideband lifecycle stages (`upstream-open`, `upstream-failed`, `relay-attached`, `relay-closed`) in one JSONL, content-free in both shapes. The lifecycle half is what separates a join that never reached this proxy from one whose upstream handshake was refused and from a live relay that carried nothing; frame records alone leave all three as an empty file. `tests/server/server-live-realtime-fixtures.test.ts` drives each sideband stage against de-identified Frameless v3 fixtures in `tests/fixtures/realtime-voice-sideband/` so a failure names the stage.
 
-## Paginated history writer boundary
-
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 

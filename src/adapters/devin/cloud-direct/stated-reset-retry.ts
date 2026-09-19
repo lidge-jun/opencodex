@@ -5,7 +5,9 @@
  * is idempotent; ambiguous transport failures still propagate unchanged.
  */
 import { parseRetryAfterFromMessage } from '../../../lib/retry-delay.js';
-import { abortError, sleepWithAbort } from '../../../lib/upstream-retry.js';
+import type { AdapterFetchContext } from '../../base.js';
+import { createAdapterPhysicalSend } from '../../physical-send.js';
+import { abortError, SendBudgetExhaustedError, sleepWithAbort } from '../../../lib/upstream-retry.js';
 import { CloudChatError, streamChatEvents, type CloudChatEvent, type CloudChatRequest } from './chat.js';
 
 /** 1 initial attempt plus at most 2 replays. */
@@ -33,6 +35,11 @@ export interface StatedResetRetryOptions {
   maxReplays?: number;
   /** CUMULATIVE wait allowance, not a fresh allowance on every failure. */
   maxWaitMs?: number;
+  /** Request-wide execution authority. Absent preserves context-free callers' unlimited fetch. */
+  execution?: Pick<
+    AdapterFetchContext,
+    "executor" | "sendBudget" | "onPhysicalSend" | "onRecoveryWithheld"
+  >;
 }
 
 function replayLimit(value: number | undefined): number {
@@ -59,15 +66,34 @@ export async function* streamChatEventsWithResetRetry(
   const sleep = options?.sleep ?? sleepWithAbort;
   const maxReplays = replayLimit(options?.maxReplays);
   const maxWaitMs = waitLimit(options?.maxWaitMs);
+  const execution = options?.execution;
+  // One sender owns the whole invocation so ordinals span the initial POST and both replays.
+  // Its executor remains lazy: replay admission happens after the provider-stated wait, never
+  // while a reservation could be held for up to an hour.
+  const send = execution
+    ? createAdapterPhysicalSend({ ...execution, abortSignal: req.signal })
+    : undefined;
   let replays = 0;
   let waitedMs = 0;
+  let replaySourceError: CloudChatError | undefined;
   while (true) {
     // Check again after sleeping: cancellation can race with timer completion.
     // A pre-aborted request must not even enter a custom transport.
     if (req.signal?.aborted) throw abortError(req.signal);
     let yielded = false;
     try {
-      for await (const event of stream(req)) {
+      const recovery = replays > 0 ? "rate-limit-429" as const : undefined;
+      const attemptRequest = send
+        ? {
+            ...req,
+            executor: ((input, init) => send({
+              url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+              ...(recovery ? { sendClass: "auth-recovery" as const, recovery } : {}),
+              dispatch: executor => executor(input, init),
+            })) as typeof globalThis.fetch,
+          }
+        : req;
+      for await (const event of stream(attemptRequest)) {
         // Latch before yielding, so a consumer-injected error is post-output.
         yielded = true;
         yield event;
@@ -75,14 +101,24 @@ export async function* streamChatEventsWithResetRetry(
       return;
     } catch (error) {
       if (req.signal?.aborted) throw abortError(req.signal);
-      const waitSec = !yielded
+      if (!yielded && error instanceof SendBudgetExhaustedError && replaySourceError) {
+        // The provider's refusal is the real upstream answer. A local cap can withhold its
+        // recovery, but replacing the 429 would erase the status and stated reset metadata.
+        execution?.onRecoveryWithheld?.({ reason: "retry-send-budget" });
+        throw replaySourceError;
+      }
+      const retryableError = !yielded
         && error instanceof CloudChatError
         && error.status === 429
-        ? parseRetryAfterFromMessage(error.message)
+        ? error
+        : undefined;
+      const waitSec = retryableError
+        ? parseRetryAfterFromMessage(retryableError.message)
         : undefined;
       const waitMs = waitSec === undefined ? undefined : waitSec * 1000;
       if (
-        waitMs === undefined
+        retryableError === undefined
+        || waitMs === undefined
         || replays >= maxReplays
         || waitMs > maxWaitMs - waitedMs
       ) {
@@ -91,6 +127,7 @@ export async function* streamChatEventsWithResetRetry(
         throw error;
       }
       replays += 1;
+      replaySourceError = retryableError;
       // Charge the complete scheduled wait once, before sleeping. This is a
       // sleep allowance, not a wall-clock deadline on generation or timer
       // scheduling: waking a few milliseconds late must not reject an already

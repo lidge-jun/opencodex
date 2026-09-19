@@ -39,6 +39,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   does not. `devin-cli` survives only as a deprecated alias — `ocx login devin-cli` routes to
   `devin`, and a startup merge migration rewrites any saved row still keyed under the old
   provider id, so the registry carries one Devin provider, not two.
+  Its `GetChatMessage` inference POSTs, including the two bounded pre-output stated-reset
+  replays, pass through the request's provider executor and shared physical-send budget.
+  Catalog and JWT RPCs remain adapter support traffic rather than inference sends.
   `AdapterFactoryContext.providerId` still tells the shared adapter which configured row it is
   serving: the Cognition tenant is recorded on the credential, not in the registry, so the
   adapter has to know the row before it can resolve a host. That adapter advertises bare local

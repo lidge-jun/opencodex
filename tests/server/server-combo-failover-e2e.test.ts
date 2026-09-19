@@ -2444,23 +2444,36 @@ describe("server combo failover 030 activation matrix", () => {
     });
     const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") });
     const headers = { "x-codex-parent-thread-id": "combo-task" };
-
     const legacyResponse = await post(config, {
       previous_response_id: "resp_combo_legacy_unscoped",
       input: "fresh scoped input",
     }, {}, headers);
+    const fullInput = [{ role: "user", content: "complete history" }, { role: "user", content: "current turn" }];
+    const fullMismatch = await post(config, {
+      previous_response_id: "resp_combo_scoped",
+      input: fullInput,
+    }, {}, { "x-codex-parent-thread-id": "other-task" });
+    const genericError = {
+      error: { message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+        type: "invalid_request_error", code: "previous_response_not_found" },
+    };
+    expect(legacyResponse.status).toBe(400);
+    expect(await legacyResponse.json()).toEqual(genericError);
+    expect(fullMismatch.status).toBe(400);
+    expect(await fullMismatch.json()).toEqual(genericError);
+    expect(bodies).toHaveLength(0);
+    const retried = await post(config, { input: fullInput }, {}, { "x-codex-parent-thread-id": "other-task" });
     const scopedResponse = await post(config, {
       previous_response_id: "resp_combo_scoped",
       input: "continue scoped task",
     }, {}, headers);
-
-    expect(legacyResponse.status).toBe(200);
-    expect(scopedResponse.status).toBe(200);
-    expect(bodies).toHaveLength(2);
-    expect(JSON.stringify(bodies[0])).not.toContain("legacy private history");
-    expect(JSON.stringify(bodies[0])).toContain("fresh scoped input");
+    const legacyUnscoped = await post(config, { previous_response_id: "resp_combo_legacy_unscoped",
+      input: "legacy continuation" });
+    expect([retried.status, scopedResponse.status, legacyUnscoped.status]).toEqual([200, 200, 200]);
+    expect(bodies).toHaveLength(3);
+    expect(JSON.stringify(bodies[0])).toContain("complete history");
     expect(JSON.stringify(bodies[1])).toContain("scoped private history");
-    expect(JSON.stringify(bodies[1])).toContain("continue scoped task");
+    expect(JSON.stringify(bodies[2])).toContain("legacy private history");
   });
 
   test("combo child preserves replay provenance for compaction and generated guidance", async () => {

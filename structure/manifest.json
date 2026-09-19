@@ -310,13 +310,14 @@
       ]
     },
     {
-      "path": "adapters/compatibility-lab.md",
-      "tier": 4,
-      "title": "Compatibility Lab",
-      "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
-      "documents": [
-        "src/lab/"
-      ]
+    "path": "adapters/compatibility-lab.md",
+    "tier": 4,
+    "title": "Compatibility Lab",
+    "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
+    "documents": [
+      "src/lab/",
+      "src/server/index.ts"
+    ]
     },
     {
       "path": "gui-and-management-api.md",
@@ -400,6 +401,77 @@
       ]
     }
   ],
+  "contracts": {
+    "version": 1,
+    "entries": [
+      {
+        "id": "paginated-history-writer",
+        "owner": {
+          "document": "codex-home.md",
+          "anchor": "paginated-history-writer-boundary"
+        },
+        "dependents": [
+          "catalog.md",
+          "config.md",
+          "gui-and-management-api.md",
+          "ops/docs-and-release.md",
+          "providers/openai-tiers.md",
+          "runtime.md",
+          "subagents.md"
+        ]
+      },
+      {
+        "id": "request-copy-accounting",
+        "owner": {
+          "document": "transports/byte-accounting.md",
+          "anchor": "request-copy-accounting"
+        },
+        "dependents": [
+          "adapters/registry.md",
+          "catalog.md",
+          "clients/claude-desktop.md",
+          "clients/integrations.md",
+          "data-planes/images.md",
+          "data-planes/inbound-compat.md",
+          "ops/docs-and-release.md",
+          "ops/service-and-sidecars.md",
+          "overview.md",
+          "providers/chat-compat.md",
+          "providers/cursor.md",
+          "providers/xai-grok.md",
+          "runtime.md",
+          "subagents.md",
+          "transports/inventory.md",
+          "transports/streaming-health.md"
+        ]
+      },
+      {
+        "id": "stream-buffer-accounting",
+        "owner": {
+          "document": "transports/byte-accounting.md",
+          "anchor": "stream-buffer-accounting"
+        },
+        "dependents": [
+          "adapters/registry.md",
+          "catalog.md",
+          "clients/claude-desktop.md",
+          "clients/integrations.md",
+          "data-planes/images.md",
+          "data-planes/inbound-compat.md",
+          "ops/docs-and-release.md",
+          "ops/service-and-sidecars.md",
+          "overview.md",
+          "providers/chat-compat.md",
+          "providers/cursor.md",
+          "providers/xai-grok.md",
+          "runtime.md",
+          "subagents.md",
+          "transports/inventory.md",
+          "transports/streaming-health.md"
+        ]
+      }
+    ]
+  },
   "grace": {
     "undocumentedSourceAreas": [
       {

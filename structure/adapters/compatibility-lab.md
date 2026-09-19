@@ -1,5 +1,23 @@
 # Compatibility Lab
 
+## Core isolation and synchronous activation
+
+The protected core request-path files carry no load-time import chain into Lab runtime code:
+the guard in `tests/lab/core-lab-boundary.test.ts` walks static imports, side-effect imports,
+and re-exports transitively from the guard-owned `PROTECTED` list and prints the offending
+chain on failure. A dynamic `import()` is a deferred edge the walk deliberately does not
+follow, because lazy loading behind a namespace or activation check is the sanctioned remedy —
+so the same guard separately forbids a protected file from naming Lab even in a direct dynamic
+import. The ordinary no-Lab path therefore executes no Lab code, while the management plane can
+still route `/api/lab` lazily through a non-Lab module without weakening the rule.
+
+`src/server/index.ts` is deliberately exempt as the composition root: Lab activation stays
+behind `labActivationRequired`, and the window from `Bun.serve` through the `startServer`
+return contains no suspension, so a policy route can never be evaluated before its evidence
+provider is registered and the subagent fallback chain keeps the operator-configured model.
+This contract is [INV-LAB-01](../overview.md#non-negotiable-invariants), bound to the same
+guard test.
+
 ## CL-03 live-route execution boundary
 
 CL-03 live-route evidence is generated only for an exact `RouteSubjectV1` and remains separate from protocol-conformance and task-effectiveness evidence.

@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { CloudChatError, type CloudChatEvent, type CloudChatRequest } from "../../src/adapters/devin/cloud-direct";
 import { streamChatEventsWithResetRetry } from "../../src/adapters/devin/cloud-direct/stated-reset-retry";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
 const REQ = { apiKey: "k", apiServerUrl: "https://example.invalid", modelUid: "swe-2", messages: [] } as unknown as CloudChatRequest;
 
@@ -27,6 +28,77 @@ async function drain(source: AsyncGenerator<CloudChatEvent>): Promise<CloudChatE
 }
 
 describe("streamChatEventsWithResetRetry", () => {
+  test("admits and reports every inference POST through one shared budget", async () => {
+    let spendReservations = 0;
+    let spendRefunds = 0;
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 3, baseSendAllowance: 3, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    }, "devin-reset-accounting", {
+      charge: () => { spendReservations += 1; return true; },
+      refund: () => { spendRefunds += 1; },
+    });
+    const sends: number[] = [];
+    const usedDuringWait: number[] = [];
+    const observed: Array<{ ordinal: number; recovery?: string }> = [];
+    let attempts = 0;
+    const stream = (req: CloudChatRequest) => (async function* (): AsyncGenerator<CloudChatEvent> {
+      attempts += 1;
+      await req.executor!("https://example.invalid/GetChatMessage");
+      if (attempts < 3) throw new CloudChatError("reset in 1 second", "resource_exhausted", "t", 429);
+      yield { kind: "finish", reason: "stop" } as CloudChatEvent;
+    })();
+
+    await drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async () => { usedDuringWait.push(budget.used); },
+      execution: {
+        executor: (async () => { sends.push(sends.length + 1); return new Response(); }) as typeof fetch,
+        sendBudget: budget,
+        onPhysicalSend: send => { observed.push(send); },
+      },
+    }));
+
+    expect(sends).toEqual([1, 2, 3]);
+    expect(budget.used).toBe(3);
+    expect(usedDuringWait).toEqual([1, 2]);
+    expect(spendReservations).toBe(3);
+    expect(spendRefunds).toBe(0);
+    expect(observed).toEqual([
+      { ordinal: 1 },
+      { ordinal: 2, recovery: "rate-limit-429" },
+      { ordinal: 3, recovery: "rate-limit-429" },
+    ]);
+  });
+
+  test("a refused replay performs no inference I/O and preserves the provider 429", async () => {
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    }, "devin-reset-refusal");
+    const refusal = new CloudChatError("Your limit will reset in 1 second", "resource_exhausted", "trace", 429);
+    const withheld: string[] = [];
+    let inferenceSends = 0;
+    const stream = (req: CloudChatRequest) => (async function* (): AsyncGenerator<CloudChatEvent> {
+      await req.executor!("https://example.invalid/GetChatMessage");
+      throw refusal;
+    })();
+
+    await expect(drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async () => {},
+      execution: {
+        executor: (async () => { inferenceSends += 1; return new Response(); }) as typeof fetch,
+        sendBudget: budget,
+        onRecoveryWithheld: event => { withheld.push(event.reason); },
+      },
+    }))).rejects.toBe(refusal);
+
+    expect(inferenceSends).toBe(1);
+    expect(budget.used).toBe(1);
+    expect(withheld).toEqual(["retry-send-budget"]);
+  });
+
   test("waits the stated delay and replays a zero-event 429", async () => {
     const waits: number[] = [];
     let calls = 0;
