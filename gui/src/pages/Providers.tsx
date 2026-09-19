@@ -223,7 +223,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
-  const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
+  const [workspaceSelected, setWorkspaceSelectedState] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_workspace_selected_provider");
+      return saved && saved.trim() ? saved.trim() : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setWorkspaceSelected = useCallback((name: string | null) => {
+    setWorkspaceSelectedState(name);
+    try {
+      if (name) localStorage.setItem("ocx_workspace_selected_provider", name);
+      else localStorage.removeItem("ocx_workspace_selected_provider");
+    } catch { /* localStorage unavailable */ }
+  }, []);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
@@ -235,6 +250,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthTosPending, setOauthTosPending] = useState<
     { provider: string; addAccount: boolean; accountId?: string } | null
   >(null);
+  const [antigravityChoicePending, setAntigravityChoicePending] = useState<{ addAccount: boolean } | null>(null);
   /** Bumped after OAuth login so ProviderDetails switches to the Accounts tab. */
   const [accountsFocus, setAccountsFocus] = useState<{ token: number; provider: string | null }>({
     token: 0,
@@ -284,7 +300,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setAddIntent(null);
     setWorkspaceSelected(provider);
     setAccountsFocus(previous => ({ token: previous.token + 1, provider }));
-  }, []);
+  }, [setWorkspaceSelected]);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
 
   // Warm the Add Provider catalog cache while the page is open so opening the
@@ -384,6 +400,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return refreshAccountRosters(target);
   }, [refreshAccountRosters, oauthCardProviders, keyCardProviders]);
   const recoverSelectionStream = useAccountSelectionEvents(apiBase, config !== null, refreshSelection);
+  const previousActiveAccountsRef = useRef<Record<string, string | null>>({});
+  useEffect(() => {
+    for (const [provider, set] of Object.entries(accountSets)) {
+      const prev = previousActiveAccountsRef.current[provider];
+      const curr = set.activeAccountId;
+      if (prev !== undefined && prev !== null && curr && prev !== curr) {
+        const switchedTo = set.accounts.find(a => a.id === curr);
+        const name = switchedTo?.alias?.trim() || switchedTo?.email || curr.slice(-6);
+        notify(t("pws.accountSwitchNotice", { account: name }), true);
+      }
+      previousActiveAccountsRef.current[provider] = curr;
+    }
+  }, [accountSets, notify, t]);
+
   const rosterKey = JSON.stringify([apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
   const rosterRecoveryKeyRef = useRef<string | null>(null);
   useKeyedClientResource(`provider-rosters:${rosterKey}`, [rosterKey], async signal => {
@@ -415,13 +445,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    * so both must fire or the rows beside each account keep their old numbers. That read's
    * forced enrichment must settle as well as the matching provider-report epoch.
    */
-  const refreshProviderQuota = useCallback((provider: string): Promise<boolean> => {
+  const refreshProviderQuota = useCallback((provider: string, accountId?: string): Promise<boolean> => {
     const configured = config?.providers[provider];
     const mode = configured?.authMode;
     const readAccounts = configured && isAccountProvider(provider, configured)
       ? () => codexPool.load(true, { validatePending: true })
       : mode === "oauth"
-        ? () => fetchAccountSets([provider], true)
+        ? () => fetchAccountSets([provider], true, accountId)
         : mode === "forward" || mode === "local"
           ? undefined
           : () => fetchKeyPools([provider], true);
@@ -483,11 +513,31 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    */
   const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
     if (busy === provider) return;
+    if (provider === "google-antigravity" && !accountId) {
+      setAntigravityChoicePending({ addAccount });
+      return;
+    }
     if (oauthTosRisk(provider)) {
       setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
     void loginOAuth(provider, addAccount, accountId);
+  };
+
+  const onContinueAntigravityOAuth = () => {
+    const addAccount = antigravityChoicePending?.addAccount ?? false;
+    setAntigravityChoicePending(null);
+    if (oauthTosRisk("google-antigravity")) {
+      setOauthTosPending({ provider: "google-antigravity", addAccount });
+      return;
+    }
+    void loginOAuth("google-antigravity", addAccount);
+  };
+
+  const onAntigravityImportSuccess = () => {
+    setAntigravityChoicePending(null);
+    void fetchOauth();
+    bumpModelsRefresh();
   };
 
   if (!config) {
@@ -728,6 +778,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           setOauthTosPending(null);
           void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
         }}
+        antigravityChoicePending={antigravityChoicePending}
+        onCancelAntigravityChoice={() => setAntigravityChoicePending(null)}
+        onContinueAntigravityOAuth={onContinueAntigravityOAuth}
+        onAntigravityImportSuccess={onAntigravityImportSuccess}
       />
     </>
   );

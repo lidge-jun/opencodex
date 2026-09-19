@@ -2,6 +2,7 @@ import AddProviderModal from "../components/AddProviderModal";
 import ProviderModelsNotice, { type ProviderModelsNoticeProps } from "../components/ProviderModelsNotice";
 import AddCodexAccountModal from "../components/AddCodexAccountModal";
 import OAuthTosWarningModal from "../components/OAuthTosWarningModal";
+import AccountAuthChoiceModal from "../components/AccountAuthChoiceModal";
 import { RemoveConfirmDialog, UnsavedLeaveDialog } from "../components/provider-workspace/ProviderDialogs";
 import type { AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import type { AccountLoginRow, AccountLoginStatus } from "../components/provider-catalog/ProviderCatalog";
@@ -25,6 +26,7 @@ export function ProvidersPageModals({
   jsonLeaveOpen,
   jsonSaving,
   oauthTosPending,
+  antigravityChoicePending,
   onCloseAdd,
   onAdded,
   onAccountLogin,
@@ -41,6 +43,9 @@ export function ProvidersPageModals({
   onSaveJson,
   onCancelOauthTos,
   onContinueOauthTos,
+  onCancelAntigravityChoice,
+  onContinueAntigravityOAuth,
+  onAntigravityImportSuccess,
 }: {
   apiBase: string;
   config: ProvidersConfig;
@@ -57,6 +62,7 @@ export function ProvidersPageModals({
   jsonLeaveOpen?: boolean;
   jsonSaving?: boolean;
   oauthTosPending: { provider: string; addAccount: boolean } | null;
+  antigravityChoicePending?: { addAccount: boolean } | null;
   onCloseAdd: () => void;
   onAdded: (name: string) => void;
   onAccountLogin: (provider: string, addAccount?: boolean) => void;
@@ -73,6 +79,9 @@ export function ProvidersPageModals({
   onSaveJson?: () => void;
   onCancelOauthTos: () => void;
   onContinueOauthTos: () => void;
+  onCancelAntigravityChoice?: () => void;
+  onContinueAntigravityOAuth?: () => void;
+  onAntigravityImportSuccess?: () => void;
 }) {
   return (
     <>
@@ -126,6 +135,18 @@ export function ProvidersPageModals({
           providerLabel={oauthLabel(oauthTosPending.provider)}
           onCancel={onCancelOauthTos}
           onContinue={onContinueOauthTos}
+        />
+      )}
+      {antigravityChoicePending && onCancelAntigravityChoice && onContinueAntigravityOAuth && (
+        <AccountAuthChoiceModal
+          provider="google-antigravity"
+          providerLabel={oauthLabel("google-antigravity")}
+          apiBase={apiBase}
+          isOpen={true}
+          isBusy={busy === "google-antigravity"}
+          onClose={onCancelAntigravityChoice}
+          onContinueOAuth={onContinueAntigravityOAuth}
+          onImportSuccess={onAntigravityImportSuccess}
         />
       )}
     </>
