@@ -303,6 +303,7 @@ test("a bound undo follows the copy resolution actually chose", async () => {
   rmSync(join(profileStore, snapshotName));
 
   const siblingBefore = treeWitness(join(root, "store", "aside-profiles", "2"));
+  const sibling2Before = readFileSync(path(2), "utf8");
   const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "restore", opId });
   expect(preview.status).toBe(200);
   const plan = await preview.json() as { canApply: boolean; fingerprint: string; profileId?: number };
@@ -314,12 +315,20 @@ test("a bound undo follows the copy resolution actually chose", async () => {
   });
   expect(undo.status).toBe(200);
 
-  // Restored from the copy that was chosen, and the journal records both the undo and the apply.
+  // Restored from the copy that was chosen, byte for byte.
   expect(readFileSync(path(1), "utf8")).toBe(original);
-  const finalRows = readFileSync(join(root, "store", "journal.jsonl"), "utf8")
-    + readFileSync(join(profileStore, "journal.jsonl"), "utf8");
-  expect(finalRows).toContain(opId);
-  expect(finalRows).toContain("restore");
+
+  // The undo is journalled in the profile's own store as a restore row, rather than inferred from
+  // a substring of two files concatenated together.
+  const profileRows = readFileSync(join(profileStore, "journal.jsonl"), "utf8")
+    .trim().split("\n").map(line => JSON.parse(line) as { kind: string; opId: string });
+  expect(profileRows.some(row => row.kind === "restore")).toBe(true);
+  expect(profileRows.some(row => row.opId === opId)).toBe(true);
+
+  // The copy resolution chose is not rewritten, and the sibling profile is untouched in both its
+  // document and its store.
+  expect(readFileSync(join(root, "store", "journal.jsonl"), "utf8")).toBe(rows);
+  expect(readFileSync(path(2), "utf8")).toBe(sibling2Before);
   expect(treeWitness(join(root, "store", "aside-profiles", "2"))).toBe(siblingBefore);
 });
 

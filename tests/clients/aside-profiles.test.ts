@@ -247,6 +247,29 @@ describe("Aside profile desired state, ownership and history", () => {
     expect((await getAsideProfileState(input(), 1)).enabled).toBe(false);
   });
 
+  test("a captured operation is the one restored, not whatever a fresh lookup would find", async () => {
+    const original = readFileSync(path(1), "utf8");
+    const enabled = await mutateAsideProfiles(input(), { profileId: 1, enabled: true });
+    const enabledResult = enabled.results[0]!;
+    if (!enabledResult.ok) throw new Error("fixture enable failed");
+    const opId = enabledResult.opId!;
+    const captured = findAsideOperation(input(), opId, 1)!;
+    expect(captured).toBeDefined();
+
+    /*
+     * Remove the row from the journal the fresh lookup reads, then restore with the row already
+     * captured. A resolver that looked the operation up again would find nothing and refuse; only
+     * the captured row can carry this through, which is what makes the handoff observable rather
+     * than merely plausible.
+     */
+    await deleteAsideOperation(input(), { opId, profileId: 1 });
+    expect(findAsideOperation(input(), opId, 1)).toBeNull();
+
+    const restored = await restoreAsideProfile(input(), { opId, profileId: 1, selectedOperation: captured });
+    expect(restored.ok).toBe(true);
+    expect(readFileSync(path(1), "utf8")).toBe(original);
+  });
+
   test("disable then Undo restores target intent without changing sibling overrides", async () => {
     seedLegacy();
     await mutateAsideProfiles(input(), { profileId: 2, enabled: false });
