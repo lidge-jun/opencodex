@@ -451,3 +451,36 @@ test("a bound confirmation is refused when the roster it was planned against has
   expect(refused?.message).toContain("roster changed");
   expect(capture.plan).not.toBeNull();
 });
+
+test("a confirmed disable of a profile with nothing applied saves the preference and touches no file", async () => {
+  /*
+   * willChange: false is a statement about the managed client document, and the plan says so. The
+   * change still records the operator's desired sync preference for that profile, which happens
+   * before any client document is touched, so the document and its history stay exactly as they
+   * were while the preference is saved.
+   */
+  await seedRoster();
+  const before = readFileSync(path(1), "utf8");
+  const profileStoreBefore = treeWitness(join(root, "store", "aside-profiles", "1"));
+  const rootStoreBefore = treeWitness(join(root, "store"));
+
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "disable" });
+  expect(preview.status).toBe(200);
+  const plan = await preview.json() as { canApply: boolean; willChange: boolean; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+  expect(plan.willChange).toBe(false);
+
+  const disabled = await api("/api/client-integrations/aside?profile=1", "PUT", {
+    enabled: false, operation: "disable", planFingerprint: plan.fingerprint,
+  });
+  expect(disabled.status).toBe(200);
+
+  // Nothing in the client's document or in either store moved.
+  expect(readFileSync(path(1), "utf8")).toBe(before);
+  expect(treeWitness(join(root, "store", "aside-profiles", "1"))).toBe(profileStoreBefore);
+  expect(treeWitness(join(root, "store"))).toBe(rootStoreBefore);
+
+  // The preference is the one thing that was written, and it is what the operator asked for.
+  expect(saved?.asideProfileSync?.profiles?.["1"]).toBe(false);
+  expect(config.asideProfileSync?.profiles?.["1"]).toBe(false);
+});

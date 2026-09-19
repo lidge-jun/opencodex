@@ -102,8 +102,11 @@ Authorization: Bearer <admin-token>
 `profileId` 为可选。路径要么是受管理的结构路径，要么是 `$snapshot`、`$ownership`、`$journal`
 这三个固定标记；运行时才确定的位置显示为 `*`。不会返回任何配置值、文件位置或所选条目的名称。
 
-`canApply` 为真而 `willChange` 为假，表示操作会成功但不写入任何内容，例如重复应用已经应用过
-的内容。
+`canApply` 为真而 `willChange` 为假，表示操作会成功，但受管理的客户端文档不会有任何改动，例如
+重复应用已经应用过的内容。
+
+Aside 配置档的变更在这种情况下仍会保存一件事：确认之后，会先记录该配置档的同步偏好，然后才去动
+客户端文档。因此关闭一个受管理区块已经不存在的配置档，只会保存偏好，文档及其历史保持不变。
 
 `integration_preview_unavailable` 表示当前没有可用的模型清单：代理刚启动是一种情况，因配置或
 提供方缓存变化而弃用了原有清单也是一种情况。读取 `GET /api/client-integrations` 会在探测成功

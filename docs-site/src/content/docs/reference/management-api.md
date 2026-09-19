@@ -141,8 +141,13 @@ A plan carries `version`, `clientId`, `operation`, `state`, `foreignEdit`, a `ch
 `$ownership` and `$journal` markers; a position chosen at runtime appears as `*`. No
 configuration value, file location or selected member identity is returned.
 
-`canApply: true` with `willChange: false` means the operation succeeds and writes nothing, such
-as applying what is already applied.
+`canApply: true` with `willChange: false` means the operation succeeds and changes nothing in
+the managed client document, such as applying what is already applied.
+
+An Aside profile change still saves one thing in that case. Confirming it records the desired sync
+preference for that profile before any client document is touched, so disabling a profile whose
+managed block is already absent stores the preference and leaves the document and its history
+untouched.
 
 `integration_preview_unavailable` means no usable model roster is currently retained. A freshly
 started proxy is one way to be in that state; a roster retired because the configuration or the

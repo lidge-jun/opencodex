@@ -122,8 +122,13 @@ les marqueurs fixes `$snapshot`, `$ownership` et `$journal` ; une position déte
 l'exécution apparaît comme `*`. Aucune valeur de configuration, aucun emplacement de fichier et
 aucune identité d'élément sélectionné n'est renvoyé.
 
-`canApply` à vrai avec `willChange` à faux signifie que l'opération réussit sans rien écrire,
-par exemple appliquer ce qui est déjà appliqué.
+`canApply` à vrai avec `willChange` à faux signifie que l'opération réussit sans rien changer
+dans le document client géré, par exemple appliquer ce qui est déjà appliqué.
+
+Une modification de profil Aside enregistre tout de même une chose dans ce cas : la confirmation
+enregistre la préférence de synchronisation du profil avant de toucher au moindre document client.
+Désactiver un profil dont le bloc géré est déjà absent enregistre donc la préférence et laisse le
+document et son historique intacts.
 
 `integration_preview_unavailable` indique qu'aucune liste de modèles utilisable n'est actuellement
 conservée : un proxy qui vient de démarrer est un cas, une liste abandonnée parce que la

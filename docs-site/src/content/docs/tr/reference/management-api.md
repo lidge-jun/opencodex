@@ -127,8 +127,12 @@ oluşan bir `changes` listesi, opak bir `fingerprint`, `canApply` ve `willChange
 `$snapshot`, `$ownership` ve `$journal` işaretleridir; çalışma sırasında belirlenen bir konum `*`
 olarak görünür. Hiçbir yapılandırma değeri, dosya konumu veya seçilen öğenin adı döndürülmez.
 
-`canApply` doğru ve `willChange` yanlışsa işlem başarılı olur ama hiçbir şey yazmaz; örneğin zaten
-uygulanmış olanı yeniden uygulamak.
+`canApply` doğru ve `willChange` yanlışsa işlem başarılı olur ama yönetilen istemci belgesinde
+hiçbir şey değişmez; örneğin zaten uygulanmış olanı yeniden uygulamak.
+
+Aside profil değişikliği bu durumda yine de bir şey kaydeder: onay, herhangi bir istemci belgesine
+dokunulmadan önce o profilin eşitleme tercihini yazar. Bu yüzden yönetilen bloğu zaten bulunmayan
+bir profili kapatmak yalnızca tercihi saklar, belgeyi ve geçmişini olduğu gibi bırakır.
 
 `integration_preview_unavailable`, şu anda kullanılabilir bir model listesi tutulmadığını belirtir:
 yeni başlamış bir vekil bunun bir hâlidir, yapılandırma ya da sağlayıcı önbelleği değiştiği için
