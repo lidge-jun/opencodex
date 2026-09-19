@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
+console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"file_imported"}');
 
 // Reads back what a TOML consumer would see for a top-level string key. A Windows path
 // is stored with escaped separators, so the raw file text never contains the unescaped path.
@@ -82,8 +83,10 @@ describe("injectCodexConfig integration (Design B)", () => {
   let ocxHome: string;
 
   beforeEach(() => {
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"before_each_entered"}');
     codexHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-codex-")));
     ocxHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-home-")));
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"before_each_ready"}');
   });
 
   afterEach(() => {
@@ -168,6 +171,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   const unreadablePreimages =
     process.platform === "win32" || process.getuid?.() === 0 ? test.skip : test;
   unreadablePreimages("unreadable preimages abort capture and remain visible as compensation failures", () => {
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"unreadable_preimages_entered"}');
     const script = `
       const fs = require("node:fs");
       const { join } = require("node:path");
@@ -200,10 +204,41 @@ describe("injectCodexConfig integration (Design B)", () => {
       allow();
       console.log(JSON.stringify({unreadable,captureCode,restored,outcomes,unchangedAfterEach,preserved}));
     `;
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"unreadable_preimages_setup_complete"}');
+    const childStartedAt = performance.now();
+    console.error(`ocx-startup-diagnostic:${JSON.stringify({
+      file: "codex-inject-integration",
+      phase: "unreadable_preimages_child_started",
+      deadlineMs: SPAWN_BUDGET_MS - 5_000,
+    })}`);
     const child = spawnSync(process.execPath, ["--eval", script], {
       cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
+    const elapsedMs = Math.min(600_000, Math.max(0, Math.round(performance.now() - childStartedAt)));
+    const status = typeof child.status === "number"
+      && Number.isSafeInteger(child.status)
+      && child.status >= 0
+      && child.status <= 255
+      ? child.status
+      : null;
+    const signal = child.signal === null
+      ? null
+      : child.signal === "SIGTERM" || child.signal === "SIGKILL"
+        ? child.signal
+        : "OTHER";
+    const rawErrorCode = child.error && "code" in child.error
+      ? String((child.error as NodeJS.ErrnoException).code ?? "")
+      : "";
+    const errorCode = rawErrorCode === "" ? null : rawErrorCode === "ETIMEDOUT" ? "ETIMEDOUT" : "OTHER";
+    console.error(`ocx-startup-diagnostic:${JSON.stringify({
+      file: "codex-inject-integration",
+      phase: "unreadable_preimages_child_returned",
+      elapsedMs,
+      status,
+      signal,
+      errorCode,
+    })}`);
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({
       unreadable: true, captureCode: "EACCES", restored: { complete: false, unrestored: ["profile"] }, outcomes: [true, true, true], unchangedAfterEach: [true, true, true], preserved: true,
