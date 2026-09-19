@@ -12,6 +12,8 @@ import { connectTrailerHttpStatus } from "../../src/adapters/devin/cloud-direct/
 import { devinErrorClassification, mergeDevinUsage } from "../../src/adapters/devin";
 import { iterFields } from "../../src/adapters/devin/cloud-direct/wire";
 import { buildMetadata, normalizeDevinSessionToken } from "../../src/adapters/devin/cloud-direct/metadata";
+import { parseRequest } from "../../src/responses/parser";
+import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 
 /** Tag -> field for one encoded proto message. */
 function iterFieldMap(buf: Buffer): Record<number, { wire: number; value: unknown }> {
@@ -526,31 +528,66 @@ describe("devin reasoning replay", () => {
     // Encrypted-only reasoning parts (thinking: "" + signature) are real: the
     // Responses parser emits them for opaque blobs. Picking one as the replay
     // unit used to send a signature with no thinking and drop a reasoning-only
-    // turn outright.
-    const history = mapOcxMessagesToDevin(parsedWith([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "signed thought", signature: "sig-signed" },
-          { type: "thinking", thinking: "", signature: "sig-orphan" },
-        ],
-      },
-    ]));
-    expect(history[0]?.thinking).toBe("signed thought");
-    expect(history[0]?.signature).toBe("sig-signed");
+    // turn outright. Fed through the real parser: direct part injection used to
+    // bypass the shapes replay actually carries (including the unsigned-item
+    // signature dump covered below).
+    const reasoningOnly = mapOcxMessagesToDevin(parseRequest({
+      model: "swe-2",
+      input: [
+        { type: "reasoning", id: "rs_signed", summary: [], encrypted_content: encodeReasoningEnvelope({ txt: "signed thought", sig: "sig-signed" }) },
+        { type: "reasoning", id: "rs_orphan", summary: [], encrypted_content: encodeReasoningEnvelope({ sig: "sig-orphan" }) },
+      ],
+    }));
+    expect(reasoningOnly[0]?.thinking).toBe("signed thought");
+    expect(reasoningOnly[0]?.signature).toBe("sig-signed");
 
-    const trailingText = mapOcxMessagesToDevin(parsedWith([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "signed thought", signature: "sig-signed" },
-          { type: "thinking", thinking: "", signature: "sig-orphan" },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ]));
-    expect(trailingText[0]?.thinking).toBe("signed thought");
-    expect(trailingText[0]?.signature).toBe("sig-signed");
+    const trailingText = mapOcxMessagesToDevin(parseRequest({
+      model: "swe-2",
+      input: [
+        { type: "reasoning", id: "rs_signed", summary: [], encrypted_content: encodeReasoningEnvelope({ txt: "signed thought", sig: "sig-signed" }) },
+        { type: "reasoning", id: "rs_orphan", summary: [], encrypted_content: encodeReasoningEnvelope({ sig: "sig-orphan" }) },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    }));
+    const assistant = trailingText.find(m => m.role === "assistant");
+    expect(assistant?.thinking).toBe("signed thought");
+    expect(assistant?.signature).toBe("sig-signed");
+    expect(assistant?.content).toBe("answer");
+  });
+
+  test("an unsigned reasoning part's serialized item is never sent as the signature", () => {
+    // The parser stores JSON.stringify(reasoningItem) on an unsigned thinking
+    // part so the opaque item survives a same-provider round trip. Cognition's
+    // #12 expects the service's own issued token, so the dump must be dropped
+    // at the field boundary rather than relayed as an attestation.
+    const parsed = parseRequest({
+      model: "swe-2",
+      input: [
+        { type: "reasoning", id: "rs_unsigned", summary: [{ type: "summary_text", text: "unsigned thought" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    });
+    const thinkingPart = parsed.context.messages
+      .find(m => m.role === "assistant")?.content
+      .find(p => p.type === "thinking") as { signature?: string } | undefined;
+    const dumped = JSON.parse(thinkingPart?.signature ?? "null") as { type?: string } | null;
+    expect(dumped?.type).toBe("reasoning");
+
+    const history = mapOcxMessagesToDevin(parsed);
+    const assistant = history.find(m => m.role === "assistant");
+    expect(assistant?.thinking).toBe("unsigned thought");
+    expect(assistant?.signature).toBeUndefined();
+
+    const unsignedReq = buildGetChatMessageRequestForTests({
+      apiKey: "devin-session-token$x",
+      modelUid: "swe-2",
+      messages: history,
+      cascadeId: "c",
+    } as never);
+    const unsignedPrompts = fieldsOf(unsignedReq)[3] ?? [];
+    const unsignedPrompt = unsignedPrompts.map(fieldsOf).find(p => p[11]);
+    expect(unsignedPrompt?.[11]?.[0]?.toString("utf8")).toBe("unsigned thought");
+    expect(unsignedPrompt?.[12]).toBeUndefined();
   });
 
   test("the encoded prompt carries thinking at #11 and its signature at #12", () => {

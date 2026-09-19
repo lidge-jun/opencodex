@@ -56,7 +56,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   carries only one thinking/signature pair, the adapter selects the final thinking block with text
   as a unit and never combines text from one block with another block's signature; a signature-only
   block attests encrypted thinking that is not replayed and is skipped rather than paired or sent
-  alone.
+  alone. The pair's signature is replayed only when the source envelope actually carried one: the
+  serialized reasoning item the Responses parser parks on unsigned thinking parts is provider
+  state, not an attestation, so it is dropped at the field boundary rather than sent as #12.
 
   There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
   `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's

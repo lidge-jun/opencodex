@@ -327,8 +327,29 @@ function assistantThinking(
   if (!block) return {};
   return {
     ...(block.thinking ? { thinking: block.thinking } : {}),
-    ...(block.signature ? { signature: block.signature } : {}),
+    ...(isCognitionReplayableSignature(block.signature) ? { signature: block.signature } : {}),
   };
+}
+
+/**
+ * Field #12 attests the #11 thinking to Cognition, so it can only carry a
+ * signature the service (or the source provider's thinking block) actually
+ * issued. The Responses parser stores a JSON.stringify(reasoningItem) dump on
+ * an unsigned thinking part so the opaque item survives a same-provider round
+ * trip; that serialized item is parseable provider state, not an attestation,
+ * and sending it as the signature hands Cognition a JSON dump where it expects
+ * its own issued token.
+ */
+function isCognitionReplayableSignature(signature: string | undefined): signature is string {
+  if (typeof signature !== "string" || signature.length === 0) return false;
+  if (!signature.startsWith("{")) return true;
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    return !parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || (parsed as { type?: unknown }).type !== "reasoning";
+  } catch {
+    return true;
+  }
 }
 
 export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
