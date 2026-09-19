@@ -82,6 +82,12 @@ xattr -d com.apple.quarantine /Applications/OpenCodex.app
 
 账号、模型配置、存储等其余操作仍在仪表板中完成。
 
+## 小组件
+
+在桌面上右键点击，选择**编辑小组件**，然后添加 **OpenCodex**。它显示代理状态、今日用量和
+配额，并使用与菜单栏应用相同的隐私安全快照。应用轮询时小组件会刷新。需要 macOS 14 或更高
+版本；它不会接收 API 密钥或原始账户信息。
+
 ## 连接到代理
 
 应用会自动查找。它读取 `~/.opencodex/runtime-port.json`（或

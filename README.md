@@ -103,6 +103,8 @@ The first launch needs a right-click → Open, because the app is ad-hoc signed 
 than notarized. See the [macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
 for the full explanation.
 
+The app also includes a macOS 14+ widget for proxy status, today's usage, and quotas.
+
 It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
 the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex

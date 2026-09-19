@@ -95,6 +95,14 @@ different default in the dashboard first.
 
 Everything else — accounts, model configuration, storage — stays in the dashboard.
 
+## Widget
+
+Add the widget from the desktop: right-click, choose **Edit Widgets**, then add
+**OpenCodex**. It shows proxy status, today's usage, quota pressure, and the same
+privacy-safe usage snapshot as the menu bar app. The widget refreshes when the app polls.
+It requires macOS 14 or later and reads only the privacy-safe snapshot written by the
+OpenCodex app; it does not receive API keys or raw account data.
+
 ## Connecting to the proxy
 
 The app finds the proxy automatically. It reads `~/.opencodex/runtime-port.json` (or

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { repoPath, repoRoot as findRepoRoot } from "../helpers/repo-root";
 
 // The macOS build script deletes whatever sits at its destination, so its containment
 // check is a safety boundary rather than a convenience. These run the real script.
@@ -14,9 +15,11 @@ import { join, resolve } from "node:path";
 //   - resolving physically BEFORE normalising let `..` reveal a symlink that was then
 //     never followed.
 
-const repoRoot = resolve(import.meta.dir, "..");
-const script = join(repoRoot, "scripts", "build-macos-app.sh");
+const repoRoot = findRepoRoot();
+const script = repoPath("scripts", "build-macos-app.sh");
 const isMacOS = process.platform === "darwin";
+
+const scriptText = await Bun.file(script).text();
 
 async function runScript(outputDir: string, cwd: string = repoRoot) {
   const proc = Bun.spawn(["bash", script], {
@@ -182,4 +185,15 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(stderr).not.toContain("Refusing to build into");
     });
   }, 300_000);
+});
+
+describe("macOS widget packaging", () => {
+  test("stages, signs, and validates the WidgetKit appex", () => {
+    expect(scriptText).toContain("--product OpenCodexWidget");
+    expect(scriptText).toContain("Contents/PlugIns/OpenCodexWidget.appex");
+    expect(scriptText).toContain("Widget-Info.plist");
+    expect(scriptText).toContain("Widget.entitlements");
+    expect(scriptText).toContain("Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget");
+    expect(scriptText).toContain("container fallback path");
+  });
 });

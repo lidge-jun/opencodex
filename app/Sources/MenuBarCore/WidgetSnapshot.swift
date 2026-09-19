@@ -9,6 +9,12 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         public let requests: Int?
         public let totalTokens: Int?
         public let estimatedCostUsd: Double?
+
+        public init(requests: Int?, totalTokens: Int?, estimatedCostUsd: Double?) {
+            self.requests = requests
+            self.totalTokens = totalTokens
+            self.estimatedCostUsd = estimatedCostUsd
+        }
     }
 
     public struct Quota: Codable, Equatable, Sendable {
@@ -16,6 +22,13 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         public let windowLabel: String
         public let percent: Double?
         public let resetAt: Double?
+
+        public init(providerLabel: String, windowLabel: String, percent: Double?, resetAt: Double?) {
+            self.providerLabel = providerLabel
+            self.windowLabel = windowLabel
+            self.percent = percent
+            self.resetAt = resetAt
+        }
     }
 
     public struct Chart: Codable, Equatable, Sendable {
@@ -24,9 +37,21 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         public let style: String
         public let series: [Series]
 
+        public init(start: Double, bucketSeconds: Int, style: String, series: [Series]) {
+            self.start = start
+            self.bucketSeconds = bucketSeconds
+            self.style = style
+            self.series = series
+        }
+
         public struct Series: Codable, Equatable, Sendable {
             public let id: String
             public let points: [Double]
+
+            public init(id: String, points: [Double]) {
+                self.id = id
+                self.points = points
+            }
         }
     }
 
@@ -41,6 +66,24 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     public let quotas: [Quota]
     public let chart: Chart?
     public let lastUpdated: Double?
+
+    public init(
+        schemaVersion: Int, generatedAt: Double, state: String, stateTitle: String, detail: String?,
+        endpointDisplay: String, menuTitle: String?, today: Today?, quotas: [Quota],
+        chart: Chart?, lastUpdated: Double?
+    ) {
+        self.schemaVersion = schemaVersion
+        self.generatedAt = generatedAt
+        self.state = state
+        self.stateTitle = stateTitle
+        self.detail = detail
+        self.endpointDisplay = endpointDisplay
+        self.menuTitle = menuTitle
+        self.today = today
+        self.quotas = quotas
+        self.chart = chart
+        self.lastUpdated = lastUpdated
+    }
 
     public static func make(from snapshot: ProxySnapshot, now: Date = Date()) -> WidgetSnapshot {
         let state: String

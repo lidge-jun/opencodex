@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .executable(name: "OpenCodexMenuBar", targets: ["MenuBarApp"]),
+        .executable(name: "OpenCodexWidget", targets: ["OpenCodexWidget"]),
         .executable(name: "MenuBarCoreTests", targets: ["MenuBarCoreTests"]),
         .executable(name: "MenuBarUITests", targets: ["MenuBarUITests"]),
         .executable(name: "UIProbe", targets: ["UIProbe"]),
@@ -20,6 +21,11 @@ let package = Package(
             name: "MenuBarApp",
             dependencies: ["MenuBarCore", "MenuBarUI"],
             path: "Sources/MenuBarApp"
+        ),
+        .executableTarget(
+            name: "OpenCodexWidget",
+            dependencies: ["MenuBarCore"],
+            path: "Sources/OpenCodexWidget"
         ),
         // An executable rather than a .testTarget: Xcode Command Line Tools ships
         // neither a usable XCTest module nor the swift-testing runtime, so a test bundle

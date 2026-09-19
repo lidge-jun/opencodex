@@ -118,6 +118,7 @@ esac
 mkdir -p "$output_root"
 
 swift_args=(--package-path "$package_dir" -c "$configuration" --product OpenCodexMenuBar)
+widget_swift_args=(--package-path "$package_dir" -c "$configuration" --product OpenCodexWidget)
 
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
   developer_dir="$(xcode-select -p 2>/dev/null || true)"
@@ -129,15 +130,23 @@ if [[ "${UNIVERSAL:-0}" == "1" ]]; then
     exit 1
   fi
   swift_args+=(--arch arm64 --arch x86_64)
+  widget_swift_args+=(--arch arm64 --arch x86_64)
 fi
 
 echo "==> Building ($configuration)…"
 swift build "${swift_args[@]}"
+swift build "${widget_swift_args[@]}"
 bin_dir="$(swift build "${swift_args[@]}" --show-bin-path)"
 executable="$bin_dir/OpenCodexMenuBar"
+widget_bin_dir="$(swift build "${widget_swift_args[@]}" --show-bin-path)"
+widget_executable="$widget_bin_dir/OpenCodexWidget"
 
 if [[ ! -x "$executable" ]]; then
   echo "Build did not produce an executable at $executable" >&2
+  exit 1
+fi
+if [[ ! -x "$widget_executable" ]]; then
+  echo "Build did not produce an executable at $widget_executable" >&2
   exit 1
 fi
 
@@ -150,6 +159,10 @@ trap cleanup EXIT
 mkdir -p "$staged_app/Contents/MacOS" "$staged_app/Contents/Resources"
 cp "$executable" "$staged_app/Contents/MacOS/OpenCodexMenuBar"
 cp "$package_dir/Info.plist" "$staged_app/Contents/Info.plist"
+appex="$staged_app/Contents/PlugIns/OpenCodexWidget.appex"
+mkdir -p "$appex/Contents/MacOS"
+cp "$widget_executable" "$appex/Contents/MacOS/OpenCodexWidget"
+cp "$package_dir/Widget-Info.plist" "$appex/Contents/Info.plist"
 
 # The app version comes from package.json, so it can never claim a version the release
 # did not ship.
@@ -192,6 +205,8 @@ fi
 
 plutil -replace CFBundleShortVersionString -string "$version_core" "$staged_app/Contents/Info.plist"
 plutil -replace CFBundleVersion            -string "$build_version" "$staged_app/Contents/Info.plist"
+plutil -replace CFBundleShortVersionString -string "$version_core" "$appex/Contents/Info.plist"
+plutil -replace CFBundleVersion            -string "$build_version" "$appex/Contents/Info.plist"
 
 # Icon: reuse the dashboard favicon rather than adding another binary asset to the repo.
 icon_source="$repo_root/gui/public/favicon.png"
@@ -222,11 +237,20 @@ iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/OpenCodex.icns"
 # be verified". The project has no Developer ID certificate today, so ad-hoc is what
 # ships and the docs must carry the right-click-Open path rather than pretend
 # otherwise.
+#
+# The widget reads the host snapshot through its bundle container fallback path.
+# App Groups are intentionally not used because ad-hoc signatures fail the team-ID
+# requirement on this machine.
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+  codesign --force --options runtime --timestamp \
+    --entitlements "$package_dir/Widget.entitlements" \
+    --sign "$MACOS_SIGN_IDENTITY" "$appex"
   codesign --force --deep --options runtime --timestamp \
     --sign "$MACOS_SIGN_IDENTITY" "$staged_app"
   echo "==> Signed with $MACOS_SIGN_IDENTITY (hardened runtime)"
 else
+  codesign --force --sign - --entitlements "$package_dir/Widget.entitlements" \
+    --timestamp=none "$appex"
   codesign --force --sign - --timestamp=none "$staged_app"
   echo "==> Ad-hoc signed (no MACOS_SIGN_IDENTITY): Gatekeeper will require the" >&2
   echo "    right-click-Open path on first launch." >&2
@@ -241,3 +265,4 @@ mv "$staged_app" "$app_bundle"
 
 echo "==> Built $app_bundle (release $version, short $version_core, build $build_version)"
 lipo -archs "$app_bundle/Contents/MacOS/OpenCodexMenuBar"
+lipo -archs "$app_bundle/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget"
