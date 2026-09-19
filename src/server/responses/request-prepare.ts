@@ -37,6 +37,7 @@ import {
   applyCodexAuthContextToProvider,
   hasCallerCodexBearer,
   requestOwnedMainPinState,
+  requestOwnedMainCredentialIsLive,
 } from "../../codex/auth-context";
 import {
   copyPreviousResponseReplayProvenance,
@@ -506,6 +507,17 @@ export async function prepareResponsesRequest(
     previewRequestScopedMainCredential,
     route.codexAccountId,
   ).preserve;
+  // Final auth's own liveness answer for a request-owned bearer, from its own shared expression
+  // (#5019). Predicting the pin alone dropped main here and handed subagent fallback a different
+  // account than the one that serves.
+  const previewRequestOwnedMainCredentialLive = requestOwnedMainCredentialIsLive({
+    preserveRequestOwnedMainPin: previewRequestOwnedMainPin,
+    requestScopedMainCredential: previewRequestScopedMainCredential,
+    nativeMainTrafficBlocked: nativeMainRecoveryBlocked,
+    mainProfileDraining: previewSelectionAdmission?.mainProfileDraining === true,
+    // Final-auth-only, and stated rather than defaulted: see the field's own note.
+    callerOwnsCooledPoolSubscription: false,
+  });
   // Deliberately NOT fenced on ownership: final auth derives `nativeMainSelectionOnly` from the
   // drain alone, and adding a term here would diverge from it in the other direction.
   const previewSelectionOptions = {
@@ -517,12 +529,13 @@ export async function prepareResponsesRequest(
     // spawn, because subagent fallback re-enters the preview through the callback below.
     //
     // Scoped to ownership, and carrying final auth's value rather than a constant, because
-    // preview exists to predict final auth. Under an effective main pin the request really is
-    // served by its own main credential, so main must stay eligible; without the pin final auth
-    // scores main `main_credential_unavailable` and drops it, so preview has to drop it too. A
-    // hardcoded `true` would be wrong in the second case and `false` in the first.
+    // preview exists to predict final auth. The request really is served by its own main
+    // credential whenever that bearer is forwardable, so main stays eligible; while retained
+    // recovery or a profile drain fences the physical identity, final auth drops main and preview
+    // has to drop it too. A hardcoded `true` would be wrong in the second case and `false` in
+    // the first.
     isMainAccountTokenLive: previewRequestScopedMainCredential
-      ? () => previewRequestOwnedMainPin
+      ? () => previewRequestOwnedMainCredentialLive
       : undefined,
     // Preview must reach the same answer as the final resolution, including the uploaded-file
     // retention (#4778): a preview that reported a quota move the request will not make would
@@ -759,11 +772,20 @@ export async function prepareResponsesRequest(
                 recoveryRequestScopedMainCredential,
                 route.codexAccountId,
               ).preserve;
+              // Same shared expression as the first preview and as final auth (#5019), recomputed
+              // against the route recovery may have moved to.
+              const recoveryRequestOwnedMainCredentialLive = requestOwnedMainCredentialIsLive({
+                preserveRequestOwnedMainPin: recoveryRequestOwnedMainPin,
+                requestScopedMainCredential: recoveryRequestScopedMainCredential,
+                nativeMainTrafficBlocked: recoveryNativeMainBlocked,
+                mainProfileDraining: recoverySelectionAdmission?.mainProfileDraining === true,
+                callerOwnsCooledPoolSubscription: false,
+              });
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
                 isMainAccountTokenLive: recoveryRequestScopedMainCredential
-                  ? () => recoveryRequestOwnedMainPin
+                  ? () => recoveryRequestOwnedMainCredentialLive
                   : undefined,
                 // #4778, same reason as `previewSelectionOptions` above: this preview decides
                 // which account subagent fallback scores against, and final auth passes the
