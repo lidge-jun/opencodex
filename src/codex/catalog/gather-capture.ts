@@ -357,11 +357,14 @@ export function captureProviderGather(
   }).provider;
   for (const key of [
     "modelContextWindows", "modelInputModalities", "modelMaxInputTokens", "modelMaxOutputTokens",
-    "modelReasoningEfforts", "modelDefaultReasoningEfforts", "modelSupportsReasoningSummaries",
+    "modelReasoningEfforts", "modelSupportsReasoningSummaries",
     "modelSupportsVerbosity", "modelSupportsServiceTier",
   ] as const) {
     if (staticProvider[key] !== undefined) enriched[key] = detachedClone(staticProvider[key]) as never;
   }
+  // A present modelDefaultReasoningEfforts object is a whole-map catalog authority, including
+  // explicit {}. enrichProviderFromRegistry already preserves/fills that contract; replacing it
+  // with the resolver's per-key registry fill would turn "no configured default" into a seed default.
   const provider = recursivelyFreeze(enriched);
   const fastPolicyAuthority = captureFastPolicyAuthority(
     name,

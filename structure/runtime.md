@@ -3,10 +3,11 @@
 ## Resolved static model policy
 
 `src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
-route spreads retain that object, and every initial, retry, continuation, sidecar, and late
-credential adapter rebuild consumes its recorded wire adapter instead of rereading mutable registry
-authority. Credential, account, quota, health, cooldown, and observed transport evidence remain
-late and cannot widen a captured static limit.
+route spreads retain that object. Every initial, fallback, and recovery route is recaptured for the
+request's original inbound protocol before route-dependent normalization, and all adapter rebuilds
+consume its recorded adapter. A translated Chat or Anthropic replay therefore cannot inherit a
+Responses-only default. Credential, account, quota, health, cooldown, and observed transport
+evidence remain late and cannot widen a captured static limit.
 
 Virtual models are the sole model-identity transition: the ordinary and compact paths preserve the
 selected public id in diagnostics, rewrite `route.modelId` to the upstream wire id, and atomically
