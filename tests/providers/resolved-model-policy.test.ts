@@ -523,6 +523,28 @@ describe("resolved static model policy parity", () => {
     expect(policy.provider.reasoningEfforts).toEqual(current.reasoningEfforts);
   });
 
+  test("custom ClinePass destination keeps an intentional low-only gateway ladder", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "cline-pass")!;
+    const configured = provider({
+      adapter: entry.adapter,
+      baseUrl: "https://custom-cline-pass.invalid/v1",
+      authMode: entry.authKind,
+      reasoningWireFormat: "gateway-object",
+      reasoningEfforts: ["low"],
+    });
+    const current = routedProviderConfig(entry.id, configured);
+    const policy = resolveModelPolicy({
+      providerName: entry.id,
+      modelId: entry.defaultModel!,
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: false,
+    });
+    expect(policy.provider.reasoningEfforts).toEqual(current.reasoningEfforts);
+    expect(policy.provider.reasoningEfforts).toEqual(["low"]);
+    expect(policy.provenance.provider.reasoningEfforts).toBe("operator");
+  });
+
   test("Anthropic numeric-family context matches current catalog fallback", () => {
     const entry = PROVIDER_REGISTRY.find(candidate => (
       candidate.adapter === "anthropic" && Object.keys(candidate.modelContextWindows ?? {}).length > 0
@@ -602,6 +624,25 @@ describe("resolved static model policy parity", () => {
     expect(policy.provider.chatServiceTier).toBe(authority.capability.chatServiceTier);
     expect(policy.model.supportsServiceTier).toBe(authority.capability.models[modelId]);
     expect(policy.model.supportsServiceTier).toBe(false);
+  });
+
+  test("unlisted key-auth model inherits provider service tier with registry provenance", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "xai")!;
+    const modelId = "grok-4.20-multi-agent-0309";
+    expect(entry.modelSupportsServiceTier?.[modelId]).toBeUndefined();
+    const configured = provider({ adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: "key" });
+    const authority = captureFastPolicyAuthority(entry.id, configured, true);
+    const policy = resolveModelPolicy({
+      providerName: entry.id,
+      modelId,
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+      effectiveAuth: { authMode: "key" },
+    });
+    expect(policy.model.supportsServiceTier).toBe(authority.capability.provider);
+    expect(policy.model.supportsServiceTier).toBe(true);
+    expect(policy.provenance.model.supportsServiceTier).toBe("registry");
   });
 
   test("provider default output fallback and provenance match current route", () => {

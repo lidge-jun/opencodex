@@ -326,8 +326,11 @@ an empty declaration is non-authoritative and falls through. OAuth/key override 
 live caller decision: the resolver accepts only its credential-free effective auth mode and records
 that provenance, never the key, reference, or usability evidence that produced it.
 Canonical static catalogs force live discovery off, narrowly recognized generated reasoning shapes
-are repaired before freezing, key-auth service-tier defaults apply only to a captured key
-authority, and a model max-input value is bounded by its resolved context window.
+are repaired before freezing only for a matched registry transport, and same-named custom
+destinations keep their operator-owned values. Key-auth service-tier defaults apply only to a
+captured key authority; exact-model provenance comes from the merged key/registry map, then falls
+back to the resolved provider capability provenance. A model max-input value is bounded by its
+resolved context window.
 
 ## Provider validation ownership
 

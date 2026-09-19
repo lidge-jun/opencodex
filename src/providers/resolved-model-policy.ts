@@ -176,7 +176,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "preserveResponsesReasoningContent", "supportsVerbosity", "responsesItemIdRepair",
     "showThinkingSummary", "escapeBuiltinToolNames", "googleMode", "project", "location",
   ] as const) putScalar(key, entry?.[key] as StaticProviderPolicyShape[typeof key] | undefined);
-  const legacyClinePassLadder = input.providerName === "cline-pass"
+  const legacyClinePassLadder = entry !== undefined && input.providerName === "cline-pass"
     && provider.reasoningWireFormat === "gateway-object"
     && sameStringArray(provider.reasoningEfforts, ["low"]);
   put("reasoningEfforts", legacyClinePassLadder ? entry?.reasoningEfforts : provider.reasoningEfforts ?? entry?.reasoningEfforts,
@@ -370,7 +370,9 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     modelProvenance.supportsReasoningSummaries = "operator";
   }
   modelProvenance.supportsVerbosity = modelOrProviderSource(provider.modelSupportsVerbosity, entry?.modelSupportsVerbosity, provider.supportsVerbosity, entry?.supportsVerbosity);
-  modelProvenance.supportsServiceTier = modelOrProviderSource(provider.modelSupportsServiceTier, registryServiceTier, provider.supportsServiceTier, entry?.supportsServiceTier);
+  const exactServiceTierSource = modelSource(provider.modelSupportsServiceTier, registryServiceTierDefaults);
+  modelProvenance.supportsServiceTier = exactServiceTierSource !== "unknown" ? exactServiceTierSource
+    : providerProvenance.supportsServiceTier ?? "unknown";
   modelProvenance.responsesUpstreamStreaming = model.responsesUpstreamStreaming === undefined ? "unknown" : "registry";
   modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
   modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";
