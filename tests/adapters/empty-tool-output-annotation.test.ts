@@ -165,7 +165,7 @@ describe("openai-responses empty tool output annotation", () => {
     }) as typeof fetch;
     // Direct dispatch needs the writer lease to prevent spend-ledger ownership failures.
     releaseSpendHome = acquireOwnedSpendHome();
-    await handleResponses(
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -174,6 +174,9 @@ describe("openai-responses empty tool output annotation", () => {
       config,
       { model: "", provider: "" },
     );
+    // The turn's body is a live stream. Releasing it here means no reader is still attached
+    // when the lease is dropped, which is what turns a finished case into a pending one.
+    await turn.body?.cancel();
     return requests[0] ?? { body: {} };
   }
 

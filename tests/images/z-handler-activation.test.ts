@@ -170,6 +170,9 @@ describe("image bridge dispatch priority (handler activation)", () => {
     const res = await post(true, [{ type: "image_generation" }]);
     expect(imageBridgeRun).toBe(true);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    // The bridge answers with a live SSE stream. Releasing it here means no reader is
+    // still attached when this suite drops its lease in afterAll.
+    await res.body?.cancel();
   });
 
   test("alias-only image tool_choice keeps canonical bridge interception armed", async () => {
@@ -191,6 +194,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(imageBridgeToolNames).toContain("generate_image");
     expect(imageBridgeToolNames).toContain("image_gen");
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body?.cancel();
   });
 
   test("stream=false + image_generation tool → 400 (bridge requires stream=true)", async () => {
@@ -208,6 +212,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(webSearchRun).toBe(true);
     expect(imageBridgeRun).toBe(false);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body?.cancel();
   });
 
   test("routed compaction with image_generation tool → image bridge does NOT hijack compaction (#424)", async () => {
@@ -229,6 +234,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     );
     expect(imageBridgeRun).toBe(false);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body?.cancel();
   });
 
   test("dual-tool on a runTurn adapter → image bridge wins (web-search loop has no runTurn support)", async () => {
@@ -241,6 +247,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
       expect(imageBridgeRun).toBe(true);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
+      await res.body?.cancel();
     } finally {
       useRunTurnAdapter = false;
     }
@@ -256,6 +263,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
       expect(webSearchRun).toBe(false);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
+      await res.body?.cancel();
     } finally {
       useRunTurnAdapter = false;
     }

@@ -53,7 +53,7 @@ async function driveResponses(args: {
   };
 
   takeSpendHome();
-  await handleResponses(
+  const turn = await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -64,6 +64,9 @@ async function driveResponses(args: {
     {},
   );
 
+  // The turn's body is a live stream. Releasing it here means no reader is still attached when
+  // the lease is dropped, which is what turns a finished case into a pending one.
+  await turn.body?.cancel();
   expect(bodies).toHaveLength(1);
   return { outboundBody: bodies[0]!, logCtx };
 }
@@ -364,7 +367,8 @@ describe("FastWire characterization: rawBody observation point", () => {
       });
 
       takeSpendHome();
-      await handleResponses(request, config, { model: "", provider: "" }, {});
+      const turn = await handleResponses(request, config, { model: "", provider: "" }, {});
+      await turn.body?.cancel();
       expect(outboundBody?.service_tier).toBe("priority");
       expect(adapterRawBody?.service_tier).toBe("flex");
     } finally {

@@ -202,7 +202,7 @@ describe("the inbound scope survives the handleResponses replay", () => {
     const requests = captureUpstreamRequests();
     const config = { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig;
     takeSpendHome();
-    await handleResponses(
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -215,6 +215,9 @@ describe("the inbound scope survives the handleResponses replay", () => {
         ...(inboundTransport === undefined ? {} : { inboundTransport }),
       },
     );
+    // The turn's body is a live stream. Releasing it here means no reader is still attached
+    // when the lease is dropped, which is what turns a finished case into a pending one.
+    await turn.body?.cancel();
     return requests[0] ?? { url: "", body: {} };
   }
 

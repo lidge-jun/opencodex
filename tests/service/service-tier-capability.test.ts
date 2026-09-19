@@ -420,7 +420,7 @@ describe("the gate fires on the live handleResponses path", () => {
     const { bodies } = captureBody();
     const config = { providers: { [providerName]: provider }, ...(fastMode === undefined ? {} : { fastMode }) } as unknown as OcxConfig;
     takeSpendHome();
-    await handleResponses(
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -430,6 +430,9 @@ describe("the gate fires on the live handleResponses path", () => {
       { model: "", provider: "" },
       {},
     );
+    // The turn's body is a live stream. Releasing it here means no reader is still attached
+    // when the lease is dropped, which is what turns a finished case into a pending one.
+    await turn.body?.cancel();
     return bodies[0] ?? {};
   }
 
@@ -470,7 +473,7 @@ describe("the gate fires on the live handleResponses path", () => {
     const { bodies } = captureBody();
     const logCtx: RequestLogContext = { model: "", provider: "" };
     takeSpendHome();
-    await handleResponses(
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -485,6 +488,7 @@ describe("the gate fires on the live handleResponses path", () => {
       logCtx,
       {},
     );
+    await turn.body?.cancel();
 
     const upstreamBody = bodies[0];
     expect(upstreamBody).toBeDefined();
