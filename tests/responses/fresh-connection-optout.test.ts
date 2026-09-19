@@ -9,6 +9,7 @@ import { handleResponses } from "../../src/server/responses";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 describe("wantsFreshConnection", () => {
   test("returns false when env is unset or empty", () => {
@@ -277,6 +278,8 @@ describe("the OAuth dispatch boundary", () => {
     process.env.OPENCODEX_HOME = home;
     process.env.CODEX_HOME = home;
     process.env.OCX_FRESH_CONNECTION_HOSTS = freshHost;
+    // Taken after this case installs its home so the direct dispatch owns that journal.
+    const releaseSpendHome = acquireOwnedSpendHome();
     const sends: Array<{ url: string; init?: RequestInit }> = [];
 
     try {
@@ -330,6 +333,8 @@ describe("the OAuth dispatch boundary", () => {
         expect(headers.get("x-grok-req-id")).toBeTruthy();
       }
     } finally {
+      // Released before restoring or removing the home so Windows can delete its lease files.
+      releaseSpendHome();
       globalThis.fetch = nativeFetch;
       if (previousHosts === undefined) delete process.env.OCX_FRESH_CONNECTION_HOSTS;
       else process.env.OCX_FRESH_CONNECTION_HOSTS = previousHosts;

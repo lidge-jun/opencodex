@@ -40,6 +40,7 @@ import {
   encryptedInput,
   recoverySse,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -184,15 +185,22 @@ async function postSpawn(
   const requestHeaders = new Headers(headers);
   requestHeaders.set("content-type", "application/json");
   requestHeaders.set("x-openai-subagent", "collab_spawn");
-  const response = await handleResponses(new Request("http://localhost/v1/responses", {
-    method: "POST",
-    headers: requestHeaders,
-    body: JSON.stringify({ model, input, stream: false }),
-  }), config, logCtx, options);
-  // handleResponses owns its translator budget through the returned body lifecycle. Draining the
-  // body also lets completed Responses schedule their state write before afterEach cancels it.
-  await response.arrayBuffer();
-  return response;
+  // Acquire on this case's installed home so direct dispatch can open the shared spend journal.
+  const releaseSpendHome = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify({ model, input, stream: false }),
+    }), config, logCtx, options);
+    // handleResponses owns its translator budget through the returned body lifecycle. Draining the
+    // body also lets completed Responses schedule their state write before afterEach cancels it.
+    await response.arrayBuffer();
+    return response;
+  } finally {
+    // Release before afterEach removes this home to prevent Windows removal failures.
+    releaseSpendHome();
+  }
 }
 
 beforeEach(() => {

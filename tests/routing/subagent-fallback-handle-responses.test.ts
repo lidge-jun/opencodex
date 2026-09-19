@@ -43,6 +43,7 @@ import {
   encryptedInput as recoverableEncryptedInput,
   recoverySse,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 setDefaultTimeout(30_000);
@@ -52,6 +53,7 @@ const originalNow = Date.now;
 let testDir: string;
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-hr-"));
@@ -59,6 +61,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
   process.env.CODEX_HOME = testDir;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
@@ -71,6 +75,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
   clearThreadAccountMap();

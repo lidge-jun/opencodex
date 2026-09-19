@@ -14,12 +14,14 @@ import { tryAdmitTurn } from "../../src/server/lifecycle";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 let home = "";
 let previousOcxHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 const OTHER_ACCOUNT_ID = "other";
 
 function config(options: { secondAccount?: boolean } = {}): OcxConfig {
@@ -57,6 +59,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
@@ -71,6 +75,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);

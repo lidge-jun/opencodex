@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import type { ProviderAdapter } from "../../src/adapters/base";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * Dispatch-priority regression test for the image bridge (PR #424).
@@ -39,9 +40,12 @@ let runTurnCalled = false;
 let mockWsPlan: unknown = undefined;
 
 let handleResponses: typeof import("../../src/server/responses")["handleResponses"];
+let releaseSpendHome: (() => void) | undefined;
 
 beforeAll(async () => {
   process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  // Take the writer lease after this suite installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
 
   const actualResolver = await import("../../src/server/adapter-resolve");
   mock.module("../../src/server/adapter-resolve", () => ({
@@ -112,6 +116,9 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  // Release before restoring the home to prevent the old directory from retaining a live ledger lease.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = PREV_HOME;
   mock.restore();

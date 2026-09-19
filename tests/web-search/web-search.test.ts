@@ -15,6 +15,7 @@ import type { OcxMessage, OcxParsedRequest } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { withUpstreamHttpVersion } from "../../src/lib/upstream-http-version";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * Wrap a fetch so it applies the provider's HTTP-version pin the way `providerFetch` does in
@@ -566,7 +567,13 @@ describe("web-search sidecar planning", () => {
 });
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the preload-home lease before later teardown can replace or remove that home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  globalThis.fetch = originalFetch;
+});
 
 test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTTP version pin", async () => {
   let routedProtocol: string | undefined;
@@ -606,6 +613,8 @@ test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTT
     throw new Error("the routed web-search leg must use the provider fetch");
   }) as typeof fetch;
 
+  // Direct dispatch needs the writer lease that startServer normally owns for this home.
+  releaseSpendHome = acquireOwnedSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {

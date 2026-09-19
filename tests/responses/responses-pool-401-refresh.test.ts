@@ -33,6 +33,7 @@ import {
   encryptedInput,
   recoverySse,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -51,6 +52,7 @@ const originalFetch = globalThis.fetch;
 let home = "";
 let previousOcxHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 function config(options: { secondAccount?: boolean } = {}): OcxConfig {
   return {
@@ -306,6 +308,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
@@ -316,6 +320,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearCompactHandoffRoutesForTests();
   clearAccountNeedsReauth(ACCOUNT_ID);

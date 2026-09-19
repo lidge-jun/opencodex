@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ManagementRequest as Request } from "../helpers/management-auth";
 import { comboProviderFactory } from "../helpers/combo-provider";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
@@ -43,12 +44,15 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 const provider = comboProviderFactory(() => undefined);
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-combo-zero-output-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-combo-zero-output-"));
   process.env.OPENCODEX_HOME = testDir;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearComboSelectionState();
   clearComboRecallForTests();
   clearComboTargetCooldowns();
@@ -59,6 +63,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   let responseStatePending = true;
   try {
     for (const server of servers.splice(0)) await server.stop(true);

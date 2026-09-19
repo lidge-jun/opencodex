@@ -32,6 +32,7 @@ import {
   waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, ProviderWebSearchBridgeBackend, ProviderWebSearchBridgeConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /** One SSE event block without its blank-line delimiter. */
 function frame(type: string, payload: Record<string, unknown>): string {
@@ -1420,6 +1421,8 @@ describe("the reported turn, end to end through handleResponses", () => {
       hooks.onProviderResponse?.(leg);
       return new Response(text, { headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
+    // Direct dispatch needs the writer lease that startServer normally owns for this home.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -1428,6 +1431,8 @@ describe("the reported turn, end to end through handleResponses", () => {
       }), ocxConfig, { model: "", provider: "" });
       return { body: await response.text(), outbound, destinations, searches, searchUrls, searchHeaders };
     } finally {
+      // Release before later teardown can replace or remove the preload sandbox home.
+      releaseSpendHome();
       globalThis.fetch = savedFetch;
     }
   }

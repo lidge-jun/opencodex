@@ -5,6 +5,9 @@ import {
 } from "../../src/providers/key-failover";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 describe("rateLimitRetryPolicyFor", () => {
   test("null when absent or explicitly disabled", () => {
@@ -140,6 +143,9 @@ describe("retry loop client-abort handling", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
+    // Release the preload-home lease before later teardown can replace or remove that home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
   });
 
@@ -170,6 +176,8 @@ describe("retry loop client-abort handling", () => {
       },
     } as OcxConfig;
 
+    // Direct dispatch needs the writer lease that startServer normally owns for this home.
+    releaseSpendHome = acquireOwnedSpendHome();
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -217,6 +225,7 @@ describe("retry loop client-abort handling", () => {
     } as OcxConfig;
 
     const abort = new AbortController();
+    releaseSpendHome = acquireOwnedSpendHome();
     const pending = handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -273,6 +282,7 @@ describe("retry loop client-abort handling", () => {
     } as OcxConfig;
 
     const abort = new AbortController();
+    releaseSpendHome = acquireOwnedSpendHome();
     const pending = handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },

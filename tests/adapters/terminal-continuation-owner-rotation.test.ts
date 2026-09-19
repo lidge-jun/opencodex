@@ -16,6 +16,7 @@ import type {
   OcxParsedRequest,
   OcxProviderConfig,
 } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 interface BuildObservation {
@@ -110,18 +111,24 @@ describe("terminal continuation provider-owner rotation", () => {
   let originalFetch: typeof fetch;
   let previousHome: string | undefined;
   let testHome = "";
+  let releaseSpendHome: (() => void) | undefined;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     previousHome = process.env.OPENCODEX_HOME;
     testHome = mkdtempSync(join(tmpdir(), "ocx-terminal-owner-"));
     process.env.OPENCODEX_HOME = testHome;
+    // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+    releaseSpendHome = acquireOwnedSpendHome();
     builds = [];
     clearKeyCooldowns();
     clearResponseStateForTests();
   });
 
   afterEach(() => {
+    // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
