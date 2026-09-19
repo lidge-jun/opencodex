@@ -8,7 +8,12 @@ import { metricsExportEnabled } from "../../src/config/feature-flags";
 import { getDefaultConfig } from "../../src/config/proxy-env";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
-import { addFinalRequestLog, type RequestLogContext } from "../../src/server/request-log";
+import {
+  addFinalRequestLog,
+  observeRequestLogsForTests,
+  type RequestLogContext,
+  type RequestLogEntry,
+} from "../../src/server/request-log";
 import { createRequestMetricsOwner } from "../../src/server/request-metrics";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -64,6 +69,42 @@ function sampleValue(text: string, prefix: string): number {
   const line = text.split("\n").find(candidate => candidate.startsWith(prefix));
   if (!line) throw new Error(`missing metric sample: ${prefix}`);
   return Number(line.slice(line.lastIndexOf(" ") + 1));
+}
+
+function awaitBounded<T>(promise: Promise<T>, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), 5_000);
+    void promise.then(value => {
+      clearTimeout(timeout);
+      resolve(value);
+    }, error => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function nextFinalRequestLog(
+  predicate: (entry: RequestLogEntry) => boolean,
+): { promise: Promise<RequestLogEntry>; dispose: () => void } {
+  let unsubscribe = () => {};
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const dispose = (): void => {
+    if (timeout) clearTimeout(timeout);
+    unsubscribe();
+  };
+  const promise = new Promise<RequestLogEntry>((resolve, reject) => {
+    timeout = setTimeout(() => {
+      dispose();
+      reject(new Error("finalized request log was not observed"));
+    }, 5_000);
+    unsubscribe = observeRequestLogsForTests(entry => {
+      if (!predicate(entry)) return;
+      dispose();
+      resolve(entry);
+    });
+  });
+  return { promise, dispose };
 }
 
 function attempt(sendCount: number, recoveryKinds: AttemptRecoveryKind[]) {
@@ -538,68 +579,75 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     });
     saveConfig(runtimeConfig("openai-responses"));
     const server = startMetricsServer();
+    const finalized = nextFinalRequestLog(entry => entry.status === 502 && entry.inboundProtocol === "responses");
     try {
-      await expect(sendResponsesRequest(server)).rejects.toThrow();
+      const response = await sendResponsesRequest(server);
+      expect(response.status).toBe(500);
+      await response.text();
+      const row = await finalized.promise;
+      expect(row).toMatchObject({ status: 502, closeReason: "non_stream" });
+      expect(row.firstOutputMs).toBeUndefined();
       const metrics = await scrapeServer(server);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="failed"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(0);
       expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="failed"}')).toBe(1);
     } finally {
+      finalized.dispose();
       await stopMetricsServer(server);
     }
   });
 
   test("a client abort during buffered JSON read is counted as aborted before rethrow", async () => {
     let signalReadStarted: (() => void) | undefined;
-    let signalUpstreamCancel: (() => void) | undefined;
+    let signalAbortObserved: (() => void) | undefined;
     const readStarted = new Promise<void>(resolve => { signalReadStarted = resolve; });
-    const upstreamCancelled = new Promise<void>(resolve => { signalUpstreamCancel = resolve; });
-    installUpstream(originalFetch, () => new Response(new ReadableStream<Uint8Array>({
-      pull() {
-        signalReadStarted?.();
-        return new Promise<void>(() => {});
-      },
-      cancel() {
-        signalUpstreamCancel?.();
-      },
-    }), { headers: { "content-type": "application/json" } }));
+    const abortObserved = new Promise<void>(resolve => { signalAbortObserved = resolve; });
+    installUpstream(originalFetch, (_send, request) => {
+      const signal = request.signal;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          const abort = () => {
+            signalAbortObserved?.();
+            try { controller.error(signal.reason); } catch { /* stream already settled */ }
+          };
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        },
+        pull() {
+          signalReadStarted?.();
+          return new Promise<void>(() => {});
+        },
+      }), { headers: { "content-type": "application/json" } });
+    });
     saveConfig(runtimeConfig("openai-responses"));
     const server = startMetricsServer();
     const clientAbort = new AbortController();
+    const finalized = nextFinalRequestLog(entry => entry.status === 499 && entry.closeReason === "client_cancel");
     try {
       const request = sendResponsesRequest(server, false, clientAbort.signal);
-      const requestRejected = expect(request).rejects.toThrow();
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("upstream buffer read did not start")), 5_000);
-        void readStarted.then(() => {
-          clearTimeout(timeout);
-          resolve();
-        }, reject);
-      });
+      const requestOutcome = request.catch(error => error);
+      await awaitBounded(readStarted, "upstream buffer read did not start");
       clientAbort.abort(new DOMException("client cancelled metrics request", "AbortError"));
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("upstream buffered body was not cancelled")), 5_000);
-        void upstreamCancelled.then(() => {
-          clearTimeout(timeout);
-          resolve();
-        }, reject);
-      });
-      await requestRejected;
+      await awaitBounded(abortObserved, "outgoing upstream signal did not observe client abort");
+      const outcome = await awaitBounded(requestOutcome, "client abort request did not settle");
+      expect(outcome).toBeInstanceOf(Error);
+      const row = await finalized.promise;
+      expect(row).toMatchObject({ status: 499, closeReason: "client_cancel" });
+      expect(row.firstOutputMs).toBeUndefined();
       const metrics = await scrapeServer(server);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="aborted"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="failed"}')).toBe(0);
       expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="aborted"}')).toBe(1);
     } finally {
+      finalized.dispose();
       await stopMetricsServer(server);
     }
   });
 
   test("terminal-free SSE EOF and downstream cancellation remain incomplete and aborted", async () => {
     const encoder = new TextEncoder();
-    let signalUpstreamCancel: (() => void) | undefined;
-    const upstreamCancelled = new Promise<void>(resolve => { signalUpstreamCancel = resolve; });
     installUpstream(originalFetch, send => {
       if (send === 1) {
         return new Response(responseSse(), { headers: { "content-type": "text/event-stream" } });
@@ -608,9 +656,6 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
         start(controller) {
           controller.enqueue(encoder.encode(responseSse()));
         },
-        cancel() {
-          signalUpstreamCancel?.();
-        },
       }), { headers: { "content-type": "text/event-stream" } });
     });
     saveConfig(runtimeConfig("openai-responses"));
@@ -618,20 +663,26 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     try {
       const incomplete = await sendResponsesRequest(server, true);
       await incomplete.text();
-      const cancelled = await sendResponsesRequest(server, true);
-      await cancelled.body?.cancel("metrics cancellation test");
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("upstream cancellation was not observed")), 5_000);
-        void upstreamCancelled.then(() => {
-          clearTimeout(timeout);
-          resolve();
-        }, reject);
-      });
-      const metrics = await scrapeServer(server);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="incomplete"}')).toBe(1);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="aborted"}')).toBe(1);
-      expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="incomplete"}')).toBe(1);
-      expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="aborted"}')).toBe(1);
+      const finalized = nextFinalRequestLog(entry => entry.status === 499 && entry.closeReason === "client_cancel");
+      const clientAbort = new AbortController();
+      const cancelled = await sendResponsesRequest(server, true, clientAbort.signal);
+      const reader = cancelled.body?.getReader();
+      try {
+        expect(reader).toBeDefined();
+        expect((await reader!.read()).done).toBe(false);
+        clientAbort.abort(new DOMException("client cancelled streaming metrics request", "AbortError"));
+        const row = await finalized.promise;
+        expect(row).toMatchObject({ status: 499, closeReason: "client_cancel" });
+        expect(row.firstOutputMs).toBeUndefined();
+        const metrics = await scrapeServer(server);
+        expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="incomplete"}')).toBe(1);
+        expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="aborted"}')).toBe(1);
+        expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="incomplete"}')).toBe(1);
+        expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="aborted"}')).toBe(1);
+      } finally {
+        await reader?.cancel().catch(() => {});
+        finalized.dispose();
+      }
     } finally {
       await stopMetricsServer(server);
     }
