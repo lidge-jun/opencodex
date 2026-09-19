@@ -396,6 +396,59 @@ describe("Google tool-schema loss report", () => {
   });
 
   test.each([
+    {
+      name: "target filtering excluded by overlay",
+      target: ["a", 1],
+      overlay: ["a"],
+      expectedEnum: ["a"],
+      expectedCategories: {},
+    },
+    {
+      name: "same filtered value in both schemas",
+      target: ["a", 1],
+      overlay: ["a", 1],
+      expectedEnum: ["a"],
+      expectedCategories: { "enum-value-filtered": 1 },
+    },
+    {
+      name: "overlay-only filtered value",
+      target: ["a"],
+      overlay: ["a", 1],
+      expectedEnum: ["a"],
+      expectedCategories: {},
+    },
+    {
+      name: "overlay widens beyond target",
+      target: ["a"],
+      overlay: ["a", "b"],
+      expectedEnum: ["a", "b"],
+      expectedCategories: { "ref-overlay-replaced": 1 },
+    },
+  ] as const)("enum ref overlay uses effective intersection: $name", ({ target, overlay, expectedEnum, expectedCategories }) => {
+    const result = sanitize({
+      type: "object",
+      properties: { value: { $ref: "#/$defs/Value", enum: [...overlay] } },
+      $defs: { Value: { enum: [...target] } },
+    });
+    const value = (result.parameters.properties as Record<string, Record<string, unknown>>).value;
+    expect(value.enum).toEqual(expectedEnum);
+    expect(result.lossReport.categories).toEqual(expectedCategories);
+    expect(result.lossReport.uncertainComparisons).toBe(0);
+  });
+
+  test("a referenced enum without an overlay keeps its existing filtered-loss report", () => {
+    const result = sanitize({
+      type: "object",
+      properties: { value: { $ref: "#/$defs/Value" } },
+      $defs: { Value: { enum: ["a", 1] } },
+    });
+    const value = (result.parameters.properties as Record<string, Record<string, unknown>>).value;
+    expect(value.enum).toEqual(["a"]);
+    expect(result.lossReport.categories).toEqual({ "enum-value-filtered": 1 });
+    expect(result.lossReport.uncertainComparisons).toBe(0);
+  });
+
+  test.each([
     [
       "enum",
       { type: "string", enum: ["a"] },
@@ -424,16 +477,16 @@ describe("Google tool-schema loss report", () => {
     expect(result.lossReport.categories).toEqual({ "ref-overlay-replaced": 1 });
   });
 
- test("comparison budget exhaustion is unknown and is not counted as proven loss", () => {
+  test("comparison budget exhaustion is unknown and is not counted as proven loss", () => {
     // The overlay differs only AFTER the bounded comparison budget: identical prefixes exhaust
     // the cap, so the late difference is indeterminate rather than proven loss.
     const values = Array.from({ length: 1_100 }, (_, index) => `value-${index}`);
     const overlayValues = [...values.slice(0, -1), "value-late-difference"];
-   const result = sanitize({
-     type: "object",
+    const result = sanitize({
+      type: "object",
       properties: { value: { $ref: "#/$defs/Value", enum: [...overlayValues] } },
-     $defs: { Value: { type: "string", enum: [...values] } },
-   });
+      $defs: { Value: { type: "string", enum: [...values] } },
+    });
     expect(result.lossReport).toEqual({
       version: 1,
       endpointClass: "ai-studio",

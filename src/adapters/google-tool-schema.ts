@@ -103,6 +103,7 @@ interface SanitizeState {
   activeRefs: Set<string>;
   remainingNodes: number;
   budgetReported: boolean;
+  enumFilterLossOverrides: WeakMap<Schema, number>;
   report: GoogleToolSchemaLossReport;
 }
 
@@ -349,6 +350,77 @@ function boundedJsonSetEqual(
   return "equal";
 }
 
+interface BoundedEnumOverlayAccounting {
+  comparison: BoundedEquality;
+  emittedWidensIntersection: boolean;
+  filteredIntersectionValues: number;
+}
+
+function boundedEnumOverlayAccounting(
+  target: unknown[],
+  overlay: unknown[],
+): BoundedEnumOverlayAccounting {
+  const state: BoundedEqualityState = { remainingNodes: MAX_SCHEMA_NODES };
+  const stringSet = (values: unknown[]): Set<string> | undefined => {
+    const result = new Set<string>();
+    for (const value of values) {
+      if (state.remainingNodes <= 0) return undefined;
+      state.remainingNodes--;
+      if (typeof value === "string") result.add(value);
+    }
+    return result;
+  };
+  const targetStrings = stringSet(target);
+  const emittedStrings = stringSet(overlay);
+  if (!targetStrings || !emittedStrings) {
+    return { comparison: "unknown", emittedWidensIntersection: false, filteredIntersectionValues: 0 };
+  }
+
+  let emittedWidensIntersection = false;
+  for (const value of emittedStrings) {
+    if (!targetStrings.has(value)) {
+      emittedWidensIntersection = true;
+      break;
+    }
+  }
+
+  const uniqueFiltered: unknown[] = [];
+  for (const value of overlay) {
+    if (typeof value === "string") continue;
+    if (state.remainingNodes <= 0) {
+      return { comparison: "unknown", emittedWidensIntersection: false, filteredIntersectionValues: 0 };
+    }
+    state.remainingNodes--;
+    let duplicate = false;
+    for (const candidate of uniqueFiltered) {
+      const comparison = boundedJsonEqual(value, candidate, state);
+      if (comparison === "unknown") {
+        return { comparison, emittedWidensIntersection: false, filteredIntersectionValues: 0 };
+      }
+      if (comparison === "equal") {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) uniqueFiltered.push(value);
+  }
+
+  let filteredIntersectionValues = 0;
+  for (const value of uniqueFiltered) {
+    for (const candidate of target) {
+      const comparison = boundedJsonEqual(value, candidate, state);
+      if (comparison === "unknown") {
+        return { comparison, emittedWidensIntersection: false, filteredIntersectionValues: 0 };
+      }
+      if (comparison === "equal") {
+        filteredIntersectionValues++;
+        break;
+      }
+    }
+  }
+  return { comparison: "equal", emittedWidensIntersection, filteredIntersectionValues };
+}
+
 function compareMergedValue(key: string, left: unknown, right: unknown): BoundedEquality {
   if (key === "enum" && Array.isArray(left) && Array.isArray(right)) {
     return boundedJsonSetEqual(left, right);
@@ -378,9 +450,27 @@ function mergeRefTarget(target: Schema, overlay: Schema, state: SanitizeState): 
   for (const key of MERGED_SCHEMA_KEYS) {
     if (Object.hasOwn(overlay, key)) {
       if (key !== "description" && Object.hasOwn(target, key)) {
-        const comparison = compareMergedValue(key, overlay[key], target[key]);
-        if (comparison === "different") addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
-        else if (comparison === "unknown") addGoogleToolSchemaUncertainty(state.report);
+        if (key === "enum" && Array.isArray(target[key]) && Array.isArray(overlay[key])) {
+          const accounting = boundedEnumOverlayAccounting(target[key], overlay[key]);
+          if (accounting.comparison === "unknown") {
+            addGoogleToolSchemaUncertainty(state.report);
+          } else {
+            if (accounting.emittedWidensIntersection) {
+              addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
+            }
+            addGoogleToolSchemaLoss(
+              state.report,
+              "enum-value-filtered",
+              accounting.filteredIntersectionValues,
+            );
+          }
+          // The intersection-aware accounting above owns this merged enum's filtering report.
+          state.enumFilterLossOverrides.set(merged, 0);
+        } else {
+          const comparison = compareMergedValue(key, overlay[key], target[key]);
+          if (comparison === "different") addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
+          else if (comparison === "unknown") addGoogleToolSchemaUncertainty(state.report);
+        }
       }
       merged[key] = overlay[key];
     } else if (Object.hasOwn(target, key)) merged[key] = target[key];
@@ -428,10 +518,14 @@ function normalizeType(
   }
 }
 
-function sanitizeEnum(value: unknown, state?: SanitizeState): string[] | undefined {
+function sanitizeEnum(value: unknown, state?: SanitizeState, filteredLossOverride?: number): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const stringValues = value.filter((item): item is string => typeof item === "string");
-  if (state) addGoogleToolSchemaLoss(state.report, "enum-value-filtered", value.length - stringValues.length);
+  if (state) addGoogleToolSchemaLoss(
+    state.report,
+    "enum-value-filtered",
+    filteredLossOverride ?? (value.length - stringValues.length),
+  );
   const values = [...new Set(stringValues)];
   return values.length > 0 ? values : undefined;
 }
@@ -597,6 +691,7 @@ function sanitizeSchema(
   const enumValues = sanitizeEnum(
     node.enum ?? (typeof node.const === "string" ? [node.const] : undefined),
     state,
+    state.enumFilterLossOverrides.get(node),
   );
   if (enumValues) out.enum = enumValues;
 
@@ -674,6 +769,7 @@ export function sanitizeGeminiToolParametersWithReport(
       activeRefs: new Set(),
       remainingNodes: MAX_SCHEMA_NODES,
       budgetReported: false,
+      enumFilterLossOverrides: new WeakMap(),
       report,
     };
     if (isRecord(parameters)) {

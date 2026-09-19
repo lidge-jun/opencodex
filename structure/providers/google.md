@@ -90,6 +90,9 @@ replacement, and root object coercion. Lossless normalization does not set `loss
 case folding, duplicate enum/required removal, nullable-union collapse, and string-const conversion
 preserve the accepted value set. Annotation-only fields such as title, default, examples, comments,
 deprecated, read-only/write-only, external documentation and examples are omitted without loss.
+Local-reference siblings use 2020-12-style conjunctive semantics for loss accounting, while the
+wire transform retains its implemented overlay-wins merge; enum reports compare that intersection
+with the post-filter set actually emitted.
 
 This layer observes loss and does not reject it. The emitted request body remains the same as
 before reporting. The existing limits remain 24 schema levels, 16 local-reference dereferences,
