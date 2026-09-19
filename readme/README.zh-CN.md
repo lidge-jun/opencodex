@@ -123,13 +123,13 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 <details>
 <summary>Docker Compose</summary>
 
-本仓库提供摘要固定、非 root 的 Compose 构建。在宿主机安装 Git 和 Bun 后，每次构建镜像前
-先生成规范兼容性清单，然后通过 stdin 初始化一次数据面令牌，再启动 hub：
+本仓库提供摘要固定、非 root 的 Compose 构建。构建会根据所选 Git 快照自行生成并验证规范兼容性
+清单。本地克隆需要 Git 和 Docker Compose；远程 Git 上下文需要 Docker Compose。两种方式都不需要
+宿主机安装 Bun，也不需要准备步骤。通过 stdin 初始化一次数据面令牌，再启动 hub：
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -140,11 +140,27 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 默认主机绑定是 `127.0.0.1:10100`。远程暴露需要显式
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`；`0.0.0.0` 会选择加入
 全部主机接口。用防火墙和经过认证的 TLS/tailnet 前端限制访问。
-生成的 JSON 保持未跟踪；它会被复制进镜像，且不包含 `.git`。
-源码变更后请重新生成，并且在生成与构建之间不要改动源码。
-构建会拒绝过期清单、缺失或不匹配的文件、额外源文件以及符号链接。
+生成的 JSON 保持未跟踪。构建上下文只接收 `.git/index` 和 `.git/HEAD`，也就是
+`git ls-files` 读取的清单；其大小约为 1 MB，而不是完整的对象存储。这些文件只能通过只读挂载
+在构建专用的清单阶段中看到，因此没有任何 `COPY` 会包含 `.git`。宿主机上已有的清单只有在
+通过验证后才会被接受；否则构建会自行生成。构建会拒绝过期清单、缺失或不匹配的文件、额外源文件以及符号链接。
 它会核对构建上下文和复制进运行时的每个已记录 SHA-256，包括
 `package.json`、`bun.lock`，以及被明确纳入的 `scripts/model-metadata.source.json`。
+
+远程 Git 上下文需要 BuildKit 保留 Git 元数据。以下 Compose 构建片段会选择远程快照，
+并传入所需的内置参数：
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 令牌和可变状态留在 `ocx-state` 命名卷中；镜像、Compose 文件、环境或 shell 参数里
 都不会放入任何凭证。提供商配置、经认证的验收检查、远程管理和回滚，见
@@ -303,8 +319,8 @@ ocx v2 <...>                   # 多智能体 v1/v2 表面控制
 ocx update [--tag preview]     # 更新 opencodex
 ```
 
-未固定端口的启动在首选端口被占用时可能改选其他空闲端口；显式 `--port`
-绝不会换端口。完整参考：[CLI 文档](https://opencodex.me/zh-cn/reference/cli/)。
+首选端口被占用时，启动会停止并指出占用者，而不会改用其他端口，因此绝不会在第一个代理旁留下另一个
+运行中的代理。请释放该端口，或用 `--port` 指定其他端口。完整参考：[CLI 文档](https://opencodex.me/zh-cn/reference/cli/)。
 
 ### 健康与就绪
 

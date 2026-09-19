@@ -255,11 +255,16 @@ uses an unsupported protocol, opencodex skips the WebSocket attempt and uses HTT
 dialing the upstream directly.
 
 These rules belong to the upstream WebSocket transport, independently of the selected provider
-adapter. HTTP fetch-based Responses requests, including SSE fallback, use Bun's HTTP proxy rules
-and do not use `ALL_PROXY`. `config.proxy` fills missing `HTTP_PROXY`/`HTTPS_PROXY` values; the
-resulting scheme-specific value also takes precedence over an existing `ALL_PROXY` for WebSocket.
-For an HTTPS upstream that requires a proxy, set `HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY`
-alone leaves both WSS and its HTTPS fallback without a scheme-matched proxy.
+adapter. HTTP fetch-based Responses requests, including SSE fallback, use the
+[configured outbound fetch](/reference/configuration/server/#server-fields). A server SOCKS5 proxy — set
+with `config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when
+`NO_PROXY`/`no_proxy` does not exempt the target. Scheme-specific
+`HTTP_PROXY`/`HTTPS_PROXY` values retain Bun's native HTTP(S) handling, while a non-SOCKS
+`ALL_PROXY` is not a native HTTP fetch route. `config.proxy` fills missing
+`HTTP_PROXY`/`HTTPS_PROXY` values; the resulting scheme-specific value also takes precedence over
+an existing `ALL_PROXY` for WebSocket. For an HTTPS upstream that requires a proxy, set
+`HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY` alone leaves both WSS and its HTTPS fallback without
+a scheme-matched proxy.
 
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:

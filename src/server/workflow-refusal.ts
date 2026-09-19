@@ -5,6 +5,10 @@
  * check in `src/server/index.ts` and the pre-dispatch ceiling check in
  * `src/server/responses/core.ts` -- had drifted into saying different things about the same
  * refusal, and because the non-obvious part below has to be stated once and not twice.
+ *
+ * The HTTP admission DECISION lives here too, for the same reason: the lane derivation and the
+ * refusal it produces are two halves of one answer, and keeping them in one file is what stops
+ * a denial from losing the detail that makes it legible on the way out.
  */
 import { formatErrorResponse } from "../bridge";
 import {
@@ -14,9 +18,13 @@ import {
 } from "./request-log";
 import {
   WORKFLOW_LOCAL_REFUSAL_HEADER,
+  admitWorkflowTurn,
   workflowDenialSummary,
   recordWorkflowRefusalEvent,
   type WorkflowDenial,
+  type WorkflowDecision,
+  type WorkflowLane,
+  type WorkflowSpendDenialDetail,
 } from "../lib/workflow-budget";
 
 /**
@@ -54,11 +62,16 @@ export function workflowRefusalResponse(
   logCtx?: RequestLogContext,
   refusalLog?: WorkflowRefusalLog,
   rootId?: string,
+  spend?: WorkflowSpendDenialDetail,
 ): Response {
-  const summary = workflowDenialSummary(reason);
+  // The denial detail, when the caller has it, is what turns "a token ceiling refused this"
+  // into "the account ceiling of 100,000 is spent". It reaches the message, the event ring and
+  // the log row through this one function, so the three cannot drift into saying different
+  // things about the same refusal -- which is what put this module here in the first place.
+  const summary = workflowDenialSummary(reason, spend);
   // Only a caller that decided the refusal ITSELF passes a root id. admitWorkflowTurn already
   // records its own denials, so passing one there would double-count them.
-  if (rootId) recordWorkflowRefusalEvent(rootId, reason);
+  if (rootId) recordWorkflowRefusalEvent(rootId, reason, Date.now(), spend);
   const recordOn = logCtx ?? refusalLog?.logCtx;
   if (recordOn) {
     markLocalRequestLogRefusal(recordOn, summary.code);
@@ -81,4 +94,45 @@ export function workflowRefusalResponse(
   // Access-Control-Expose-Headers, so a cross-origin reader sees only the CORS-safelisted ones.
   refusal.headers.set("Access-Control-Expose-Headers", WORKFLOW_LOCAL_REFUSAL_HEADER);
   return refusal;
+}
+
+/**
+ * Admit one HTTP turn against its root workflow budget.
+ *
+ * A fan-out shares the conversation it serves. Without a reserve, a worker burst takes every
+ * slot under its own root and the interactive turn that started it waits behind its own
+ * children. A request that names a parent is treated as that fan-out; a top-level request is
+ * the conversation and may use the reserved slots.
+ */
+export function admitHttpWorkflowTurn(headers: Headers): WorkflowDecision | undefined {
+  const rootId = headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  const threadId = headers.get("thread-id")?.trim() || undefined;
+  const lane: WorkflowLane = rootId !== undefined && threadId !== undefined && threadId !== rootId
+    ? "worker"
+    : "interactive";
+  return admitWorkflowTurn(rootId, lane, undefined, threadId);
+}
+
+/**
+ * The refusal for a decision {@link admitHttpWorkflowTurn} declined.
+ *
+ * It exists so the denial's own detail survives the trip to the wire. A token-ceiling denial
+ * arrives carrying the scope that refused and the number it refused against, and a caller that
+ * forwarded only `reason` would answer with a 429 that names no ceiling -- which is the
+ * illegible refusal this whole path is built to avoid. No root id is passed on: the admission
+ * check already recorded its own event, and passing one would count the refusal twice.
+ */
+export function workflowDecisionRefusalResponse(
+  decision: Extract<WorkflowDecision, { admitted: false }>,
+  logCtx?: RequestLogContext,
+  refusalLog?: WorkflowRefusalLog,
+): Response {
+  const spend = decision.spendScope !== undefined && decision.spendLimit !== undefined
+    ? {
+      scope: decision.spendScope,
+      limit: decision.spendLimit,
+      ...(decision.spendProjected !== undefined ? { projected: decision.spendProjected } : {}),
+    }
+    : undefined;
+  return workflowRefusalResponse(decision.reason, logCtx, refusalLog, undefined, spend);
 }

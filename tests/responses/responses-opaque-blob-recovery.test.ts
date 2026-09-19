@@ -14,6 +14,7 @@ import {
 } from "../../src/server/responses/core";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { markBodyNonPersistable, rememberResponseState, previousResponseProviderState } from "../../src/responses/state";
 
@@ -66,15 +67,21 @@ const CALLER_MISMATCH_BLOB_ERROR = JSON.stringify({
 });
 
 let testDir = "";
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-opaque-blob-recovery-"));
   process.env.OPENCODEX_HOME = testDir;
+  // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearReasoningReplayCacheForTests();
   resetThoughtSignatureReplayForTests();
 });
 
 afterEach(() => {
+  // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearReasoningReplayCacheForTests();
   resetThoughtSignatureReplayForTests();

@@ -118,6 +118,22 @@ ocx logout <provider>
 
 Google Antigravity 계정·제공자 할당량 확인은 모델 목록 폴백을 포함해 고정된 Google 회계 엔드포인트를 사용합니다. 해당 목적지의 투명 Fake-IP DNS를 지원하며 TLS 검증, 리다이렉트 거부, 사설 주소 검사는 유지합니다. 사용자 지정 base URL은 모델 요청에만 적용되며 할당량 목적지는 바꾸지 않습니다. `NO_PROXY`는 기존 직접 연결 정책을 유지합니다.
 
+### Google 도구 스키마 손실 진단
+
+Google 도구 선언은 선택된 엔드포인트 클래스에 맞춰 컴파일됩니다. `ocx debug provider on`,
+대시보드 Logs 토글 또는 `OCX_DEBUG=1`로 프로바이더 디버그를 켜면 정책을 생략하거나
+`compatible`인 호환성 변환 중 스키마 손실이 발생할 때 `[ocx:google:google-tool-schema-loss]` 레코드를 기록합니다
+(`ocx debug provider logs -f`로 tail할 수 있습니다). 이 레코드에는 보고서 버전, 엔드포인트
+클래스, `lossy` 표시, 판정 불가능한 비교의 상한 개수, 상한이 있는 개수를 포함한 고정 손실 범주, 잘림 여부만 들어갑니다.
+도구명과 속성명, 경로, 값, 스키마 본문은 포함하지 않습니다. 정책을 생략하거나
+`compatible`이면 변환을 거부하지 않고 관찰합니다. `reject-lossy`에서는 초기 컴파일에 손실이 있거나
+상한 비교를 판정할 수 없으면 전송 전에 거부합니다. 거부된 요청에는 별도의 손실 레코드를 기록하지
+않습니다. `reject-lossy`에서는 제약을 지우는 Vertex 또는 Cloud Code Assist 복구가 동일하게 내용이 없는
+`google-tool-schema-repair`를 기록하고 변경 전송 없이 원래 400을 반환합니다. 정책을 생략하거나
+`compatible`이면 복구된 요청을 이전과 같이 다시 전송합니다. 직접 AI Studio는
+이 복구를 수행하지 않습니다. 네이티브 출력 스키마는 두 정책 경로 모두의 대상이 아닙니다.
+[디버그 명령어 참고 문서](/ko/reference/cli/agents/)도 확인하세요.
+
 
 Nous refresh가 종료 실패한 경우, `ocx login nous`로 재인증하세요.
 

@@ -483,9 +483,8 @@ describe("devin adapter api-server host resolution (#4503)", () => {
     home = mkdtempSync(join(tmpdir(), "ocx-devin-host-"));
     process.env.OPENCODEX_HOME = home;
     seenUrls = [];
-    // This adapter's transport fetches through the global fetch — it does not
-    // consume IncomingMeta.providerFetch — so the stub observes every upstream
-    // URL the turn dispatches to.
+    // No providerFetch is supplied by this direct adapter test, so inference falls back to the
+    // global fetch alongside catalog/JWT RPCs and this stub observes every upstream URL.
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       seenUrls.push(String(input));
       return new Response("down", { status: 500 });

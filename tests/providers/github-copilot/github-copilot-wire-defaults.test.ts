@@ -17,6 +17,9 @@ import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../../src/server/adapter-resolve";
 import { handleResponses } from "../../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 const RESPONSES_ONLY = [
   "gpt-5.3-codex",
@@ -137,7 +140,12 @@ describe("the registry default is isolated to the copilot provider", () => {
 
 describe("the wire default survives the handleResponses replay", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the preload-home lease before later teardown can replace or remove that home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   function captureUpstreamUrl(): string[] {
     const urls: string[] = [];
@@ -154,6 +162,8 @@ describe("the wire default survives the handleResponses replay", () => {
   async function drive(model: string, inboundWire?: "responses" | "chat" | "anthropic"): Promise<string> {
     const urls = captureUpstreamUrl();
     const config = { providers: { "github-copilot": copilotProvider() } } as unknown as OcxConfig;
+    // Direct dispatch needs the writer lease that startServer normally owns for this home.
+    releaseSpendHome = acquireOwnedSpendHome();
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

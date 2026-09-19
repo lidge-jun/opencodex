@@ -90,7 +90,14 @@ describe("server bind canonicalizes explicit localhost but preserves wildcards (
     // loopback-only, so a bare substring ban would forbid the fix rather than the defect.
     // Pin the assertion to the public serve call instead: it must take bindHost and nothing
     // else.
-    expect(src).toContain("server = Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost });");
+    // Wrapper-aware, because the public listener is now handed to a lifecycle registrar as it is
+    // created. Both halves of the original claim are kept: the serve call's argument object is
+    // pinned exactly, so the public bind still takes bindHost and nothing else, and `server` is
+    // still what that call is assigned to, through at most one registrar call.
+    expect(src).toContain("Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost })");
+    expect(src).toMatch(
+      /\bserver = (?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\()?Bun\.serve<WsData>\(\{ \.\.\.serveOptions, port: listenPort, hostname: bindHost \}\)/,
+    );
     expect(src).not.toMatch(/port: listenPort,\s*\n\s*hostname: "127\.0\.0\.1"/);
     expect(src).not.toContain("port: listenPort, hostname: \"127.0.0.1\"");
   });

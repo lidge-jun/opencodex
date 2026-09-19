@@ -1719,4 +1719,23 @@ describe("Codex history injection preflight on a WAL store with no live writer",
     setStateDbPreflightOpenFailureForTests(() => Object.assign(new Error("access to the database file is denied"), { code: "SQLITE_PERM" }));
     expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBe("history_injection_preflight_unavailable");
   });
+
+  test("covers the first read, which is where macOS raises the missing shared memory", () => {
+    // `sqlite3_open_v2` never reads page 1, so a WAL header is not inspected until the first
+    // prepare. On macOS that is where the absent `-shm` is discovered; the guarded attempt
+    // had already returned, the failure landed in the caller, and a healthy store got the
+    // catch-all refusal #4943 was supposed to remove. Linux cannot show this: its SQLite
+    // materializes both sidecars on that same read and never fails.
+    const fixture = checkpointedWalFixture();
+    const phases: string[] = [];
+    setStateDbPreflightOpenFailureForTests((_path, phase) => {
+      phases.push(String(phase));
+      return phase === "first-read" ? missingSharedMemory() : undefined;
+    });
+    // A failure raised at the first read has to reach the same verdict as one raised at open,
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+    // and the attempt has to actually offer that phase: before this fix only "open" existed,
+    // which is exactly why the platform that fails later was not covered.
+    expect(phases).toEqual(["open", "first-read"]);
+  });
 });

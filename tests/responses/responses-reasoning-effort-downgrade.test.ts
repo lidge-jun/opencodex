@@ -6,6 +6,7 @@ import { handleResponses } from "../../src/server/responses/core";
 import { resetReasoningMetadataCachesForTests } from "../../src/providers/reasoning-metadata";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * Rejected-rung learning on the request path: a rung the catalog advertises can still be refused
@@ -27,6 +28,7 @@ const REFUSAL = JSON.stringify({
 const UNRELATED = JSON.stringify({ error: { type: "invalid_request_error", message: "Invalid upload request." } });
 
 let testDir = "";
+let releaseSpendHome: (() => void) | undefined;
 
 function writeSnapshot(values: string[]): void {
   writeFileSync(join(testDir, "reasoning-metadata-cache.json"), JSON.stringify({
@@ -101,10 +103,15 @@ function success(): Response {
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-reasoning-downgrade-"));
   process.env.OPENCODEX_HOME = testDir;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   resetReasoningMetadataCachesForTests();
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   resetReasoningMetadataCachesForTests();
   if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;

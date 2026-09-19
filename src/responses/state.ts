@@ -135,11 +135,10 @@ export type ResidentInput = Omit<ResidentResponseState, "kind" | "sizeBytes">;
 
 export type PreviousResponseReplayFailure = {
   code: "previous_response_not_found";
-  reason: "spill_missing" | "spill_corrupt" | "spill_failed" | "spill_too_large";
+  reason: "spill_missing" | "spill_corrupt" | "spill_failed" | "spill_too_large" | "scope_mismatch";
 };
 
 const states = new Map<string, StoredResponseState>();
-const replayScopeMismatches = new WeakSet<object>();
 let storedResponseBytes = 0;
 let residentResponseBytes = 0;
 let oldestResidentId: string | undefined;
@@ -1044,11 +1043,6 @@ function normalizedClientThreadId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function withoutPreviousResponseId(request: Record<string, unknown>): Record<string, unknown> {
-  const { previous_response_id: _previousResponseId, ...freshRequest } = request;
-  return freshRequest;
-}
-
 export function expandPreviousResponseInput(body: unknown, clientThreadId?: string): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const request = body as Record<string, unknown>;
@@ -1068,10 +1062,9 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
   // A Codex task must never inherit another task's continuation, nor a legacy unscoped entry.
   // Unscoped callers retain backward-compatible replay only with other unscoped entries.
   if (requestThreadId !== storedThreadId) {
-    const freshRequest = withoutPreviousResponseId(request);
-    replayScopeMismatches.add(freshRequest);
+    replayFailures.set(request, { code: "previous_response_not_found", reason: "scope_mismatch" });
     replayScopeMismatchDrops += 1;
-    return freshRequest;
+    return body;
   }
   // The client already replayed this history verbatim. Prepending the stored copy would
   // double it, and the doubled turn is stored again, so the next turn triples (#1412 saw
@@ -1136,9 +1129,9 @@ export function copyPreviousResponseReplayProvenance(source: unknown, target: un
   replayedInputPrefixLengths.set(target, prefixLength);
 }
 
-/** True when a stale or foreign previous_response_id was removed from this exact request body. */
+/** True when this exact request could not replay because its task scope did not match. */
 export function previousResponseScopeMismatch(body: unknown): boolean {
-  return !!body && typeof body === "object" && replayScopeMismatches.has(body as object);
+  return previousResponseReplayFailure(body)?.reason === "scope_mismatch";
 }
 
 export function previousResponseConversationId(responseId: string | undefined): string | undefined {

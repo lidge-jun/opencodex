@@ -140,6 +140,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic 互換ゲートウェイの組み込みツール名をエスケープし、返された呼び出しで復元します。 |
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 前にストリームが終了しても、可視テキストまたは完全な JSON オブジェクトのツール入力が受信済みの場合に限り完了を許可します（Anthropic 互換ゲートウェイ向け）。デフォルトはオフ。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google トランスポート/認証モード。デフォルトは`ai-studio`です。 |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 専用です。省略時または `compatible` は互換スキーマと既存の非直接 400 修復を維持します。`reject-lossy` は初期損失または判定不能な上限付き比較を送信前に拒否し、制約を開く Vertex／Cloud Code Assist 修復を保留します。直接 AI Studio はこの修復を行いません。 |
 | `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。 |
 | `location?` | `string` |頂点の位置。環境フォールバックは `GOOGLE_CLOUD_LOCATION` です。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` |カーソルのみ: 標準入出力またはストリーミング可能な HTTP MCP サーバー。 |
@@ -155,11 +156,11 @@ API キープロバイダーは、リテラルキーまたは環境参照を保�
 
 ダッシュボード接続テストとライブ モデル検出では、制限された GET 専用トランスポートが使用されます。送信プロキシを使用しない場合、opencodex はホスト名を一度解決し、その検証されたアドレスにのみ接続します。 HTTPS は元のホスト、SNI、および証明書の検証を保持します。プロバイダー設定では証明書チェックを無効にすることはできません。
 
-`HTTP_PROXY`、`HTTPS_PROXY`、または `ALL_PROXY` が適用される場合、これらの操作は Bun のネイティブ フェッチを維持します。 URL とリテラル アドレスのチェックは引き続き実行されますが、プロキシが最終ルート、DNS 応答、ピアを選択するため、opencodex はそのピアを固定したり検証したりできません。これは明示的なセキュリティ制限です。
+これらの操作は[サーバーで設定された送信 fetch](/ja/reference/configuration/server/)を使用します。`config.proxy` で設定された、または SOCKS5 `ALL_PROXY` から継承したサーバーの SOCKS5 プロキシは、宛先が `NO_PROXY` に一致しない場合に OpenCodex の組み込みトンネルを使用します。`HTTP_PROXY` と `HTTPS_PROXY` は Bun のネイティブ HTTP(S) 処理を維持しますが、SOCKS 以外の `ALL_PROXY` はネイティブ HTTP fetch の経路にはなりません。URL とリテラル アドレスのチェックは引き続き実行されますが、選択されたプロキシが最終ルート、DNS 応答、ピアを決めるため、opencodex はそのピアを固定したり検証したりできません。これは明示的なセキュリティ制限です。
 
 プライベート/ローカル宛先には `allowPrivateNetwork: true` が必要で、送信プロキシがアクティブな場合は、一致する `NO_PROXY` エントリが必要です。ループバックは自動的に追加されます。 CIDR エントリは解釈されないため、各 LAN ホストを明示的にリストします。マッチャーは、正確なホスト、ドメイン サフィックス、オプションのポート、括弧で囲まれた IPv6、および `*` をサポートします。たとえば、`192.168.1.50` を明示的にリストします。メタデータとリンクローカル宛先はブロックされたままになります。診断リクエストはリダイレクトを拒否し、資格情報が剥奪されたターゲットを報告します。通常のプロバイダー要求のリダイレクト レビューは、この診断ガードとは独立したままになります。
 
-Clash / Surge / Mihomo 利用者向けの fake-IP DNS 例外は 2 種類あり、いずれも DNS の*応答*にのみ適用されます。URL に書かれたリテラルアドレスは引き続き拒否されます。IANA ベンチマーク範囲 `198.18.0.0/15`（IPv4-mapped IPv6 表記を含む）は、そのホストにアウトバウンドプロキシが適用される場合に許可されます。Mihomo の既定 IPv6 fake-IP 範囲 `fdfe:dcba:9876::/48` はより厳しい条件でのみ許可されます。URL スキームに一致するプロキシ変数（`https:` は `HTTPS_PROXY`、`http:` は `HTTP_PROXY`、`ALL_PROXY` は対象外）が設定されていること、ホストが `NO_PROXY` に一致しないことが必要で、その場合リクエストはそのプロキシに明示的に固定されます。それ以外の ULA、隣接プレフィックス、実際のプライベート応答と混在した fake-IP 応答には引き続き `allowPrivateNetwork: true` が必要です。プロバイダー保存時の検証には IPv6 例外は適用されません。
+Clash / Surge / Mihomo 利用者向けの fake-IP DNS 例外は 2 種類あり、いずれも DNS の*応答*にのみ適用されます。URL に書かれたリテラルアドレスは引き続き拒否されます。IANA ベンチマーク範囲 `198.18.0.0/15`（IPv4-mapped IPv6 表記を含む）は、そのホストにアウトバウンドプロキシが適用される場合に許可されます。Mihomo の既定 IPv6 fake-IP 範囲 `fdfe:dcba:9876::/48` はより厳しい条件でのみ許可されます。URL スキームに一致するプロキシ変数（`https:` は `HTTPS_PROXY`、`http:` は `HTTP_PROXY`）または SOCKS5 の `ALL_PROXY` が設定されていること（SOCKS 以外の `ALL_PROXY` は対象外）、ホストが `NO_PROXY` に一致しないことが必要で、その場合リクエストはそのプロキシに明示的に固定されます。それ以外の ULA、隣接プレフィックス、実際のプライベート応答と混在した fake-IP 応答には引き続き `allowPrivateNetwork: true` が必要です。プロバイダー保存時の検証には IPv6 例外は適用されません。
 
 ## Codexアカウントプール
 

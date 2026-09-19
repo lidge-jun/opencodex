@@ -905,8 +905,16 @@ export function hasCodexAgentModelFallbackField(role: string, codexHome = CODEX_
 }
 
 /** Roles whose TOML still carries `model_fallback`, including empty arrays. */
-export function scanCodexAgentRolesWithTomlModelFallback(codexHome = CODEX_HOME): string[] {
-  return listCodexAgentRoles(codexHome).filter(role => hasCodexAgentModelFallbackField(role, codexHome));
+export function scanCodexAgentRolesWithTomlModelFallback(
+  codexHome = CODEX_HOME,
+  onListError?: (cause: unknown) => void,
+): string[] {
+  try {
+    return listCodexAgentRoles(codexHome).filter(role => hasCodexAgentModelFallbackField(role, codexHome));
+  } catch (cause) {
+    onListError?.(cause);
+    return [];
+  }
 }
 
 const TOML_MODEL_KEY = /^\s*(?:model|"model"|'model')\s*=/;
@@ -984,9 +992,19 @@ const OPENCODEX_DERIVED_ROLE_MARKERS = ["generated-by: opencodex", "ocx-route:"]
  * authorizes writing to, repairing, or removing these files, and the marker-based ownership rules
  * that govern the files opencodex does write are unchanged.
  */
-export function scanOpencodexDerivedCodexAgentRolesWithoutModelPin(codexHome = CODEX_HOME): string[] {
+export function scanOpencodexDerivedCodexAgentRolesWithoutModelPin(
+  codexHome = CODEX_HOME,
+  onListError?: (cause: unknown) => void,
+): string[] {
   const findings: string[] = [];
-  for (const role of listCodexAgentRoles(codexHome)) {
+  let roles: string[];
+  try {
+    roles = listCodexAgentRoles(codexHome);
+  } catch (cause) {
+    onListError?.(cause);
+    return [];
+  }
+  for (const role of roles) {
     let content: string;
     try {
       content = readFileSync(join(codexHome, "agents", `${role}.toml`), "utf8");

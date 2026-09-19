@@ -13,6 +13,7 @@ import {
   quotaResetNotifySchema,
   remoteGuiConfigSchema,
   runtimeRoleSchema,
+  spendSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -166,6 +167,11 @@ export const configSchema = z.object({
   quotaResetNotify: quotaResetNotifySchema.optional().catch(undefined),
   // Same rationale: a bad auto-refresh section must not cost the operator their providers.
   catalogAutoRefresh: catalogAutoRefreshSchema.optional().catch(undefined),
+  // Same rationale again, with the failure direction stated: a malformed spend section
+  // degrades to "no ceiling", which means observe-only accounting rather than an outage. That
+  // is the safe degrade for traffic and the dangerous one for the operator, so the write path
+  // rejects it and loadConfig warns -- the same pair codexPool uses below.
+  spend: spendSchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -466,6 +472,17 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelSupportsReasoningSummaries"],
         message: reasoningSummariesError,
+      });
+    }
+    const suppressSyntheticMaxError = booleanRecordConfigError(
+      (provider as { modelSuppressSyntheticMax?: unknown }).modelSuppressSyntheticMax,
+      "modelSuppressSyntheticMax",
+    );
+    if (suppressSyntheticMaxError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelSuppressSyntheticMax"],
+        message: suppressSyntheticMaxError,
       });
     }
     const verbositySupportError = booleanRecordConfigError(

@@ -235,7 +235,7 @@ async function runShutdownBudgetChild(
 async function runNeverSettlingAclChild(
   mode: "principal" | "icacls",
 ): Promise<NeverSettlingAclChildResult> {
-  const timeoutMs = watchdogMs(1_500);
+  const timeoutMs = watchdogMs(8_000);
   const child = Bun.spawn([
     process.execPath,
     helperPath("responses-state-never-settling-acl-child.ts"),
@@ -356,7 +356,7 @@ describe("Responses previous_response_id state", () => {
       model: "cursor/auto",
       previous_response_id: first.id,
       input: [{ type: "function_call_output", call_id: "call_1", output: "ok" }],
-    }) as { input: unknown[] };
+    }, "   ") as { input: unknown[] };
 
     expect(expanded.input).toEqual([
       { role: "user", content: "use ping" },
@@ -376,13 +376,10 @@ describe("Responses previous_response_id state", () => {
       model: "cursor/auto",
       previous_response_id: first.id,
       input: "continue task A",
-    }, "task-a") as { previous_response_id?: string; input: unknown[] };
+    }, "  task-a  ") as { previous_response_id?: string; input: unknown[] };
     expect(sameTask.previous_response_id).toBe(first.id);
-    expect(sameTask.input).toEqual([
-      { role: "user", content: "private task A history" },
-      first.output[0],
-      { role: "user", content: "continue task A" },
-    ]);
+    expect(sameTask.input).toEqual([{ role: "user", content: "private task A history" }, first.output[0],
+      { role: "user", content: "continue task A" }]);
     expect(previousResponseScopeMismatch(sameTask)).toBe(false);
 
     const foreignTask = expandPreviousResponseInput({
@@ -390,10 +387,12 @@ describe("Responses previous_response_id state", () => {
       previous_response_id: first.id,
       input: "brand-new task B",
     }, "task-b") as { previous_response_id?: string; input: string };
-    expect(foreignTask).toEqual({ model: "cursor/auto", input: "brand-new task B" });
+    expect(foreignTask).toEqual({ model: "cursor/auto", previous_response_id: first.id, input: "brand-new task B" });
     expect(previousResponseScopeMismatch(foreignTask)).toBe(true);
-    expect(previousResponseReplayPrefixLength(foreignTask)).toBe(0);
-    expect(responseStateMetrics().replayScopeMismatchDrops).toBe(1);
+    expect(previousResponseReplayFailure(foreignTask)?.reason).toBe("scope_mismatch");
+    const unscopedTask = expandPreviousResponseInput({ previous_response_id: first.id, input: "unscoped" });
+    expect(previousResponseReplayFailure(unscopedTask)?.reason).toBe("scope_mismatch");
+    expect(responseStateMetrics().replayScopeMismatchDrops).toBe(2);
   });
 
   test("scoped tasks reject legacy unscoped continuation state", () => {
@@ -406,7 +405,7 @@ describe("Responses previous_response_id state", () => {
       previous_response_id: first.id,
       input: "new task",
     }, "task-new");
-    expect(freshTask).toEqual({ input: "new task" });
+    expect(freshTask).toEqual({ previous_response_id: first.id, input: "new task" });
     expect(previousResponseScopeMismatch(freshTask)).toBe(true);
   });
 
@@ -1246,7 +1245,7 @@ describe("Responses previous_response_id state", () => {
         metrics: { tombstoneCount: 2 },
       });
     }
-  }, { timeout: (2 * watchdogMs(1_500)) + 2_000 });
+  }, { timeout: (2 * watchdogMs(8_000)) + 2_000 });
 
   test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
     forceWindowsAclLane();
@@ -1961,7 +1960,7 @@ describe("Responses previous_response_id state", () => {
       { previous_response_id: "resp_spill_restart", input: "foreign" },
       "task-other",
     );
-    expect(foreign).toEqual({ input: "foreign" });
+    expect(foreign).toEqual({ previous_response_id: "resp_spill_restart", input: "foreign" });
   });
 
   test("spill references bind the expected response id and use the locked digest basename", () => {

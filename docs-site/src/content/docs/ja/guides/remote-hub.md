@@ -137,17 +137,30 @@ Codex の状態とカタログも失われます。更新や再起動の代わ�
 
 公式 Docker イメージはありませんが、リポジトリには digest 固定の Bun イメージをローカルビルドするための、管理された `Dockerfile` と `compose.yaml` があります。初回起動前にデータキーを stdin から一度だけ初期化します。キーは表示されず、`ocx-state` ボリューム内に所有者限定の権限で保存されます。
 
-ホストに Git と Bun が必要です。イメージをビルドするたびに、Git 管理下のソースから正規のマニフェストを生成し、生成後はビルドまでソースを変更しないでください。生成 JSON は Git に追加せず、`.git` は Docker コンテキストから除外します。ホスト側は既定で `127.0.0.1` にバインドします。リモート公開は `OPENCODEX_BIND_ADDRESS=<LANまたはTailscaleのIP> docker compose up -d` で明示的に指定し、`0.0.0.0` は全インターフェースを公開します。ファイアウォールと認証付き TLS/tailnet フロントエンドで保護してください。
+ローカルチェックアウトでは Git と Docker Compose、リモート Git コンテキストでは Docker Compose だけが必要です。Bun のインストールや手動生成は不要です。ビルド専用ステージが選択した Git スナップショットから正規のマニフェストを生成し、ソースをコピーする前に検証します。`.git` は読み取り専用マウントからだけ参照され、イメージのレイヤーにはコピーされません。ホストで生成済みのマニフェストも、検証に成功した場合は引き続き使用できます。ホスト側は既定で `127.0.0.1` にバインドします。リモート公開は `OPENCODEX_BIND_ADDRESS=<LANまたはTailscaleのIP> docker compose up -d` で明示的に指定し、`0.0.0.0` は全インターフェースを公開します。ファイアウォールと認証付き TLS/tailnet フロントエンドで保護してください。
 
 ビルドは古いマニフェストを拒否し、すべての SHA-256 をコンテキストとコピー後のファイルに照合します。欠落・不一致のファイル、余分なソース、シンボリックリンクは拒否されます。`package.json`、`bun.lock`、および `scripts/` から唯一取り込む `scripts/model-metadata.source.json` が必須です。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
+```
+
+リモート Git コンテキストから直接ビルドする場合は、BuildKit の組み込み引数で Git メタデータを保持します。
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
 ```
 
 コンテナは非 root の `bun` ユーザー、読み取り専用のルートファイルシステムで実行され、公開するのは `10100` だけです。`10101` は公開せず、秘密値を `ARG`、`ENV`、`COPY`、Compose、イメージ履歴、argv に入れないでください。healthcheck 後にも readiness、認証済みカタログ、実リクエストを別途確認します。`docker compose down` はボリュームを保持し、`docker compose down --volumes` は設定、認証情報、キーも削除します。

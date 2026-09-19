@@ -27,6 +27,7 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const accountId = "reserve-dispatch-workspace";
 const accessToken = "reserve-dispatch-owned-fixture";
@@ -67,6 +68,8 @@ async function authorize() {
   if (!guard) throw new Error("fixture expected a dispatch guard");
   return { ctx, cfg, guard };
 }
+
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   oldHome = process.env.OPENCODEX_HOME;
@@ -113,9 +116,16 @@ beforeEach(() => {
     }
     throw new Error("unexpected dispatch fixture destination");
   }, { preconnect() {} }));
+  // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+  // last because the lease binds the home in effect at the moment it is taken.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(async () => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   mock.restore();
   clearAccountQuota();
   clearMainAccountInfoCache();

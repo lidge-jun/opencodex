@@ -1055,6 +1055,8 @@ export interface CloudChatRequest {
   catalog?: CacheEntry | null;
   /** Abort signal — closes the fetch stream. */
   signal?: AbortSignal;
+  /** Executor for the inference POST only; catalog and JWT RPCs retain their own transport. */
+  executor?: typeof globalThis.fetch;
 }
 
 export class CloudChatError extends Error {
@@ -1216,7 +1218,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
 
   let resp: Response;
   try {
-    resp = await fetch(`${host}/exa.api_server_pb.ApiServerService/GetChatMessage`, {
+    resp = await (req.executor ?? globalThis.fetch)(`${host}/exa.api_server_pb.ApiServerService/GetChatMessage`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/connect+proto',

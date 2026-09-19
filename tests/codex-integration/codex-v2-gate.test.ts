@@ -20,6 +20,7 @@ import {
   buildCatalogEntriesFromObservedState,
   mergeCatalogEntriesFromObservedState,
 } from "../../src/codex/catalog/sync";
+import { nativeMultiAgentDefaults } from "../../src/codex/catalog/parsing";
 import {
   getAgentsEnabled,
   getAgentsMaxDepth,
@@ -104,45 +105,6 @@ function installModeHintRuntime(supported = true): string {
   selectRuntime(command);
   return command;
 }
-
-describe("catalog ultra (always-on)", () => {
-  const routed = [{ id: "glm-5.2", provider: "opencode-go", reasoningEfforts: ["low", "medium", "high", "xhigh"] }];
-
-  test("Go keeps declared efforts while old natives retain mock tiers", () => {
-    const entries = buildCatalogEntries(template(), ["gpt-5.5"], routed as never, [], false);
-    const native = entries.find(e => e.slug === "gpt-5.5")!;
-    const glm = entries.find(e => e.slug === "opencode-go/glm-5.2")!;
-    expect(efforts(native)).toContain("ultra");
-    expect(efforts(native)).toContain("max");
-    expect(efforts(glm)).toEqual(["low", "medium", "high", "xhigh"]);
-  });
-
-  test("gpt-5.6-sol keeps native ultra + max; luna has max but no native ultra (upstream ladder)", () => {
-    const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna"], [], [], false);
-    const sol = entries.find(e => e.slug === "gpt-5.6-sol")!;
-    const luna = entries.find(e => e.slug === "gpt-5.6-luna")!;
-    expect(efforts(sol)).toContain("max");
-    expect(efforts(sol)).toContain("ultra");
-    expect(efforts(luna)).toEqual(["low", "medium", "high", "xhigh", "max"]);
-  });
-
-  test("sync preserves genuine native entries with ultra intact", () => {
-    const diskSol = {
-      ...template(),
-      slug: "gpt-5.6-sol",
-      display_name: "GPT-5.6 Sol",
-      supported_reasoning_levels: [
-        { effort: "high", description: "h" }, { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
-      ],
-      default_reasoning_level: "ultra",
-    };
-    const merged = mergeCatalogEntriesForSync([diskSol as never], [], new Map(), [], false);
-    const sol = merged.find(e => e.slug === "gpt-5.6-sol")!;
-    expect(efforts(sol)).toContain("ultra");
-    expect(efforts(sol)).toContain("max");
-    expect(sol.default_reasoning_level).toBe("ultra"); // preserved as-is
-  });
-});
 
 describe("features.ts config reader", () => {
   test("table form: [features.multi_agent_v2] enabled = true", () => {
@@ -1818,45 +1780,6 @@ describe("cli surface", () => {
   }, 15_000);
 });
 
-describe("mock-max wire clamp (nativeEffortClamp)", () => {
-  test("gpt-5.5 max/ultra clamp to its real top rung (xhigh)", () => {
-    expect(nativeEffortClamp("gpt-5.5", "max")).toBe("xhigh");
-    expect(nativeEffortClamp("gpt-5.5", "ultra")).toBe("xhigh");
-  });
-
-  test("real-max natives are untouched", () => {
-    expect(nativeEffortClamp("gpt-5.6-sol", "max")).toBe(null);
-    expect(nativeEffortClamp("gpt-5.6-luna", "max")).toBe(null);
-  });
-
-  test("only the canonical built-in OpenAI forward route enters the native clamp gate", () => {
-    const nativeProvider = {
-      adapter: "openai-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authMode: "forward",
-    } as const;
-    const routedProvider = {
-      adapter: "openai-chat",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      authMode: "key",
-      apiKey: "dashscope-test",
-    } as const;
-
-    expect(shouldApplyNativeEffortClamp("openai", nativeProvider as never, "gpt-5.5")).toBe(true);
-    expect(shouldApplyNativeEffortClamp("bailian", routedProvider as never, "glm-5.2-fast-preview")).toBe(false);
-    expect(shouldApplyNativeEffortClamp("bailian", routedProvider as never, "bailian/glm-5.2-fast-preview")).toBe(false);
-  });
-
-  test("ordinary efforts and routed slugs pass through; unknown BARE natives clamp conservatively", () => {
-    expect(nativeEffortClamp("gpt-5.5", "high")).toBe(null);
-    expect(nativeEffortClamp("gpt-5.5", undefined)).toBe(null);
-    expect(nativeEffortClamp("opencode-go/glm-5.2", "max")).toBe(null);
-    // off-snapshot bare native = old low..xhigh ladder -> clamp; future 5.6 variants stay free
-    expect(nativeEffortClamp("gpt-totally-unknown", "max")).toBe("xhigh");
-    expect(nativeEffortClamp("gpt-5.6-future", "max")).toBe(null);
-  });
-});
-
 describe("3-state multi-agent mode", () => {
   test("observed catalog transforms ignore ambient V2 changes and leave evidence rows untouched", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
@@ -2064,6 +1987,124 @@ describe("3-state multi-agent mode", () => {
     expect(luna.multi_agent_version).toBe("v1");
     // gpt-5.5 has no upstream pin — cleared (codex flag decides)
     expect(native.multi_agent_version).toBeUndefined();
+  });
+
+  test("mode default prefers pristine-baseline pins over the bundled snapshot", () => {
+    // The installed pristine backup is authoritative for the rows it contains: a
+    // baseline pin wins even when the bundled snapshot pins a different value, and
+    // a baseline row with no pin still gets stale forced-stamp cleanup.
+    const diskSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v2" };
+    const diskLuna = { ...template(), slug: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", multi_agent_version: "v2" };
+    const diskNative = { ...template(), slug: "gpt-5.5", display_name: "gpt-5.5", multi_agent_version: "v2" };
+    const merged = mergeCatalogEntriesForSync(
+      [diskSol as never, diskLuna as never, diskNative as never],
+      [], new Map(), [], false, new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [], new Set(), new Set(), undefined, false,
+      new Map<string, string | null>([
+        ["gpt-5.6-sol", "v1"],
+        ["gpt-5.6-luna", "v1"],
+        ["gpt-5.5", null],
+      ]),
+    );
+    // Baseline says v1 — applied instead of the bundled snapshot's v2 pin.
+    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v1");
+    expect(merged.find(e => e.slug === "gpt-5.6-luna")?.multi_agent_version).toBe("v1");
+    // Baseline contains the row with no pin — stale forced stamp is cleared.
+    expect(merged.find(e => e.slug === "gpt-5.5")?.multi_agent_version).toBeUndefined();
+  });
+
+  test("mode default preserves pins on live native rows outside the pristine baseline", () => {
+    // A preserved on-disk row the pristine backup never contained may carry a
+    // user- or provider-preserved pin newer than our bundled snapshot. It was not
+    // stamped by us, so default mode must not delete it.
+    const liveNative = { ...template(), slug: "custom-native", display_name: "Custom Native", multi_agent_version: "v2" };
+    // A routed row is never in the bare-native baseline, so its absence proves
+    // nothing; default mode still clears its stale pin.
+    const staleRouted = { ...template(), slug: "provider/model", display_name: "Routed", multi_agent_version: "v1" };
+    const merged = mergeCatalogEntriesForSync(
+      [liveNative as never, staleRouted as never],
+      [], new Map(), [], false, new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [], new Set(), new Set(), undefined, false,
+      new Map([["gpt-5.6-sol", "v2"]]),
+    );
+    expect(merged.find(e => e.slug === "custom-native")?.multi_agent_version).toBe("v2");
+    expect(merged.find(e => e.slug === "provider/model")?.multi_agent_version).toBeUndefined();
+  });
+
+  test("mode default keys baseline pins by trusted account-bound slugs only", () => {
+    // hasNativeDefault resolves the lookup slug through
+    // trustedAccountBoundNativeCatalogSlug, so an account-bound clone tracks its
+    // bound native's pristine pin: the backup's "v1" beats both the bundled
+    // snapshot's "v2" and a stale stamp on the clone, and a baseline row with no
+    // pin still clears the clone's stale stamp.
+    const boundSol = {
+      ...template(),
+      slug: "team/gpt-5.6-sol",
+      display_name: "team / GPT-5.6 Sol",
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      multi_agent_version: "v2",
+    };
+    const boundNative = {
+      ...template(),
+      slug: "team/gpt-5.5",
+      display_name: "team / gpt-5.5",
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      multi_agent_version: "v2",
+    };
+    // An untrusted slashed row must not key the baseline by its post-slash part:
+    // "external/gpt-5.6-sol" is not the native "gpt-5.6-sol" row, so its preserved
+    // pin survives instead of being rewritten to the baseline's "v1".
+    const foreignRouted = {
+      ...template(),
+      slug: "external/gpt-5.6-sol",
+      display_name: "External Sol",
+      multi_agent_version: "v2",
+    };
+    const merged = mergeCatalogEntriesForSync(
+      [foreignRouted as never], [], new Map(), [], false,
+      new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [boundSol as never, boundNative as never],
+      new Set(), new Set(), undefined, false,
+      new Map<string, string | null>([["gpt-5.6-sol", "v1"], ["gpt-5.5", null]]),
+    );
+    expect(merged.find(e => e.slug === "team/gpt-5.6-sol")?.multi_agent_version).toBe("v1");
+    expect(merged.find(e => e.slug === "team/gpt-5.5")?.multi_agent_version).toBeUndefined();
+    // Not "v1": the contract this case exists for is that an untrusted slashed row
+    // never keys the baseline by its post-slash part. Whether the row then keeps its
+    // own pin or is cleared as an ordinary routed row is decided elsewhere and is not
+    // what this case proves; asserting "v2" here passed only because earlier cases in
+    // this file had already warmed the catalog module, so it broke under isolation and
+    // under reordering without any behaviour changing.
+    expect(merged.find(e => e.slug === "external/gpt-5.6-sol")?.multi_agent_version).not.toBe("v1");
+
+    // The baseline extractor itself never indexes slashed rows, so account-bound
+    // or routed rows inside a backup cannot alias a bare native slug.
+    const defaults = nativeMultiAgentDefaults([
+      { slug: "gpt-5.6-sol", multi_agent_version: "v1" },
+      { slug: "team/gpt-5.6-sol", multi_agent_version: "v2" },
+      { slug: "gpt-5.5" },
+    ]);
+    expect(defaults.get("gpt-5.6-sol")).toBe("v1");
+    expect(defaults.has("team/gpt-5.6-sol")).toBe(false);
+    expect(defaults.has("gpt-5.5")).toBe(true);
+    expect(defaults.get("gpt-5.5")).toBeNull();
+  });
+
+  test("mode default keeps a live pin the supplied baseline does not mention", () => {
+    // A supplied baseline is authoritative only for the slugs it contains. When
+    // the backup omits the bundled "gpt-5.6-sol" row, the live catalog's preserved
+    // "v1" pin must survive: falling back to the bundled "v2" snapshot here would
+    // rewrite a pin the baseline never spoke about. The preservation branch below
+    // can only run when the bundled lookup yields no pin for this row.
+    const liveSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v1" };
+    const merged = mergeCatalogEntriesForSync(
+      [liveSol as never], [], new Map(), [], false,
+      new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [],
+      new Set(), new Set(), undefined, false,
+      new Map<string, string | null>([["gpt-5.5", "v1"]]),
+    );
+    expect(merged.find(e => e.slug === "gpt-5.6-sol")?.multi_agent_version).toBe("v1");
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";

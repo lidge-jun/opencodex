@@ -91,6 +91,9 @@ call time, and admission/residue checks consume the same database path. Storage 
 owns the Codex-home tree separately and does not gain deletion authority over an external SQLite
 root from this resolver alone. Durable service launchers preserve an explicitly supplied
 `CODEX_SQLITE_HOME` so a background service resolves the same split state as the installing shell.
+Service install state records that effective SQLite home beside `CODEX_HOME` and `OPENCODEX_HOME`,
+and a lifecycle command requires the recorded value to match the current effective resolution; a
+legacy record without the field keeps its existing behavior.
 An absent `config.toml` or absent root `sqlite_home` permits the environment/home fallback. Any
 other read failure, malformed TOML, wrong-typed or blank `sqlite_home` is indeterminate and fails
 closed so history code cannot select a different database by accident. This strict parse is scoped
@@ -126,7 +129,12 @@ owner lifecycle), path/hash/inode re-verification inside the claim, and one
 atomic write of access/refresh/id token + account_id. The old identity token
 is never retained beside the new grant. No claim is held while the human
 completes the device page, and no DTO, log, or error carries tokens, emails,
-or raw account ids.
+or raw account ids. Cancellation is bound to the commit's exclusive claim and
+is rechecked immediately before publication, so a cancel delivered while the
+claim is contended aborts the wait and a cancelled flow cannot replace
+`auth.json` or clear its reauthentication quarantine. A cancel that arrives
+after the write still reports `succeeded`: the credential was replaced, so
+that is the honest terminal.
 
 > Decision record: [ADR-0008](decisions/ADR-0008-codex-home.md)
 
@@ -272,7 +280,7 @@ a deliberate user choice:
   (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
   override.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Plan-based automatic exclusions leave native credential files untouched and preserve the native-main exemption in the [selection policy](providers/openai-tiers.md#automatic-pool-plan-exclusions).
@@ -303,11 +311,11 @@ management read degrades instead of returning an error page.
 
 ## Paginated history writer boundary
 
-`src/codex/history-provider.ts` rejects provider-history changes with `history_paginated_requires_native_writer` when a target begins with an ordinal-bearing record, later contains a paginated record after a legacy start (#4311), or declares `history_mode=paginated`. The first line alone is not sufficient: a rollout that started unnumbered and was later migrated is also refused. Apply, manifest-backed restore, and explicit legacy recovery preflight all selected targets before changing database rows or manifests. The append boundary checks again. Codex owns ordinal allocation and the live projection cursor; reading the last ordinal and appending N+1 is not safe concurrent coordination. Legacy unnumbered rollouts retain their existing behavior. This guard prevents the observed stable-format corruption; it does not implement native-writer integration.
+`src/codex/history-provider.ts` rejects provider-history changes with `history_paginated_requires_native_writer` when a target begins with an ordinal-bearing record, later contains a paginated record after a legacy start (#4311), or declares `history_mode=paginated`. The first line alone is not sufficient: a rollout that started unnumbered and was later migrated is also refused. Apply, manifest-backed restore, and explicit legacy recovery preflight all selected targets before changing database rows or manifests. The append boundary checks again. Codex owns ordinal allocation and the live projection cursor; reading the last ordinal and appending N+1 is not safe concurrent coordination. Legacy unnumbered rollouts retain their existing behavior. History Worker targets resolve the canonical manifest first and an existing pre-normalization Windows filename second, so passing an explicit target cannot bypass upgrade recovery. This guard prevents the observed stable-format corruption; it does not implement native-writer integration.
 
 Injection preflights affected history using the normalized config candidate before writing config/profile/journal, then checks again after the complete artifact write. Native restore also rechecks after successful journal restoration or fallback removal, while exact config/profile/journal preimages and any coordinated remove transaction remain available for compensation.
 
-The preflight opens the state store read-write-free and in that order deliberately. `{ readonly: true }` is the primary open and the only one that joins a live writer's WAL shared memory, so a thread another process just migrated to paginated history is visible and refuses here. A WAL store whose last writer closed cleanly has no `-shm` to join and a read-only connection may not create one, so that open fails `SQLITE_CANTOPEN` on a perfectly healthy store and the catch-all turned it into `history_injection_preflight_unavailable` on every attempt (#4943). The immutable fallback (`immutable=1` over a `file:` URI, the same idiom as the storage scanner and the log-guard inspector) is admitted only when neither `-wal` nor `-shm` is on disk, because that is the state in which the main database is the whole store and an immutable read is exact rather than stale. Either sidecar present, or any other open failure, keeps the original error and the refusal that follows: an immutable read is a snapshot, and a refusal this preflight fails to observe is a config transition over history Codex owns.
+The preflight opens the state store read-write-free and in that order deliberately. `{ readonly: true }` is the primary open and the only one that joins a live writer's WAL shared memory, so a thread another process just migrated to paginated history is visible and refuses here. A WAL store whose last writer closed cleanly has no `-shm` to join and a read-only connection may not create one, so that open fails `SQLITE_CANTOPEN` on a perfectly healthy store and the catch-all turned it into `history_injection_preflight_unavailable` on every attempt (#4943). The immutable fallback (`immutable=1` over a `file:` URI, the same idiom as the storage scanner and the log-guard inspector) is admitted only when neither `-wal` nor `-shm` is on disk, because that is the state in which the main database is the whole store and an immutable read is exact rather than stale. Either sidecar present, or any other open failure, keeps the original error and the refusal that follows: an immutable read is a snapshot, and a refusal this preflight fails to observe is a config transition over history Codex owns. The guard covers the whole primary attempt, not only the constructor. `sqlite3_open_v2` never reads page 1, so a WAL header is not inspected until the first prepare, and on macOS that is where the absent `-shm` is raised; the first read therefore happens inside the attempt, where the error can still be classified. Bun's bundled SQLite on Linux materializes both sidecars on that same read and never fails, which is why Linux and Windows evidence could not see this gap.
 
 What a detected migration does depends on which refusal it is, and on direction. The reason that stands down is one exported constant, `HISTORY_RELABEL_STANDS_DOWN` in `src/codex/history-provider.ts`, because apply and restore have to agree on it exactly and once did not.
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import {
   buildMuseToolNameAliasPlan,
@@ -11,7 +11,19 @@ import {
 import { expandPreviousResponseInput } from "../../src/responses/state";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+afterEach(() => {
+  // Release first so a failed dispatch cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
@@ -270,6 +282,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       }), { headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -304,6 +317,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -338,6 +352,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -389,6 +404,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       const turn1 = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

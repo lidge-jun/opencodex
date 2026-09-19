@@ -89,6 +89,19 @@ describe("identity-bound main-account hard-lock policy", () => {
     expect(getMainAccountHardLockStatus(enabled).state).toBe("ready");
   });
 
+  test.each([4, 101])("an expired non-blocking short reading %s cannot hide a fresh weekly block", shortPercent => {
+    const elapsed = Math.floor(Date.now() / 1000) - 60;
+    observe({ shortPercent, shortWindowSeconds: 18_000, shortResetAt: elapsed, weeklyPercent: 20 });
+
+    observe({ weeklyPercent: 99 });
+
+    expect(getMainPolicyQuota()).toMatchObject({ weeklyPercent: 99 });
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    expect(getMainPolicyQuota()?.shortResetAt).toBeUndefined();
+    expect(getMainPolicyQuota()?.shortWindowSeconds).toBeUndefined();
+    expect(getMainAccountHardLockStatus(enabled).state).toBe("blocked");
+  });
+
   test("one missing reset prevents a false scheduled-unlock promise", () => {
     observe({ weeklyPercent: 99, monthlyPercent: 99, monthlyResetAt: now + 60_000 });
     expect(getMainAccountHardLockStatus(enabled, now)).toEqual({ enabled: true, state: "blocked" });

@@ -1,5 +1,7 @@
 # Runtime
 
+Routed Meta Muse requests use the registry-owned [Muse effort and header contract](providers-and-adapters.md); `max` reaches the provider through the existing reasoning mapper.
+
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
@@ -106,6 +108,10 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
 | `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. |
 
+`src/cli/provider.ts` accepts the Google-only `--google-tool-schema-policy` creation flag and rejects
+an unknown value or non-Google effective adapter before persistence. The persisted field and default
+are owned by the [config contract](config.md#config-surface).
+
 The `src/` root stays thin: process entry (`src/cli.ts`, `src/index.ts`), shared config/types,
 router, bridge, service manager, reasoning-effort definitions, and the stall-timeout budget live
 there. Feature code is grouped by responsibility:
@@ -148,6 +154,31 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+
+A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
+about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
+— are identity probes with a retry budget, because a start that answers "nobody is there" on one
+lost probe deletes this home's pid record and then binds a second listener that takes over the
+records and re-points Codex at itself. `probePortOwner` in `src/server/proxy-liveness.ts` asks the
+busy port directly, on both loopback families, independent of the pid and runtime records; the
+outcome is the pure decision `decideBusyPreferredPort` in `src/cli/dispatch.ts`. An opencodex
+holder is refused with the same message the owner check prints (exit 0 instead under
+`OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
+is reported as such rather than called foreign, because an identity probe cannot distinguish a
+foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
+pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
+
+Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
+for its resolved OpenCodex state directory before loading configuration or binding a listener.
+References share one lease only inside one process and one directory; a different directory in
+that process is refused while the lease is held, because the shared ledger is process-wide. The
+refusal is about two directories owned at once, not forever: releasing the final reference
+discards the singleton with its binding, so the same process may then own a different directory
+and build a ledger by replaying that directory's own journal. A second process on the same
+directory is refused even for observe-only spend configuration, while a separate directory is
+independent. Ordinary stop releases the final reference after listener teardown, and every thrown
+startup path releases its reference. SQLite and the OS release a crashed owner; no PID, timestamp,
+TTL or lock-file deletion participates in recovery.
 
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
@@ -284,7 +315,7 @@ A withheld token carries its own cause into the reported `reason` through
 `resolveHubState`'s `withheldTokenReason`, so a changed connection, a missing token file, and a
 fingerprint mismatch are named separately rather than all reported as a missing data key.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in
@@ -342,9 +373,7 @@ The relay is transparent in both directions, and that includes the close: a down
 
 `OCX_LIVE_FRAME_LOG` records both frame metadata and sideband lifecycle stages (`upstream-open`, `upstream-failed`, `relay-attached`, `relay-closed`) in one JSONL, content-free in both shapes. The lifecycle half is what separates a join that never reached this proxy from one whose upstream handshake was refused and from a live relay that carried nothing; frame records alone leave all three as an empty file. `tests/server/server-live-realtime-fixtures.test.ts` drives each sideband stage against de-identified Frameless v3 fixtures in `tests/fixtures/realtime-voice-sideband/` so a failure names the stage.
 
-## Paginated history writer boundary
-
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
@@ -360,7 +389,7 @@ Cline CLI joins the existing export/client integration registries. Explicit CLI 
 Config JSON preserves the boolean; only literal true activates the role-changing transform.
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
-Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged.
+Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
@@ -397,6 +426,10 @@ Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#rena
 
 Translated audio/file admission follows the [final-adapter input contract](adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 ## Request-local target compatibility
+
+Google's final adapter compiler may emit an opt-in, content-free
+[tool-schema loss diagnostic](providers/google.md#google-tool-schema-loss-reporting). It observes
+adapter-local narrowing only and changes neither provider routing nor the serialized request body.
 
 `src/adapters/openai-responses.ts` omits only top-level `user` at the canonical ChatGPT Codex forward destination. Claude translation retains its original identity and prompt-cache key; public API and noncanonical gateways retain their `user` field. Input roles, tool-schema properties, safety identifiers and original replay bodies are not changed.
 

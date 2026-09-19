@@ -10,6 +10,7 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
+import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { NoEligiblePolicyCandidateError, routeCompactionModel } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import {
@@ -107,6 +108,7 @@ import {
 } from "../../codex/upstream-host-health";
 import {
   ForwardAdmissionCredentialError,
+  contextPrincipalIdOf,
   hasForwardableCodexBearer,
   validateForwardAdmissionCredential,
 } from "../auth-cors";
@@ -214,8 +216,33 @@ function pruneCompactHandoffRoutes(now: number): void {
   }
 }
 
-function rememberCompactHandoffRoute(req: Request, model: string, now = Date.now()): void {
-  const key = sessionLaneIdFromRequest(req.headers);
+/**
+ * The handoff map is process-global, so a caller-controlled lane header alone
+ * cannot be the key: two authenticated clients sending the same lane header
+ * would share one fallback route. Namespace the lane by the admitted principal.
+ * A loopback or missing admission has no authenticated identity to bind this
+ * cross-request state to, so it is ineligible rather than trusted.
+ */
+function compactHandoffRouteKey(req: Request, admission: DataPlaneAdmission | undefined): string | null {
+  const lane = sessionLaneIdFromRequest(req.headers);
+  if (!lane || !admission || admission.kind === "loopback") return null;
+  // Fail closed rather than substituting a weaker identity. `keyId` survives a
+  // rotation and every identity-less environment admission would collapse into
+  // one bucket, which is the collision this key exists to prevent. Production
+  // admission always mints `contextPrincipalId` for configured and environment
+  // holders, so no real authenticated caller loses the route.
+  const principal = contextPrincipalIdOf(admission);
+  if (!principal) return null;
+  return `${principal}\u0000${lane}`;
+}
+
+function rememberCompactHandoffRoute(
+  req: Request,
+  admission: DataPlaneAdmission | undefined,
+  model: string,
+  now = Date.now(),
+): void {
+  const key = compactHandoffRouteKey(req, admission);
   if (!key || model.length > COMPACT_HANDOFF_MODEL_MAX_LENGTH) return;
   pruneCompactHandoffRoutes(now);
   compactHandoffRoutes.delete(key);
@@ -223,13 +250,18 @@ function rememberCompactHandoffRoute(req: Request, model: string, now = Date.now
   pruneCompactHandoffRoutes(now);
 }
 
-function forgetCompactHandoffRoute(req: Request): void {
-  const key = sessionLaneIdFromRequest(req.headers);
+function forgetCompactHandoffRoute(req: Request, admission?: DataPlaneAdmission): void {
+  const key = compactHandoffRouteKey(req, admission);
   if (key) compactHandoffRoutes.delete(key);
 }
 
-function compactHandoffRoute(req: Request, previousModel: string, now = Date.now()): string | null {
-  const key = sessionLaneIdFromRequest(req.headers);
+function compactHandoffRoute(
+  req: Request,
+  admission: DataPlaneAdmission | undefined,
+  previousModel: string,
+  now = Date.now(),
+): string | null {
+  const key = compactHandoffRouteKey(req, admission);
   if (!key) return null;
   pruneCompactHandoffRoutes(now);
   const entry = compactHandoffRoutes.get(key);
@@ -814,7 +846,12 @@ export async function handleResponsesCompact(
     // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
     // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
     // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
-    const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
+    // #5095: the compact endpoint forwards `raw` directly, so it needs the same legacy dotted
+    // call-name repair the adapter applies. A damaged item here refuses the compaction itself,
+    // which is the request a long task depends on to keep going.
+    const compactBody = repairLegacyDottedToolCallNames(
+      sanitizeReasoningInputContent(compactBodyRaw),
+    ) as typeof compactBodyRaw;
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {
@@ -1272,10 +1309,10 @@ export async function handleResponsesCompact(
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
       inspectResponseLogJson(logCtx, await buffered.clone().text());
-      forgetCompactHandoffRoute(req);
+      forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
     } else if (quotaFailure && !storedPool401ReplayAttempted) {
-      const fallbackModel = compactHandoffRoute(req, raw.model);
+      const fallbackModel = compactHandoffRoute(req, admission, raw.model);
       if (fallbackModel && !req.signal.aborted) {
         const fallbackReq = new Request(req.url, {
           method: "POST",
@@ -1407,7 +1444,7 @@ export async function handleResponsesCompact(
     const result = new Response(JSON.stringify({ output: compactionItems }), {
       headers: { "Content-Type": "application/json" },
     });
-    rememberCompactHandoffRoute(req, raw.model);
+    rememberCompactHandoffRoute(req, admission, raw.model);
     return result;
   }
   const encrypted = compactionItems[0]!.encrypted_content;
@@ -1418,6 +1455,6 @@ export async function handleResponsesCompact(
   }
   const summary = decoded;
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
-  rememberCompactHandoffRoute(req, raw.model);
+  rememberCompactHandoffRoute(req, admission, raw.model);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }

@@ -1794,13 +1794,17 @@ describe("management and data-plane credential separation", () => {
     saveConfig(remoteConfig());
     process.env.USERNAME ??= "tester";
     setPlatformForTests("win32");
-    // Env-token init never needs file ACL. Time out management-token paths so a
-    // broken file-backed ACL cannot be what made management available; allow
-    // other file hardens so startServer → saveConfig works on real win32
-    // (config-mutation directory harden soft-fails home timeouts).
+    // Env-token init never needs file ACL. Time out the management TOKEN FILE so a broken
+    // file-backed ACL cannot be what made management available; the assertion that the state's
+    // source is "environment" is what proves which path answered.
+    //
+    // The state directory itself is no longer timed out. It was never load-bearing for this
+    // claim, and it is hardened with required: true by the spend-journal owner during
+    // startServer, which correctly refuses rather than soft-failing: an unverified ACL on the
+    // directory holding a secret is not something to proceed past.
     setIcaclsRunnerForTests(args => {
       const target = args[0] ?? "";
-      if (target === testHome || target.endsWith("admin-api-token")) {
+      if (target.endsWith("admin-api-token")) {
         return { success: false, exitCode: null, timedOut: true, stdout: "" };
       }
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };

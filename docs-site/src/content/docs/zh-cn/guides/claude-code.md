@@ -25,6 +25,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel`（可选，也包括旧版 `ANTHROPIC_SMALL_FAST_MODEL`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可选） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
+| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 

@@ -64,6 +64,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (isteğe bağlı; eski `ANTHROPIC_SMALL_FAST_MODEL` da geçerlidir) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (isteğe bağlı) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
 
 Kendi dışa aktardığınız değişkenler her zaman önceliklidir. Ekstra argümanlar

@@ -144,6 +144,24 @@ ocx logout <saglayici>
 
 Google Antigravity hesap ve sağlayıcı kota sorguları, model listesine geri dönüş dahil sabit Google uç noktalarını kullanır. Bu hedefler için şeffaf Fake-IP DNS desteklenirken TLS doğrulaması, yönlendirme reddi ve özel adres kontrolleri korunur. Özel base URL yalnızca model isteklerini değiştirir; `NO_PROXY` doğrudan bağlantı politikasını korur.
 
+### Google araç şeması kayıp tanılaması
+
+Google araç bildirimleri seçilen uç nokta sınıfına göre derlenir. Sağlayıcı hata ayıklaması
+`ocx debug provider on`, kontrol panelindeki Logs anahtarı veya `OCX_DEBUG=1` ile açıldığında,
+politika yokken veya `compatible` iken uyumluluk dönüşümü sırasında oluşan şema kaybı bir
+`[ocx:google:google-tool-schema-loss]` kaydı yayınlar
+(`ocx debug provider logs -f` ile takip edin). Kayıt yalnızca rapor sürümünü, uç nokta sınıfını,
+bir `lossy` göstergesini, sınırlı bir belirsiz karşılaştırma sayısını, sınırlı sayımlara sahip sabit kayıp kategorilerini ve kesilme işaretini
+taşır. Araç ve özellik adları, yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Politika
+yoksa veya `compatible` ise dönüşüm reddedilmeden gözlemlenir. `reject-lossy` altında, ilk derleme
+kayıplıysa veya sınırlı karşılaştırmanın sonucu belirsizse gönderimden önce reddedilir; reddedilen
+istek için ayrı bir kayıp kaydı yayınlanmaz.
+`reject-lossy` altında, kısıtları kaldıracak bir Vertex veya Cloud Code Assist onarımı
+aynı şekilde içeriksiz bir `google-tool-schema-repair` kaydı üretir ve değiştirilmiş gönderim yapmadan
+özgün 400 yanıtını döndürür; politika yoksa veya `compatible` ise onarılan istek daha önce olduğu gibi
+yeniden gönderilir. Doğrudan AI Studio bu onarımı yapmaz. Yerel çıktı şemaları iki politika yolunun da
+dışındadır. [Hata ayıklama komutu başvurusuna](/tr/reference/cli/agents/) bakın.
+
 
 Uç bir Nous yenileme hatasından sonra yeniden kimlik doğrulamak için `ocx login
 nous` çalıştırın.

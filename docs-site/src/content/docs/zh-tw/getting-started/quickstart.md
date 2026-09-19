@@ -45,8 +45,9 @@ ocx start --port 8080
 - 在 provider 支援時發現即時模型，並**把原生與已路由條目同步進 Codex 的模型目錄**，以及
 - 在 `http://localhost:<port>/v1` 上監聽。
 
-如果請求的埠已被佔用，`ocx start` 會選擇一個空閒埠，將其寫入 `runtime-port.json`，並更新
-Codex 設定以使用實際監聽埠。
+如果請求的埠已被佔用，`ocx start` 會停止並告訴你是什麼佔用了該埠：如果回應的是
+opencodex，請先執行 `ocx stop`；也可以使用 `ocx start --port <port>` 在空閒埠上啟動。
+它不會自行切換到其他埠；舊行為會讓兩個代理同時執行，並將 Codex 重新指向後啟動的代理。
 
 檢查它:
 

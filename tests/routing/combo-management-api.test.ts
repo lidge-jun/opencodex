@@ -41,6 +41,7 @@ import type { OcxConfig } from "../../src/types";
 import { syncCatalogModels } from "../../src/codex/catalog";
 import { injectClaudeAgentDefs } from "../../src/claude/agents-inject";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
@@ -1250,6 +1251,8 @@ describe("supported disabled-provider activation", () => {
           return Response.json({ error: { message: "default provider must not be reached" } }, { status: 500 });
         },
       });
+      // Taken after withTempHome installs this case's home so physical dispatch owns its ledger.
+      const releaseSpendHome = acquireOwnedSpendHome();
       try {
         const config = baseConfig({
           defaultProvider: "c",
@@ -1283,9 +1286,13 @@ describe("supported disabled-provider activation", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
         }), config, { model: "", provider: "" });
-        expect(routed.status).toBe(200);
-        expect(bHits).toBe(1);
-        expect(cHits).toBe(0);
+        try {
+          expect(routed.status).toBe(200);
+          expect(bHits).toBe(1);
+          expect(cHits).toBe(0);
+        } finally {
+          await routed.body?.cancel();
+        }
 
         expect((await comboApi(config, "PATCH", "/api/providers?name=b", { disabled: true }))?.status).toBe(200);
         const diagnostics = readConfigDiagnostics();
@@ -1305,6 +1312,8 @@ describe("supported disabled-provider activation", () => {
         expect(bHits).toBe(1);
         expect(cHits).toBe(0);
       } finally {
+        // Released before withTempHome removes the directory, preventing a live database there.
+        releaseSpendHome();
         await upstreamB.stop(true);
         await upstreamC.stop(true);
       }
@@ -1335,6 +1344,8 @@ describe("combo response-path strategy accounting", () => {
     let bHits = 0;
     const upstreamA = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { aHits += 1; return completion("a"); } });
     const upstreamB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { bHits += 1; return completion("b"); } });
+    // Taken after the inherited test home is in effect so both physical dispatches can record.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const config = baseConfig({
         providers: {
@@ -1343,10 +1354,22 @@ describe("combo response-path strategy accounting", () => {
         },
         combos: { free: { strategy: "least-used", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] } },
       });
-      expect((await handleResponses(responseRequest(), config, { model: "", provider: "" })).status).toBe(200);
-      expect((await handleResponses(responseRequest(), config, { model: "", provider: "" })).status).toBe(200);
+      const first = await handleResponses(responseRequest(), config, { model: "", provider: "" });
+      try {
+        expect(first.status).toBe(200);
+      } finally {
+        await first.body?.cancel();
+      }
+      const second = await handleResponses(responseRequest(), config, { model: "", provider: "" });
+      try {
+        expect(second.status).toBe(200);
+      } finally {
+        await second.body?.cancel();
+      }
       expect({ aHits, bHits }).toEqual({ aHits: 1, bHits: 1 });
     } finally {
+      // Released after both bodies are cancelled so no stream retains the ledger owner.
+      releaseSpendHome();
       await upstreamA.stop(true);
       await upstreamB.stop(true);
     }
@@ -1361,6 +1384,8 @@ describe("combo response-path strategy accounting", () => {
       fetch() { aHits += 1; return Response.json({ error: { message: "busy" } }, { status: 429, headers: { "retry-after": "60" } }); },
     });
     const upstreamB = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { bHits += 1; return completion("b"); } });
+    // Taken after the inherited test home is in effect so failover dispatch can record its sends.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const config = baseConfig({
         providers: {
@@ -1370,10 +1395,16 @@ describe("combo response-path strategy accounting", () => {
         combos: { free: { strategy: "reset-window", targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] } },
       });
       const response = await handleResponses(responseRequest(), config, { model: "", provider: "" });
-      expect(response.status).toBe(200);
-      expect({ aHits, bHits }).toEqual({ aHits: 1, bHits: 1 });
-      expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(true);
+      try {
+        expect(response.status).toBe(200);
+        expect({ aHits, bHits }).toEqual({ aHits: 1, bHits: 1 });
+        expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(true);
+      } finally {
+        await response.body?.cancel();
+      }
     } finally {
+      // Released after the response body is cancelled so no stream retains the ledger owner.
+      releaseSpendHome();
       await upstreamA.stop(true);
       await upstreamB.stop(true);
     }

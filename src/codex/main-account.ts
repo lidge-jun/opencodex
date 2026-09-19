@@ -296,7 +296,10 @@ function persistNativeMainReauthTokens(
  *     main account's reauth quarantine for the new credential generation.
  */
 export function beginNativeMainReauth(): {
-  commit: (tokens: NativeMainReauthTokens) => Promise<{ chatgptAccountId: string }>;
+  commit: (
+    tokens: NativeMainReauthTokens,
+    options?: { signal?: AbortSignal },
+  ) => Promise<{ chatgptAccountId: string }>;
 } {
   const expected = readMainAuthJsonCredential();
   if (!expected || !expected.chatgptAccountId) {
@@ -305,7 +308,10 @@ export function beginNativeMainReauth(): {
     );
   }
   return {
-    async commit(tokens: NativeMainReauthTokens): Promise<{ chatgptAccountId: string }> {
+    async commit(
+      tokens: NativeMainReauthTokens,
+      options: { signal?: AbortSignal } = {},
+    ): Promise<{ chatgptAccountId: string }> {
       if (!tokens.accessToken || !tokens.refreshToken || !tokens.idToken) {
         throw new NativeMainReauthUnavailableError("Device grant did not produce a complete token set");
       }
@@ -322,11 +328,12 @@ export function beginNativeMainReauth(): {
             "Native main traffic is blocked by startup or recovery state",
           );
         }
+        if (options.signal?.aborted) throw options.signal.reason;
         assertMainAuthJsonSnapshotUnchanged(expected);
         persistNativeMainReauthTokens(expected, tokens);
         clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
         return { chatgptAccountId: tokens.chatgptAccountId };
-      }, { waitMs: 30_000 });
+      }, { waitMs: 30_000, signal: options.signal });
     },
   };
 }

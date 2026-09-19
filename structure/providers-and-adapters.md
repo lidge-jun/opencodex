@@ -7,16 +7,19 @@ the [bounded ingestion contract](transports/inventory.md#bounded-response-ingest
 | Path | Responsibility |
 | --- | --- |
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |
+| `src/providers/registry/model-ids.ts` | Classifies every `ProviderRegistryEntry` field by what its KEYS mean for selector decoding, and derives the native model ids an entry names. The classification is exhaustive by construction: a new registry field fails typecheck until its keys are given a meaning, which is what stops an identity-bearing map from being silently left out of decoding. Imported directly rather than through the facade, which is at its file-size cap. |
 | `src/providers/derive.ts` | Enrichment from provider presets into user config. |
+| `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, hard wire pins, aliases, and explicit false/empty values with field-level provenance. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
 | `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
 | `src/combos/request.ts` | Clones each selected combo target request and applies the existing target capability ladder: adaptive unknown targets and explicit empty ladders receive no unsupported reasoning/thinking controls, while known ladders retain per-target resolution. |
 | `src/adapters/openai-responses.ts` | Native OpenAI/ChatGPT Responses passthrough. |
 | `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
 | `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `tool-call-validation.ts`, `tool-schema.ts`, `errors.ts`). Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
 | `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. |
-| `src/adapters/google.ts` | Gemini bridge. |
+| `src/adapters/google.ts` | Gemini bridge. The final wire compiler owns [endpoint-scoped tool-schema loss policy](providers/google.md#google-tool-schema-loss-reporting): compatible mode changes no request bytes, strict initial loss creates no physical send, and strict non-direct repair creates no changed repair send. |
 | `src/adapters/azure.ts` | Azure OpenAI bridge. |
 | `src/adapters/cursor.ts`, `src/adapters/cursor/` | Cursor protobuf transport: discovery, request builder, event decoding, MCP, thread continuity, native-exec policy. |
+| `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog and JWT support RPCs remain outside inference-send accounting. |
 | `src/adapters/kiro.ts` and `src/adapters/kiro/` | Kiro event/tool/thinking/truncation/retry handling. The original path is a facade over leaves for wire identity, reasoning, conversation state, token estimation, payload assembly, streaming, and the adapter. |
 | `src/adapters/mimo-free.ts` | Mimo Free transport (client identity + JWT). |
 | `src/adapters/image.ts`, `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Image conversion for adapter ingress and Anthropic-specific normalization/limits. An image's ladder position is pinned to its own identity (content hash + media type), so appending a newer image cannot re-encode older ones and bust Anthropic's prompt prefix cache (#4532). |
@@ -56,6 +59,10 @@ Provider-scoped capability hints remain authoritative when discovery returns an 
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
 routed-model fallback.
+Meta's two direct surfaces keep separate reasoning contracts: `meta-model` remains capped at
+`xhigh`, while `meta-muse` advertises `max` and sends the transparent Muse compatibility
+User-Agent required by that credential surface. The existing registry header merge keeps an
+operator-supplied User-Agent authoritative.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
@@ -112,7 +119,7 @@ position before the next turn's first leg is dispatched, recording exactly the t
 turn show the destination one consistent conversation. The rewrite runs only for a provider with
 `webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different destination, or a
 `call_id` the body already carries — leaves the replayed item untouched. Re-running the search or
-synthesizing result text is not a permitted recovery.
+synthesizing result text is not a permitted recovery. The bridge finalizes request-scoped OpenAI sidecar authority on completion, failure, and client cancellation — cancellation releases immediately rather than waiting on an abandoned upstream read — so a recovery probe lease no search consumed is always returned.
 `tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes

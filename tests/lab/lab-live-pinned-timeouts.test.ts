@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createLabAuthorizedPinnedSender } from "../../src/lib/lab-live-pinned-sender";
+import { TransportError, classifyTransportError } from "../../src/lab/live/transport";
 import type { LabCredentialLeaseV1, LabDestinationV1, LiveRunConfig } from "../../src/lab/live/types";
 
 const SERVERS: Server[] = [];
@@ -121,6 +122,43 @@ describe("CL-03 pinned live transport failure classification", () => {
     })).rejects.toMatchObject({
       name: "TransportError",
       code: "output_byte_limit",
+    });
+  });
+
+  // An answer the transport cannot read is the peer's doing. Before this was classified, it
+  // reached Lab as an unrecognized error, and the executor's fallback reported it as
+  // harness_failure / execution_error - the runner blamed for what the upstream sent.
+  test("reports a coding this transport cannot undo as an unreadable response", async () => {
+    const port = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "content-encoding": "br" });
+      res.end("not really brotli");
+    });
+
+    // Classify the error the sender actually rejected with. Building a second TransportError and
+    // classifying that would pass even if the sender raised something else entirely.
+    const error = await send(port, { firstByteTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 })
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ name: "TransportError", code: "unreadable_response" });
+    expect(classifyTransportError(error)).toEqual({
+      classification: "protocol_failure",
+      secondaryCode: "unreadable_response",
+    });
+  });
+
+  test("reports coded bytes that do not decode as an unreadable response", async () => {
+    const port = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip" });
+      res.end("this is not gzip at all");
+    });
+
+    const error = await send(port, { firstByteTimeoutMs: 1_000, inactivityTimeoutMs: 1_000 })
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ name: "TransportError", code: "unreadable_response" });
+    expect(classifyTransportError(error)).toEqual({
+      classification: "protocol_failure",
+      secondaryCode: "unreadable_response",
     });
   });
 

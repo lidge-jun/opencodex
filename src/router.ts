@@ -19,6 +19,9 @@ import {
   providerCodexAccountMode,
   registryModelServiceTierCapabilityApplies,
 } from "./providers/registry";
+// Imported from the module directly rather than through the registry facade, which is at its
+// file-size cap.
+import { registryModelIdKeys } from "./providers/registry/model-ids";
 import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./providers/derive";
 import { cloneFastWire } from "./providers/fastwire";
 import {
@@ -117,19 +120,11 @@ export function knownModelIdsForProvider(
     : undefined;
   for (const id of registry?.models ?? []) ids.add(id);
   // Registry model-keyed hint maps double as known native ids (e.g. NVIDIA carries no
-  // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps).
-  for (const map of [
-    registry?.modelContextWindows,
-    registry?.modelInputModalities,
-    registry?.modelReasoningEfforts,
-    registry?.modelDefaultReasoningEfforts,
-    registry?.modelReasoningEffortMap,
-    registry?.modelMaxOutputTokens,
-    registry?.modelSupportsServiceTier,
-    registry?.modelSupportsVerbosity,
-  ]) {
-    for (const id of Object.keys(map ?? {})) ids.add(id);
-  }
+  // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps). Which
+  // maps count is classified by the registry itself rather than listed here, so an id declared
+  // only in a map this function forgot is no longer undecodable, and a new model-keyed field
+  // fails typecheck until its keys are given a meaning.
+  for (const id of registry ? registryModelIdKeys(registry) : []) ids.add(id);
   for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
   for (const model of config?.customModels ?? []) {
     if (model.provider === provName && model.modelId) ids.add(model.modelId);

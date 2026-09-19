@@ -155,19 +155,35 @@ describe("muse key quota probe", () => {
 });
 
 describe("muse model api version header", () => {
-  test("the registry row declares it", () => {
-    expect(getProviderRegistryEntry("meta-muse")?.staticHeaders).toEqual({ "x-api-version": "1.0.0" });
+  test("the registry row declares the Muse compatibility headers", () => {
+    expect(getProviderRegistryEntry("meta-muse")?.staticHeaders).toEqual({
+      "User-Agent": "muse-build/1.3.0 (opencodex compatibility)",
+      "x-api-version": "1.0.0",
+    });
   });
 
   test("a user-set header of the same name still wins", () => {
     const entry = getProviderRegistryEntry("meta-muse");
     const merged = mergeRegistryStaticHeaders(entry?.staticHeaders, { "X-Api-Version": "9.9.9" });
-    expect(merged).toEqual({ "X-Api-Version": "9.9.9" });
+    expect(merged).toEqual({
+      "User-Agent": "muse-build/1.3.0 (opencodex compatibility)",
+      "X-Api-Version": "9.9.9",
+    });
   });
 
   test("it is merged in when the user sets an unrelated header", () => {
     const entry = getProviderRegistryEntry("meta-muse");
     const merged = mergeRegistryStaticHeaders(entry?.staticHeaders, { "X-Trace": "1" });
-    expect(merged).toEqual({ "X-Trace": "1", "x-api-version": "1.0.0" });
+    expect(merged).toEqual({
+      "User-Agent": "muse-build/1.3.0 (opencodex compatibility)",
+      "X-Trace": "1",
+      "x-api-version": "1.0.0",
+    });
+  });
+
+  test("a user-set User-Agent still wins", () => {
+    const entry = getProviderRegistryEntry("meta-muse");
+    const merged = mergeRegistryStaticHeaders(entry?.staticHeaders, { "user-agent": "custom-client/1.0" });
+    expect(merged).toEqual({ "user-agent": "custom-client/1.0", "x-api-version": "1.0.0" });
   });
 });

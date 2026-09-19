@@ -1,6 +1,6 @@
 import { antigravityUserAgent } from "../../adapters/client-fingerprint";
 import { DestinationDnsResolutionError } from "../../lib/destination-policy";
-import { PinnedHttpError } from "../../lib/pinned-http";
+import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
 import { getValidAccessToken } from "../../oauth";
 import { getAccountCredential, getCredential } from "../../oauth/store";
@@ -193,10 +193,30 @@ type AntigravityQuotaProbeResult =
   | { kind: "available"; quota: ProviderQuota; source: "google-antigravity:retrieveUserQuotaSummary" | "google-antigravity:fetchAvailableModels" }
   | { kind: "unavailable"; failure: QuotaFailureCode; legacy: { kind: "null" } | { kind: "throw"; error: unknown } };
 
+/**
+ * Every pinned-transport failure code, classified once.
+ *
+ * A conditional that named one code and sent the rest to `timeout` was correct only for as long
+ * as the union held exactly the codes it was written against. When the transport learned to
+ * report a coding it cannot undo, that answer was reported as a timeout, which is a different
+ * operational story entirely. A total map makes a new code a compile error here rather than a
+ * quiet misdiagnosis.
+ */
+const PINNED_QUOTA_FAILURES = {
+  connect_timeout: "timeout",
+  first_byte_timeout: "timeout",
+  inactivity_timeout: "timeout",
+  // The response arrived and cannot be used: too large, coded in a format this transport cannot
+  // undo, or coded bytes that did not decode. None of these is a timing failure.
+  output_byte_limit: "response_unusable",
+  unsupported_content_encoding: "response_unusable",
+  content_decode_failed: "response_unusable",
+} satisfies Record<PinnedHttpErrorCode, QuotaFailureCode>;
+
 function quotaTransportFailure(error: unknown): QuotaFailureCode {
   if (error instanceof ProviderOutboundPolicyError) return "destination_blocked";
   if (error instanceof DestinationDnsResolutionError) return "dns_failed";
-  if (error instanceof PinnedHttpError) return error.code === "output_byte_limit" ? "response_unusable" : "timeout";
+  if (error instanceof PinnedHttpError) return PINNED_QUOTA_FAILURES[error.code];
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   return "transport_error";
 }

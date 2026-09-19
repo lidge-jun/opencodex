@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { isIP } from "node:net";
 import { loadConfig } from "../config";
 import { readRuntimePort } from "../config/process-state";
 import { configuredAdminToken } from "./admin-secrets";
@@ -50,9 +51,11 @@ export interface GracefulStopIo {
 }
 
 /**
- * Host to POST /api/stop against: follow the recorded bind hostname when it names a
- * concrete address (a proxy bound to ::1 or a LAN IP is unreachable on 127.0.0.1);
- * loopback aliases and wildcard binds all answer on IPv4 loopback.
+ * Host to POST /api/stop against: follow the recorded bind hostname only when it is
+ * an IP literal (a proxy bound to ::1 or a LAN IP is unreachable on 127.0.0.1).
+ * DNS names are not safe here because resolution may change between bind and stop,
+ * while this request carries the management token. Loopback aliases, DNS names, and
+ * wildcard binds therefore all fall back to IPv4 loopback.
  */
 export function gracefulStopHost(hostname: string | undefined): string {
   const trimmed = (hostname ?? "").trim();
@@ -61,8 +64,13 @@ export function gracefulStopHost(hostname: string | undefined): string {
     return "127.0.0.1";
   }
   if (lower === "::1" || lower === "[::1]") return "[::1]";
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) return trimmed;
-  return trimmed.includes(":") ? `[${trimmed}]` : trimmed;
+  const unbracketed = trimmed.startsWith("[") && trimmed.endsWith("]")
+    ? trimmed.slice(1, -1)
+    : trimmed;
+  const ipVersion = isIP(unbracketed);
+  if (ipVersion === 6) return `[${unbracketed}]`;
+  if (ipVersion === 4) return unbracketed;
+  return "127.0.0.1";
 }
 
 /**

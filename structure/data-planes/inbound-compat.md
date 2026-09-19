@@ -292,6 +292,10 @@ never fetched.
 
 ## Translated Chat control fidelity
 
+Translated Chat ingress does not reshape schemas for Google's
+[endpoint-scoped loss report](../providers/google.md#google-tool-schema-loss-reporting). The report
+is produced only at the final Google adapter boundary and does not alter the ingress body.
+
 A translated Chat turn keeps the controls the caller sent. The Chat ingress pins
 `store:false` for every `openai-responses` route and strips nothing else: the
 sampling and output-cap restrictions that the canonical ChatGPT backend requires are

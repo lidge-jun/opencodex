@@ -30,7 +30,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
-import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant } from "../../codex/auth-context";
+import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant, releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { consumeComboFailure } from "./core-combo-failure";
 import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
@@ -83,7 +83,10 @@ import {
 import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-tool-repair";
 import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
-import { createGrokResponsesControlFrameBlockRewrite } from "../grok-responses-control-frame";
+import {
+  createGrokResponsesControlFrameBlockRewrite,
+  createGrokResponsesTimestampBlockRewrite,
+} from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
 import {
   createPlaintextV2AgentMessageCallRestoreRewrite,
@@ -99,6 +102,24 @@ import {
   normalizeDefaultNamespaceInJson,
 } from "../responses-undeclared-tool-guard";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
+
+/**
+ * Platform override for the two relay-path policy calls below. Tests only.
+ *
+ * The eager relay is reachable only on win32 and darwin, so a Linux shard cannot exercise it
+ * without claiming to be one of them. Overwriting `process.platform` globally does that, and a
+ * great deal more: every filesystem, ACL and state-directory decision in the process follows it,
+ * and the spend-ledger owner lowercases its home on win32, which on a case-sensitive filesystem
+ * names a DIFFERENT directory. A row that did that stopped being able to reserve its send and
+ * delivered no terminal at all, reporting as a relay defect. This narrows the claim to the two
+ * calls that actually choose the relay path.
+ */
+let relayPlatformForTests: NodeJS.Platform | undefined;
+
+/** Internal test contract, not operator configuration: no config key reaches this. */
+export function setRelayPlatformForTests(platform: NodeJS.Platform | undefined): void {
+  relayPlatformForTests = platform;
+}
 import { linkAbortSignal, UPSTREAM_JSON_BODY_READ_OPTIONS } from "./core-lifetime";
 import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle";
 import { relaySseEagerBounded } from "../relay-eager";
@@ -413,6 +434,10 @@ export async function deliverPassthroughResponse(
             const result = checkOutboundBodySize(continuationBody, config.maxUpstreamBodyBytes);
             return result.admitted ? undefined : describeOutboundBodyRefusal(result);
           },
+          // Resolution can acquire the account's sole cooldown-recovery probe before the routed
+          // provider reveals whether it will request search. Hand an unused lease back on every
+          // terminal path; after an executed search, the outcome recorder has already settled it.
+          onFinalize: () => releaseCodexAuthContextProbeLease(openAiSidecar?.authContext),
           signal: upstream.signal,
         })
         : upstreamResponse.body;
@@ -495,6 +520,9 @@ export async function deliverPassthroughResponse(
           ? createGrokResponsesControlFrameBlockRewrite()
           : undefined,
         grokClientCompatibilityEnabled
+          ? createGrokResponsesTimestampBlockRewrite()
+          : undefined,
+        grokClientCompatibilityEnabled
           ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget)
           : undefined,
         snapshotRepairEnabled
@@ -525,12 +553,13 @@ export async function deliverPassthroughResponse(
         ? composeSseBlockRewrites(...blockRewrites)
         : undefined;
       const needsClientRewrite = clientBlockRewrite !== undefined;
+      const relayPlatform = relayPlatformForTests ?? process.platform;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
-      const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
+      const win32EagerRewrite = isWin32EagerRewrite(relayPlatform, needsClientRewrite);
       const eagerPath = selectEagerPath(
-        process.platform,
+        relayPlatform,
         needsClientRewrite,
         config.streamMode ?? "auto",
       );

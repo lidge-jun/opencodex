@@ -10,12 +10,13 @@
  * status surface itself, in an isolated client home, with injected ladders or harmless fixture
  * launchers in place of the operator's Codex runtime.
  */
-import { describe, expect, spyOn, test } from "bun:test";
+import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -105,6 +106,12 @@ function runStatusProbe(options: {
   fullDiagnostics?: boolean;
   /** "connect" drives `ocx connect status`; "status" drives the general `ocx status` collector. */
   surface?: "connect" | "status";
+  /**
+   * Child deadline. Only the warm-up passes one: it takes the cold module-graph load and the cold
+   * runtime-fixture spawns out of the measured window, so every assertion below keeps the
+   * 15-second bound that reports a wedged child.
+   */
+  deadlineMs?: number;
 }): ProbeResult {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-home-"));
   const codexHome = mkdtempSync(join(tmpdir(), "ocx-readiness-codex-"));
@@ -263,7 +270,7 @@ function runStatusProbe(options: {
       // Bun's test timeout cannot interrupt spawnSync, so a child that wedged on a lock or an
       // unexpected probe would hang the worker rather than fail. Same budget the existing
       // client fixtures use.
-      timeout: INTERNAL_DEADLINE_MS,
+      timeout: options.deadlineMs ?? INTERNAL_DEADLINE_MS,
       killSignal: "SIGKILL",
       env: {
         ...process.env,
@@ -293,6 +300,15 @@ function runStatusProbe(options: {
 }
 
 describe("#4207 connected-client readiness", () => {
+  // One child of this shape, before anything is measured. Windows 2/9 of run 35305115672 timed the
+  // first one at 2893ms against a 553-594ms warm baseline; that gap is module load, and it belongs
+  // in setup rather than inside the first assertion that happens to run.
+  beforeAll(async () => {
+    await warmColdSpawn("cli-connect-readiness/connect", deadlineMs => {
+      runStatusProbe({ connected: true, ladder: OLD_CLI, deadlineMs });
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("first-time connect escapes a rejected hub catalog before stderr output", () => {
     const probe = runStatusProbe({
       connected: false,
@@ -394,6 +410,19 @@ describe("#4207 connected-client readiness", () => {
 });
 
 describe("connected-client runtime probe scope", () => {
+  // The second cold start in this file, and the one that actually failed. The observed ladder loads
+  // `src/codex/runtime` on top of the connect graph and spawns the generated runtime fixtures, so it
+  // is cold even after the describe above has run: on Windows 2/9 of run 35305115672 its first child
+  // was killed at 15339ms while its siblings took 2037-2376ms. Warming the connect graph alone would
+  // not have prevented that, which is why the warm-up is per graph rather than per file or per
+  // process. The replay runs the same `runStatusProbe` the tests run, so there is no second copy of
+  // the invocation to drift away from what is measured.
+  beforeAll(async () => {
+    await warmColdSpawn("cli-connect-readiness/observed", deadlineMs => {
+      runStatusProbe({ connected: true, ladder: "observed", deadlineMs });
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("observes only the selected runtime and leaves full diagnostics available", () => {
     const probe = runStatusProbe({ connected: true, ladder: "observed", fullDiagnostics: true });
 

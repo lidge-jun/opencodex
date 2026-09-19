@@ -68,6 +68,20 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 
 /**
+ * The nested-helper spellings, as a membership view of the same list.
+ *
+ * A code-mode catalog never DECLARES any of them — they exist only as `tools.<helper>(...)` inside
+ * `exec` — so a recorded call under one of these names can only have come from a provider echoing
+ * the helper, which is what makes the set usable as a bounded recovery vocabulary for stored
+ * history (#5095). Kept beside the tuple it is built from so the two can never drift; this is a
+ * different question from `NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES` below, which also covers `exec`
+ * itself because declaring THAT name is what turns normalization on.
+ */
+export const CODE_MODE_HELPER_WIRE_NAMES: ReadonlySet<string> = new Set<string>(
+  CODE_MODE_HELPER_TOOL_NAMES,
+);
+
+/**
  * Spellings that may never be MANUFACTURED as a bare alias for a namespaced tool.
  *
  * A bare alias is an ordinary compatibility affordance -- providers echo a namespaced tool

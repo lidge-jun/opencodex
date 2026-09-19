@@ -89,6 +89,11 @@ export type TransportErrorCode =
   | "output_byte_limit"
   | "output_token_limit"
   | "tool_call_limit"
+  // The peer answered, and the answer cannot be read: a content coding this transport cannot
+  // undo, or coded bytes that did not decode. Neither is a timeout, a budget, or a fault of
+  // the harness, so none of those codes describes it and every one of them would send an
+  // operator looking in the wrong place.
+  | "unreadable_response"
   | "artifact_byte_limit"
   | "memory_limit"
   | "child_process_limit"

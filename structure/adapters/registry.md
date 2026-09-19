@@ -39,6 +39,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   does not. `devin-cli` survives only as a deprecated alias — `ocx login devin-cli` routes to
   `devin`, and a startup merge migration rewrites any saved row still keyed under the old
   provider id, so the registry carries one Devin provider, not two.
+  Its `GetChatMessage` inference POSTs, including the two bounded pre-output stated-reset
+  replays, pass through the request's provider executor and shared physical-send budget.
+  Catalog and JWT RPCs remain adapter support traffic rather than inference sends.
   `AdapterFactoryContext.providerId` still tells the shared adapter which configured row it is
   serving: the Cognition tenant is recorded on the credential, not in the registry, so the
   adapter has to know the row before it can resolve a host. That adapter advertises bare local
@@ -101,6 +104,10 @@ Do not add a second switch/list of adapter factories in request routing. Focused
 ## Scope boundary
 
 This decision does not change routed `apply_patch` behavior, Cursor structured-edit conversion, Azure/MiMo request construction, or provider wire selection. Those behaviors remain owned by their existing modules and focused tests. The registry exposes the universe and semantic relationships; the next stack layer consumes that metadata for generic conformance.
+
+Registry selection neither derives nor consumes Google's endpoint-scoped
+[tool-schema loss report](../providers/google.md#google-tool-schema-loss-reporting). That report is
+owned by the selected adapter's final compiler and cannot affect adapter selection.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
@@ -206,3 +213,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+## Devin image boundary
+
+The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.

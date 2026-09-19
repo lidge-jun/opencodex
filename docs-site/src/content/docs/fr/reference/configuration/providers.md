@@ -148,6 +148,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `escapeBuiltinToolNames?` | `boolean` | Échapper aux noms d'outils intégrés pour les passerelles compatibles Anthropic et les restaurer lors des appels renvoyés. |
 | `anthropicEofTolerance?` | `boolean` | Laissez une passerelle compatible Anthropic compléter un flux qui se termine avant `message_stop`, uniquement lorsque du texte visible ou une entrée complète d'outil d'objet JSON a été reçue. Désactivé par défaut. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Mode Google transport/auth. Par défaut `ai-studio`. |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google uniquement. Une valeur absente ou `compatible` conserve le schéma compatible et la réparation 400 existante hors mode direct. `reject-lossy` refuse une perte initiale ou une comparaison bornée indéterminée avant l’envoi et bloque une réparation Vertex ou Cloud Code Assist qui ouvrirait des contraintes. AI Studio direct n’effectue jamais cette réparation. |
 | `project?` | `string` | ID du projet Vertex ou Antigravity Cloud Code Assist. |
 | `location?` | `string` | Région Vertex ; la valeur de repli de l'environnement est `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor uniquement : serveurs MCP sur entrée-sortie standard ou HTTP diffusé en continu. |
@@ -168,9 +169,7 @@ proxy sortant, opencodex résout le nom d'hôte une seule fois et se connecte ex
 HTTPS conserve l'hôte d'origine, le SNI et la vérification du certificat ; la configuration du fournisseur ne peut pas désactiver
 ces contrôles.
 
-Lorsque `HTTP_PROXY`, `HTTPS_PROXY` ou `ALL_PROXY` s'applique, ces opérations conservent la fonction de récupération native de Bun.
-Les vérifications de l'URL et de l'adresse littérale sont toujours exécutées, mais le proxy choisit la route finale, la réponse DNS et l'homologue ;
-opencodex ne peut donc ni épingler ni vérifier cet homologue. Il s'agit d'une limitation de sécurité explicite.
+Ces opérations utilisent le [fetch sortant configuré du serveur](/fr/reference/configuration/server/). Un proxy SOCKS5 du serveur — défini avec `config.proxy` ou hérité d'un `ALL_PROXY` SOCKS5 — utilise le tunnel intégré d'OpenCodex lorsque la cible ne correspond pas à `NO_PROXY`. `HTTP_PROXY` et `HTTPS_PROXY` conservent le traitement HTTP(S) natif de Bun, tandis qu'un `ALL_PROXY` non SOCKS n'est pas une route du fetch HTTP natif. Les vérifications de l'URL et de l'adresse littérale sont toujours exécutées, mais le proxy sélectionné choisit la route finale, la réponse DNS et l'homologue ; opencodex ne peut donc ni épingler ni vérifier cet homologue. Il s'agit d'une limitation de sécurité explicite.
 
 Les destinations privées ou locales nécessitent `allowPrivateNetwork: true` et, lorsqu'un proxy sortant est actif,
 une entrée `NO_PROXY` correspondante. Le bouclage est ajouté automatiquement ; indiquez explicitement chaque hôte du réseau local, car
@@ -179,7 +178,7 @@ les adresses IPv6 entre crochets et `*` ; par exemple, indiquez explicitement `
 restent bloquées. Les requêtes de diagnostic rejettent les redirections et signalent une cible dont les identifiants ont été retirés. L'examen des
 redirections des requêtes ordinaires vers les fournisseurs reste distinct de cette protection de diagnostic.
 
-Deux accommodements fake-IP DNS existent pour les utilisateurs de Clash / Surge / Mihomo, et tous deux ne s'appliquent qu'aux *réponses* DNS — une adresse littérale dans l'URL reste rejetée. La plage de benchmark IANA `198.18.0.0/15` (et ses écritures IPv6 IPv4-mapped) est acceptée dès qu'un proxy sortant s'applique à l'hôte. La plage IPv6 fake-IP par défaut de Mihomo `fdfe:dcba:9876::/48` est acceptée sous une condition plus stricte : la variable de proxy correspondant au schéma de l'URL (`HTTPS_PROXY` pour `https:`, `HTTP_PROXY` pour `http:` ; `ALL_PROXY` ne compte pas) doit être définie, l'hôte ne doit pas correspondre à `NO_PROXY`, et la requête est alors explicitement liée à ce proxy. Tout autre ULA, un préfixe adjacent ou une réponse fake-IP mélangée à une vraie réponse privée exige toujours `allowPrivateNetwork: true`. La validation à l'enregistrement du fournisseur n'applique jamais l'accommodement IPv6.
+Deux accommodements fake-IP DNS existent pour les utilisateurs de Clash / Surge / Mihomo, et tous deux ne s'appliquent qu'aux *réponses* DNS — une adresse littérale dans l'URL reste rejetée. La plage de benchmark IANA `198.18.0.0/15` (et ses écritures IPv6 IPv4-mapped) est acceptée dès qu'un proxy sortant s'applique à l'hôte. La plage IPv6 fake-IP par défaut de Mihomo `fdfe:dcba:9876::/48` est acceptée sous une condition plus stricte : la variable de proxy correspondant au schéma de l'URL (`HTTPS_PROXY` pour `https:`, `HTTP_PROXY` pour `http:`) ou un `ALL_PROXY` SOCKS5 doit être définie (un `ALL_PROXY` non SOCKS ne compte pas), l'hôte ne doit pas correspondre à `NO_PROXY`, et la requête est alors explicitement liée à ce proxy. Tout autre ULA, un préfixe adjacent ou une réponse fake-IP mélangée à une vraie réponse privée exige toujours `allowPrivateNetwork: true`. La validation à l'enregistrement du fournisseur n'applique jamais l'accommodement IPv6.
 
 ## Groupe de comptes Codex
 

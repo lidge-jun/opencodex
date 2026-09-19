@@ -6,6 +6,8 @@ import type { CursorRunRequest, CursorServerMessage } from "../../src/adapters/c
 import type { CursorTransport } from "../../src/adapters/cursor/transport";
 import { createRequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { CloudChatError, type CloudChatEvent, type CloudChatRequest } from "../../src/adapters/devin/cloud-direct";
+import { streamChatEventsWithResetRetry } from "../../src/adapters/devin/cloud-direct/stated-reset-retry";
 
 /**
  * Adapters that retry INSIDE one adapter call are the layer a per-request cap cannot see from
@@ -143,5 +145,24 @@ describe("Cursor inner retries and the request send budget", () => {
     expect(budget.used).toBe(2);
     expect(observed.map(send => send.ordinal)).toEqual([1, 2]);
     expect(observed.map(send => send.recovery)).toEqual([undefined, "connection-reset"]);
+  });
+});
+
+describe("Devin inner retries and the request send budget", () => {
+  test("an exhausted initial send escapes as the local budget error", async () => {
+    const request = {
+      apiKey: "test", apiServerUrl: "https://example.invalid", modelUid: "swe-2", messages: [],
+    } as unknown as CloudChatRequest;
+    const stream = (req: CloudChatRequest) => (async function* (): AsyncGenerator<CloudChatEvent> {
+      await req.executor!("https://example.invalid/GetChatMessage");
+      throw new CloudChatError("must not replace the budget refusal", undefined, undefined, 429);
+    })();
+
+    await expect((async () => {
+      for await (const _event of streamChatEventsWithResetRetry(request, {
+        stream,
+        execution: { sendBudget: budgetOf(0) },
+      })) { /* drain */ }
+    })()).rejects.toBeInstanceOf(SendBudgetExhaustedError);
   });
 });

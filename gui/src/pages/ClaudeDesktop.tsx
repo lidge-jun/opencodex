@@ -56,6 +56,25 @@ interface DesktopStatus {
   health: { lastRequestAt: string | null; requestCount: number; errorCount: number };
 }
 
+/**
+ * The status poll accepts any JSON today, so an error-shaped or malformed OK
+ * payload would be cached and rendered as a real status until the next poll.
+ * Validate before trusting either the wire or the cache.
+ */
+function isDesktopStatus(value: unknown): value is DesktopStatus {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  const health = v.health as Record<string, unknown> | null | undefined;
+  return typeof v.desiredEnabled === "boolean"
+    && typeof v.applied === "boolean"
+    && (v.appliedAt === null || typeof v.appliedAt === "string")
+    && typeof v.stale === "boolean"
+    && typeof health === "object" && health !== null
+    && (health.lastRequestAt === null || typeof health.lastRequestAt === "string")
+    && typeof health.requestCount === "number"
+    && typeof health.errorCount === "number";
+}
+
 interface DesktopResponse {
   profile: DesktopProfile;
   models: DesktopModel[];
@@ -271,21 +290,24 @@ export default function ClaudeDesktop({
   const statusCacheKey = `ocx.claude-desktop.status.v1:${apiBase}`;
   const statusResourceKey = `claude-desktop-status:${apiBase}`;
   const cachedStatusEntry = readSessionListCacheEntry<DesktopStatus>(statusCacheKey);
+  const cachedStatus = cachedStatusEntry && isDesktopStatus(cachedStatusEntry.data)
+    ? cachedStatusEntry.data
+    : null;
   const statusResource = useDataSurface<DesktopStatus>(
     statusResourceKey,
     [apiBase],
     async (signal) => {
       const response = await fetch(`${apiBase}/api/claude-desktop/status`, { signal });
-      const next = await readJsonIfOk<DesktopStatus>(response);
-      if (!next) throw new Error("Claude Desktop status unavailable");
+      const next = await readJsonIfOk<unknown>(response);
+      if (!isDesktopStatus(next)) throw new Error("Claude Desktop status unavailable");
       writeSessionListCacheEntry(statusCacheKey, next);
       return next;
     },
     // Polled, so no staleAfterMs: the cadence already keeps it fresh.
-    { isEmpty: () => false, pollMs: 5000, enabled: active, initialData: cachedStatusEntry?.data ?? undefined },
+    { isEmpty: () => false, pollMs: 5000, enabled: active, initialData: cachedStatus ?? undefined },
   );
   const statusState = statusResource.state;
-  const status = statusState.data ?? cachedStatusEntry?.data ?? null;
+  const status = statusState.data ?? cachedStatus;
   const statusFailed = statusState.showError;
 
   const moveModel = (route: string, family: Family) => {

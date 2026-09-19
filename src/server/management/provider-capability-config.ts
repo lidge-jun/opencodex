@@ -1,11 +1,7 @@
 import { booleanRecordConfigError } from "../../config/provider-validation";
 import type { OcxConfig } from "../../types";
 
-/**
- * Provider-management validation that belongs to the provider editor, not the
- * request-authentication/CORS boundary. Keeping this here lets the editor
- * evolve its capability schema without widening the auth-cors security surface.
- */
+/** Provider-management validation shared by provider editor write paths. */
 export function providerServiceTierConfigError(name: unknown, provider: unknown): string | null {
   if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
     return null;
@@ -17,7 +13,20 @@ export function providerServiceTierConfigError(name: unknown, provider: unknown)
   return error ? `provider ${name} ${error}` : null;
 }
 
-function publicServiceTierRecord(value: unknown): Record<string, boolean> | undefined {
+export function providerCatalogCapabilityConfigError(name: unknown, provider: unknown): string | null {
+  const serviceTierError = providerServiceTierConfigError(name, provider);
+  if (serviceTierError) return serviceTierError;
+  if (typeof name !== "string" || !provider || typeof provider !== "object" || Array.isArray(provider)) {
+    return null;
+  }
+  const error = booleanRecordConfigError(
+    (provider as { modelSuppressSyntheticMax?: unknown }).modelSuppressSyntheticMax,
+    "modelSuppressSyntheticMax",
+  );
+  return error ? `provider ${name} ${error}` : null;
+}
+
+function publicBooleanRecord(value: unknown): Record<string, boolean> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const entries = Object.entries(value).filter(([model, supported]) =>
     model.trim().length > 0 && typeof supported === "boolean",
@@ -40,9 +49,28 @@ export function withProviderServiceTierDTO(dto: unknown, config: OcxConfig): unk
   for (const [name, provider] of Object.entries(config.providers)) {
     const dtoProvider = providers[name];
     if (!dtoProvider || typeof dtoProvider !== "object" || Array.isArray(dtoProvider)) continue;
-    const capabilities = publicServiceTierRecord(provider.modelSupportsServiceTier);
+    const capabilities = publicBooleanRecord(provider.modelSupportsServiceTier);
     if (capabilities === undefined) continue;
     projectedProviders[name] = { ...(dtoProvider as Record<string, unknown>), modelSupportsServiceTier: capabilities };
+  }
+  return { ...root, providers: projectedProviders };
+}
+
+/** Project all catalog-only model capability maps across the dashboard config boundary. */
+export function withProviderCatalogCapabilityDTO(dto: unknown, config: OcxConfig): unknown {
+  const projected = withProviderServiceTierDTO(dto, config);
+  if (!projected || typeof projected !== "object" || Array.isArray(projected)) return projected;
+  const root = projected as { providers?: unknown };
+  if (!root.providers || typeof root.providers !== "object" || Array.isArray(root.providers)) return projected;
+
+  const providers = root.providers as Record<string, unknown>;
+  const projectedProviders: Record<string, unknown> = { ...providers };
+  for (const [name, provider] of Object.entries(config.providers)) {
+    const dtoProvider = providers[name];
+    if (!dtoProvider || typeof dtoProvider !== "object" || Array.isArray(dtoProvider)) continue;
+    const capabilities = publicBooleanRecord(provider.modelSuppressSyntheticMax);
+    if (capabilities === undefined) continue;
+    projectedProviders[name] = { ...(dtoProvider as Record<string, unknown>), modelSuppressSyntheticMax: capabilities };
   }
   return { ...root, providers: projectedProviders };
 }

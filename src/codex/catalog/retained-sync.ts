@@ -33,6 +33,7 @@ import {
   readCodexCatalogPath,
   readCodexCatalogPathForHome,
   readNativeBaseline,
+  nativeMultiAgentDefaults,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import {
@@ -50,6 +51,7 @@ import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { bundledCatalogCacheState, loadBundledCodexCatalog } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { clampCatalogModelsToCodexSupport } from "./effort";
+import { suppressedSyntheticMaxCatalogSlugs } from "./model-hints";
 import { filterCatalogVisibleModels, gatherRoutedModels, type CatalogGatherProviderModelOutcome } from "./provider-fetch";
 import { dedupeCatalogEntriesBySlug, enforceCatalogSlugUniqueness, exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
 import {
@@ -321,6 +323,11 @@ function writeRetainedCatalogSync({
   const enabledGo = filterCatalogVisibleModels(goModels, config);
   const featured = config.subagentModels ?? [];
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
+  const suppressedSyntheticMaxSlugs = suppressedSyntheticMaxCatalogSlugs(
+    config,
+    orderedGoModels,
+    catalogModelsForMerge,
+  );
   const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
@@ -452,6 +459,7 @@ function writeRetainedCatalogSync({
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
   const baselineCatalog = readCatalogBackup(catalogPath);
   const baseline = readNativeBaseline(catalogPath);
+  const nativePinBaseline = nativeMultiAgentDefaults(baselineCatalog?.models);
   const gatheredProviderNames = new Set(
     Object.entries(config.providers ?? {})
       .filter(([, prov]) => prov.disabled !== true)
@@ -521,8 +529,10 @@ function writeRetainedCatalogSync({
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
+    suppressedSyntheticMaxSlugs,
     openaiContextCap,
     nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,
+    nativeMultiAgentDefaults: nativePinBaseline,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       nativeBackfillSlugs: [...availableBareNativeSlugs, ...observedNativeSlugs],

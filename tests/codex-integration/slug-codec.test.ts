@@ -19,6 +19,8 @@ import { knownModelIdsForProvider, routeModel } from "../../src/router";
 import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import { getModelMetadata } from "../../src/generated/model-metadata";
+import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { registryModelIdKeys } from "../../src/providers/registry/model-ids";
 import type { RawEntry } from "../../src/codex/catalog";
 import type { OcxConfig } from "../../src/types";
 
@@ -119,6 +121,44 @@ describe("slug-codec primitives", () => {
 });
 
 describe("routeModel decode (proxy layer)", () => {
+  const fixtureId = "slug-codec-registry-fixture";
+  const fixtureBaseUrl = "https://slug-codec-registry.fixture.example/v1";
+  const mutableRegistry = PROVIDER_REGISTRY as unknown as Array<Record<string, unknown>>;
+
+  function withSyntheticRegistryEntry(
+    fields: Record<string, unknown>,
+    assertion: (config: OcxConfig) => void,
+  ): void {
+    // A disposable row prevents decode tests from changing any shipped provider metadata.
+    mutableRegistry.push({
+      id: fixtureId,
+      label: "Slug codec registry fixture",
+      adapter: "openai-chat",
+      baseUrl: fixtureBaseUrl,
+      authKind: "key",
+      preserveCustomDestination: true,
+      ...fields,
+    });
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: fixtureId,
+      providers: {
+        [fixtureId]: {
+          adapter: "openai-chat",
+          baseUrl: fixtureBaseUrl,
+          authMode: "key",
+          apiKey: "k",
+        },
+      },
+    };
+    try {
+      assertion(config);
+    } finally {
+      const index = mutableRegistry.findIndex(entry => entry.id === fixtureId);
+      if (index >= 0) mutableRegistry.splice(index, 1);
+    }
+  }
+
   test("encoded zenmux slug decodes to the native id via the registry seed (cold cache)", () => {
     const route = routeModel(zenmuxConfig(), "zenmux/moonshotai-kimi-k3-free");
     expect(route.providerName).toBe("zenmux");
@@ -147,6 +187,91 @@ describe("routeModel decode (proxy layer)", () => {
     expect(route.modelId).toBe("moonshotai/kimi-k2.6");
     // And the raw form still routes to the same native id.
     expect(routeModel(config, "nvidia/moonshotai/kimi-k2.6").modelId).toBe("moonshotai/kimi-k2.6");
+  });
+
+  test("every classified direct registry map independently seeds selector decoding", () => {
+    // All fifteen, not only the ones the old hand-written list omitted. The eight it did carry
+    // are now reached through the same classification as the rest, so they belong in the public
+    // route-level table too rather than resting on helper-level parity alone.
+    const cases = [
+      ["modelWireDefaults", "openai-chat"],
+      ["modelResponsesUpstreamStreaming", false],
+      ["modelResponsesTerminalRepair", { graceMs: 25 }],
+      ["modelSupportsServiceTier", true],
+      ["modelSupportsReasoningSummaries", false],
+      ["modelSupportsVerbosity", true],
+      ["modelContextWindows", 100_000],
+      ["modelDisplayNames", "Synthetic display name"],
+      ["modelInputModalities", ["text"]],
+      ["modelMaxOutputTokens", 8_000],
+      ["modelReasoningEfforts", ["low"]],
+      ["modelDefaultReasoningEfforts", "low"],
+      ["modelReasoningEffortMap", { low: "low" }],
+      ["virtualModels", { wireModelId: "wire-target", reasoningMode: "pro" }],
+      ["modelMaxInputTokens", 100_000],
+    ] as const;
+    const nativeIds = new Map<string, string>();
+    const fields = Object.fromEntries(cases.map(([field, value], index) => {
+      const nativeId = `vendor/${field}-${index}`;
+      nativeIds.set(field, nativeId);
+      return [field, { [nativeId]: value }];
+    }));
+
+    withSyntheticRegistryEntry(fields, config => {
+      for (const [field] of cases) {
+        const nativeId = nativeIds.get(field)!;
+        const route = routeModel(config, `${fixtureId}/${encodeRoutedModelId(nativeId)}`);
+        expect(route.modelId, field).toBe(nativeId);
+      }
+    });
+  });
+
+  test("the nested key-auth service-tier map seeds selector decoding", () => {
+    const nativeId = "vendor/nested-service-tier-model";
+    withSyntheticRegistryEntry({
+      keyAuthServiceTier: { modelSupportsServiceTier: { [nativeId]: true } },
+    }, config => {
+      expect(routeModel(config, `${fixtureId}/${encodeRoutedModelId(nativeId)}`).modelId).toBe(nativeId);
+    });
+  });
+
+  test("the collected ids are frozen and the registry entry is left untouched", () => {
+    // The helper documents a frozen result and promises not to mutate registry data. A caller
+    // that could push into the returned array, or a helper that sorted the entry's own maps in
+    // place, would be editing shared process-wide registry state from a decode path.
+    const metaMuse = PROVIDER_REGISTRY.find(entry => entry.id === "meta-muse")!;
+    const before = JSON.stringify(metaMuse);
+    const ids = registryModelIdKeys(metaMuse);
+    expect(Object.isFrozen(ids)).toBe(true);
+    expect(() => (ids as string[]).push("vendor/injected")).toThrow();
+    expect(JSON.stringify(metaMuse)).toBe(before);
+  });
+
+  test("decode hints preserve unknown pass-through and ambiguous-selector rejection", () => {
+    withSyntheticRegistryEntry({
+      modelWireDefaults: { "a/b-c": "openai-chat" },
+      modelDisplayNames: { "a-b/c": "Ambiguous sibling" },
+    }, config => {
+      expect(routeModel(config, `${fixtureId}/unknown-model`).modelId).toBe("unknown-model");
+      expect(() => routeModel(config, `${fixtureId}/a-b-c`)).toThrow(/ambiguous/);
+    });
+  });
+
+  test("a provider with a mismatched transport inherits no registry decode hints", () => {
+    const nativeId = "vendor/transport-guarded-model";
+    withSyntheticRegistryEntry({ modelDisplayNames: { [nativeId]: "Transport guarded" } }, config => {
+      config.providers[fixtureId]!.baseUrl = "https://unrelated.example/v1";
+      expect(routeModel(config, `${fixtureId}/${encodeRoutedModelId(nativeId)}`).modelId)
+        .toBe(encodeRoutedModelId(nativeId));
+    });
+  });
+
+  test("a registry decode hint alone does not publish a catalog row", () => {
+    const nativeId = "vendor/decode-hint-only";
+    withSyntheticRegistryEntry({ modelDisplayNames: { [nativeId]: "Decode hint only" } }, () => {
+      const entries = buildCatalogEntries(nativeTemplate(), [], []);
+      expect(entries.some(entry => entry.slug === `${fixtureId}/${encodeRoutedModelId(nativeId)}`)).toBe(false);
+    });
   });
 
   test("defaultModel encoded fallback routes to the native id", () => {

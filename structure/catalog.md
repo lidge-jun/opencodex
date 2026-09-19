@@ -22,6 +22,23 @@ validation-pending. Import alone supplies no entitlement evidence for the model 
 
 ## Shared catalog
 
+Static policy and observed catalog evidence are separate authorities.
+`src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
+hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
+metadata, cache freshness, availability, credentials, account state, quota and health never enter
+that result. A catalog consumer may pass observed context, max-input, or max-output values to the
+resolver's call-local limit projection; the lower observed/static value wins, and an observed value
+may fill an absent static one only inside that call-local projection — the frozen static policy is
+unchanged and never widened — max input never exceeds the resolved context window, and the
+projection mutates neither input. P1a establishes this provider-owned contract
+without changing catalog assembly; consumer migration is a separate layer.
+Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
+diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
+input-modality declarations outrank the registry/config modality map; an empty declaration
+falls through to that map.
+Anthropic numeric point releases inherit the nearest configured family context window before the
+provider-wide fallback. Exact model output limits precede the provider default output limit.
+
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
@@ -86,6 +103,14 @@ keeps a combo's advertised intersection aligned with the final custom row withou
 provider-native row or inventing capabilities for other models. Public custom-row materialization
 and routed-slug deduplication remain the final catalog owner's responsibility.
 Codex's native `ultra` mode is preserved and is not a literal API wire promise.
+
+Selector decode hints are identity evidence and nothing else. `knownModelIdsForProvider` unions
+the configured models, the registry's static list, the native ids the registry's classified
+model-keyed maps name (`src/providers/registry/model-ids.ts`), the last-known-good discovery
+cache and custom model ids, so an id declared only in a policy map still round-trips through an
+encoded selector. A hint publishes no catalog row, grants no availability or entitlement and
+confers no transport authority: the registry transport identity is checked before hints are
+read, and an ambiguous selector is still rejected rather than guessed.
 When account selectors are enabled, the sync path may also observe exact, visible, API-supported
 OpenAI-family ids from Codex's user-owned catalog/cache. Only rows with native catalog provenance
 are trusted; unknown ids are carried through startup cache invalidation as hidden observations and
@@ -380,6 +405,17 @@ Ultra is always advertised in the catalog regardless of the `multi_agent_v2` tog
 controls only the multi-agent collab surface, not ultra visibility. The `nativeEffortClamp` function
 wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire).
 
+For routed models, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
+prevents `src/codex/catalog/effort.ts` from adding a missing synthetic `max` and prevents
+`src/codex/catalog/build-entries.ts` from repairing that missing rung during observed-state merge.
+It never removes a provider-declared `max`, and `ultra` remains advertised. If the configured default
+names a suppressed missing `max`, the catalog selects the highest real rung below it. A degraded sync
+also preserves any `max` already recorded on disk: without persisted provenance OpenCodex cannot
+distinguish an older synthetic rung from a real provider rung, so only a later healthy provider rebuild
+can remove the former. Codex uses this same membership for the picker and explicit `spawn_agent`
+effort validation; an explicit `max` spawn can therefore fail client-side before proxy wire clamping,
+while retained `ultra` remains the supported harness path.
+
 `effortCap` and `subagentEffortCap` are hard ceilings applied on the V2 path
 (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting
 the request, and they never raise it.
@@ -413,7 +449,7 @@ spelling; the V1 and compaction cap exemptions are preserved.
 
 > Decision record: [ADR-0026](decisions/ADR-0026-ultra-reasoning-level.md)
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
@@ -437,9 +473,7 @@ its defaults and exclusions are owned by [Responses transport](transports/respon
 
 Provider `showThinkingSummary` is a Responses request default; it does not rewrite catalog summary defaults or client configuration. See [Google summaries](providers/google.md).
 
-## Paginated history writer boundary
-
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 

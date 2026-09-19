@@ -472,9 +472,9 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     // pointless until the refusal was CORS-wrapped, because without an allow-origin a browser
     // cannot read an exposed header either.
     // src/server/index.ts is a facade now. The runAdmittedHttpTurn call sites live in the
-    // serve-options leaf while withCors(workflowRefusalResponse( stayed in the composition
-    // root, so read both. Reading the facade alone would find no call site and the
-    // "more than one surface" assertion would pass on an empty match array.
+    // serve-options leaf while the CORS-wrapped refusal stayed in the composition root, so
+    // read both. Reading the facade alone would find no call site and the "more than one
+    // surface" assertion would pass on an empty match array.
     const source = [
       await Bun.file(repoPath("src/server/index.ts")).text(),
       await Bun.file(repoPath("src/server/index/serve-options.ts")).text(),
@@ -485,7 +485,10 @@ describe("a refusal an operator can read, name and clear (#4546)", () => {
     // Exactly one surface has no log context to thread: /v1/messages/count_tokens opens no
     // request-log row at all. Every other one must, or a refusal there leaves no trace.
     expect(callSites.length - threaded.length).toBe(1);
-    expect(source).toContain("withCors(workflowRefusalResponse(");
+    // The admission refusal goes through the decision-carrying wrapper, which forwards the
+    // denial's own scope and ceiling. Forwarding `reason` alone would answer a token-ceiling
+    // refusal with a 429 that names no ceiling.
+    expect(source).toContain("withCors(workflowDecisionRefusalResponse(");
   });
 
   test("every refusal lands on the record with the counts that caused it", () => {

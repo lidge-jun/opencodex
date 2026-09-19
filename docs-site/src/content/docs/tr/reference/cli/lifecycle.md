@@ -21,12 +21,18 @@ otomatik başlatma dolgusunu kurar.
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Proxy sunucusunu başlatın (tercih edilen port `10100`). Bu port doluysa
-opencodex başka bir kullanılabilir port seçer ve kaydeder. PID/çalışma zamanı
-portu durumunu yazar ve ikinci bir canlı örneği başlatmayı reddeder. Başlangıçta
-her sağlayıcının modellerini Codex'in kataloğuna senkronize eder. Kapatıldığında
-— yönetilen bir servis olarak başlatılmadığı sürece (`OCX_SERVICE=1`) — yerel
-Codex'i geri yükler.
+Proxy sunucusunu başlatın (tercih edilen port `10100`). PID/çalışma zamanı portu
+durumunu yazar ve ikinci bir canlı örneği başlatmayı reddeder. Tercih edilen port
+doluysa `start`, portu tutan süreci sorgular ve her iki durumda da durur: orada bir
+opencodex yanıt veriyorsa başlatmayı reddeder, aksi halde portu tutan sürecin
+tanımlanamadığını bildirir. İlk proxy'yi çalışır durumda bırakıp Codex'i ikinciye
+yönlendireceği için dinleyiciyi kendiliğinden başka bir porta taşımaz. Aynı
+`OPENCODEX_HOME` kullanılırken farklı bir `--port` açıkça verilse de başlangıç reddedilir;
+yalnızca gözlem ve sınır uygulama kiplerinin ikisi de aynı harcama günlüğüne yazar. Bağımsız
+bir kardeş örnek için ayrı bir `OPENCODEX_HOME` kullanın. `port: 0` yalnızca port seçimini
+işletim sistemine bırakır, durumu ayırmaz. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
+senkronize eder. Kapatıldığında — yönetilen bir servis olarak başlatılmadığı sürece
+(`OCX_SERVICE=1`) — yerel Codex'i geri yükler.
 
 `--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
 HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş

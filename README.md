@@ -125,14 +125,14 @@ See [SPONSORS.md](./SPONSORS.md).
 <details>
 <summary>Docker Compose</summary>
 
-The repository ships a digest-pinned, non-root Compose build. With Git and Bun installed on the
-host, generate the canonical compatibility manifest before every image build, then initialize
-the data-plane token once through stdin and start the hub:
+The repository ships a digest-pinned, non-root Compose build. The build generates and verifies the
+canonical compatibility manifest from the selected Git snapshot. A local clone needs Git and
+Docker Compose; a remote Git context needs Docker Compose. Neither path needs host Bun or a
+preparation step. Initialize the data-plane token once through stdin and start the hub:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -143,11 +143,28 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 The default host binding is `127.0.0.1:10100`. Remote exposure requires explicit
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`; `0.0.0.0` opts into
 all host interfaces. Restrict access with a firewall and an authenticated TLS/tailnet frontend.
-The generated JSON stays untracked; it is copied into the image without including `.git`.
-Regenerate it after source changes, and do not change the source between generation and build.
-The build rejects stale manifests, missing or mismatched files, extra source files, and symlinks.
+The generated JSON stays untracked. The build context admits only `.git/index` and `.git/HEAD` — the
+inventory `git ls-files` reads, about 1 MB rather than the full object store — and they are visible
+only to the build-only manifest stage through a read-only mount, so no `COPY` includes `.git`. An existing host-generated manifest
+is still accepted only after validation; otherwise the build generates one itself. The build rejects
+stale manifests, missing or mismatched files, extra source files, and symlinks.
 It checks every recorded SHA-256 against the build context and copied runtime files, including
 `package.json`, `bun.lock`, and the specifically included `scripts/model-metadata.source.json`.
+
+A remote Git context needs BuildKit to retain Git metadata. This Compose build fragment selects the
+remote snapshot and passes the required built-in argument:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 The token and mutable state stay in the `ocx-state` named volume; no credential is placed in the
 image, Compose file, environment, or shell arguments. See the
@@ -313,8 +330,9 @@ ocx v2 <...>                   # multi-agent v1/v2 surface controls
 ocx update [--tag preview]     # update opencodex
 ```
 
-Unpinned starts may pick another free port if the preferred one is busy; an explicit `--port`
-never hops. Full reference: [CLI docs](https://opencodex.me/reference/cli/).
+A start whose preferred port is busy stops and names the holder instead of moving to another port,
+so it can never leave a second proxy running beside the first. Free the port, or name a different
+one with `--port`. Full reference: [CLI docs](https://opencodex.me/reference/cli/).
 
 ### Health and readiness
 

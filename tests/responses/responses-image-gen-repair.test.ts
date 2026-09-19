@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   imageGenToolCallAliases,
   relaySseWithImageGenCallRestore as relaySseWithImageGenCallRestoreProduction,
@@ -8,6 +8,18 @@ import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { finalizeTranslatorBudgetResponse } from "../../src/lib/translator-budget";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+afterEach(() => {
+  // Release first so a failed dispatch cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 function relaySseWithImageGenCallRestore(
   body: ReadableStream<Uint8Array>,
@@ -185,6 +197,7 @@ describe("Responses image-gen call restoration", () => {
     } as OcxConfig;
 
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -245,6 +258,7 @@ describe("Responses image-gen call restoration", () => {
     } as OcxConfig;
 
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -317,6 +331,7 @@ describe("Responses image-gen call restoration", () => {
     } as OcxConfig;
 
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

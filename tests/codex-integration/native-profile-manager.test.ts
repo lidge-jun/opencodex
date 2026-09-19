@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,10 +15,12 @@ import {
 } from "../../src/codex/native-profile-store";
 import { NativeProfileError, type NativeProfileKey, type NativeProfileKeyProvider } from "../../src/codex/native-profile-types";
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
+const nativeProfileLockChildPath = helperPath("native-profile-lock-child.ts");
 const roots: string[] = [];
 
 afterEach(() => {
@@ -159,7 +161,7 @@ function spawnLockHolder(
   releasePath: string,
   options: { crash?: boolean; contention?: string } = {},
 ): ReturnType<typeof Bun.spawn> {
-  return Bun.spawn([process.execPath, helperPath("native-profile-lock-child.ts")], {
+  return Bun.spawn([process.execPath, nativeProfileLockChildPath], {
     cwd: repoRoot(),
     env: {
       ...process.env,
@@ -180,7 +182,7 @@ function spawnLockProbe(
   f: ReturnType<typeof fixture>,
   resultPath: string,
 ): ReturnType<typeof Bun.spawn> {
-  return Bun.spawn([process.execPath, helperPath("native-profile-lock-child.ts")], {
+  return Bun.spawn([process.execPath, nativeProfileLockChildPath], {
     cwd: repoRoot(),
     env: {
       ...process.env,
@@ -195,6 +197,12 @@ function spawnLockProbe(
 }
 
 describe("native main profile transactions", () => {
+  // This describe's first spawned child pays the cold native-profile lock helper graph.
+  // Warm it in setup so the readiness deadline remains a bound on transaction behavior.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "native-profile-lock-child", entry: nativeProfileLockChildPath });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("an abruptly exited child releases the OS-backed profile transaction", async () => {
     const f = fixture();
     const readyPath = join(f.root, "crash-ready");

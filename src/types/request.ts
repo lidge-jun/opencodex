@@ -68,6 +68,12 @@ export interface OcxParsedRequest {
   _cursorConversationId?: string;
   /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
   _clientThreadId?: string;
+  /**
+   * This request's OWN Codex thread id (`thread-id`), as opposed to `_clientThreadId`, which
+   * carries `x-codex-parent-thread-id` and is therefore shared by every parallel child of one
+   * parent. Only a surface that must distinguish siblings should read it.
+   */
+  _codexOwnThreadId?: string;
   /** True when promptCacheKey identifies a shared cache cohort rather than one conversation. */
   _promptCacheKeyIsSharedCohort?: boolean;
   /** Cursor-only thread owner; may be an opaque process-local Desktop session/thread identity. */
@@ -312,7 +318,7 @@ export interface OcxProviderContinuationState {
 }
 
 export type AdapterEvent =
-  | { type: "heartbeat" }
+  | { type: "heartbeat"; replayUnsafe?: true }
   | { type: "text_delta"; text: string; phase?: OcxMessagePhase }
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and

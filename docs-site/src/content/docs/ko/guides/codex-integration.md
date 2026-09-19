@@ -211,6 +211,12 @@ upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex W
 HTTP 클라이언트는 이 오류를 직접 처리하고 `previous_response_id` 없이 전체 컨텍스트를 다시
 보내야 합니다. 같은 ID만 재시도해서는 누락된 상태를 복구할 수 없습니다.
 
+참조한 상태의 client task scope가 현재 요청과 다를 때도 같은 거부 응답을 반환합니다. 새 요청이
+전체 입력처럼 보여도 프록시는 그것이 완전한 대화인지 증명할 수 없으므로
+`previous_response_id`를 조용히 제거하거나 일치하는 상태의 존재 여부를 노출하지 않습니다.
+전체 대화를 담고 `previous_response_id`를 뺀 요청으로 명시적으로 다시 시도하세요. 정규화된
+scope가 같거나 양쪽 scope가 모두 없거나 비어 있는 기존 unscoped continuation은 계속 replay합니다.
+
 routed 목적지에는 모두 같은 복구 신호가 적용됩니다. 프록시가 잃어버린 기록을 대신 볼 수 있는
 것은 네이티브 Responses 패스스루뿐입니다. 체인을 저장해 둔 백엔드로 `previous_response_id`를
 그대로 넘기기 때문입니다. 나머지 wire는 매 턴 요청에 담긴 입력만으로 대화를 다시 구성하므로,

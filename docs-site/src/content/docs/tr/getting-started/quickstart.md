@@ -55,8 +55,10 @@ Başlatıldığında opencodex:
   yönlendirilen girdileri Codex'in model kataloğuna senkronize eder**,
 - `http://localhost:<port>/v1` üzerinde dinler.
 
-İstenen port meşgulse `ocx start` boş bir port seçer, bunu `runtime-port.json`
-dosyasına kaydeder ve canlı dinleyiciyi kullanmak için Codex'i günceller.
+İstenen port meşgulse `ocx start` durur ve portu neyin tuttuğunu bildirir: orada bir
+opencodex yanıt veriyorsa önce `ocx stop` çalıştırın veya `ocx start --port <port>` ile
+boş bir portta başlatın. Kendiliğinden başka bir porta geçmez; önceki davranış, iki
+proxy'nin yan yana çalışmasına ve Codex'in daha yeni olana yönlendirilmesine neden oluyordu.
 
 Kontrol edin:
 

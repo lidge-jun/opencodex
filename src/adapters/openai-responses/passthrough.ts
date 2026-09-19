@@ -18,6 +18,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../../responses/namespace-tool-compat";
+import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { preparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
 import { isMetaAiResponsesDestination, rewriteMuseToolNamesForUpstream } from "../../responses/muse-tool-name-alias";
 import { openaiResponsesUrl } from "../openai-responses-url";
@@ -335,6 +336,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // every turn, and a strict parser rejects the whole request over the missing key —
       // `queries` for DeepSeek (#930), `query` for Console Go (#3071).
       outBody = backfillWebSearchQueries(outBody);
+      // #5095: a conversation that already contains a `default.`-prefixed call name is refused by
+      // the upstream `^[a-zA-Z0-9_-]+$` name pattern on every later turn that replays it, so the
+      // task cannot be compacted or continued at all. Repair the replayed item here, before the
+      // canonical-destination split below, because the reported failure was a side chat on a plain
+      // OpenAI model inheriting history a routed provider had damaged.
+      outBody = repairLegacyDottedToolCallNames(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = stripInternalChatMessageMetadataPassthrough(outBody);
         // The same class of private field, one level up, but keyed on the DESTINATION rather than

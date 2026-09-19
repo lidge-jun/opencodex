@@ -15,9 +15,11 @@ import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oa
 import { clearAccountQuotaCache, getCachedProviderAccountQuota, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testHome = "";
+let releaseSpendHome: (() => void) | undefined;
 let handleResponses: typeof import("../../../src/server/responses")["handleResponses"];
 let observedKeys: string[] = [];
 let sidecarMode = false;
@@ -100,9 +102,14 @@ beforeEach(() => {
   clearGenericFailoverHealth();
   clearAccountQuotaCache();
   resetProviderQuotaReconcileStateForTests();
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(() => {
+  // Released before the directory below is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   clearAnthropicAccountPoolState();
   clearGenericFailoverHealth();
   clearAccountQuotaCache();

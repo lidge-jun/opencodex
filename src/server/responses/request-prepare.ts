@@ -41,7 +41,6 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
-  previousResponseScopeMismatch,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -233,16 +232,23 @@ export async function prepareResponsesRequest(
     (body as { input?: unknown } | undefined)?.input,
   );
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
+  // The request's OWN thread, which `x-codex-parent-thread-id` is not: parallel children of one
+  // parent all present the same parent id. `codexConversationIdentity` already reads this header
+  // for the same reason, and a surface that must tell siblings apart needs it too (#5033).
+  const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
     body = expandPreviousResponseInput(body, inboundClientThreadId);
-    if (previousResponseScopeMismatch(body)) {
-      console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+    const replayFailure = previousResponseReplayFailure(body);
+    if (replayFailure?.reason === "scope_mismatch") {
+      // Bounded and content-free: no task scope and nothing about the retained entry.
+      console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
     }
-    if (previousResponseReplayFailure(body)) {
+    // Local replay failures require full client replay.
+    if (replayFailure) {
       return formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -305,6 +311,7 @@ export async function prepareResponsesRequest(
       ? options.comboReplaySnapshot.providerContinuation
       : previousResponseProviderState(parsed.previousResponseId);
     if (providerContinuationCandidate) parsed._providerContinuationCandidate = providerContinuationCandidate;
+    if (inboundOwnThreadId) parsed._codexOwnThreadId = inboundOwnThreadId;
     if (inboundClientThreadId) {
       parsed._clientThreadId = inboundClientThreadId;
     } else if (
@@ -701,6 +708,7 @@ export async function prepareResponsesRequest(
             "_providerContinuationOwner",
             "_cursorConversationId",
             "_clientThreadId",
+            "_codexOwnThreadId",
             "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
@@ -919,7 +927,7 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(
       400,
       "previous_response_not_found",
-      "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
 
@@ -945,7 +953,7 @@ export async function prepareResponsesRequest(
       return formatErrorResponse(
         400,
         "previous_response_not_found",
-        "Routed continuation requires unavailable local history; resend the full conversation without previous_response_id.",
+        "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       );
     }
   }

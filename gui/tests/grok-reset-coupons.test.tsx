@@ -2,8 +2,9 @@
  * The Grok reset-coupon surface on xAI account rows.
  *
  * These cases exist because the dangerous paths here are the quiet ones: a
- * replayed *failure* arrives as HTTP 200, an aborted redemption may still be
- * executing upstream, and a per-row retry used to cancel every sibling read.
+ * replayed *failure* arrives as HTTP 200, a rejected redemption request may
+ * still be executing upstream, and a per-row retry used to cancel every sibling
+ * read.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -262,9 +263,9 @@ test("ledger capacity gets its own retryable message", async () => {
   expect(dialogText(host)).toContain("journal is full");
 });
 
-test("an aborted redemption stops posting, re-reads the account, and offers no retry", async () => {
+test("a transport-rejected redemption stops posting, re-reads the account, and offers no retry", async () => {
   harness.coupons.set("acct-a", [COUPON("restok_a1", 10)]);
-  harness.consumeReply = async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); };
+  harness.consumeReply = async () => { throw new TypeError("connection reset after request dispatch"); };
   const host = await mountPanel([ACCOUNT("acct-a")]);
 
   await openDialog(host);

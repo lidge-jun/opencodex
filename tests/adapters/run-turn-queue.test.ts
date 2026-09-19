@@ -144,6 +144,26 @@ describe("run-turn adapter event queue", () => {
     expect(await queue.collect()).toEqual([heartbeat]);
   });
 
+  test("heartbeat coalescing latches a later replay-unsafe marker", async () => {
+    const queue = createAdapterEventQueue();
+
+    queue.push(heartbeat);
+    queue.push({ type: "heartbeat", replayUnsafe: true });
+    queue.close();
+
+    expect(await queue.collect()).toEqual([{ type: "heartbeat", replayUnsafe: true }]);
+  });
+
+  test("heartbeat coalescing does not clear an existing replay-unsafe marker", async () => {
+    const queue = createAdapterEventQueue();
+
+    queue.push({ type: "heartbeat", replayUnsafe: true });
+    queue.push(heartbeat);
+    queue.close();
+
+    expect(await queue.collect()).toEqual([{ type: "heartbeat", replayUnsafe: true }]);
+  });
+
   test("a tool event breaks text coalescing on both sides", async () => {
     const queue = createAdapterEventQueue();
 
@@ -254,6 +274,22 @@ describe("run-turn adapter event preflight", () => {
     expect(preflight.error).toEqual(error);
     expect(preflight.empty).toBe(false);
     expect(await collect(preflight.stream)).toEqual([heartbeat, error]);
+  });
+
+  test("replay-unsafe state survives heartbeat buffer eviction", async () => {
+    const unsafeHeartbeat: AdapterEvent = { type: "heartbeat", replayUnsafe: true };
+    const error: AdapterEvent = { type: "error", message: "rate limited" };
+    const values = [
+      unsafeHeartbeat,
+      ...Array.from({ length: PREFLIGHT_HEARTBEAT_RETAIN_LIMIT + 1 }, () => heartbeat),
+      error,
+    ];
+    const preflight = await preflightAdapterEvents(events(values));
+    expect(preflight.replayUnsafe).toBe(true);
+    expect(await collect(preflight.stream)).toEqual([
+      ...Array.from({ length: PREFLIGHT_HEARTBEAT_RETAIN_LIMIT }, () => heartbeat),
+      error,
+    ]);
   });
 
   test("heartbeat text done commits and replays the full order once", async () => {

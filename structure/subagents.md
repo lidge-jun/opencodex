@@ -51,9 +51,9 @@ resolver enforces source identity and expiry before those credentials reach rout
 
 | Mode | Behavior |
 | --- | --- |
-| `"v1"` | Force ALL entries to `multi_agent_version = "v1"` — overrides upstream pins (sol/terra included). |
-| `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null → codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
-| `"v2"` | Force ALL entries to `multi_agent_version = "v2"` — overrides upstream pins (luna included). |
+| `"v1"` | Force ALL entries to `multi_agent_version = "v1"` ??overrides upstream pins (sol/terra included). |
+| `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null ??codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
+| `"v2"` | Force ALL entries to `multi_agent_version = "v2"` ??overrides upstream pins (luna included). |
 
 The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
 `mergeCatalogEntriesForSync` (on-disk sync), AFTER all normalization and visibility processing. This
@@ -66,7 +66,7 @@ native-to-routed child task is undeliverable ciphertext. The repair and salvage 
 `src/config/diagnostics.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
 document, because spreading the defaults underneath would repair an unrelated missing field
 into a surface change its operator never made.
-An absent key still means `"default"`, because selecting base deletes the key — absence cannot be
+An absent key still means `"default"`, because selecting base deletes the key ??absence cannot be
 read as "never configured". An install that predates that change is therefore not rewritten; it is
 asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mode is not v1 and
 the stored `multiAgentSurfaceAdvisoryVersion` is below `MULTI_AGENT_SURFACE_ADVISORY_VERSION`, and
@@ -101,23 +101,23 @@ Three different numbers, often conflated:
 | --- | --- | --- |
 | Models **advertised** as overrides | `min(5, picker-visible eligible rows)` | `multi_agents_spec.rs:785-790` |
 | Models **eligible** as targets | no numeric cap (only `"disabled"` is excluded, and only on V2) | `multi_agents_common.rs:36-42` |
-| **Concurrent** subagents | V1 6 children (root excluded); V2 total 4 including root → 3 children | `config/mod.rs:211-212`, `:1497-1506` |
+| **Concurrent** subagents | V1 6 children (root excluded); V2 total 4 including root ??3 children | `config/mod.rs:211-212`, `:1497-1506` |
 
 **The cap is the same 5 on both surfaces, but the window's contents are not.** The eligibility
 filter runs *before* `.take(5)`, and it behaves differently per surface: on a V1 call
 `model_supports_multi_agent_backend` short-circuits true for every row (including `disabled`
-ones), while a V2 call drops `Some(Disabled)` first — which lets a later row move into the five.
+ones), while a V2 call drops `Some(Disabled)` first ??which lets a later row move into the five.
 Same catalog, different advertised list:
 
 | # | Model | pin | V1 advertises | V2 advertises |
 | ---: | --- | --- | :---: | :---: |
-| 1 | `v2-a` | `v2` | ✅ | ✅ |
-| 2 | `disabled-a` | `disabled` | ✅ | — |
-| 3 | `v1-a` | `v1` | ✅ | ✅ |
-| 4 | `null-a` | absent | ✅ | ✅ |
-| 5 | `v2-b` | `v2` | ✅ | ✅ |
-| 6 | `disabled-b` | `disabled` | — | — |
-| 7 | `null-b` | absent | — | ✅ |
+| 1 | `v2-a` | `v2` | ??| ??|
+| 2 | `disabled-a` | `disabled` | ??| ??|
+| 3 | `v1-a` | `v1` | ??| ??|
+| 4 | `null-a` | absent | ??| ??|
+| 5 | `v2-b` | `v2` | ??| ??|
+| 6 | `disabled-b` | `disabled` | ??| ??|
+| 7 | `null-b` | absent | ??| ??|
 
 opencodex already matches this: `effectiveSubagentRoster` filters with
 `surface !== "v2" || isEligibleV2SubagentEntry(entry)`, so the V1 path skips the eligibility
@@ -149,6 +149,7 @@ featured or picker rank. Canonical `opencode-go` rows retain their configured re
 and provider-scoped context metadata both when generated and when merged from retained catalog
 state; `deepseek-v4.1-flash` therefore keeps its 1,048,576-token window, while synthetic max/ultra
 choices are not added to that provider's declared ladder.
+`meta-muse` declares `max` for both seeded models under the [Muse provider contract](providers-and-adapters.md), so routed-client catalogs can expose it without extending OpenCode Go's ladder.
 The first-party DeepSeek `deepseek-flash` row declares native `text` and `image` input and therefore
 does not require the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
@@ -293,7 +294,7 @@ authority, task-scope and collaboration-tool rules remain applicable. This is gu
 not an enforcement mechanism or a change to native settings or tool access.
 
 Replay deduplication compares the latest exact generated developer text separately for
-each tag family, preserving built-in → custom → built-in transitions without duplicating
+each tag family, preserving built-in ??custom ??built-in transitions without duplicating
 unchanged proxy metadata after a native policy change. Native and legacy-tagged history
 remain intact: tags do not establish historical authorship or revoke old instructions,
 and mixed-version transition detection is not guaranteed.
@@ -335,7 +336,7 @@ It orders routed output groups after alias deduplication, preserving the collisi
 base/1M/Fast siblings. Native groups and explicit Desktop profile ownership are unchanged.
 Native Codex advertisements still follow display priority; private guidance ranks do not freeze them.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
@@ -361,9 +362,7 @@ its defaults and exclusions are owned by [Responses transport](transports/respon
 
 Final-route summary visibility is recomputed after fallback from the original Responses preference; an earlier provider opt-in does not carry into a later provider. See [reasoning presentation](providers/chat-compat.md).
 
-## Paginated history writer boundary
-
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
@@ -407,5 +406,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](runtime.md).
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).

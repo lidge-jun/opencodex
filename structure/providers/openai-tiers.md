@@ -273,9 +273,11 @@ future or missing deadlines remain carried, and explicit incoming short readings
 This stops partial weekly/Spark or credits-only refreshes from renewing obsolete Spark-derived
 5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
 
-The separately retained main-policy snapshot preserves omitted short evidence even after its
-reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
-existing short usage reading or release its hard lock; a fresh short reading can replace it.
+The separately retained main-policy snapshot preserves omitted blocking short evidence even after
+its reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
+existing blocking short usage reading or release its hard lock; a fresh short reading can replace
+it. Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking
+weekly reading.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only
@@ -597,8 +599,7 @@ Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.
 `src/codex/routing/selection.ts` applies optional `codexPool.excludedPlans` to both candidate selection and existing active/affined accounts. An all-excluded pool returns no automatic candidate, including preview and configured-account fallback. Native main remains exempt and unknown plans remain eligible. Explicit account-qualified routes retain pause, credential and entitlement checks while bypassing only this automatic policy.
 
 `src/codex/auth-api/account-list.ts` projects `selectionExcludedReason: "plan_excluded"` and `selectionExcludedPlan` from the routing config, even when a newer display-only WHAM plan could not be persisted. The dashboard and account CLI show the policy reason separately from credential health; renewal clears the derived fields. The automatic next-session action and badge are omitted for excluded rows.
-## Paginated history writer boundary
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](../codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 

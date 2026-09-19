@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { loadManifest, renderIndex, runStructureChecks, type Manifest } from "../../scripts/structure-ssot";
+import { loadManifest, renderIndex, runStructureChecks, writeGeneratedIndex, type Manifest } from "../../scripts/structure-ssot";
 import { repoRoot } from "../helpers/repo-root";
 
 /**
@@ -82,6 +82,30 @@ function scaffold(): string {
   return root;
 }
 
+/** Add one valid authority and a second doc that preserves many-to-many source review. */
+function contractScaffold(): string {
+  const root = scaffold();
+  const manifest = manifestOf(root);
+  manifest.docs.push({ path: "second.md", tier: 1, title: "Second", scope: "second scope", documents: ["src/alpha/"] });
+  manifest.contracts = {
+    version: 1,
+    entries: [
+      {
+        id: "alpha-contract",
+        owner: { document: "overview.md", anchor: "non-negotiable-invariants" },
+        dependents: ["second.md"],
+      },
+    ],
+  };
+  write(
+    root,
+    "structure/second.md",
+    "# Second\n\nAlpha uses " + BT + "src/alpha/keep.ts" + BT + ".\n\nSee the [alpha contract](overview.md#non-negotiable-invariants).\n",
+  );
+  saveManifest(root, manifest);
+  return root;
+}
+
 const fires = (root: string, needle: string): void => {
   expect(runStructureChecks(root).join("\n")).toContain(needle);
 };
@@ -109,6 +133,12 @@ describe("structure/ SSOT", () => {
 
   test("the scaffold used by the negative cases is itself clean", () => {
     expect(runStructureChecks(scaffold())).toEqual([]);
+  });
+
+  test("contracts are optional", () => {
+    const root = scaffold();
+    expect(manifestOf(root).contracts).toBeUndefined();
+    expect(runStructureChecks(root)).toEqual([]);
   });
 
   test("a doc on disk that the manifest does not list", () => {
@@ -329,6 +359,140 @@ describe("structure/ SSOT", () => {
     expect(runStructureChecks(root)).toEqual([]);
   });
 
+  test("contract manifest shapes fail with actionable errors", () => {
+    const valid = manifestOf(scaffold());
+    const cases: [unknown, string][] = [
+      [[], "contracts must be an object"],
+      [{ version: 2, entries: [] }, "contracts.version must be 1"],
+      [{ version: 1, entries: {} }, "contracts.entries must be an array"],
+      [{ version: 1, entries: [{ id: "Not Kebab", owner: {}, dependents: [] }] }, "id must be a kebab-case string"],
+      [{ version: 1, entries: [{ id: "valid-id", owner: null, dependents: [] }] }, "owner must be an object"],
+      [{ version: 1, entries: [{ id: "valid-id", owner: { document: 1, anchor: 2 }, dependents: [] }] }, "owner.document must be a string"],
+      [{ version: 1, entries: [{ id: "valid-id", owner: { document: "overview.md", anchor: "overview" }, dependents: {} }] }, "dependents must be an array"],
+      [{ version: 1, entries: [{ id: "valid-id", owner: { document: "overview.md", anchor: "overview" }, dependents: [1] }] }, "dependents[0] must be a string"],
+    ];
+    for (const [contracts, needle] of cases) {
+      const loaded = loadManifest(JSON.stringify({ ...valid, contracts }));
+      expect(loaded).toHaveProperty("error");
+      expect((loaded as { error: string }).error).toContain(needle);
+    }
+  });
+
+  test("duplicate contract ids are rejected", () => {
+    const root = contractScaffold();
+    const manifest = manifestOf(root);
+    manifest.contracts!.entries.push({
+      id: "alpha-contract",
+      owner: { document: "overview.md", anchor: "non-negotiable-invariants" },
+      dependents: [],
+    });
+    saveManifest(root, manifest);
+    fires(root, "contract alpha-contract is declared twice");
+  });
+
+  test("contract owners must be declared files with real anchors", () => {
+    const undeclared = contractScaffold();
+    const undeclaredManifest = manifestOf(undeclared);
+    undeclaredManifest.contracts!.entries[0]!.owner.document = "ghost.md";
+    saveManifest(undeclared, undeclaredManifest);
+    fires(undeclared, "owner ghost.md is not a declared structure document");
+
+    const missing = contractScaffold();
+    const missingManifest = manifestOf(missing);
+    missingManifest.docs.push({ path: "ghost.md", tier: 1, title: "Ghost", scope: "ghost", documents: [] });
+    missingManifest.contracts!.entries[0]!.owner.document = "ghost.md";
+    saveManifest(missing, missingManifest);
+    fires(missing, "owner structure/ghost.md is missing");
+
+    const anchor = contractScaffold();
+    const anchorManifest = manifestOf(anchor);
+    anchorManifest.contracts!.entries[0]!.owner.anchor = "missing-heading";
+    saveManifest(anchor, anchorManifest);
+    fires(anchor, "owner structure/overview.md has no #missing-heading heading anchor");
+  });
+
+  test("contract dependents must be unique declared files distinct from the owner", () => {
+    const duplicate = contractScaffold();
+    const duplicateManifest = manifestOf(duplicate);
+    duplicateManifest.contracts!.entries[0]!.dependents.push("second.md");
+    saveManifest(duplicate, duplicateManifest);
+    fires(duplicate, "lists dependent second.md twice");
+
+    const owner = contractScaffold();
+    const ownerManifest = manifestOf(owner);
+    ownerManifest.contracts!.entries[0]!.dependents = ["overview.md"];
+    saveManifest(owner, ownerManifest);
+    fires(owner, "lists its owner overview.md as a dependent");
+
+    const undeclared = contractScaffold();
+    const undeclaredManifest = manifestOf(undeclared);
+    undeclaredManifest.contracts!.entries[0]!.dependents = ["ghost.md"];
+    saveManifest(undeclared, undeclaredManifest);
+    fires(undeclared, "dependent ghost.md is not a declared structure document");
+
+    const missing = contractScaffold();
+    const missingManifest = manifestOf(missing);
+    missingManifest.docs.push({ path: "ghost.md", tier: 1, title: "Ghost", scope: "ghost", documents: [] });
+    missingManifest.contracts!.entries[0]!.dependents = ["ghost.md"];
+    saveManifest(missing, missingManifest);
+    fires(missing, "dependent structure/ghost.md is missing");
+  });
+
+  test("a contract dependent must link the exact owner anchor", () => {
+    const root = contractScaffold();
+    write(root, "structure/second.md", "# Second\n\nAlpha uses " + BT + "src/alpha/keep.ts" + BT + ".\n\nSee [Overview](overview.md).\n");
+    fires(root, "dependent structure/second.md does not link overview.md#non-negotiable-invariants");
+  });
+
+  test("a valid contract keeps many-to-many source review", () => {
+    const root = contractScaffold();
+    expect(runStructureChecks(root)).toEqual([]);
+    expect(renderIndex(manifestOf(root))).toContain(
+      "| " + BT + "src/alpha/" + BT + " | [" + BT + "overview.md" + BT + "](overview.md)<br>[" + BT + "second.md" + BT + "](second.md) |",
+    );
+  });
+
+  test("contract navigation has deterministic ordering and placement", () => {
+    const root = contractScaffold();
+    const manifest = manifestOf(root);
+    manifest.docs.push({ path: "third.md", tier: 1, title: "Third", scope: "third scope", documents: [] });
+    manifest.contracts!.entries = [
+      {
+        id: "zeta-contract",
+        owner: { document: "overview.md", anchor: "non-negotiable-invariants" },
+        dependents: [],
+      },
+      {
+        id: "alpha-contract",
+        owner: { document: "overview.md", anchor: "non-negotiable-invariants" },
+        dependents: ["third.md", "second.md"],
+      },
+    ];
+    const rendered = renderIndex(manifest);
+    const contracts = rendered.indexOf("## Cross-cutting contracts");
+    const decisions = rendered.indexOf("## Decision records");
+    const alpha = rendered.indexOf("| " + BT + "alpha-contract" + BT + " |");
+    const zeta = rendered.indexOf("| " + BT + "zeta-contract" + BT + " |");
+    expect(contracts).toBeGreaterThan(rendered.indexOf("### Not described by any doc"));
+    expect(decisions).toBeGreaterThan(contracts);
+    expect(alpha).toBeGreaterThan(contracts);
+    expect(zeta).toBeGreaterThan(alpha);
+    expect(rendered.slice(alpha, zeta)).toContain(
+      "[" + BT + "second.md" + BT + "](second.md)<br>[" + BT + "third.md" + BT + "](third.md)",
+    );
+    expect(rendered).toContain(
+      "[" + BT + "overview.md#non-negotiable-invariants" + BT + "](overview.md#non-negotiable-invariants)",
+    );
+    expect(rendered.slice(zeta, decisions)).toContain("| — |");
+  });
+
+  test("contract checks validate topology rather than owner prose", () => {
+    const root = contractScaffold();
+    const owner = readFileSync(join(root, "structure/overview.md"), "utf8").replace("alpha keeps working", "alpha remains available");
+    write(root, "structure/overview.md", owner);
+    expect(runStructureChecks(root)).toEqual([]);
+  });
+
   test("a malformed manifest is an actionable failure, not a stack trace", () => {
     expect(loadManifest("{not json")).toHaveProperty("error");
     const shapeless = loadManifest(JSON.stringify({ sizeBudgetLines: 600 }));
@@ -400,5 +564,72 @@ describe("structure/ SSOT", () => {
     manifest.absentPaths = ["go/"];
     write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
     fires(root, "absentPaths[0].path must be a string");
+  });
+
+  test("index generation validates the manifest before writing", () => {
+    const root = scaffold();
+    const before = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    const manifest = manifestOf(root) as unknown as { contracts: unknown };
+    manifest.contracts = { version: 1, entries: "not-an-array" };
+    write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+    const result = writeGeneratedIndex(root);
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("contracts.entries must be an array");
+    expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
+  });
+
+  test("index generation rejects a malformed contract entry without a renderer crash", () => {
+    const root = scaffold();
+    const before = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    const manifest = manifestOf(root) as unknown as { contracts: unknown };
+    // A bare string entry used to reach the renderer's id comparator and throw a TypeError.
+    manifest.contracts = { version: 1, entries: ["oops"] };
+    write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+    const result = writeGeneratedIndex(root);
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("id must be a kebab-case string");
+    expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
+  });
+
+  // The seam-level tests above prove the helper; these two drive the real CLI tail, which is
+  // where the original bug lived (parse + cast + render before validation). The script is
+  // copied into the scaffold so its import.meta.dir resolves to the synthetic root.
+  function scaffoldCli(root: string): void {
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    copyFileSync(join(repoRoot(), "scripts/structure-ssot.ts"), join(root, "scripts/structure-ssot.ts"));
+  }
+
+  test("CLI --fix fails malformed contracts with a named diagnostic and an unchanged index", () => {
+    const root = scaffold();
+    scaffoldCli(root);
+    const before = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    const manifest = manifestOf(root) as unknown as { contracts: unknown };
+    manifest.contracts = { version: 1, entries: "not-an-array" };
+    write(root, "structure/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+    const result = Bun.spawnSync([process.execPath, "scripts/structure-ssot.ts", "--fix"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).not.toBe(0);
+    const stderr = result.stderr.toString();
+    expect(stderr).toContain("contracts.entries must be an array");
+    expect(stderr).not.toContain("TypeError");
+    expect(readFileSync(join(root, "structure/INDEX.md"), "utf8")).toBe(before);
+  });
+
+  test("CLI --fix regenerates a stale index for a valid manifest", () => {
+    const root = scaffold();
+    scaffoldCli(root);
+    write(root, "structure/INDEX.md", "# stale\n");
+    const result = Bun.spawnSync([process.execPath, "scripts/structure-ssot.ts", "--fix"], {
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    const regenerated = readFileSync(join(root, "structure/INDEX.md"), "utf8");
+    expect(regenerated).not.toBe("# stale\n");
+    expect(regenerated).toBe(renderIndex(manifestOf(root)));
   });
 });

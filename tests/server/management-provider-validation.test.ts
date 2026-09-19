@@ -589,6 +589,7 @@ describe("provider management validation", () => {
     saveConfig({ ...config("127.0.0.1"), providers: poolProviders() });
 
     const server = startServer(0);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     try {
       const response = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
@@ -610,6 +611,11 @@ describe("provider management validation", () => {
       await server.stop(true);
     }
   });
+
+  // A pins-less POST used to skip validateConfigCandidate entirely, so a provider
+  // field the management boundary does not check (apiKeyPoolStrategy is an
+  // editor-owned enum) could persist a schema-invalid candidate. The candidate
+  // draft is now validated for every completed POST before live adoption.
 
   test("provider PATCH sets, clears, and rejects annotateEmptyToolOutputs", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);

@@ -31,8 +31,16 @@ lists its required source/registry paths and preview/apply flags.
 
 ## Public docs
 
+The provider configuration reference and provider guide own the public Google tool-schema policy:
+the persisted values/default, initial refusal, non-direct repair withholding, direct no-repair
+behavior, and content-free diagnostics. English and all translated copies change together.
+
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
 served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, and Japanese under `/ja`. `docs-site/astro.config.mjs` is the locale source of truth.
+
+Server-configuration credential rows in English and every locale copy distinguish data-plane `apiKeys` from the independent management admin credential and link the matching locale management reference. Credential setup instructions themselves stay in the management reference; the rows only name the separation.
+
+Proxy-format, adapter, and provider documentation distinguishes server-level SOCKS5 configured outbound fetch from scheme-specific HTTP(S) routing, and every locale copy carrying that claim stays aligned. The public pages own the runtime detail rather than duplicating it here.
 
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
@@ -93,14 +101,15 @@ container bootstrap helper, but still publishes no registry image. The source bu
 base by multi-platform digest, runs non-root with a read-only root filesystem and dropped
 capabilities, publishes the data port on host loopback by default (remote binding is an explicit
 `OPENCODEX_BIND_ADDRESS` opt-in), persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
-owner-only canonical token file. Before every image build, operators run
-`bun scripts/generate-compatibility-version.ts` in the host Git checkout. The runtime copies
-that untracked JSON artifact without including `.git` in the Docker context or changing the
-generator's tracked-source authority. `docker/verify-compatibility.ts` rejects stale manifests
-by comparing all file hashes and the complete source inventory in the read-only build context
-and copied runtime tree. It rejects symlinks, missing/mismatched entries, and extra source files.
+owner-only canonical token file. A build-only manifest stage uses Git metadata from a read-only
+context mount to run `scripts/generate-compatibility-version.ts`; remote Git contexts retain that
+metadata through `BUILDKIT_CONTEXT_KEEP_GIT_DIR=1`. A verified host-generated artifact remains a
+compatible input. No `COPY` includes `.git`, and the Git executable does not reach the runtime stage.
+`docker/verify-compatibility.ts` compares all file hashes and the complete source inventory in the
+read-only build context before source copy and again in the copied runtime tree. It rejects symlinks,
+missing/mismatched entries, and extra source files.
 The required roots are `package.json`, `bun.lock`, and `scripts/model-metadata.source.json`;
-the context admits only that exact scripts artifact.
+the context also admits the canonical generator, while the runtime includes only the metadata source.
 Operators must still prove liveness, readiness, authenticated
 catalog access, and a real routed response before promotion.
 
@@ -161,6 +170,12 @@ invariants belong in `structure/`, not the README.
 `docs/` contains investigations and diagnostic notes. Do not treat it as the current public user
 manual. When an investigation graduates into a maintained invariant, summarize it here under
 `structure/` and link public workflows from `docs-site/`.
+
+Cross-cutting structure contracts are maintained by editing `structure/manifest.json`, the authority
+statement, and any dependent whose local explanation changes. Regenerate `structure/INDEX.md` with
+the owning command and require the structure check in hosted CI. The
+[structure rules](../AGENTS.md#the-source-to-doc-map) retain review of every document mapped to a
+changed source area even when no text edit is needed.
 
 ## Branch and devlog policy
 
@@ -383,7 +398,7 @@ and its matching-cache or `unavailable` result.
 
 The Remote Hub guide and affected CLI, server-config, management-API, and dashboard references have eight sources: root English plus `fr`, `ko`, `zh-cn`, `zh-tw`, `ru`, `ja`, and `tr`. English is canonical; commands, defaults, endpoint auth, and warnings remain exact in translations. A release requires the remote-only focused/full gates, privacy scan, GUI/docs builds, protocol compatibility receipts, and the MAINTAINERS security review for the exact head.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](../providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 The account CLI and translated Codex integration guides follow the [automatic plan exclusion contract](../providers/openai-tiers.md#automatic-pool-plan-exclusions), including all-excluded pools and explicit routes.
@@ -409,9 +424,7 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 Provider configuration documents distinguish actual summaries from raw reasoning content. The test layout registers the summary-default contract cases and removes the obsolete content-rewrite test with its implementation.
 
-## Paginated history writer boundary
-
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates refused restore/removal transitions. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. Apply retains an existing provider definition before candidate admission even when history preflight passes, so migration after artifact commit or during worker startup cannot leave earlier conversations without their provider. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](../codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 Private pool credential metadata follows the [quota-history publication identity contract](../providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 

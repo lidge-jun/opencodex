@@ -258,6 +258,26 @@ test("9. the dialog names WHY text is missing rather than omitting it silently",
   await act(async () => { root.unmount(); });
 });
 
+test("9b. an unmapped layer does not receive the base-prompt explanation", async () => {
+  // A probe that succeeded but has no confirmed tag for a layer is neither
+  // "unavailable" nor the base prompt's "not-exposed": the not-exposed copy
+  // names the base prompt and model_instructions_file, which would mislead an
+  // operator reading it for an unrelated layer.
+  stubRoutes(call => call.url.endsWith("/api/codex-prompt/text")
+    ? json({ ok: true, layers: { personality: { text: null, reason: "unmapped", bytes: 0 } } })
+    : json(snapshot()));
+  const { container, root } = await mount();
+  await act(async () => {
+    (row(container, "personality")!.querySelector("button") as HTMLButtonElement).click();
+  });
+  const dialog = document.querySelector("dialog.modal-overlay")!;
+  const notice = dialog.querySelector(".codex-set-layer-dialog__no-text")!;
+  expect(notice.textContent).toContain("no confirmed mapping");
+  expect(notice.textContent).not.toContain("base prompt");
+  expect(notice.textContent).not.toContain("model_instructions_file");
+  await act(async () => { root.unmount(); });
+});
+
 test("the prompt-text request is aborted when the panel unmounts", async () => {
   let textSignal: AbortSignal | null = null;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

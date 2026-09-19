@@ -13,6 +13,10 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
+only. It copies no request content and adds no bytes to the upstream wire; see the
+[Google provider contract](../providers/google.md#google-tool-schema-loss-reporting).
+
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
 `JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
@@ -63,6 +67,12 @@ their event-stream semantics. `src/server/relay.ts` re-exports this canonical ex
 maintaining a second implementation. Empty byte results across the relay and
 `src/server/sse-frame-buffer.ts` reuse one immutable zero-length view; non-empty frame ownership,
 frame limits, cancellation, terminal detection, and wire bytes are unchanged.
+
+`src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
+their charge/release lifecycle while it asks the pure progressive decoder in
+`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
+charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
+second retention owner or change terminal, failure, incomplete, or disposal release behavior.
 
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.

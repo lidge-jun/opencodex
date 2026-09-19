@@ -1,4 +1,9 @@
-import { collectAmbiguousDottedAliases, dottedAliasIsUnambiguous, wireToolInnerName } from "../responses/tool-name-aliases";
+import {
+  collectAmbiguousDottedAliases,
+  dottedAliasIsUnambiguous,
+  isSchemaValidResponsesToolName,
+  wireToolInnerName,
+} from "../responses/tool-name-aliases";
 import {
   dottedToolName,
   NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES,
@@ -511,6 +516,31 @@ export function normalizeDefaultNamespaceInItem(
       ) {
         return { value: { ...item, name: bare }, changed: true };
       }
+    }
+    // Authorization and emission were reading two different resolvers for the same question.
+    // `undeclaredNameInItem` resolves an emitted name through `normalizeDeclaredToolName`, which
+    // maps a `default.`-prefixed code-mode helper onto the declared `exec` (#4412) as well as a
+    // `default.`-prefixed bare tool (#4176); the rewrite above learned only the second case. So a
+    // routed Muse turn under a code-mode catalog had `default.view_image` ACCEPTED as `exec` and
+    // then relayed under the name the upstream schema rejects. Codex stored
+    // `{"type":"function_call","name":"default.view_image"}`, answered "unsupported call", and
+    // every later replay of that history — a side chat, a compaction — was refused on
+    // `input[N].name` for the lifetime of the conversation (#5095).
+    //
+    // Emit the name the guard authorized rather than a second, weaker opinion about it. The two
+    // must agree: a name good enough to admit is the name the client has to receive.
+    //
+    // Gated on the name actually being unusable, so this branch cannot touch a name the upstream
+    // accepts whatever the resolver would have said about it. The routed-custom-tool and
+    // namespace restores run earlier in the same chain and already rewrite the shapes they own,
+    // which leaves this as the boundary check for the names no restore claimed.
+    if (!isSchemaValidResponsesToolName(name)) {
+      const authorized = normalizeDeclaredToolName(name, declared, declaredBare);
+      if (
+        authorized !== name
+        && declared.has(authorized)
+        && isSchemaValidResponsesToolName(authorized)
+      ) return { value: { ...item, name: authorized }, changed: true };
     }
   }
   return { value: item, changed: false };

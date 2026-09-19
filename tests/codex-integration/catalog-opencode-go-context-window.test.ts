@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { buildCatalogEntries } from "../../src/codex/catalog";
+import { augmentRoutedModelsWithMetadata, buildCatalogEntries } from "../../src/codex/catalog";
+import { buildClaudeContextWindows, withOneMillionMarker } from "../../src/claude/context-windows";
 import { applyCatalogModelMetadata } from "../../src/codex/catalog/effort";
 import { applyCatalogMetadata, ensureStrictCatalogFields } from "../../src/codex/catalog/parsing";
 import type { CatalogModel, RawEntry } from "../../src/codex/catalog/parsing";
 import { getModelMetadata } from "../../src/generated/model-metadata";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
+import type { OcxProviderConfig } from "../../src/types";
 
 /**
  * Regression coverage for #4944.
@@ -114,5 +116,92 @@ describe("OpenCode Go routed context windows (#4944)", () => {
       const generated = getModelMetadata("opencode-go", id)?.contextWindow;
       if (generated !== undefined) expect(generated, id).toBeGreaterThanOrEqual(registryWindow!);
     }
+  });
+});
+
+/**
+ * Regression coverage for #4971, which is the same data with a different reader.
+ *
+ * #4944 above is about the serialized catalog entry, and `applyCatalogMetadata` repairs
+ * that from the generated table no matter what the CatalogModel holds. The raw
+ * `CatalogModel` was never repaired: `augmentRoutedModelsWithMetadata` skipped every id the
+ * live list returned, so a discovered OpenCode Go row kept `contextWindow: undefined` even
+ * though the registry publishes one for exactly that provider and id.
+ *
+ * That mattered because not every consumer reads the serialized entry.
+ * `buildClaudeContextWindows` filters out routed rows with no positive window, so the map
+ * that decides the Claude `[1m]` marker never learned about a published 1M model — the
+ * behaviour asserted below, and the reason this is a defect rather than missing metadata.
+ */
+const CAP_PROVIDERS = {
+  "opencode-go": {
+    adapter: "openai-chat",
+    baseUrl: "https://opencode-go.test/v1",
+    apiKey: "sk-test",
+  } as OcxProviderConfig,
+};
+
+const backfilled = (
+  live: CatalogModel[],
+  caps?: { providerContextCaps: Record<string, number> },
+): CatalogModel | undefined =>
+  augmentRoutedModelsWithMetadata(live, ["opencode-go"], CAP_PROVIDERS, caps)
+    .find(model => model.provider === "opencode-go" && model.id === "qwen3.8-flash");
+
+describe("routed metadata backfills a live row's context window (#4971)", () => {
+  test("a live row with no window receives the published one", () => {
+    const model = backfilled([discovered("qwen3.8-flash")]);
+
+    expect(model?.contextWindow).toBe(1_000_000);
+  });
+
+  test("the backfilled window reaches the Claude marker that could not see it", () => {
+    // The end of the chain, and the part a serialized-entry fix cannot cover: an absent
+    // window is filtered out of this map entirely, so the selector stayed unmarked.
+    const model = backfilled([discovered("qwen3.8-flash")]);
+    const windows = buildClaudeContextWindows([], [model!]);
+
+    expect(windows["opencode-go/qwen3.8-flash"]).toBe(1_000_000);
+    expect(withOneMillionMarker("opencode-go/qwen3.8-flash", windows))
+      .toBe("opencode-go/qwen3.8-flash[1m]");
+
+    // Same row before the fill: proves the assertions above are not vacuous.
+    const bare = buildClaudeContextWindows([], [discovered("qwen3.8-flash")]);
+    expect(bare["opencode-go/qwen3.8-flash"]).toBeUndefined();
+    expect(withOneMillionMarker("opencode-go/qwen3.8-flash", bare))
+      .toBe("opencode-go/qwen3.8-flash");
+  });
+
+  test("a live window the upstream did report still wins", () => {
+    // Missing-value fill, not an override: the upstream is the authority on its own model,
+    // and a lower live window must not be raised to the registry's figure.
+    const model = backfilled([{ ...discovered("qwen3.8-flash"), contextWindow: 262_144 }]);
+
+    expect(model?.contextWindow).toBe(262_144);
+  });
+
+  test("providerContextCaps still caps a backfilled window", () => {
+    // The fill runs through applyProviderConfigHints for exactly this reason. A merge that
+    // wrote meta.contextWindow straight onto the row would pass the first test here and
+    // silently hand the operator 1M after they capped the provider at 350k.
+    const model = backfilled(
+      [discovered("qwen3.8-flash")],
+      { providerContextCaps: { "opencode-go": 350_000 } },
+    );
+
+    expect(model).toMatchObject({ contextWindow: 350_000, contextCap: 350_000, contextCapped: true });
+  });
+
+  test("the row is replaced in place rather than duplicated", () => {
+    const models = augmentRoutedModelsWithMetadata(
+      [discovered("qwen3.8-flash")],
+      ["opencode-go"],
+      CAP_PROVIDERS,
+    );
+
+    expect(models.filter(m => `${m.provider}/${m.id}` === "opencode-go/qwen3.8-flash"))
+      .toHaveLength(1);
+    // The append path is unchanged: ids the live list never returned still arrive.
+    expect(models.some(m => m.id === "qwen3.6-plus")).toBe(true);
   });
 });

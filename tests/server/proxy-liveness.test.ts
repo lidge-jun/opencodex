@@ -4,11 +4,15 @@ import {
   runStartupReadinessSync,
 } from "../../src/server/readiness";
 import {
+  DEFAULT_PROBE_TIMEOUT_MS,
   findLiveProxy,
   isOpencodexHealthz,
+  loopbackProbeHosts,
   probeHostname,
+  probePortOwner,
   probeReadiness,
   proxyIdentityAt,
+  START_OWNERSHIP_LIVENESS,
   validateReadyzBody,
 } from "../../src/server/proxy-liveness";
 import {
@@ -161,6 +165,73 @@ describe("proxyIdentityAt", () => {
     expect(identity).toBeNull();
     // First attempt spends the budget; remaining retries must not fire.
     expect(calls).toBe(1);
+  });
+});
+
+/**
+ * #5004. A bare `ocx start` beside a healthy proxy printed the port-busy warning, hopped to
+ * an ephemeral port, and left two proxies running with Codex pointed at the second. The hop
+ * path never asked who held the port — it read this home's records, and a probe that came
+ * back empty was enough. These pin the narrower question the start path now asks instead.
+ */
+describe("probePortOwner asks the port itself who holds it", () => {
+  test("a loopback bind is asked on both families; anything else is asked where it was configured", () => {
+    expect(loopbackProbeHosts(undefined)).toEqual(["127.0.0.1", "[::1]"]);
+    expect(loopbackProbeHosts("127.0.0.1")).toEqual(["127.0.0.1", "[::1]"]);
+    expect(loopbackProbeHosts("0.0.0.0")).toEqual(["127.0.0.1", "[::1]"]);
+    // `startServer` canonicalizes a literal `localhost` bind to 127.0.0.1 exactly because
+    // Windows resolves the name ::1-first. Leaving the family to the resolver here is how a
+    // healthy listener reads as an empty port.
+    expect(loopbackProbeHosts("localhost")).toEqual(["127.0.0.1", "[::1]"]);
+    expect(loopbackProbeHosts("::1")).toEqual(["[::1]", "127.0.0.1"]);
+    expect(loopbackProbeHosts("192.168.1.20")).toEqual(["192.168.1.20"]);
+  });
+
+  test("finds the owner when it answers on the other loopback family", async () => {
+    const urls: string[] = [];
+    const owner = await probePortOwner(58285, { hostname: "localhost" }, {
+      fetchFn: (async (url: string | URL | Request) => {
+        urls.push(String(url));
+        if (String(url).includes("[::1]")) return healthz(OURS);
+        throw new Error("ECONNREFUSED");
+      }) as typeof fetch,
+    });
+
+    expect(owner).toEqual({ pid: 4242, version: "2.6.17", hostname: "[::1]" });
+    expect(urls).toEqual(["http://127.0.0.1:58285/healthz", "http://[::1]:58285/healthz"]);
+  });
+
+  test("one lost probe is not an empty port", async () => {
+    let calls = 0;
+    const owner = await probePortOwner(58285, {}, {
+      ...START_OWNERSHIP_LIVENESS,
+      sleepFn: async () => { /* no real delay */ },
+      fetchFn: (async () => {
+        calls += 1;
+        if (calls < 3) throw new Error("timeout");
+        return healthz(OURS);
+      }) as typeof fetch,
+    });
+
+    expect(owner).toEqual({ pid: 4242, version: "2.6.17", hostname: "127.0.0.1" });
+    expect(calls).toBe(3);
+  });
+
+  test("a holder that does not identify as opencodex is not reported as one", async () => {
+    const foreign = await probePortOwner(58285, {}, {
+      fetchFn: (async () => healthz({ ok: true })) as typeof fetch,
+    });
+    expect(foreign).toBeNull();
+
+    const silent = await probePortOwner(58285, {}, {
+      fetchFn: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch,
+    });
+    expect(silent).toBeNull();
+  });
+
+  test("the start-ownership budget is larger than the default single short probe", () => {
+    expect(START_OWNERSHIP_LIVENESS.attempts ?? 1).toBeGreaterThan(1);
+    expect(START_OWNERSHIP_LIVENESS.timeoutMs ?? 0).toBeGreaterThan(DEFAULT_PROBE_TIMEOUT_MS);
   });
 });
 

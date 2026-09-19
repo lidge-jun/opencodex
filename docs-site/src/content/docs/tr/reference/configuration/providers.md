@@ -154,6 +154,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic uyumlu ağ geçitleri için yerleşik araç adlarından kaçış yapın ve döndürülen çağrılarda bunları geri yükleyin. |
 | `anthropicEofTolerance?` | `boolean` | Yalnızca görünür metin veya eksiksiz bir JSON nesnesi araç girdisi alındığında, Anthropic uyumlu bir ağ geçidinin `message_stop` öncesinde biten bir akışı tamamlamasına izin verin. Varsayılan olarak kapalıdır. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google aktarım/kimlik doğrulama modu. Varsayılan `ai-studio`. |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Yalnızca Google. Alanın atlanması veya `compatible`, uyumlu şemayı ve mevcut doğrudan olmayan 400 onarımını korur. `reject-lossy`, ilk kaybı veya sonucu belirsiz sınırlı bir karşılaştırmayı gönderimden önce reddeder ve kısıtları açacak Vertex ya da Cloud Code Assist onarımını engeller. Doğrudan AI Studio bu onarımı yapmaz. |
 | `project?` | `string` | Vertex veya Antigravity Cloud Code Assist proje kimliği. |
 | `location?` | `string` | Vertex konumu; ortam geri dönüşü `GOOGLE_CLOUD_LOCATION`'dır. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Yalnızca Cursor: stdio veya Akışlanabilir HTTP MCP sunucuları. |
@@ -177,9 +178,11 @@ kez çözer ve yalnızca bu doğrulanmış adrese bağlanır. HTTPS orijinal Hos
 ve sertifika doğrulamasını korur; sağlayıcı yapılandırması sertifika
 denetimlerini devre dışı bırakamaz.
 
-`HTTP_PROXY`, `HTTPS_PROXY` veya `ALL_PROXY` geçerli olduğunda bu işlemler
-Bun'ın yerel getirmesini korur. URL ve değişmez adres denetimleri hala çalışır,
-ancak proxy son rotayı, DNS yanıtını ve eşi seçer, bu nedenle opencodex bu eşi
+Bu işlemler [sunucunun yapılandırılmış giden fetch yolunu](/tr/reference/configuration/server/)
+kullanır. `config.proxy` ile ayarlanan veya SOCKS5 `ALL_PROXY`'den devralınan sunucu SOCKS5 proxy'si,
+hedef `NO_PROXY` ile eşleşmediğinde OpenCodex'in yerleşik tünelini kullanır. `HTTP_PROXY` ve `HTTPS_PROXY`, Bun'ın yerel HTTP(S) işlemesini korur; SOCKS olmayan bir
+`ALL_PROXY` ise yerel HTTP fetch rotası değildir. URL ve değişmez adres denetimleri hâlâ çalışır,
+ancak seçilen proxy son rotayı, DNS yanıtını ve eşi belirler; bu nedenle opencodex bu eşi
 sabitleyemez veya doğrulayamaz. Bu açık bir güvenlik sınırlamasıdır.
 
 Özel/yerel hedefler `allowPrivateNetwork: true` ve giden bir proxy etkin
@@ -192,7 +195,7 @@ hedefleri engellenmiş olarak kalır. Teşhis istekleri yönlendirmeleri reddede
 kimlik bilgisi kaldırılmış bir hedef bildirir. Sıradan sağlayıcı isteği yeniden
 yönlendirme incelemesi bu teşhis korumasından ayrı kalır.
 
-Clash / Surge / Mihomo kullanıcıları için iki fake-IP DNS istisnası vardır ve ikisi de yalnızca DNS *yanıtlarına* uygulanır; URL'deki literal adres yine reddedilir. IANA benchmark aralığı `198.18.0.0/15` (IPv4-mapped IPv6 yazımları dahil), ana bilgisayara bir giden proxy uygulandığında kabul edilir. Mihomo'nun varsayılan IPv6 fake-IP aralığı `fdfe:dcba:9876::/48` daha sıkı bir koşulla kabul edilir: URL şemasıyla eşleşen proxy değişkeni (`https:` için `HTTPS_PROXY`, `http:` için `HTTP_PROXY`; `ALL_PROXY` sayılmaz) ayarlı olmalı, ana bilgisayar `NO_PROXY` ile eşleşmemeli ve istek daha sonra açıkça o proxy'ye bağlanır. Diğer tüm ULA'lar, komşu önekler veya gerçek bir özel yanıtla karışık fake-IP yanıtları hâlâ `allowPrivateNetwork: true` gerektirir. Sağlayıcı kaydetme zamanı doğrulaması IPv6 istisnasını hiçbir zaman uygulamaz.
+Clash / Surge / Mihomo kullanıcıları için iki fake-IP DNS istisnası vardır ve ikisi de yalnızca DNS *yanıtlarına* uygulanır; URL'deki literal adres yine reddedilir. IANA benchmark aralığı `198.18.0.0/15` (IPv4-mapped IPv6 yazımları dahil), ana bilgisayara bir giden proxy uygulandığında kabul edilir. Mihomo'nun varsayılan IPv6 fake-IP aralığı `fdfe:dcba:9876::/48` daha sıkı bir koşulla kabul edilir: URL şemasıyla eşleşen proxy değişkeni (`https:` için `HTTPS_PROXY`, `http:` için `HTTP_PROXY`) veya bir SOCKS5 `ALL_PROXY` ayarlı olmalı (SOCKS olmayan `ALL_PROXY` sayılmaz), ana bilgisayar `NO_PROXY` ile eşleşmemeli ve istek daha sonra açıkça o proxy'ye bağlanır. Diğer tüm ULA'lar, komşu önekler veya gerçek bir özel yanıtla karışık fake-IP yanıtları hâlâ `allowPrivateNetwork: true` gerektirir. Sağlayıcı kaydetme zamanı doğrulaması IPv6 istisnasını hiçbir zaman uygulamaz.
 
 ## Codex hesap havuzu
 

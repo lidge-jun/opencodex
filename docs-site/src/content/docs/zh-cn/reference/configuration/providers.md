@@ -140,6 +140,7 @@ selector，而不是分配一个新名称。
 | `escapeBuiltinToolNames?` | `boolean` | 为 Anthropic 兼容网关转义内置工具名，并在返回的调用中恢复。 |
 | `anthropicEofTolerance?` | `boolean` | 允许 Anthropic 兼容网关在 `message_stop` 前结束流，仅当已收到可见文本或完整的 JSON 对象工具输入时。默认关闭。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 传输/身份验证模式。默认 `ai-studio`。 |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | 仅限 Google。省略或设为 `compatible` 时保留兼容架构和现有的非直连 400 修复。`reject-lossy` 会在发送前拒绝初始损失或结果不确定的有界比较，并阻止会放宽约束的 Vertex 或 Cloud Code Assist 修复。直连 AI Studio 从不执行该修复。 |
 | `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 项目 id。 |
 | `location?` | `string` | Vertex 位置；环境变量回退为 `GOOGLE_CLOUD_LOCATION`。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | 仅 Cursor：stdio 或 Streamable HTTP MCP 服务器。 |
@@ -155,11 +156,11 @@ API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者�
 
 仪表板连接测试和实时模型发现使用受限的、仅 GET 传输。没有出站代理时，opencodex 只会解析一次主机名，并仅连接到该已验证地址。HTTPS 仍会保留原始 Host、SNI 和证书验证；提供者配置不能关闭证书检查。
 
-当 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 生效时，这些操作会继续使用 Bun 的原生 fetch。URL 和字面量地址检查仍会执行，但最终路由、DNS 解析结果和对端由代理决定，因此 opencodex 无法固定或验证该对端。这是一个明确的安全限制。
+这些操作使用[服务器配置的出站 fetch](/zh-cn/reference/configuration/server/)。通过 `config.proxy` 设置或继承自 SOCKS5 `ALL_PROXY` 的服务器 SOCKS5 代理，在目标不匹配 `NO_PROXY` 时使用 OpenCodex 的内置隧道。`HTTP_PROXY` 和 `HTTPS_PROXY` 保留 Bun 的原生 HTTP(S) 处理，而非 SOCKS 的 `ALL_PROXY` 不是原生 HTTP fetch 路由。URL 和字面量地址检查仍会执行，但所选代理会决定最终路由、DNS 解析结果和对端，因此 opencodex 无法固定或验证该对端。这是一个明确的安全限制。
 
 私有/本地目标需要 `allowPrivateNetwork: true`，并且在出站代理启用时，还需要匹配的 `NO_PROXY` 条目。回环地址会自动加入；每个 LAN 主机都必须显式列出，因为 CIDR 条目不会被解释。匹配器支持精确主机、域后缀、可选端口、带方括号的 IPv6 以及 `*`；例如，应显式列出 `192.168.1.50`。元数据和链路本地目标仍会被阻止。诊断请求会拒绝重定向，并报告一个已剥离凭据的目标。普通提供者请求的重定向审查仍然独立于这个诊断保护。
 
-面向 Clash / Surge / Mihomo 用户的 fake-IP DNS 例外有两种，且都只作用于 DNS *应答*——URL 中的字面地址仍会被拒绝。IANA 基准段 `198.18.0.0/15`（含 IPv4-mapped IPv6 写法）在该主机适用出站代理时被接受。Mihomo 默认的 IPv6 fake-IP 段 `fdfe:dcba:9876::/48` 采用更严格的门槛：必须设置与 URL 协议匹配的代理变量（`https:` 对应 `HTTPS_PROXY`，`http:` 对应 `HTTP_PROXY`，`ALL_PROXY` 不算），主机不能命中 `NO_PROXY`，随后请求会被显式绑定到该代理。其他 ULA、相邻前缀，或与真实私网应答混合的 fake-IP 应答仍需要 `allowPrivateNetwork: true`。提供方保存时的校验不应用该 IPv6 例外。
+面向 Clash / Surge / Mihomo 用户的 fake-IP DNS 例外有两种，且都只作用于 DNS *应答*——URL 中的字面地址仍会被拒绝。IANA 基准段 `198.18.0.0/15`（含 IPv4-mapped IPv6 写法）在该主机适用出站代理时被接受。Mihomo 默认的 IPv6 fake-IP 段 `fdfe:dcba:9876::/48` 采用更严格的门槛：必须设置与 URL 协议匹配的代理变量（`https:` 对应 `HTTPS_PROXY`，`http:` 对应 `HTTP_PROXY`）或 SOCKS5 的 `ALL_PROXY`（非 SOCKS 的 `ALL_PROXY` 不算），主机不能命中 `NO_PROXY`，随后请求会被显式绑定到该代理。其他 ULA、相邻前缀，或与真实私网应答混合的 fake-IP 应答仍需要 `allowPrivateNetwork: true`。提供方保存时的校验不应用该 IPv6 例外。
 
 ## Codex 账户池
 

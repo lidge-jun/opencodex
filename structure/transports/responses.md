@@ -45,9 +45,20 @@ modules merely because those imports existed in the pre-split `responses.ts` mon
 
 `OCX_FRESH_CONNECTION_HOSTS` accepts comma-separated hostnames whose outbound HTTP sends bypass
 keep-alive reuse with `Connection: close` and `keepalive: false`; exact hosts and their subdomains
-match case-insensitively. The helper applies this policy at the final executor boundary, after a
-dispatch override has selected or rebuilt the destination, so matching follows the URL sent on the
-wire rather than the URL supplied before credential revalidation.
+match case-insensitively. `sendWithConnectionPolicy` applies the policy around the fetch that
+performs the physical send, after a dispatch override has selected or rebuilt the destination, so
+matching follows the URL sent on the wire rather than the URL supplied before credential
+revalidation.
+
+The wrapped executor alone is not that boundary. An override that revalidates credentials re-reads
+`route.provider.fetch` at send time, because reselection can install a different provider transport
+after the wrapper was built, and then calls that implementation instead of the executor. Both
+production overrides do this -- `oauthDispatch` in `request-transport.ts` and the native Chat
+key-revalidation override in `chat-native.ts` -- so both wrap the selected implementation rather
+than choosing between policy and provider transport. Reporting the executor as the boundary while
+the code let a provider-scoped transport past it is what #4992 recorded, and it is why a
+regression for this policy has to enter through `handleResponses` rather than through a
+hand-written override that cooperates by calling the executor it was handed.
 
 ### Semantic progress ownership
 
@@ -113,6 +124,16 @@ Function-call wrappers around freeform bodies are restored by
 `exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+
+Progressive preview for those wrappers is decoded by
+`src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
+function-call restoration. A prefix that can still become a complete outer fence stays held so
+completion never removes bytes already published in a delta; ordinary raw input remains
+progressive, fallback fields wait for a complete parse, and JSON escapes emit only complete
+decoded units. Routed restoration additionally keeps its existing hold for an unrecognized JSON
+object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that
+become invalid only after a valid prefix was emitted remain bounded exceptions: completion is
+authoritative because preserving progressive canonical input leaves no rewind mechanism.
 
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
@@ -469,7 +490,12 @@ receive `previous_response_not_found` before upstream dispatch and must resend c
 without `previous_response_id`. That refusal is not specific to the stateless flag: it covers every
 destination that cannot see the prefix this process failed to restore, which is every destination
 except the native Responses passthrough. The passthrough forwards the id and keeps its
-upstream-owned state. `PROVIDER_OWNED_CONTINUATION_WIRES` in
+upstream-owned state. A task-scope mismatch uses the same generic refusal even when the supplied
+input appears complete, because the proxy cannot prove that it contains the full conversation.
+The internal mismatch reason, stored scope and state contents never enter the client response;
+the caller retries explicitly with complete history and no `previous_response_id`. Matching
+normalized scopes replay, and two absent or blank scopes remain the legacy unscoped cohort.
+`PROVIDER_OWNED_CONTINUATION_WIRES` in
 `src/responses/continuation-ownership.ts` is deliberately empty and records why the three
 candidates do not qualify: devin re-sends the whole conversation each turn, cursor reads its
 `checkpointRef` out of the same expired store and otherwise falls back to `full-replay`, and kiro
@@ -527,6 +553,11 @@ Arguments, user text, and schema property names are never rewritten.
 
 ### Declared-tool membership by inbound wire
 
+Inbound declaration membership and schemas remain unchanged by Google's
+[tool-schema loss report](../providers/google.md#google-tool-schema-loss-reporting). Only the final
+Google wire compiler observes and reports compatibility narrowing; the Responses bridges neither
+derive nor consume that report.
+
 `declaredToolNames` carries the request's tool catalog into both bridges, and it does two separate
 jobs that are separately controlled.
 
@@ -535,6 +566,37 @@ Normalization runs on every inbound wire. `normalizeDeclaredToolName` and `decla
 declared bare tool and to rewrite code-mode helper names into the declared `exec`. Both return their
 input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
 is expressed by a separate flag rather than by withholding it.
+
+The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so
+whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
+`normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
+`default.`-prefixed code-mode helper was admitted as `exec` (#4412) and then relayed verbatim.
+`default.view_image` is not a legal Responses tool name, and Codex stores what it receives, so the
+one relayed item was refused by `^[a-zA-Z0-9_-]+$` on every later replay of that conversation and
+the task could not be compacted or continued (#5095). The rewrite now falls back to the resolver
+whenever `isSchemaValidResponsesToolName` (`src/responses/tool-name-aliases.ts`) rejects the emitted
+name, and only then, so a name the upstream accepts is never reshaped by this branch. A name that
+resolves to nothing declared stays refused by the #1700 guard, which is the pre-existing and
+intended outcome: an invalid name that cannot be resolved must end the turn visibly rather than
+reach stored history.
+
+Stopping the emission is only half of it, because Codex stores what it received. A conversation
+that already contains one `default.`-prefixed call name is refused on every later turn that
+replays it, so the task cannot be compacted or continued at all and no upgrade reaches it.
+`repairLegacyDottedToolCallNames` (`src/responses/legacy-dotted-tool-name-repair.ts`) repairs the
+replayed item on the way out, in `buildRequest` beside `backfillWebSearchQueries` and again in
+`src/server/responses/compact.ts`, which forwards the caller's body directly. It runs before the
+canonical-destination split because the reported failure was a side chat on a plain OpenAI model
+inheriting history a routed provider had damaged.
+
+What it will resolve is bounded on purpose, and only replayed `input` items are eligible — the
+caller's tool catalog is never rewritten. A dotted spelling the catalog itself declares is a real
+tool identity and is left alone; a suffix claimed by two declared identities is ambiguous and is
+left alone; a suffix that names exactly one declared tool, or one of the code-mode helper spellings
+in `CODE_MODE_HELPER_WIRE_NAMES` (which a code-mode catalog never declares), resolves to that name.
+There is no rule that strips whatever precedes the first dot: a legitimate tool name may contain
+one in another provider's vocabulary, and a replayed item names a call that already happened, which
+is the worst place to guess.
 
 Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
 wire enforces. A routed provider that names a tool the request never declared ends the turn there:
@@ -684,6 +746,11 @@ The inspector records a structured `response.failed` status before invoking the
 terminal observer. Native Responses, Chat Completions, Claude Messages, and WebSocket
 request logs must therefore finalize through the context-aware terminal mapper; recognized
 `cyber_policy` terminals stay `400 / cyber_policy` rather than collapsing to a generic 502.
+
+Raw SSE inspection remains upstream-first: client-facing block rewrites run after the original
+bytes are observed. The Grok-only `response.created_at` and `response.completed_at` compatibility
+rewrite is limited to `response.*` events with nonnegative safe integer values and leaves invalid or
+byte-identical payloads unchanged.
 
 The client-facing boundary treats the first Responses terminal as authoritative in both relay
 shapes. High-confidence policy errors carried as `response.incomplete`, `response.failed`, or a
@@ -899,13 +966,22 @@ The hop pays for a replay that some *other* layer dispatches, so which layer set
 reservation follows the dispatcher, not the ladder. A helper-routed replay reports the same
 physical send back through `onSendsConsumed`; that is what `countedExternally: true` names, and the
 reporter's first send settles the pending booking instead of adding a second charge. An adapter
-that owns its transport — Kiro's reset ladder, Cursor's transport ladder — reserves once per
-physical send instead, so no reporter ever arrives. Those ladders are handed
+that owns its transport — Kiro's reset ladder, Cursor's transport ladder, or Devin's bounded
+pre-output stated-reset replay — reserves once per physical send instead, so no reporter ever
+arrives. Those ladders are handed
 `adapterDispatchBudget`, a live delegating view of the same budget that spends a permit passed down
 through `pendingHopPermit` on the adapter's first reservation and closes the booking through
 `permit.assumeCharge()`. Letting both charge is how one physical send became two charges, and how a
 spent allowance answered a 429 with a synthetic error instead of the rate limit it was recovering
 from (#4709).
+
+`run-turn-execution.ts` passes the same physical-send and recovery-withheld observers used by the
+request-building adapter path. Devin builds one `createAdapterPhysicalSend` for the whole
+`GetChatMessage` invocation, so its initial POST and at most two same-target replays report ordinals
+1, 2, and 3. The outer runTurn attempt already records ordinal 1, and the shared observer therefore
+adds only ordinals above 1 to `sendCount`; the execution budget still reserves every ordinal. A
+replay reserves only after its server-stated wait. If admission is refused, no inference I/O occurs,
+`retry-send-budget` is recorded, and the preceding provider 429 remains the returned error.
 
 Confirmation happens at the dispatch boundary rather than at the rotation. `adapter-dispatch.ts`
 passes an `onDispatch` callback that the rebuild invokes immediately before the wire, and skips it
@@ -983,7 +1059,50 @@ booking, the settlement split, the refund, a ceiling that refuses a dispatch rat
 describing it afterwards, and the restart.
 
 The default policy still sets no token ceiling on any scope, so an unconfigured install accounts
-and reports without refusing. The operator configuration path for those limits is not wired yet.
+and reports without refusing. An operator turns enforcement on with the `spend` section in
+config.json, which `src/lib/spend-reservation-ledger.ts` resolves through
+`spendPolicyFromConfig` and applies with `configureSharedSpendLedger` at startup. There is no
+default figure and there deliberately never will be: this ledger is on and journaling by
+default, so a shipped ceiling would start refusing real traffic on the first upgrade that ran
+it, against a number nobody chose. Absent, empty and all-scopes-absent sections are the same
+thing -- observe only.
+
+The shared journal has one live writer per state directory. `startServer` acquires the
+`src/lib/spend-ledger-owner.ts` SQLite lease before configuration and before any listener binds;
+`sharedSpendLedger` asserts that lease before construction because replay can append `lost`
+records, and `configureSharedSpendLedger` asserts it before changing a live singleton. This applies
+identically with and without configured ceilings: observe-only still appends, settles and compacts.
+Two servers in one process and one directory share a reference-counted lease; that process cannot
+hold two directories at once. Sequential ownership is allowed and concurrent ownership is not:
+releasing the final reference discards the singleton, so a later directory replays its own
+journal instead of inheriting figures. A ledger records the ownership it was built under and
+proves that exact identity on every accounting read and change, so a handle kept across a release
+and a reacquire of the same directory is refused rather than resuming over writes another owner
+may have made. File-backed journal and salt writers are owner-bound at construction, and a
+directory entry that is a link -- including one whose target does not exist -- is refused instead
+of followed. A separate process may use a separate directory. SQLite crash release permits the
+next owner without stale-PID or TTL reclamation.
+
+The journal survives an ordinary process restart once its writes reached the filesystem. It does
+not claim host power-loss durability: the append path does not fsync each record, so power loss can
+drop recently acknowledged filesystem writes. A torn final line remains the only replay corruption
+that may be discarded quietly.
+
+Applying a policy to a ledger that already exists reconfigures it rather than rebuilding it.
+Every figure already accounted survives, so raising, lowering or clearing a ceiling changes what
+is refused from here on and never what was spent. A rebuild would replay the journal into a
+second set of maps while the first still held this process's open reservations, and the two
+would then disagree about what is in flight.
+
+With a ceiling configured, three places can refuse and they are ordered cheapest first. HTTP
+admission refuses a root scope that is ALREADY spent, before the body is parsed, because that
+question needs no token count; the pre-dispatch check in `createResponsesSendBudget` asks the
+same question beside the existing send-count one; and the reservation itself refuses the send
+that would CROSS a ceiling, which is the only one of the three that can see the identity and
+pool scopes, since neither is known until routing picks an account. Count caps and token
+ceilings are an intersection: a request passes only when every count and every ceiling admits
+it, a count denial is decided before any reservation is booked, and a token denial before any
+count is charged, so neither leaves the other's accounting to unwind.
 
 ## What a spent budget tells the client
 

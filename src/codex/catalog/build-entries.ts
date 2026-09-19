@@ -26,7 +26,7 @@ import {
 } from "./metadata";
 import { resetBundledCatalogCacheForTests } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
-import { ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
+import { clampedDefaultEffort, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
 import { clearGatherRoutedModelsInflight, lastDropWarnSignature } from "./provider-fetch";
 import {
   accountSelectorShadowCollisionWarnings,
@@ -490,10 +490,14 @@ export interface ObservedCatalogMergeInput {
   readonly includeNativeOpenAi: boolean;
   readonly accountBoundEntries: readonly RawEntry[];
   readonly suppressedBareNativeSlugs?: ReadonlySet<string>;
+  /** Routed slugs that must not gain a missing synthetic max rung during retained-row repair. */
+  readonly suppressedSyntheticMaxSlugs?: ReadonlySet<string>;
   readonly policy: ObservedCatalogMergePolicy;
   readonly openaiContextCap?: NativeContextLimitsInput;
   /** Exact display-only labels for bare native OpenAI models. */
   readonly nativeDisplayNames?: Readonly<Record<string, string>>;
+  /** Pristine installed-catalog multi-agent pins; see MultiAgentModeOptions.nativeDefaults. */
+  readonly nativeMultiAgentDefaults?: ReadonlyMap<string, string | null>;
 }
 
 /**
@@ -526,9 +530,11 @@ export function mergeCatalogEntriesFromObservedState({
   includeNativeOpenAi,
   accountBoundEntries,
   suppressedBareNativeSlugs = new Set(),
+  suppressedSyntheticMaxSlugs = new Set(),
   policy,
   openaiContextCap,
   nativeDisplayNames,
+  nativeMultiAgentDefaults,
 }: ObservedCatalogMergeInput): RawEntry[] {
   // Raw catalog rows contain nested arrays/objects that normalization mutates. Detach every row at
   // the observed-core boundary so callers can safely retain evidence objects or repeat the merge.
@@ -860,15 +866,28 @@ export function mergeCatalogEntriesFromObservedState({
     });
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
-    // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
+    // reasoning-capable entry. A suppressed preserved row that already contains max keeps it;
+    // without persisted provenance, only a healthy provider rebuild can distinguish and remove
+    // an older synthetic rung from a real provider-declared rung. max only: 5.6 exact ladders
+    // (luna: no ultra) stay intact.
     if (!freshCustomEntries.has(m) && !exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
-      if (levels.length > 0 && !levels.some(level => level.effort === "max")) {
+      if (levels.length > 0
+        && !suppressedSyntheticMaxSlugs.has(String(e.slug ?? ""))
+        && !levels.some(level => level.effort === "max")) {
         levels.push(CODEX_REASONING_LEVELS.find(level => level.effort === "max")
           ?? { effort: "max", description: "Maximum reasoning depth for the hardest problems" });
         e.supported_reasoning_levels = levels;
+      }
+      if (suppressedSyntheticMaxSlugs.has(String(e.slug ?? ""))
+        && typeof e.default_reasoning_level === "string"
+        && !levels.some(level => level.effort === e.default_reasoning_level)) {
+        e.default_reasoning_level = clampedDefaultEffort(
+          e.default_reasoning_level,
+          levels.flatMap(level => typeof level.effort === "string" ? [level.effort] : []),
+        );
       }
     }
     if (wsEnabled) e.supports_websockets = true;
@@ -886,7 +905,7 @@ export function mergeCatalogEntriesFromObservedState({
     applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
     multiAgentMode,
     multiAgentV2Enabled,
-    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection },
+    { keepNativeChatGptOnV1, preserveDefaultMultiAgentVersion: isReserveCatalogProjection, nativeDefaults: nativeMultiAgentDefaults },
   );
   applyFullModelPickerOrder(versionedEntries, modelPickerOrder);
   for (const entry of versionedEntries) {
@@ -937,6 +956,7 @@ export function mergeCatalogEntriesForSync(
   ),
   openaiContextCap?: NativeContextLimitsInput,
   keepNativeChatGptOnV1 = false,
+  nativeMultiAgentDefaults?: ReadonlyMap<string, string | null>,
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must
   // not suppress same-named native rows; actual admitted combo entries own that decision now.
@@ -973,6 +993,7 @@ export function mergeCatalogEntriesForSync(
     accountBoundEntries,
     suppressedBareNativeSlugs,
     openaiContextCap,
+    nativeMultiAgentDefaults,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "emit",

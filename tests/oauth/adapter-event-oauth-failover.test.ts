@@ -6,6 +6,7 @@ import type { ProviderAdapter } from "../../src/adapters/base";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { getAccountSet, getCredential, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const actualResolver = await import("../../src/server/adapter-resolve");
@@ -13,6 +14,7 @@ const actualResolveAdapter = actualResolver.resolveAdapter;
 let attempts: AdapterEvent[][] = [];
 let attemptKeys: string[] = [];
 let attemptProjects: Array<string | undefined> = [];
+let attemptCredentialIdentities: Array<string | undefined> = [];
 /** Set by the delivery test: an attempt that emits, then blocks before completing the turn. */
 let slowAttempt: ((emit: (event: AdapterEvent) => void) => Promise<void>) | undefined;
 let beforePhysicalSend: (() => Promise<void>) | undefined;
@@ -30,6 +32,7 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
       const index = attemptKeys.length;
       attemptKeys.push(provider.apiKey ?? "");
       attemptProjects.push(provider.project);
+      attemptCredentialIdentities.push(_parsed._providerContinuationOwner?.credentialIdentity);
       const gate = beforePhysicalSend;
       beforePhysicalSend = undefined;
       await gate?.();
@@ -55,6 +58,7 @@ mock.module("../../src/server/adapter-resolve", () => ({
 const { handleResponses } = await import("../../src/server/responses");
 const originalHome = process.env.OPENCODEX_HOME;
 let home = "";
+let releaseSpendHome: (() => void) | undefined;
 
 /**
  * `enabled: undefined` is the case that matters after #2568d — the key absent entirely, which is
@@ -98,16 +102,22 @@ async function seedAccounts(count: number): Promise<void> {
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-adapter-event-failover-"));
   process.env.OPENCODEX_HOME = home;
+  // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearGenericFailoverHealth();
   attempts = [];
   attemptKeys = [];
   attemptProjects = [];
+  attemptCredentialIdentities = [];
   slowAttempt = undefined;
   beforePhysicalSend = undefined;
   physicalSends = 0;
 });
 
 afterEach(() => {
+  // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -198,6 +208,19 @@ describe("#2568 adapter-event OAuth failover", () => {
       expect(body).not.toContain("Cursor rate limit exceeded");
       expect(getCredential("cursor")?.access).toBe("cursor-access-0");
     });
+
+    test(`${stream ? "streaming" : "non-streaming"} local side effect prevents 429 replay`, async () => {
+      await seedAccounts(2);
+      attempts = [[
+        { type: "heartbeat", replayUnsafe: true },
+        { type: "error", message: "Cursor rate limit exceeded: resource_exhausted" },
+      ]];
+
+      const body = await (await handleResponses(request(stream), config(), { model: "", provider: "" })).text();
+
+      expect(attemptKeys).toEqual(["cursor-access-1"]);
+      expect(body).toContain("rate_limit_exceeded");
+    });
   }
 
   test("a newer manual choice wins a pending request's 429 proposal", async () => {
@@ -216,6 +239,11 @@ describe("#2568 adapter-event OAuth failover", () => {
     expect(await response.text()).toContain("manual choice answered");
     expect(attemptKeys).toEqual(["cursor-access-2", "cursor-access-1"]);
     expect(getCredential("cursor")?.access).toBe("cursor-access-1");
+    await (await handleResponses(request(false), config(false), { model: "", provider: "" })).text();
+    expect(attemptCredentialIdentities[1]).toBe(attemptCredentialIdentities[2]);
+    await setActiveAccount("cursor", accounts[0]!.id);
+    await (await handleResponses(request(false), config(false), { model: "", provider: "" })).text();
+    expect(attemptCredentialIdentities[1]).not.toBe(attemptCredentialIdentities[3]);
   });
 
   test("a single account is a strict no-op", async () => {

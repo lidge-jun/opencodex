@@ -41,23 +41,12 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { log } from "../helpers/request-log-entry";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
-}
-
-function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
-  return {
-    requestId: "ocx-test",
-    timestamp: 1,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 10,
-    usageStatus: "unreported",
-    ...overrides,
-  };
 }
 
 describe("request log metadata", () => {
@@ -240,6 +229,9 @@ describe("request log metadata", () => {
       },
     } as OcxConfig;
 
+    // This row calls the handler directly, so it takes the spend-journal writer lease that
+    // startServer would have taken. Released in the finally, before the fetch stub is restored.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -256,7 +248,11 @@ describe("request log metadata", () => {
         adapter: "openai-responses",
         sendCount: 1,
       })]);
+      // Read before the lease is released: the row asserts on metadata only, so without this it
+      // finishes with the turn's body still attached and the lease dropped underneath it.
+      await response.text();
     } finally {
+      releaseSpendHome();
       globalThis.fetch = originalFetch;
     }
   });

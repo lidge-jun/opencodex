@@ -9,6 +9,7 @@ import { getOrAllocateRequestSessionLane } from "../../src/server/request-log-co
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const MUSE_MODEL = "muse-spark-1.3-contributor";
 const CHAT_MODEL = "glm-5.2";
@@ -28,6 +29,13 @@ const RESPONSES_SESSION_VECTORS = {
   prefixed: "ocx_c974cef031af8717276b933929f0c073",
   codex: "ocx_a0cfe09ee92e4bfa2e560579bc46c50e",
 } as const;
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+// Release before the next case so a failed dispatch cannot leave an ownership conflict.
+const dropSpendHome = (): void => { releaseSpendHome?.(); releaseSpendHome = undefined; };
 
 function opencodeGo(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   const entry = getProviderRegistryEntry("opencode-go");
@@ -96,6 +104,7 @@ async function captureRequest(input: {
   const config = {
     providers: { [providerName]: input.provider ?? opencodeGo() },
   } as unknown as OcxConfig;
+  takeSpendHome();
   const response = input.claude ? await handleClaudeMessages(
     new Request("http://localhost/v1/messages", {
       method: "POST",
@@ -136,7 +145,10 @@ async function captureRequest(input: {
 
 describe("OpenCode Go session affinity (#3344)", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    dropSpendHome();
+    globalThis.fetch = originalFetch;
+  });
 
   for (const model of [CHAT_MODEL, MUSE_MODEL]) {
     // The policy target is deliberately renamed, so provider-name wire defaults do not apply;
@@ -183,6 +195,7 @@ describe("OpenCode Go session affinity (#3344)", () => {
         // Preliminary route checks the first target; dispatch independently picks Go.
         entropy.mockReturnValueOnce(0);
         try {
+          takeSpendHome();
           const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
             method: "POST", headers: { "content-type": "application/json", ...identity.headers } as Record<string, string>,
             body: JSON.stringify({ model: "combo/affinity", max_tokens: 64, stream: false,
@@ -243,6 +256,7 @@ describe("OpenCode Go session affinity (#3344)", () => {
       } as unknown as OcxConfig;
       const entropy = spyOn(Math, "random").mockReturnValue(0.9).mockReturnValueOnce(0);
       try {
+        takeSpendHome();
         const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
           method: "POST", headers: { "content-type": "application/json", [SESSION_HEADER]: "client-session-a" },
           body: JSON.stringify({ model: "combo/affinity", max_tokens: 64, stream: false,

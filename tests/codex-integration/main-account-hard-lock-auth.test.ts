@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -33,7 +33,9 @@ import { handleResponses } from "../../src/server/responses/core";
 import { handleResponsesCompact } from "../../src/server/responses/compact";
 import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -105,6 +107,14 @@ function addAlternative(cfg: OcxConfig): void {
   });
 }
 
+let releaseSpendHome: (() => void) | undefined;
+// Taken by the two cases that dispatch in-process, never for the whole file. Two describes here
+// spawn a child that runs startServer against this same home, and that child takes the real
+// lease: a parent holding one turns the child's startup into SPEND_LEDGER_OWNER_BUSY, which is
+// the contract working and the case failing for a reason it is not about.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+const dropSpendHome = (): void => { releaseSpendHome?.(); releaseSpendHome = undefined; };
+
 beforeEach(() => {
   tokenExpiry = Math.floor(Date.now() / 1000) + 86_400;
   previousHome = process.env.OPENCODEX_HOME;
@@ -124,6 +134,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  dropSpendHome();
   mock.restore();
   clearAccountQuota();
   clearThreadAccountMap();
@@ -141,6 +154,15 @@ afterEach(() => {
 });
 
 describe("startup policy binding read is bounded", () => {
+  // This describe owns the file's first spawned child, so its bounded-auth-read entry pays the
+  // cold module-graph load unless setup imports that graph before the measured timeout.
+  beforeAll(async () => {
+    await warmModuleGraph({
+      graph: "bounded-auth-read-child",
+      entry: helperPath("bounded-auth-read-child.ts"),
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   // FIFO and symlink cases need POSIX semantics; Windows keeps the portable cases.
   const boundedReadCases: string[] = ["valid", "oversize", "directory", "missing",
     ...(process.platform === "win32" ? [] : ["fifo-retained", "fifo-hang-proof", "symlink"])];
@@ -170,6 +192,15 @@ describe("startup policy binding read is bounded", () => {
 });
 
 describe("main quota policy at native admission", () => {
+  // This is the first child of its own graph even though another graph spawned above. Its large
+  // server and responses graph must be warm before the measured timeout starts.
+  beforeAll(async () => {
+    await warmModuleGraph({
+      graph: "main-account-policy-startup-child",
+      entry: helperPath("main-account-policy-startup-child.ts"),
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test.each(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
     "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
     "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding",
@@ -474,6 +505,7 @@ describe("main quota policy at native admission", () => {
         model: "fixture-model", output: [], usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
       });
     }, { preconnect() {} }));
+    takeSpendHome();
     const post = (model: string) => handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { ...Object.fromEntries(caller()), "content-type": "application/json" },
@@ -513,6 +545,7 @@ describe("main quota policy at native admission", () => {
       sends.push({ url: request.url, authorization: request.headers.get("authorization") });
       return Response.json({ id: "cmp_policy_transport", object: "response.compaction", output: [] });
     }, { preconnect() {} }));
+    takeSpendHome();
     const post = (model: string) => handleResponsesCompact(new Request("http://localhost/v1/responses/compact", {
       method: "POST",
       headers: { ...Object.fromEntries(caller()), "content-type": "application/json" },

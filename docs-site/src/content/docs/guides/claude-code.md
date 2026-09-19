@@ -70,6 +70,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (optional) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` when `alwaysEnableEffort` is on (conditional) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; off by default — see [MCP tool schemas fill the context](#mcp-tool-schemas-fill-the-context-on-turn-one)) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | Legacy context override when `maxContextTokens` is set (conditional) |
 Variables you export yourself always win. Extra arguments pass through: `ocx claude -p "hello"`.
 
@@ -678,6 +679,28 @@ window may be below the auto-compact threshold.
 **High token count from skill loads** — The bundled `claude-api` skill (~136k tokens) auto-loads
 on Claude model mentions. This is normal for native passthrough; on routed models, opencodex stubs
 it by default (`blockedSkills: ["claude-api"]`).
+
+**MCP tool schemas fill the context on turn one** — Claude Code turns MCP tool deferral off
+whenever `ANTHROPIC_BASE_URL` is not a first-party Anthropic host. The check is keyed on the
+host, not the model, so it applies to every `ocx claude` session: with many connectors
+configured, every tool schema is inlined before you type anything. Re-enable deferral with:
+
+```json
+{ "claudeCode": { "toolSearch": true } }
+```
+
+This is off by default because it only pays off on **native Anthropic passthrough** routes.
+Deferral is a server-side optimisation, not a smaller request: Claude Code still sends every
+tool definition, and Anthropic's API is what keeps deferred schemas out of the model's context
+and answers the `tool_search` server tool with `tool_reference` blocks. A translated (routed)
+model never reaches that machinery — opencodex drops the `tool_search` tool and ignores
+`defer_loading` — so the provider still receives every schema while Claude Code stops counting
+them and therefore stops compacting. With `claudeCode.compatibility: "enforce"` the same
+request is rejected with 400 instead. Turn it on when `ocx claude` is routed to an Anthropic
+model; leave it off for third-party routes until translated deferral is supported.
+
+Accepted values follow Claude Code's own parser: `true`, `"auto"`, `"auto:N"` (N at least 100)
+and `"force"`. A value you export yourself always wins over the injected one.
 
 **Subagent dispatches to wrong model** — Roster agents (`ocx-*`) use `<!-- ocx-route: ... -->`
 directives, not the Agent tool's `model` argument. Make sure the directive matches the intended

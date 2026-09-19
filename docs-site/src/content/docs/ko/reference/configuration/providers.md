@@ -140,6 +140,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic 호환 게이트웨이를 위해 내장 도구 이름을 이스케이프하고, 반환된 호출에서는 다시 복원합니다. |
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 전에 스트림이 끝나도 표시 텍스트 또는 완전한 JSON 객체 툴 입력을 받은 경우에만 완료를 허용합니다（Anthropic 호환 게이트웨이용）. 기본값은 꺼짐. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 전송/인증 모드입니다. 기본값은 `ai-studio`입니다. |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 전용입니다. 생략하거나 `compatible`이면 호환 스키마와 기존 비직접 400 복구를 유지합니다. `reject-lossy`는 초기 손실 또는 판정 불가능한 상한 비교를 전송 전에 거부하고 제약을 개방하는 Vertex 또는 Cloud Code Assist 복구를 보류합니다. 직접 AI Studio는 이 복구를 수행하지 않습니다. |
 | `project?` | `string` | Vertex 또는 Antigravity Cloud Code Assist 프로젝트 id입니다. |
 | `location?` | `string` | Vertex 위치입니다. 환경 변수 폴백은 `GOOGLE_CLOUD_LOCATION`입니다. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor 전용입니다. stdio 또는 Streamable HTTP MCP 서버입니다. |
@@ -155,11 +156,11 @@ API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAu
 
 대시보드 연결 테스트와 라이브 모델 발견은 범위가 제한된 GET 전용 전송을 사용합니다. 아웃바운드 프록시가 없으면 opencodex는 호스트 이름을 한 번만 확인하고, 검증된 주소로만 연결합니다. HTTPS는 원래 Host, SNI, 인증서 검증을 유지하며, 공급자 설정으로 인증서 검사를 끌 수는 없습니다.
 
-`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`가 적용되면 이 작업들은 Bun의 네이티브 fetch를 그대로 사용합니다. URL과 리터럴 주소 검사는 계속 실행되지만, 최종 경로, DNS 응답, 피어는 프록시가 고르므로 opencodex는 그 피어를 고정하거나 검증할 수 없습니다. 이는 명시적인 보안 한계입니다.
+이 작업들은 [서버에 설정된 아웃바운드 fetch](/ko/reference/configuration/server/)를 사용합니다. `config.proxy`로 설정했거나 SOCKS5 `ALL_PROXY`에서 상속된 서버 SOCKS5 프록시는 대상이 `NO_PROXY`에 걸리지 않을 때 OpenCodex의 내장 터널을 사용합니다. `HTTP_PROXY`와 `HTTPS_PROXY`는 Bun의 네이티브 HTTP(S) 처리를 그대로 사용하지만, SOCKS가 아닌 `ALL_PROXY`는 네이티브 HTTP fetch 경로가 아닙니다. URL과 리터럴 주소 검사는 계속 실행되지만, 선택된 프록시가 최종 경로, DNS 응답, 피어를 고르므로 opencodex는 그 피어를 고정하거나 검증할 수 없습니다. 이는 명시적인 보안 한계입니다.
 
 사설/로컬 목적지는 `allowPrivateNetwork: true`가 필요하며, 아웃바운드 프록시가 활성화된 경우에는 일치하는 `NO_PROXY` 항목도 필요합니다. loopback은 자동으로 추가됩니다. CIDR 항목은 해석하지 않으므로 각 LAN 호스트는 따로 적어야 합니다. matcher는 정확한 호스트, 도메인 접미사, 선택적 포트, 괄호로 감싼 IPv6, `*`를 지원합니다. 예를 들면 `192.168.1.50`은 따로 적어야 합니다. 메타데이터와 link-local 목적지는 계속 차단됩니다. 진단 요청은 리디렉션을 거부하고, 자격 증명이 제거된 대상만 보고합니다. 일반적인 공급자 요청의 리디렉션 검토는 이 진단 가드와 별도로 유지됩니다.
 
-Clash / Surge / Mihomo 사용자를 위한 fake-IP DNS 예외는 두 가지이며, 둘 다 DNS *응답*에만 적용됩니다. URL에 적힌 리터럴 주소는 그대로 거부됩니다. IANA 벤치마크 대역 `198.18.0.0/15`(IPv4-mapped IPv6 표기 포함)은 해당 호스트에 아웃바운드 프록시가 적용될 때 허용됩니다. Mihomo 기본 IPv6 fake-IP 대역 `fdfe:dcba:9876::/48`은 더 엄격한 조건에서만 허용됩니다. URL 스킴에 맞는 프록시 변수(`https:`는 `HTTPS_PROXY`, `http:`는 `HTTP_PROXY`, `ALL_PROXY`는 해당 없음)가 설정되어 있어야 하고, 호스트가 `NO_PROXY`에 걸리지 않아야 하며, 그 경우 요청은 해당 프록시에 명시적으로 묶여 나갑니다. 그 밖의 ULA, 인접 프리픽스, 실제 사설 응답과 섞인 fake-IP 응답은 여전히 `allowPrivateNetwork: true`가 필요합니다. 프로바이더 저장 시점 검증에는 IPv6 예외가 적용되지 않습니다.
+Clash / Surge / Mihomo 사용자를 위한 fake-IP DNS 예외는 두 가지이며, 둘 다 DNS *응답*에만 적용됩니다. URL에 적힌 리터럴 주소는 그대로 거부됩니다. IANA 벤치마크 대역 `198.18.0.0/15`(IPv4-mapped IPv6 표기 포함)은 해당 호스트에 아웃바운드 프록시가 적용될 때 허용됩니다. Mihomo 기본 IPv6 fake-IP 대역 `fdfe:dcba:9876::/48`은 더 엄격한 조건에서만 허용됩니다. URL 스킴에 맞는 프록시 변수(`https:`는 `HTTPS_PROXY`, `http:`는 `HTTP_PROXY`) 또는 SOCKS5 `ALL_PROXY`가 설정되어 있어야 하고(SOCKS가 아닌 `ALL_PROXY`는 해당 없음), 호스트가 `NO_PROXY`에 걸리지 않아야 하며, 그 경우 요청은 해당 프록시에 명시적으로 묶여 나갑니다. 그 밖의 ULA, 인접 프리픽스, 실제 사설 응답과 섞인 fake-IP 응답은 여전히 `allowPrivateNetwork: true`가 필요합니다. 프로바이더 저장 시점 검증에는 IPv6 예외가 적용되지 않습니다.
 
 ## Codex 계정 풀
 

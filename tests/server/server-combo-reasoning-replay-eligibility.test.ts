@@ -15,6 +15,7 @@ import { clearComboRecallForTests } from "../../src/server/responses/combo-sessi
 import { TARGET_INCOMPATIBLE_MESSAGE } from "../../src/server/responses/core-errors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 type HandleOptions = NonNullable<Parameters<typeof handleResponses>[3]>;
@@ -23,6 +24,10 @@ let testDir = "";
 let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
+let releaseSpendHome: (() => void) | undefined;
+
+// Acquire only for rows that physically dispatch, after their temporary home is installed.
+const takeSpendHome = (): void => { releaseSpendHome = acquireOwnedSpendHome(); };
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -38,6 +43,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   let responseStatePending = true;
   try {
     for (const server of servers.splice(0)) await server.stop(true);
@@ -172,6 +180,7 @@ describe("combo mandatory reasoning replay failover", () => {
   });
 
   test("upstream_server_error failover to strict Responses preserves existing reasoning_text", async () => {
+    takeSpendHome();
     const failed = serve(() => Response.json({
       error: { type: "server_error", code: "upstream_server_error", message: "busy" },
     }, { status: 500 }));
@@ -208,6 +217,7 @@ describe("combo mandatory reasoning replay failover", () => {
   });
 
   test("a foreign opaque-only replay skips the strict target without forwarding or fabrication", async () => {
+    takeSpendHome();
     let firstTargetFails = false;
     const first = serve(() => firstTargetFails
       ? Response.json({ error: { type: "server_error", code: "upstream_server_error", message: "busy" } }, { status: 500 })
@@ -257,6 +267,7 @@ describe("combo mandatory reasoning replay failover", () => {
   });
 
   test("an exhausted combo reports target_incompatible when mandatory plaintext is unavailable", async () => {
+    takeSpendHome();
     let firstTargetFails = false;
     const first = serve(() => firstTargetFails
       ? Response.json({ error: { type: "server_error", code: "upstream_server_error", message: "busy" } }, { status: 500 })
