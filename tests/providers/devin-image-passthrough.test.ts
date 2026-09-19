@@ -53,6 +53,17 @@ describe("user image passthrough", () => {
     const user = items.find(i => i.role === "user")!;
     expect(user.content).toEqual([{ type: "text", text: "[image url: https://example.com/pic.png]" }]);
   });
+
+  test("an oversized remote image URL is not copied into prompt text", () => {
+    const attackerControlledSuffix = "a".repeat(9_000);
+    const items = mapOcxMessagesToDevin(parsedWith([{
+      role: "user",
+      content: [{ type: "image", imageUrl: `https://example.com/${attackerControlledSuffix}` }],
+    }]));
+    const user = items.find(i => i.role === "user")!;
+    expect(user.content).toEqual([{ type: "text", text: "[image omitted: unsupported or oversized URL]" }]);
+    expect(JSON.stringify(user.content)).not.toContain(attackerControlledSuffix);
+  });
 });
 
 describe("tool-result image passthrough", () => {

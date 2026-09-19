@@ -253,6 +253,17 @@ function textFromParts(content: string | OcxContentPart[] | undefined): string {
   return content.map((part) => (part.type === "text" ? part.text : "")).filter(Boolean).join("\n");
 }
 
+const MAX_DEVIN_REMOTE_IMAGE_URL_CHARS = 8_192;
+
+function boundedDevinRemoteImageReference(imageUrl: string): string | undefined {
+  if (imageUrl.length > MAX_DEVIN_REMOTE_IMAGE_URL_CHARS) return undefined;
+  try {
+    return new URL(imageUrl).protocol === "https:" ? imageUrl : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Convert inbound content parts to the multimodal shape the wire encoder accepts.
  *
@@ -261,9 +272,10 @@ function textFromParts(content: string | OcxContentPart[] | undefined): string {
  * text-only string and a message whose only content was an image was dropped
  * entirely, which is why a pasted screenshot killed the turn and the only
  * workaround was running OCR before sending. A data: URL carries everything
- * field #10 needs; a remote https URL cannot be inlined without a fetch, so it
- * stays as an explicit text reference rather than pretending the model can see
- * a picture it cannot. Video has no Devin field and is skipped.
+ * field #10 needs; a bounded remote https URL cannot be inlined without a fetch,
+ * so it stays as an explicit text reference rather than pretending the model can
+ * see a picture it cannot. Unsupported and oversized references become a fixed
+ * omission marker, never attacker-sized prompt text. Video has no Devin field.
  */
 function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): string | ContentPart[] {
   if (typeof content === "string" || !Array.isArray(content)) return content ?? "";
@@ -274,7 +286,13 @@ function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): st
     } else if (part.type === "image") {
       const m = part.imageUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (m) out.push({ type: "image", mimeType: m[1]!, base64Data: m[2]! });
-      else out.push({ type: "text", text: `[image url: ${part.imageUrl}]` });
+      else {
+        const remoteReference = boundedDevinRemoteImageReference(part.imageUrl);
+        out.push({
+          type: "text",
+          text: remoteReference ? `[image url: ${remoteReference}]` : "[image omitted: unsupported or oversized URL]",
+        });
+      }
     }
   }
   return out;
