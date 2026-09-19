@@ -133,6 +133,14 @@ describe("Codex CLI update dry-run plan", () => {
     expect(plan.refusal).toBe("already_current");
   });
 
+  test("a resolved target lower than the install is refused, not applied as a downgrade", async () => {
+    const plan = await createCodexCliUpdatePlan(planDeps({
+      resolveTarget: () => ({ kind: "resolved", version: "0.9.0", integrity: "sha512-AAAA" }),
+    }));
+    expect(plan.refusal).toBe("target_not_newer");
+    expect(plan.planId).toBeNull();
+  });
+
   test("an unreadable process table defers instead of reading as no live session", async () => {
     const plan = await createCodexCliUpdatePlan(planDeps({ scanProcesses: () => ({ kind: "unavailable" }) }));
     expect(plan.refusal).toBe("blocked_process_state_unknown");

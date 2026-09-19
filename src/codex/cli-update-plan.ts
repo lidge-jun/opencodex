@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseStrictSemver } from "../lib/strict-semver";
+import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
 import {
   inspectCodexCliInstall,
@@ -48,6 +48,7 @@ export type CodexCliUpdateRefusal =
   | "installed_version_unverified"
   | "target_unresolved"
   | "already_current"
+  | "target_not_newer"
   | "blocked_active_session"
   | "blocked_process_state_unknown";
 
@@ -253,16 +254,9 @@ export function resolveCodexCliUpdateTarget(
  */
 function defaultRunInstaller(version: string, expectedIntegrity: string | null): CodexCliUpdateInstallerResult {
   if (!expectedIntegrity) {
-    const target = npmTarget(["install", "-g", `${CODEX_CLI_PACKAGE}@${version}`]);
-    if (!target) return Object.freeze({ exitCode: null });
-    const run = spawnSync(target.bin, target.args, {
-      encoding: "utf8",
-      timeout: INSTALL_TIMEOUT_MS,
-      windowsHide: true,
-      stdio: "inherit",
-      ...target.options,
-    });
-    return Object.freeze({ exitCode: run.status });
+    // Fail closed: a caller that cannot state the expected digest gets no
+    // unverified install, even though production plans always carry one.
+    return Object.freeze({ exitCode: null, integrityMismatch: true });
   }
   const stage = mkdtempSync(join(tmpdir(), "ocx-codex-cli-update-"));
   try {
@@ -361,7 +355,8 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   // package-manifest evidence states what is installed on disk, and only that can be
   // compared with a registry version or read back after an install.
   const installedVersion = report.versionEvidence.kind === "package-manifest" ? report.packageVersion : null;
-  if (!installedVersion || !parseStrictSemver(installedVersion)) {
+  const installedSemver = installedVersion ? parseStrictSemver(installedVersion) : null;
+  if (!installedVersion || !installedSemver) {
     return refusedPlan("installed_version_unverified", report, channel, null, NOT_EVALUATED);
   }
 
@@ -370,8 +365,19 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   if (target.kind !== "resolved") {
     return refusedPlan("target_unresolved", report, channel, target, NOT_EVALUATED);
   }
-  if (target.version === installedVersion) {
+  // Raw equality is not the gate: a resolved target must advance the installed
+  // version by semver precedence. Equal versions are already current and lower
+  // ones are refused rather than applied as a silent downgrade.
+  const targetSemver = parseStrictSemver(target.version);
+  if (!targetSemver) {
+    return refusedPlan("target_unresolved", report, channel, target, NOT_EVALUATED);
+  }
+  const versionOrder = compareStrictSemver(targetSemver, installedSemver);
+  if (versionOrder === 0) {
     return refusedPlan("already_current", report, channel, target, NOT_EVALUATED);
+  }
+  if (versionOrder < 0) {
+    return refusedPlan("target_not_newer", report, channel, target, NOT_EVALUATED);
   }
 
   const scan = (deps.scanProcesses ?? scanCodexAppServerProcesses)(deps.processIo ?? {});
