@@ -319,14 +319,14 @@ export async function loadExportModels(
    * are compared rather than assumed equal from the configuration and the cache stamp, because a
    * projection also reads entitlement state neither of those two describes.
    */
-  const models = Object.freeze(structuredClone(exported));
+  const projection = Object.freeze(structuredClone(exported));
   if (retained !== null
     && retained.cacheStamp === cacheStamp
     && isExportConfigAdmissionCurrent(retained.admission, config)
-    && JSON.stringify(retained.models) === JSON.stringify(models)) {
+    && JSON.stringify(retained.models) === JSON.stringify(projection)) {
     return exported;
   }
-  lastExportSnapshot = { admission, cacheStamp, generation: ++exportSnapshotGeneration, models };
+  lastExportSnapshot = { admission, cacheStamp, generation: ++exportSnapshotGeneration, models: projection };
   return exported;
 }
 

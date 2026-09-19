@@ -13,7 +13,10 @@ import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { loadExportModels, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
+import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
+import { asideGuardFor } from "../../src/server/management/aside-profile-routes";
+import { previewIntegration, type IntegrationMutationPlan } from "../../src/integrations/mutation-plan";
+import { setCached } from "../../src/codex/model-cache";
 
 let root: string;
 let home: string;
@@ -394,4 +397,46 @@ test("dedicated nested paths retain profile scope for status, history and restor
   expect((await api("/api/client-integrations/aside/profiles/2/restore", "POST", { opId: on.opId })).status).toBe(200);
   expect(document(2).providers.opencodex).toBeUndefined();
   expect(document(0).providers.opencodex).toBeUndefined();
+});
+
+test("a bound confirmation is refused when the roster it was planned against has moved", async () => {
+  // The guard the route installs, exercised with the input a mutation would be written from. Only
+  // the rows are carried into the mutation, so an ordinary load completing while it prepares can
+  // replace or retire the snapshot without the carried rows noticing.
+  resetExportSnapshotForTests();
+  // A roster with rows in it, so the plan below is a real apply rather than a noop.
+  await loadExportModels(config, [{ id: "one", provider: "fixture" }]);
+  const identity = exportSnapshotIdentity(config);
+  expect(identity).not.toBeNull();
+  const roster = previewExportSnapshot(config);
+  expect(roster).not.toBeNull();
+
+  const profileStore = createIntegrationStateStore(join(root, "store", "aside-profiles", "1"));
+  const prepared = {
+    clientId: "aside" as const,
+    config,
+    models: roster!.models,
+    port: 10100,
+    env,
+    home,
+    store: profileStore,
+    resolvedPaths: { configPath: path(1), detectDir: join(home, ".aside", "u", "1") },
+  };
+  const plan = previewIntegration(prepared, { operation: "apply" as const, profileId: 1 });
+  expect(plan.canApply).toBe(true);
+
+  const capture: { plan: IntegrationMutationPlan | null } = { plan: null };
+  const guard = asideGuardFor({ config }, identity!, 1, { operation: "apply", fingerprint: plan.fingerprint }, {}, capture);
+
+  // Current roster, matching fingerprint: the confirmation stands.
+  expect(await guard(prepared)).toBeNull();
+
+  // A discovery publishes while this change is in flight. The rows the guard holds are unchanged,
+  // and they are no longer the roster the operator was shown.
+  expect(setCached("fixture", [{ id: "published-mid-flight", provider: "fixture" }])).toBe(true);
+  expect(exportSnapshotIdentity(config)).toBeNull();
+  const refused = await guard(prepared);
+  expect(refused).toMatchObject({ ok: false, reason: "conflict", clientId: "aside", profileId: 1 });
+  expect(refused?.message).toContain("roster changed");
+  expect(capture.plan).not.toBeNull();
 });

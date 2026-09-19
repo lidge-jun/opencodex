@@ -516,3 +516,59 @@ describe("planning an undo reads the writer's specification", () => {
     }
   });
 });
+
+const MANAGED_PATHS = [["settings", "providers", "opencodex"]];
+
+describe("integration mutation plan: what an undo would change", () => {
+  const owned = { ...RECORD, fragmentPaths: MANAGED_PATHS };
+
+  test("undoing an initial apply takes the managed place back out", () => {
+    // There was no prior record, because nothing was ours before that apply. Reading only the
+    // prior record therefore described this undo as touching no managed place at all, while the
+    // undo removes the block it added.
+    const plan = buildMutationPlan({
+      ...PLAN_BASE,
+      operation: "restore",
+      classified: { state: "current" },
+      restore: { ...RESTORE, entry: { ...ENTRY, priorRecord: null } },
+      record: owned,
+      parsed: OCCUPIED,
+    });
+
+    expect(plan.changes).toContainEqual({ kind: "remove", path: "settings.providers.opencodex" });
+    expect(plan.changes.some(change => change.kind === "replace")).toBe(false);
+  });
+
+  test("undoing a disable adds back a place the document does not have", () => {
+    // The disable removed it, so the document has nothing there now. Calling that a replacement
+    // described a mutation of something that is not in the file.
+    const plan = buildMutationPlan({
+      ...PLAN_BASE,
+      operation: "restore",
+      classified: { state: "absent" },
+      restore: { ...RESTORE, entry: { ...ENTRY, kind: "disable", priorRecord: owned } },
+      record: null,
+      parsed: {},
+    });
+
+    expect(plan.changes).toContainEqual({ kind: "add", path: "settings.providers.opencodex" });
+    expect(plan.changes.some(change => change.kind === "replace")).toBe(false);
+  });
+
+  test("a place that is ours on both sides is replaced, and none of this publishes a value", () => {
+    const plan = buildMutationPlan({
+      ...PLAN_BASE,
+      operation: "restore",
+      classified: { state: "current" },
+      restore: { ...RESTORE, entry: { ...ENTRY, priorRecord: owned } },
+      record: owned,
+      parsed: OCCUPIED,
+    });
+
+    expect(plan.changes).toContainEqual({ kind: "replace", path: "settings.providers.opencodex" });
+    expect(plan.changes.some(change => change.kind === "remove" || change.kind === "add")).toBe(false);
+    // The plan names places, never what is in them or where the file lives.
+    expect(JSON.stringify(plan)).not.toContain(CANARY);
+    expect(JSON.stringify(plan)).not.toContain(CONFIG_PATH);
+  });
+});

@@ -68,9 +68,10 @@ describe("provider outbound GET transport", () => {
      * inside discovery and failed that provider for a reason nothing in its configuration
      * explains. A configured value means the built-in transport, which is what pins the peer.
      */
+    const written = { baseUrl: "https://provider.example/v1", fetch: "https://not-an-executor.example" };
     const response = await providerOutboundGet(
       "written-fetch",
-      { baseUrl: "https://provider.example/v1", fetch: "https://not-an-executor.example" } as never,
+      written as unknown as Parameters<typeof providerOutboundGet>[1],
       "https://provider.example/v1/models",
       { headers: { authorization: "Bearer test-key" } },
       dependencies,

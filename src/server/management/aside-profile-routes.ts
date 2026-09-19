@@ -15,7 +15,7 @@ import type { WriteRefused } from "../../integrations/writer";
 import type { IntegrationWriteInput } from "../../integrations/writer";
 import type { IntegrationMutationPlan, IntegrationPlanOperation } from "../../integrations/mutation-plan";
 import { previewIntegration } from "../../integrations/mutation-plan";
-import { previewExportModels, previewExportSnapshot } from "./model-rows";
+import { exportSnapshotIdentity, previewExportSnapshot } from "./model-rows";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { jsonResponse } from "../auth-cors";
@@ -62,8 +62,15 @@ function asideBinding(
  * reading the live configuration a second time, so a configuration edited to something else and
  * back again while this action was in flight produced a check that agreed with a plan the write
  * never described.
+ *
+ * Exported so the check itself can be exercised with a real prepared input and a roster that
+ * actually moved. The window it closes needs an ordinary load to complete while a mutation is
+ * preparing, which no test seam reaches from outside; a copy of the guard would prove nothing
+ * about the one the route installs. It takes only the configuration from the request context.
  */
-function asideGuardFor(
+export function asideGuardFor(
+  ctx: Pick<ManagementContext, "config">,
+  capturedIdentity: string,
   profileIdValue: number,
   binding: { operation: IntegrationPlanOperation; fingerprint: string },
   request: { opId?: string; confirmDrift?: boolean; resolved?: AsideOperation },
@@ -81,14 +88,25 @@ function asideGuardFor(
         ? {}
         : { resolved: { entry: request.resolved.entry, store: request.resolved.store } }),
     });
-    if (plan.canApply && plan.fingerprint === binding.fingerprint) return null;
+    /*
+     * The roster this confirmation was planned against has to still be the retained one. Only its
+     * rows were carried into the mutation, so an ordinary load completing while this action
+     * prepared could have replaced or retired the snapshot, and fingerprinting the carried rows
+     * would then accept a confirmation for a roster the operator no longer has. The non-Aside
+     * guard verifies the same identity; this one verifies it before the preference write, which is
+     * the last moment that still precedes every effect this action has.
+     */
+    const rosterMoved = exportSnapshotIdentity(ctx.config) !== capturedIdentity;
+    if (!rosterMoved && plan.canApply && plan.fingerprint === binding.fingerprint) return null;
     capture.plan = plan;
     return {
       ok: false,
       reason: "conflict",
       state: plan.state,
       clientId: "aside",
-      message: "that confirmation no longer describes this profile",
+      message: rosterMoved
+        ? "the model roster changed while confirming"
+        : "that confirmation no longer describes this profile",
       profileId: profileIdValue,
     };
   };
@@ -277,7 +295,7 @@ export async function handleAsideProfileRoutes(
     let mutationInput = options.input();
     let revalidate: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
     if (binding !== null && id !== undefined) {
-      const roster = previewExportModels(ctx.config);
+      const roster = previewExportSnapshot(ctx.config);
       if (roster === null) {
         return jsonResponse({
           error: "no model roster is cached yet, so this change cannot be planned",
@@ -285,8 +303,8 @@ export async function handleAsideProfileRoutes(
         }, 409, req, ctx.config);
       }
       // One roster for the guard and the mutation, so they cannot disagree by construction.
-      mutationInput = { ...mutationInput, models: roster };
-      revalidate = asideGuardFor(id, binding, {}, capture);
+      mutationInput = { ...mutationInput, models: roster.models };
+      revalidate = asideGuardFor(ctx, roster.identity, id, binding, {}, capture);
     }
     const batch = await mutateAsideProfiles(
       mutationInput,
@@ -365,15 +383,15 @@ export async function asideRestoreResponse(
     let restoreInput = input;
     let revalidate: ((prepared: IntegrationWriteInput) => Promise<AsideProfileWriteOutcome | null>) | undefined;
     if (restoreBinding !== null) {
-      const roster = previewExportModels(ctx.config);
+      const roster = previewExportSnapshot(ctx.config);
       if (roster === null) {
         return jsonResponse({
           error: "no model roster is cached yet, so this change cannot be planned",
           code: "integration_preview_unavailable",
         }, 409, ctx.req, ctx.config);
       }
-      restoreInput = { ...restoreInput, models: roster };
-      revalidate = asideGuardFor(operation.profileId, restoreBinding, {
+      restoreInput = { ...restoreInput, models: roster.models };
+      revalidate = asideGuardFor(ctx, roster.identity, operation.profileId, restoreBinding, {
         opId: body.opId,
         confirmDrift: body.confirmDrift === true,
         resolved: operation,

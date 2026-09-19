@@ -376,12 +376,30 @@ function changesOf(input: PlanInput): readonly IntegrationPlanChange[] {
     }
   }
   if (input.operation === "restore") {
-    // Provenance is restored, never re-derived, so the places an undo touches are the ones the
-    // row recorded as ours before that operation ran, not whatever a record says today.
+    /*
+     * An undo replaces the whole document, so what it changes is the difference between the
+     * places that are ours now and the places the row recorded as ours before that operation ran.
+     *
+     * Reading only the prior record got both common undos wrong. Undoing an initial apply has no
+     * prior record, so the plan described a change to nothing at all while the undo removed the
+     * managed block. Undoing a disable has a prior record and an empty document, so the plan said
+     * it would replace paths the file does not currently have.
+     *
+     * Provenance is still restored rather than re-derived: the prior record is what says which
+     * places are ours afterwards. The document only answers whether each of them is there now.
+     */
+    const prior = new Map<string, readonly string[]>();
     for (const fragment of input.restore?.entry.priorRecord?.fragmentPaths ?? []) {
       const path = canonicalSchemaPath(input.clientId, fragment);
-      if (path === null) continue;
-      changes.push({ kind: "replace", path });
+      if (path !== null) prior.set(path, fragment);
+    }
+    for (const [path, fragment] of prior) {
+      changes.push({ kind: readPath(input.parsed, fragment) === undefined ? "add" : "replace", path });
+    }
+    for (const fragment of input.record?.fragmentPaths ?? []) {
+      const path = canonicalSchemaPath(input.clientId, fragment);
+      if (path === null || prior.has(path)) continue;
+      changes.push({ kind: "remove", path });
     }
   }
   changes.push({ kind: "snapshot", path: PLAN_SNAPSHOT_PATH });
