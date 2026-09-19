@@ -18,21 +18,26 @@ const UNSUPPORTED_CONSTRAINT_KEYS = [
   "not",
   "multipleOf",
   "pattern",
+  "$dynamicRef",
+  "$recursiveRef",
   "additionalProperties",
+  "additionalItems",
   "uniqueItems",
   "contains",
   "minContains",
   "maxContains",
+  "dependencies",
   "dependentRequired",
   "dependentSchemas",
   "patternProperties",
   "propertyNames",
   "unevaluatedProperties",
   "unevaluatedItems",
-  "default",
-  "examples",
-  "title",
 ] as const;
+const CONDITIONAL_KEYS = ["if", "then", "else"] as const;
+// Annotation-only keywords do not change the accepted value set. The sanitizer intentionally
+// drops title, default, examples, $comment, deprecated, readOnly, writeOnly, contentEncoding,
+// contentMediaType, contentSchema, externalDocs, and example without loss.
 const MERGED_SCHEMA_KEYS = [
   "type",
   "nullable",
@@ -56,8 +61,17 @@ export interface GoogleToolSchemaProfile {
 
 export type GoogleToolSchemaLossCategory =
   | "enum-value-filtered"
+  | "enum-constraint-dropped"
+  | "const-value-filtered"
   | "numeric-bound-dropped"
   | "size-bound-dropped"
+  | "type-union-widened"
+  | "unsupported-type-widened"
+  | "nullability-overridden"
+  | "conditional-dropped"
+  | "tuple-prefix-dropped"
+  | "ref-overlay-replaced"
+  | "root-object-coerced"
   | "union-widened"
   | "recursive-ref-widened"
   | "dereference-limit-widened"
@@ -149,8 +163,16 @@ function reportDroppedConstraints(node: Schema, state: SanitizeState): void {
   for (const key of UNSUPPORTED_CONSTRAINT_KEYS) {
     if (Object.hasOwn(node, key)) unsupported++;
   }
-  if (Object.hasOwn(node, "const") && typeof node.const !== "string") unsupported++;
   addGoogleToolSchemaLoss(state.report, "unsupported-constraint-dropped", unsupported);
+
+  let conditionals = 0;
+  for (const key of CONDITIONAL_KEYS) {
+    if (Object.hasOwn(node, key)) conditionals++;
+  }
+  addGoogleToolSchemaLoss(state.report, "conditional-dropped", conditionals);
+  if (Object.hasOwn(node, "prefixItems")) {
+    addGoogleToolSchemaLoss(state.report, "tuple-prefix-dropped");
+  }
 }
 
 function isRecord(value: unknown): value is Schema {
@@ -179,34 +201,58 @@ function collectDefs(root: unknown, defs: Map<string, unknown>): void {
   }
 }
 
-function mergeRefTarget(target: Schema, overlay: Schema): Schema {
+function mergeRefTarget(target: Schema, overlay: Schema, state: SanitizeState): Schema {
   const merged: Schema = {};
   if (Object.hasOwn(target, "$ref")) merged.$ref = target.$ref;
   for (const key of MERGED_SCHEMA_KEYS) {
-    if (Object.hasOwn(overlay, key)) merged[key] = overlay[key];
-    else if (Object.hasOwn(target, key)) merged[key] = target[key];
+    if (Object.hasOwn(overlay, key)) {
+      if (key !== "description" && Object.hasOwn(target, key) && !Object.is(overlay[key], target[key])) {
+        addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
+      }
+      merged[key] = overlay[key];
+    } else if (Object.hasOwn(target, key)) merged[key] = target[key];
   }
   return merged;
 }
 
-function normalizeType(value: unknown, out: Schema, preserveNullType: boolean): void {
+function normalizeType(
+  value: unknown,
+  out: Schema,
+  preserveNullType: boolean,
+  state: SanitizeState,
+): void {
   const candidates = Array.isArray(value) ? value : [value];
   let sawNull = false;
+  const nonNullTypes = new Set<string>();
+  let unsupported = 0;
+  if (Array.isArray(value) && value.length === 0) unsupported++;
 
   for (const candidate of candidates) {
-    if (typeof candidate !== "string") continue;
+    if (typeof candidate !== "string") {
+      if (candidate !== undefined) unsupported++;
+      continue;
+    }
     const type = candidate.toLowerCase();
     if (type === "null") {
       sawNull = true;
-    } else if (out.type === undefined && ALLOWED_TYPES.has(type)) {
-      out.type = type;
+    } else if (ALLOWED_TYPES.has(type)) {
+      nonNullTypes.add(type);
+      if (out.type === undefined) out.type = type;
+    } else {
+      unsupported++;
     }
   }
+
+  addGoogleToolSchemaLoss(state.report, "unsupported-type-widened", unsupported);
+  if (nonNullTypes.size > 1) addGoogleToolSchemaLoss(state.report, "type-union-widened");
 
   if (!sawNull) return;
   if (out.type !== undefined) out.nullable = true;
   else if (preserveNullType) out.type = "null";
-  else out.nullable = true;
+  else {
+    out.nullable = true;
+    addGoogleToolSchemaLoss(state.report, "unsupported-type-widened");
+  }
 }
 
 function sanitizeEnum(value: unknown, state?: SanitizeState): string[] | undefined {
@@ -313,7 +359,9 @@ function sanitizeSchema(
 
   reportDroppedConstraints(node, state);
 
-  if (typeof node.$ref === "string" && refDepth >= MAX_DEREF_DEPTH) {
+  if (Object.hasOwn(node, "$ref") && typeof node.$ref !== "string") {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
+  } else if (typeof node.$ref === "string" && refDepth >= MAX_DEREF_DEPTH) {
     addGoogleToolSchemaLoss(state.report, "dereference-limit-widened");
   } else if (typeof node.$ref === "string") {
     const target = resolveRef(node.$ref, defs);
@@ -323,12 +371,12 @@ function sanitizeSchema(
         return {};
       }
       state.activeRefs.add(node.$ref);
-      // Unsupported constraints on a definition are not copied into the safe merged view below,
-      // so account for them before selecting only sanitizer-owned keys.
+      // Constraints outside the merge allowlist are discarded here and must be counted before
+      // selecting the safe view. Copied keys are deliberately excluded to avoid double counting.
       reportDroppedConstraints(target, state);
       // Select only inputs the sanitizer can consume. Spreading an untrusted definition here would
       // enumerate and allocate every unsupported annotation before the node budget can stop work.
-      const merged = mergeRefTarget(target, node);
+      const merged = mergeRefTarget(target, node, state);
       try {
         return sanitizeSchema(merged, defs, depth, refDepth + 1, preserveNullType, state);
       } finally {
@@ -340,32 +388,69 @@ function sanitizeSchema(
   }
 
   const out: Schema = {};
-  normalizeType(node.type, out, preserveNullType);
+  if (Object.hasOwn(node, "type") && node.type === undefined) {
+    addGoogleToolSchemaLoss(state.report, "unsupported-type-widened");
+  }
+  normalizeType(node.type, out, preserveNullType, state);
 
+  const typeIncludesNull = (Array.isArray(node.type) ? node.type : [node.type])
+    .some(candidate => typeof candidate === "string" && candidate.toLowerCase() === "null");
+  if (node.nullable === false && typeIncludesNull) {
+    addGoogleToolSchemaLoss(state.report, "nullability-overridden");
+  }
   if (typeof node.nullable === "boolean") out.nullable = node.nullable;
+  else if (Object.hasOwn(node, "nullable")) addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
   if (typeof node.description === "string") out.description = node.description;
   if (typeof node.format === "string") out.format = node.format;
+  else if (Object.hasOwn(node, "format")) addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
 
+  if (Object.hasOwn(node, "enum") && !Array.isArray(node.enum)) {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
+  } else if (Array.isArray(node.enum) && node.enum.length === 0) {
+    addGoogleToolSchemaLoss(state.report, "enum-constraint-dropped");
+  }
+  if (Object.hasOwn(node, "const")) {
+    if (typeof node.const !== "string") {
+      addGoogleToolSchemaLoss(state.report, "const-value-filtered");
+    } else if (Object.hasOwn(node, "enum")) {
+      const enumValues = Array.isArray(node.enum)
+        ? [...new Set(node.enum.filter((item): item is string => typeof item === "string"))]
+        : [];
+      if (enumValues.length !== 1 || enumValues[0] !== node.const) {
+        addGoogleToolSchemaLoss(state.report, "const-value-filtered");
+      }
+    }
+  }
   const enumValues = sanitizeEnum(
     node.enum ?? (typeof node.const === "string" ? [node.const] : undefined),
     state,
   );
   if (enumValues) out.enum = enumValues;
 
+  if (Object.hasOwn(node, "properties") && !isRecord(node.properties)) {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
+  }
   const properties = sanitizeProperties(node.properties, defs, depth, refDepth, state);
   if (properties) out.properties = properties;
 
   if (properties && Array.isArray(node.required)) {
-    const validRequired = node.required.filter((item): item is string => (
-      typeof item === "string" && Object.hasOwn(properties, item)
-    ));
-    const required = [...new Set(validRequired)];
+    const stringRequired = node.required.filter((item): item is string => typeof item === "string");
+    const uniqueRequired = [...new Set(stringRequired)];
+    const required = uniqueRequired.filter(item => Object.hasOwn(properties, item));
     addGoogleToolSchemaLoss(
       state.report,
       "unsupported-constraint-dropped",
-      node.required.length - validRequired.length,
+      uniqueRequired.length - required.length,
     );
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened", node.required.length - stringRequired.length);
     if (required.length > 0) out.required = required;
+  } else if (!properties && Array.isArray(node.required)) {
+    const stringRequired = node.required.filter((item): item is string => typeof item === "string");
+    const required = new Set(stringRequired);
+    addGoogleToolSchemaLoss(state.report, "unsupported-constraint-dropped", required.size);
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened", node.required.length - stringRequired.length);
+  } else if (Object.hasOwn(node, "required") && !Array.isArray(node.required)) {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
   }
 
   if (state.remainingNodes <= 0) {
@@ -373,7 +458,9 @@ function sanitizeSchema(
     return out;
   }
 
-  if (isRecord(node.items)) {
+  if (Array.isArray(node.items)) {
+    addGoogleToolSchemaLoss(state.report, "tuple-prefix-dropped");
+  } else if (isRecord(node.items)) {
     const items = sanitizeSchema(node.items, defs, depth + 1, refDepth, false, state);
     if (items !== BUDGET_EXHAUSTED) out.items = items;
   } else if (Object.hasOwn(node, "items")) {
@@ -384,7 +471,7 @@ function sanitizeSchema(
     if (Object.hasOwn(node, "anyOf")) reportBudgetExhausted(state);
     return out;
   }
-  if (node.anyOf !== undefined) {
+  if (Object.hasOwn(node, "anyOf")) {
     Object.assign(out, normalizeAnyOf(node.anyOf, defs, depth, refDepth, state));
   }
   return out;
@@ -407,11 +494,19 @@ export function sanitizeGeminiToolParametersWithReport(
       budgetReported: false,
       report,
     };
+    if (isRecord(parameters)) {
+      for (const bag of ["$defs", "definitions"] as const) {
+        if (Object.hasOwn(parameters, bag) && !isRecord(parameters[bag])) {
+          addGoogleToolSchemaLoss(report, "invalid-schema-widened");
+        }
+      }
+    }
     const sanitized = sanitizeSchema(parameters, defs, 0, 0, false, state);
     const root = sanitized === BUDGET_EXHAUSTED ? {} : sanitized;
 
     // Function arguments are always an object. Claude additionally rejects root composition and a
     // missing root type even when those forms are valid general-purpose JSON Schema.
+    if (root.type !== "object") addGoogleToolSchemaLoss(report, "root-object-coerced");
     root.type = "object";
     if (!isRecord(root.properties)) root.properties = {};
     return { parameters: root, lossReport: report };

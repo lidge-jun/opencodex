@@ -81,6 +81,12 @@ conservative documented subset. Compilation returns the compatible parameters pl
 loss report containing only endpoint class, fixed category counts, and bounded/truncated flags.
 Counts saturate at 255. The report never retains tool or property names, paths, descriptions,
 schema or enum values, references, hashes, request ids, project ids, or account ids.
+Every sanitizer branch that widens or drops an accepted-value constraint has a closed category,
+including type unions and unsupported types, conditional and tuple constraints, reference-overlay
+replacement, and root object coercion. Lossless normalization does not set `lossy`: accepted type
+case folding, duplicate enum/required removal, nullable-union collapse, and string-const conversion
+preserve the accepted value set. Annotation-only fields such as title, default, examples, comments,
+deprecated, read-only/write-only, external documentation and examples are omitted without loss.
 
 This layer observes loss and does not reject it. The emitted request body remains the same as
 before reporting. The existing limits remain 24 schema levels, 16 local-reference dereferences,
