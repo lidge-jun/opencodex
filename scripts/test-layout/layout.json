@@ -376,7 +376,6 @@
     "cleanup-orphaned-workflows.test.ts": "ci-workflows",
     "clearable-deadline.test.ts": "lib",
     "cli-account-orca-import.test.ts": "cli",
-
     "cli-account-pin-drain.test.ts": "cli",
     "cli-account-pool-verbs.test.ts": "cli",
     "cli-account.test.ts": "cli",
@@ -1544,7 +1543,8 @@
     "ci-structure-gate.test.ts": "ci-workflows",
     "responses-code-mode-patch-compile.test.ts": "responses",
     "gui-codex-usage-score-parity.test.ts": "gui",
-    "web-search-sidecar-429.test.ts": "web-search"
+    "web-search-sidecar-429.test.ts": "web-search",
+    "codex-shim-destroyed-probe.test.ts": "codex-integration"
   },
   "migrated": [
     "adapters",
