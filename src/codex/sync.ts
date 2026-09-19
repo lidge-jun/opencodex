@@ -122,18 +122,24 @@ export async function syncModelsToCodex(
   // catalog/cache. It therefore needs the same unattended service-home veto as
   // the injector, before it gets a chance to create any artifact.
   const admission = (deps.admitCodexWrite ?? admitCodexWrite)();
-  if (admission.kind === "refused" && admission.authority === "service-home") {
-    return {
-      status: "refused",
-      authority: "service-home",
-      ok: false,
-      added: 0,
-      catalogPath: null,
-      catalogExists: false,
-      catalogWritten: false,
-      cacheSynced: false,
-      message: admission.message,
-    };
+  if (admission.kind === "refused") {
+    // An unattended refusal must never be silent: the startup path turns it into
+    // a bare /readyz "failed" with zero evidence, and the operator's only path
+    // to the cause is this message.
+    log?.error(`[opencodex] Codex write admission refused (${admission.authority}): ${admission.message}`);
+    if (admission.authority === "service-home") {
+      return {
+        status: "refused",
+        authority: "service-home",
+        ok: false,
+        added: 0,
+        catalogPath: null,
+        catalogExists: false,
+        catalogWritten: false,
+        cacheSynced: false,
+        message: admission.message,
+      };
+    }
   }
   // Config injection is a relevant Codex write even when the catalog bytes are unchanged.
   // Drop cached process evidence before async discovery so a process that appeared since the
