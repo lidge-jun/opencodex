@@ -75,6 +75,31 @@ function dereferenceChain(length: number): Record<string, unknown> {
   };
 }
 
+function endpointRequestUncertain(): OcxParsedRequest {
+  const values = Array.from({ length: 1_100 }, (_, index) => `value-${index}`);
+  return {
+    modelId: "gemini-test-model",
+    stream: false,
+    context: {
+      messages: [{ role: "user", content: "use the tool", timestamp: 0 }],
+      tools: [{
+        name: "ENDPOINT_TOOL_CANARY_5112",
+        description: "endpoint profile fixture",
+        parameters: {
+          type: "object",
+          properties: {
+            ENDPOINT_PROPERTY_CANARY_5112: {
+              $ref: "#/$defs/Value",
+              enum: [...values.slice(0, -1), "value-late-difference"],
+            },
+          },
+          $defs: { Value: { type: "string", enum: [...values] } },
+        },
+      }],
+    },
+  } as unknown as OcxParsedRequest;
+}
+
 function endpointRequest(lossy: boolean): OcxParsedRequest {
   return {
     modelId: "gemini-test-model",
@@ -398,13 +423,16 @@ describe("Google tool-schema loss report", () => {
     expect(result.lossReport.categories).toEqual({ "ref-overlay-replaced": 1 });
   });
 
-  test("comparison budget exhaustion is unknown and is not counted as proven loss", () => {
+ test("comparison budget exhaustion is unknown and is not counted as proven loss", () => {
+    // The overlay differs only AFTER the bounded comparison budget: identical prefixes exhaust
+    // the cap, so the late difference is indeterminate rather than proven loss.
     const values = Array.from({ length: 1_100 }, (_, index) => `value-${index}`);
-    const result = sanitize({
-      type: "object",
-      properties: { value: { $ref: "#/$defs/Value", enum: [...values] } },
-      $defs: { Value: { type: "string", enum: [...values] } },
-    });
+    const overlayValues = [...values.slice(0, -1), "value-late-difference"];
+   const result = sanitize({
+     type: "object",
+      properties: { value: { $ref: "#/$defs/Value", enum: [...overlayValues] } },
+     $defs: { Value: { type: "string", enum: [...values] } },
+   });
     expect(result.lossReport).toEqual({
       version: 1,
       endpointClass: "ai-studio",
@@ -413,15 +441,17 @@ describe("Google tool-schema loss report", () => {
       uncertainComparisons: 1,
       categories: {},
     });
-    // Compatible mode keeps the overlay bytes. The stacked strict child must refuse uncertainty.
+    // Compatible mode keeps the overlay bytes, which genuinely differ from the target.
+    // The stacked strict child must refuse uncertainty.
     const value = (result.parameters.properties as Record<string, Record<string, unknown>>).value;
-    expect(value.enum).toEqual(values);
+    expect(value.enum).toEqual(overlayValues);
+    expect(value.enum).not.toEqual(values);
     const compiled = compileGoogleWireBody({
       tools: [{ functionDeclarations: [{
         name: "uncertain_comparison",
         parameters: {
           type: "object",
-          properties: { value: { $ref: "#/$defs/Value", enum: [...values] } },
+          properties: { value: { $ref: "#/$defs/Value", enum: [...overlayValues] } },
           $defs: { Value: { type: "string", enum: [...values] } },
         },
       }] }],
@@ -634,6 +664,37 @@ describe("Google tool-schema loss report", () => {
         type: "object",
         properties: { OUTPUT_SCHEMA_CANARY_5112: { type: "integer", minimum: 1 } },
       });
+   } finally {
+     console.error = realError;
+   }
+ });
+
+  test("report-only mode emits one content-free diagnostic for an indeterminate comparison", async () => {
+    const adapter = createGoogleAdapter({
+      adapter: "google",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      apiKey: "test-key",
+      googleMode: "ai-studio",
+    } as OcxProviderConfig);
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      setDebugSettings({ debug: true });
+      resetDebugLogBufferForTests();
+      const built = await adapter.buildRequest(endpointRequestUncertain());
+      const lines = getDebugLogEntries().map((entry) => entry.line)
+        .filter((entry) => entry.includes("google-tool-schema-loss"));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]!).toContain(`"uncertainComparisons":1`);
+      expect(lines[0]!).toContain(`"lossy":false`);
+      expect(built.body).toBeDefined();
+      for (const canary of [
+        "ENDPOINT_TOOL_CANARY_5112",
+        "ENDPOINT_PROPERTY_CANARY_5112",
+        "value-late-difference",
+      ]) {
+        expect(getDebugLogEntries().map((entry) => entry.line).join("\n")).not.toContain(canary);
+      }
     } finally {
       console.error = realError;
     }

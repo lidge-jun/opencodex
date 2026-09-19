@@ -743,7 +743,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     endpointClass: provider.googleMode ?? "ai-studio",
   } satisfies GoogleToolSchemaProfile;
   const reportToolSchemaLoss = (report: GoogleToolSchemaLossReport): void => {
-    if (!report.lossy) return;
+    if (!report.lossy && report.uncertainComparisons === 0) return;
     debugProviderDiagnosticLazy("google", "google-tool-schema-loss", () => ({ ...report }));
   };
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
