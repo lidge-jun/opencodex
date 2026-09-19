@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,7 @@ import { repoPath } from "../helpers/repo-root";
 const ADMIN_TOKEN = "ocx_admin_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DATA_TOKEN = "ocx_data_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const METRICS_UPSTREAM = "metrics-upstream.example";
+const OBSERVATION_TIMEOUT = Symbol("observation-timeout");
 
 function authState(): ManagementAuthState {
   return {
@@ -84,20 +85,22 @@ function awaitBounded<T>(promise: Promise<T>, message: string): Promise<T> {
   });
 }
 
+function awaitObservation<T>(promise: Promise<T>): Promise<T | typeof OBSERVATION_TIMEOUT> {
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => resolve(OBSERVATION_TIMEOUT), 5_000);
+    void promise.then(value => {
+      clearTimeout(timeout);
+      resolve(value);
+    });
+  });
+}
+
 function nextFinalRequestLog(
   predicate: (entry: RequestLogEntry) => boolean,
 ): { promise: Promise<RequestLogEntry>; dispose: () => void } {
   let unsubscribe = () => {};
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const dispose = (): void => {
-    if (timeout) clearTimeout(timeout);
-    unsubscribe();
-  };
-  const promise = new Promise<RequestLogEntry>((resolve, reject) => {
-    timeout = setTimeout(() => {
-      dispose();
-      reject(new Error("finalized request log was not observed"));
-    }, 5_000);
+  const dispose = (): void => { unsubscribe(); };
+  const promise = new Promise<RequestLogEntry>(resolve => {
     unsubscribe = observeRequestLogsForTests(entry => {
       if (!predicate(entry)) return;
       dispose();
@@ -433,6 +436,28 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     return server;
   };
 
+  const startMetricsServerWithExpectedError = (
+    expected: Error,
+    observed: unknown[],
+    unexpected: unknown[],
+  ): ReturnType<typeof startServer> => {
+    const nativeServe = Bun.serve.bind(Bun);
+    const serveSpy = spyOn(Bun, "serve").mockImplementation(options => nativeServe({
+      ...options,
+      error(error) {
+        if (error === expected) observed.push(error);
+        else unexpected.push(error);
+        return new Response("expected metrics fixture server error", { status: 500 });
+      },
+    } as Parameters<typeof Bun.serve>[0]));
+    try {
+      return startMetricsServer();
+    } finally {
+      // startServer is synchronous; restore before any request or awaited cleanup.
+      serveSpy.mockRestore();
+    }
+  };
+
   const stopMetricsServer = async (server: ReturnType<typeof startServer>): Promise<void> => {
     try {
       await server.stop(true);
@@ -564,6 +589,9 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
 
   test("buffered read errors stay failed even after terminal-looking partial bytes", async () => {
     const bytes = new TextEncoder().encode(completedResponseJson("partial"));
+    const fixtureError = new Error("fixture read failure");
+    const observedErrors: unknown[] = [];
+    const unexpectedErrors: unknown[] = [];
     installUpstream(originalFetch, () => {
       let delivered = false;
       return new Response(new ReadableStream<Uint8Array>({
@@ -573,18 +601,23 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
             controller.enqueue(bytes);
             return;
           }
-          controller.error(new Error("fixture read failure"));
+          controller.error(fixtureError);
         },
       }), { headers: { "content-type": "application/json" } });
     });
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startMetricsServer();
+    const server = startMetricsServerWithExpectedError(fixtureError, observedErrors, unexpectedErrors);
     const finalized = nextFinalRequestLog(entry => entry.status === 502 && entry.inboundProtocol === "responses");
     try {
       const response = await sendResponsesRequest(server);
       expect(response.status).toBe(500);
       await response.text();
-      const row = await finalized.promise;
+      expect(observedErrors).toEqual([fixtureError]);
+      expect(unexpectedErrors).toEqual([]);
+      const observedRow = await awaitObservation(finalized.promise);
+      expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("read-error finalization was not observed");
+      const row = observedRow;
       expect(row).toMatchObject({ status: 502, closeReason: "non_stream" });
       expect(row.firstOutputMs).toBeUndefined();
       const metrics = await scrapeServer(server);
@@ -632,7 +665,10 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       await awaitBounded(abortObserved, "outgoing upstream signal did not observe client abort");
       const outcome = await awaitBounded(requestOutcome, "client abort request did not settle");
       expect(outcome).toBeInstanceOf(Error);
-      const row = await finalized.promise;
+      const observedRow = await awaitObservation(finalized.promise);
+      expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("buffered-abort finalization was not observed");
+      const row = observedRow;
       expect(row).toMatchObject({ status: 499, closeReason: "client_cancel" });
       expect(row.firstOutputMs).toBeUndefined();
       const metrics = await scrapeServer(server);
@@ -671,7 +707,10 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
         expect(reader).toBeDefined();
         expect((await reader!.read()).done).toBe(false);
         clientAbort.abort(new DOMException("client cancelled streaming metrics request", "AbortError"));
-        const row = await finalized.promise;
+        const observedRow = await awaitObservation(finalized.promise);
+        expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+        if (observedRow === OBSERVATION_TIMEOUT) throw new Error("stream-cancel finalization was not observed");
+        const row = observedRow;
         expect(row).toMatchObject({ status: 499, closeReason: "client_cancel" });
         expect(row.firstOutputMs).toBeUndefined();
         const metrics = await scrapeServer(server);
