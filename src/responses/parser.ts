@@ -18,6 +18,7 @@ import { lookupReplayThoughtSignature } from "./thought-signature-replay";
 import { compactionItemToText, isCompactionItemType } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
+import { hasRoutedIdentity, repairRoutedIdentity } from "../adapters/identity";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
@@ -94,6 +95,27 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+
+/**
+ * Rewrite an inherited routed-identity sentence in a developer item so it names the model this
+ * request is destined for. Returns the input unchanged when no such sentence is present, which is
+ * every request that has not gone through a sub-agent spawn.
+ */
+function repairDeveloperIdentity(
+  content: string | OcxContentPart[],
+  modelId: string,
+): string | OcxContentPart[] {
+  if (typeof content === "string") {
+    return hasRoutedIdentity(content) ? repairRoutedIdentity(content, modelId) : content;
+  }
+  let changed = false;
+  const parts = content.map((part) => {
+    if (part.type !== "text" || !hasRoutedIdentity(part.text)) return part;
+    changed = true;
+    return { ...part, text: repairRoutedIdentity(part.text, modelId) };
+  });
+  return changed ? parts : content;
+}
 
 export function parseRequest(
   body: unknown,
@@ -253,7 +275,15 @@ export function parseRequest(
           case "developer": {
             pendingReasoning.length = 0;
             const content = inputContentParts(msg.content);
-            messages.push({ role: msg.role, content, timestamp: now });
+            messages.push({
+              role: msg.role,
+              // #5217: Codex replays the PARENT session's instruction block as the worker's
+              // developer message, so a sub-agent on another model inherits an identity sentence
+              // naming the parent. Only this proxy's own sentence is rewritten, and only on a
+              // developer item; user turns are the caller's content and stay byte-identical.
+              content: msg.role === "developer" ? repairDeveloperIdentity(content, data.model) : content,
+              timestamp: now,
+            });
             break;
           }
           case "assistant": {
