@@ -1301,6 +1301,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         prov.zaiResponsesDefaultVersion = latest.zaiResponsesDefaultVersion;
       }
     }
+    if (name === "volcengine-coding-plan") {
+      const latest = config.providers[name];
+      if (latest?.volcengineCodingPlanResponsesDefaultVersion !== undefined) {
+        prov.volcengineCodingPlanResponsesDefaultVersion = latest.volcengineCodingPlanResponsesDefaultVersion;
+      }
+    }
     // Reapply pins to the latest live row after DNS/import awaits, then validate the
     // complete draft before adopting any provider/default state.
     const latest = config.providers[name];

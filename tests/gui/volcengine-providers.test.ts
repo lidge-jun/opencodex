@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { applyProviderConfigHints, buildCatalogEntries } from "../../src/codex/catalog";
-import { KEY_LOGIN_PROVIDERS } from "../../src/oauth/key-providers";
+import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS } from "../../src/oauth/key-providers";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
+import { migrateVolcengineCodingPlanResponsesDefault } from "../../src/providers/volcengine-coding-plan-responses-migration";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { safeConfigDTO } from "../../src/server/auth-cors";
 import { routeModel } from "../../src/router";
@@ -49,9 +50,12 @@ describe("Volcengine Ark providers", () => {
     expect(PROVIDER_REGISTRY.find(provider => provider.id === "volcengine-coding-plan")).toMatchObject({
       label: "Volcengine Ark Coding Plan",
       baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
-      adapter: "openai-chat",
+      responsesPath: "/responses",
+      adapter: "openai-responses",
       authKind: "key",
+      supportsServiceTier: false,
       preserveCustomDestination: true,
+      dropResponsesReasoningItems: true,
       defaultModel: "ark-code-latest",
       models: [
         "ark-code-latest",
@@ -111,6 +115,8 @@ describe("Volcengine Ark providers", () => {
     });
     expect(KEY_LOGIN_PROVIDERS["volcengine-coding-plan"]).toMatchObject({
       baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      responsesPath: "/responses",
+      adapter: "openai-responses",
       defaultModel: "ark-code-latest",
       liveModels: false,
       preserveReasoningContentModels: ["deepseek-v4-flash"],
@@ -153,6 +159,126 @@ describe("Volcengine Ark providers", () => {
       _rawBody: { model: route.modelId, input: "ping", stream: true },
     }, { headers: new Headers() });
     expect(request.url).toBe("https://ark.cn-beijing.volces.com/api/plan/v3/responses");
+  });
+
+  test("routes Coding Plan to native Responses and drops replayed reasoning items", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "volcengine-coding-plan",
+      providers: {
+        "volcengine-coding-plan": {
+          adapter: "openai-responses",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    };
+    const route = routeModel(config, "volcengine-coding-plan/glm-5.3");
+    expect(route.provider.responsesPath).toBe("/responses");
+    expect(route.provider.dropResponsesReasoningItems).toBe(true);
+
+    const request = createResponsesPassthroughAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: route.modelId,
+        input: [
+          { type: "reasoning", id: "rs_1", content: [{ type: "reasoning_text", text: "private" }] },
+          { type: "function_call", call_id: "call_1", name: "echo", arguments: "{\"value\":\"ok\"}" },
+          { type: "function_call_output", call_id: "call_1", output: "ok" },
+          { type: "function_call_output", call_id: "orphan", output: "must-stay-a-tool-output" },
+        ],
+        stream: true,
+      },
+    }, { headers: new Headers() });
+
+    expect(request.url).toBe("https://ark.cn-beijing.volces.com/api/coding/v3/responses");
+    const body = JSON.parse(request.body) as { input: Array<Record<string, unknown>> };
+    expect(body.input.map(item => item.type)).toEqual([
+      "function_call",
+      "function_call_output",
+      "function_call_output",
+    ]);
+    expect(body.input[2]).toEqual({
+      type: "function_call_output",
+      call_id: "orphan",
+      output: "must-stay-a-tool-output",
+    });
+  });
+
+  test("migrates the saved canonical Coding Plan Chat preset once, then preserves later wire choices", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "volcengine-coding-plan",
+      providers: {
+        "volcengine-coding-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+          authMode: "key",
+          apiKey: "test-key",
+          apiKeyPool: [{ id: "primary", key: "test-key", label: "primary" }],
+          defaultModel: "my-custom-default",
+          models: ["my-custom-default"],
+          modelAdapters: { "my-custom-default": "openai-chat" },
+          selectedModels: ["my-custom-default"],
+        },
+      },
+    };
+
+    expect(migrateVolcengineCodingPlanResponsesDefault(config)).toBe(true);
+    expect(config.providers["volcengine-coding-plan"]).toMatchObject({
+      adapter: "openai-responses",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      responsesPath: "/responses",
+      volcengineCodingPlanResponsesDefaultVersion: 1,
+      apiKey: "test-key",
+      apiKeyPool: [{ id: "primary", key: "test-key", label: "primary" }],
+      defaultModel: "my-custom-default",
+      models: ["my-custom-default"],
+      modelAdapters: { "my-custom-default": "openai-chat" },
+      selectedModels: ["my-custom-default"],
+    });
+
+    config.providers["volcengine-coding-plan"]!.adapter = "openai-chat";
+    expect(migrateVolcengineCodingPlanResponsesDefault(config)).toBe(false);
+    expect(config.providers["volcengine-coding-plan"]!.adapter).toBe("openai-chat");
+  });
+
+  test("leaves custom destinations and custom-named providers unmigrated", () => {
+    const customDestinationConfig: OcxConfig = {
+      port: 10100,
+      defaultProvider: "volcengine-coding-plan",
+      providers: {
+        "volcengine-coding-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.example.com/api/coding/v3",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    };
+    const beforeCustomDest = structuredClone(customDestinationConfig);
+    expect(migrateVolcengineCodingPlanResponsesDefault(customDestinationConfig)).toBe(false);
+    expect(customDestinationConfig).toEqual(beforeCustomDest);
+
+    const customNameConfig: OcxConfig = {
+      port: 10100,
+      defaultProvider: "my-volc-coding",
+      providers: {
+        "my-volc-coding": {
+          adapter: "openai-chat",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    };
+    const beforeCustomName = structuredClone(customNameConfig);
+    expect(migrateVolcengineCodingPlanResponsesDefault(customNameConfig)).toBe(false);
+    expect(customNameConfig).toEqual(beforeCustomName);
   });
 
   test.each([
@@ -218,10 +344,11 @@ describe("Volcengine Ark providers", () => {
         defaultProvider: "volcengine-coding-plan",
         providers: {
           "volcengine-coding-plan": {
-            adapter: "openai-chat",
+            adapter: "openai-responses",
             baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
             authMode: "key",
             apiKey: "test-key",
+            modelAdapters: { [modelId]: "openai-chat" },
           },
         },
       };
@@ -288,6 +415,36 @@ describe("Volcengine Ark providers", () => {
           .toEqual(["text", "image"]);
       }
     }
+  });
+
+  test("keeps Coding Plan replay compatibility when the GUI saves it under a custom name", () => {
+    const preset = deriveProviderPresets().find(provider => provider.id === "volcengine-coding-plan")!;
+    const postBody = buildProviderPostBody(preset, {
+      name: "my-coding-plan",
+      adapter: preset.adapter,
+      baseUrl: preset.baseUrl,
+      responsesPath: preset.responsesPath,
+      authMode: preset.auth,
+      apiKey: "test-key",
+      defaultModel: preset.defaultModel ?? "",
+    });
+    const provider = postBody.provider as OcxConfig["providers"][string];
+    enrichProviderFromCatalog(postBody.name, provider);
+
+    expect(provider).toMatchObject({
+      adapter: "openai-responses",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      responsesPath: "/responses",
+      dropResponsesReasoningItems: true,
+    });
+
+    const unrelated = {
+      adapter: "openai-responses",
+      baseUrl: "https://responses.example.test/v1",
+      authMode: "key",
+    } as OcxConfig["providers"][string];
+    enrichProviderFromCatalog("my-responses", unrelated);
+    expect(unrelated.dropResponsesReasoningItems).toBeUndefined();
   });
 
   test("keeps Agent Plan response routing when the GUI saves it under a custom name", () => {

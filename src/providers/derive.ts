@@ -447,13 +447,16 @@ function applyVerbosityDefaults(prov: OcxProviderConfig, entry: ProviderRegistry
  * was skipped and the reasoning ladder was advertised without summary support — exactly the
  * inconsistency that makes Codex drop the inbound reasoning object.
  *
- * Deliberately narrow: reasoning-summary and effort metadata only, via
+ * Deliberately narrow: reasoning-summary, effort, and replay-compatibility metadata only, via
  * `registryEntryForProviderDestination`, which matches fixed key destinations and refuses
  * templated or overridable base URLs. A custom row keeps its own identity for everything else.
  */
 function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+  if (prov.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined) {
+    prov.dropResponsesReasoningItems = destination.dropResponsesReasoningItems;
+  }
   if (destination?.modelReasoningEfforts) {
     prov.modelReasoningEfforts = fillRecordOfArrays(destination.modelReasoningEfforts, prov.modelReasoningEfforts);
   }
@@ -563,6 +566,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     prov.supportsResponsesCustomTools = entry.supportsResponsesCustomTools;
   }
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
+  if (prov.dropResponsesReasoningItems === undefined && entry.dropResponsesReasoningItems !== undefined) prov.dropResponsesReasoningItems = entry.dropResponsesReasoningItems;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
   applyServiceTierModelDefaults(prov, serviceTierModelDefaultsFor(entry, prov));
   applyVerbosityDefaults(prov, entry);

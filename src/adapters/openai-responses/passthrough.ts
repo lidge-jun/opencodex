@@ -32,7 +32,7 @@ import {
 import {
   createAdapterTierMetadata,
 } from "../../providers/fastwire";
-import { mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
+import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
 import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -295,6 +295,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       const synthesizeMissingCallOutputs = !forward && (stateless || pairedToolResults);
       if (forward || stateless || pairedToolResults) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss, synthesizeMissingCallOutputs);
+      }
+      if (provider.dropResponsesReasoningItems === true) {
+        outBody = dropResponsesReasoningInputItems(outBody);
       }
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
