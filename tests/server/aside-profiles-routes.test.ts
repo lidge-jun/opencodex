@@ -544,10 +544,23 @@ test("a confirmed drift restore does not rewrite a target edited while preferenc
    * Confirming drift says the operator accepted the difference they were shown. It does not say
    * they accepted one that appeared afterwards, and the snapshot checks say nothing about the
    * target file.
+   *
+   * The row is left only in the root store, so a restore that proceeded would copy it and its
+   * snapshot into this profile's own store first. That copy is history, and the coordinated
+   * restore cannot take it back: a refusal from inside it returns before the restore transaction
+   * begins, so nothing compensates. The refusal therefore has to happen before the copy, and the
+   * store witnesses below are what say it did.
    */
   const enabled = await (await api("/api/client-integrations/aside?profile=1", "PUT", { enabled: true })).json();
   expect(enabled.ok).toBe(true);
   const opId = enabled.opId as string;
+
+  const profileStore = join(root, "store", "aside-profiles", "1");
+  const snapshotName = join("snapshots", "aside", opId);
+  writeFileSync(join(root, "store", "journal.jsonl"), readFileSync(join(profileStore, "journal.jsonl"), "utf8"));
+  mkdirSync(join(root, "store", "snapshots", "aside"), { recursive: true });
+  writeFileSync(join(root, "store", snapshotName), readFileSync(join(profileStore, snapshotName), "utf8"));
+  rmSync(join(profileStore, snapshotName));
 
   writeFileSync(path(1), JSON.stringify({ theme: "drifted-before-the-preview" }));
   await seedRoster();
@@ -558,6 +571,8 @@ test("a confirmed drift restore does not rewrite a target edited while preferenc
   const plan = await preview.json() as { canApply: boolean; fingerprint: string };
   expect(plan.canApply).toBe(true);
 
+  const profileStoreBefore = treeWitness(profileStore);
+  const rootStoreBefore = treeWitness(join(root, "store"));
   const edited = JSON.stringify({ theme: "edited-after-the-check" });
   onPersist = () => { writeFileSync(path(1), edited); };
 
@@ -567,5 +582,8 @@ test("a confirmed drift restore does not rewrite a target edited while preferenc
 
   expect(undo.status).toBe(409);
   expect((await undo.json() as { code: string }).code).toBe("integration_preview_stale");
+  // The editor's file is the one still there, and no history was written on the way to refusing.
   expect(readFileSync(path(1), "utf8")).toBe(edited);
+  expect(treeWitness(profileStore)).toBe(profileStoreBefore);
+  expect(treeWitness(join(root, "store"))).toBe(rootStoreBefore);
 });
