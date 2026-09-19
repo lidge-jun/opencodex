@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   createOwnedFileSpendJournal,
   loadOrCreateSpendLedgerSalt,
@@ -70,9 +70,15 @@ describe("spend ledger file journal", () => {
     // been appended to as though the slot were empty.
     chmodSync(dir, 0o000);
     try {
-      expect(() => journal.read()).toThrowError(SpendLedgerOwnerError);
-      // The refusal carries the module's own vocabulary, not the errno and path of a state file.
-      expect(() => journal.read()).toThrow(/could not be inspected safely/);
+      // Refused, and refused in the module's own vocabulary rather than with the errno and path
+      // of a state file. WHICH gate notices first is platform-dependent: where the directory
+      // cannot be traversed at all, the ownership check cannot resolve it before the entry is
+      // ever inspected. Both are the same refusal, so the type and the absence of a leaked path
+      // are what this pins; the seam-driven case below pins the exact message everywhere.
+      let refusal: unknown;
+      try { journal.read(); } catch (error) { refusal = error; }
+      expect(refusal).toBeInstanceOf(SpendLedgerOwnerError);
+      expect((refusal as Error).message).not.toContain(dir);
     } finally {
       chmodSync(dir, 0o700);
     }
@@ -101,8 +107,11 @@ describe("spend ledger file journal", () => {
     // contract proved everywhere: only the JOURNAL's own inspection fails, the salt stays
     // readable, and every other filesystem step is real.
     for (const code of ["EACCES", "EIO"] as const) {
+      // Matched by entry name, not by full path: the owned home is the REAL path of the
+      // directory, and on macOS the temp root is a symlink, so an equality check against the
+      // path this case built never fired and the fault silently did nothing.
       setSpendJournalFaultForTests((step, target) => {
-        if (step !== "stat" || target !== journalPath) return;
+        if (step !== "stat" || basename(target) !== SPEND_LEDGER_JOURNAL_FILENAME) return;
         throw Object.assign(new Error(`injected ${code}`), { code });
       });
       expect(() => journal.read()).toThrowError(SpendLedgerOwnerError);

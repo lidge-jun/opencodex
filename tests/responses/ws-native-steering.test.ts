@@ -103,8 +103,10 @@ afterEach(async () => {
     // Every client gets its close and its wait even after an earlier one gave up. Stopping at
     // the first failure left the rest open for the next case to inherit.
     for (const client of clients.splice(0)) {
+      // Separate guards: close() runs the production handler, so a throw there would otherwise
+      // skip this client's completion wait as well as its own failure.
+      try { client.close(); } catch (error) { note(error); }
       try {
-        client.close();
         await waitFor(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
       } catch (error) { note(error); }
     }
