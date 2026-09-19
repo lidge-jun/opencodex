@@ -798,6 +798,21 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: "qwen3.8-max",
     models: ALIBABA_TOKEN_PLAN_MODELS,
     liveModels: false,
+    // Alibaba documents an OpenAI-compatible Responses API on this same base and ships an
+    // official Codex integration guide (wire_api = "responses") (#5097). The gateway serves
+    // the same models over both wires, so these pins are scoped to Responses inbound only:
+    // Codex clients ride the native wire with zero translation hops, while chat and
+    // anthropic inbound keep the provider-wide chat wire and its measured prefix-cache
+    // behavior. These three models carry live end-to-end evidence on this gateway (custom
+    // tools, reasoning replay, streaming, multi-turn continuation - #5097); the rest of the
+    // family can be pinned as field reports land, and modelAdapters always wins either way.
+    // The intl sibling stays unpinned until the same four-axis verification runs against its
+    // gateway (its /responses route is registered, #5097).
+    modelWireDefaults: {
+      "qwen3.8-flash": { wire: "openai-responses", inbound: ["responses"] },
+      "qwen3.7-plus": { wire: "openai-responses", inbound: ["responses"] },
+      "glm-5.3": { wire: "openai-responses", inbound: ["responses"] },
+    },
     note: "Token Plan Personal Edition · China (Beijing)",
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
