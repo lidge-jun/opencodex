@@ -149,6 +149,7 @@ featured or picker rank. Canonical `opencode-go` rows retain their configured re
 and provider-scoped context metadata both when generated and when merged from retained catalog
 state; `deepseek-v4.1-flash` therefore keeps its 1,048,576-token window, while synthetic max/ultra
 choices are not added to that provider's declared ladder.
+`meta-muse` declares `max` for both seeded models under the [Muse provider contract](providers-and-adapters.md), so routed-client catalogs can expose it without extending OpenCode Go's ladder.
 The first-party DeepSeek `deepseek-flash` row declares native `text` and `image` input and therefore
 does not require the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`

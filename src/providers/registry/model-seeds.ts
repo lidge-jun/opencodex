@@ -177,6 +177,15 @@ export const META_MUSE_REASONING_EFFORTS = ["minimal", "low", "medium", "high", 
 export const META_MUSE_REASONING_EFFORT_MAP: Record<string, string> = Object.fromEntries(
   META_MUSE_REASONING_EFFORTS.map(effort => [effort, effort]),
 );
+/*
+ * Muse Code credentials have a separate capability contract. Meta's authenticated
+ * /muse-code/models roster advertises max for both 1.3 models, and the Responses API
+ * accepts it when the request identifies the Muse client surface.
+ */
+export const META_MUSE_CODE_REASONING_EFFORTS = [...META_MUSE_REASONING_EFFORTS, "max"];
+export const META_MUSE_CODE_REASONING_EFFORT_MAP: Record<string, string> = Object.fromEntries(
+  META_MUSE_CODE_REASONING_EFFORTS.map(effort => [effort, effort]),
+);
 /** Both Muse Spark 1.3 tiers publish a 1,048,576-token window (dev.meta.ai/docs/models). */
 export const META_MUSE_CONTEXT_WINDOW = 1_048_576;
 export const META_MUSE_MODELS = ["muse-spark-1.3", "muse-spark-1.3-contributor"];

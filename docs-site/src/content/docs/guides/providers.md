@@ -686,6 +686,12 @@ instead, where the same key is visible. A pasted key faces the same format check
 same live validation against the Model API as an imported one. See
 [Platform support](/reference/platform-support/) for the full per-platform picture.
 
+Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
+routed clients, including Grok's effort picker. Requests use
+`User-Agent: muse-build/1.3.0 (opencodex compatibility)` so Meta accepts the Muse Code
+effort contract. An explicit provider User-Agent overrides this default and may cause
+`max` to be rejected. The `meta-model` and OpenCode Go effort ladders remain unchanged.
+
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
