@@ -3,6 +3,9 @@ import { routeModel } from "../../src/router";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { applyOpenAiVirtualModel } from "../../src/providers/openai-virtual-models";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { captureProviderGather } from "../../src/codex/catalog/gather-capture";
+import { fetchProviderModelsWithAuth, refreshingModelsAuthResolver } from "../../src/codex/catalog/provider-models";
+import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
 import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
 
@@ -69,5 +72,53 @@ describe("resolved static policy consumers", () => {
     expect(logCtx.model).toBe(resolution.selectedModelId);
     expect(logCtx.resolvedModel).toBe(resolution.wireModelId);
     expect(parsed._openAiVirtualSelectedModelId).toBe(resolution.selectedModelId);
+  });
+
+  test("OpenAI API gather capture and catalog rows retain lower configured limits", async () => {
+    const modelId = "gpt-6-astra";
+    const captured = captureProviderGather("openai-apikey", {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authMode: "key",
+      apiKey: "test-key",
+      liveModels: false,
+      models: [modelId],
+      modelContextWindows: { [modelId]: 200_000 },
+      modelMaxOutputTokens: { [modelId]: 8_000 },
+    }, refreshingModelsAuthResolver);
+
+    const { models } = await fetchProviderModelsWithAuth(captured, 0, undefined, refreshingModelsAuthResolver);
+    const row = models.find(model => model.id === modelId);
+    const limits = [
+      ["contextWindow", captured.provider.modelContextWindows?.[modelId], row?.contextWindow, 200_000],
+      ["maxOutputTokens", captured.provider.modelMaxOutputTokens?.[modelId], row?.maxOutputTokens, 8_000],
+    ] as const;
+    for (const [field, capturedValue, emittedValue, expected] of limits) {
+      expect({ field, capturedValue, emittedValue }).toEqual({
+        field,
+        capturedValue: expected,
+        emittedValue: expected,
+      });
+    }
+  });
+
+  test("Anthropic family context outranks provider-wide and observed date-model limits", () => {
+    const modelId = "claude-sonnet-4-20250514";
+    const captured = captureProviderGather("anthropic", {
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      authMode: "oauth",
+      liveModels: false,
+      models: [modelId],
+      contextWindow: 111_000,
+      modelContextWindows: { "claude-sonnet-4": 222_000 },
+    }, refreshingModelsAuthResolver);
+
+    const projected = applyProviderConfigHints("anthropic", captured.provider, {
+      provider: "anthropic",
+      id: modelId,
+      contextWindow: 333_000,
+    });
+    expect(projected.contextWindow).toBe(222_000);
   });
 });
