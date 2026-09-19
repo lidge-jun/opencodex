@@ -272,7 +272,9 @@ alternative this code cannot undo is not a refusal.
 The pinned helper's `maxBytes` binds both sides of that decode: the bytes that arrive on the
 socket keep their existing meaning, and the decoded bytes are bounded by the same ceiling, so a
 small coded response cannot expand past the limit a caller set to bound what it holds. A decoder
-failure surfaces as a named `PinnedHttpError` and closes the connection.
+failure surfaces as a named `PinnedHttpError`. Connection teardown belongs to the responses that
+end early — a decode failure, an exceeded ceiling, a cancelled read; a response that completed
+is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

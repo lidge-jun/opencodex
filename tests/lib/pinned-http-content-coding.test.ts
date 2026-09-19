@@ -200,14 +200,23 @@ describe("pinned direct content coding", () => {
   });
 
   test("a corrupt coded body fails with a named decode error rather than a bare stream failure", async () => {
-    const { server: target, connection } = codedTarget("gzip", new TextEncoder().encode("this is not gzip at all"));
+    // Promise more than is sent and keep the socket open. A fixture that delivers its whole
+    // declared length lets the response complete before the decoder rejects, and then the
+    // connection may be pooled rather than closed - which would make this assert the same
+    // agent behavior the success case above deliberately does not pin. Holding the response
+    // unfinished is what makes the close attributable to this path.
+    const corrupt = new TextEncoder().encode("this is not gzip at all");
+    const { server: target, connection } = codedTarget("gzip", corrupt, {
+      holdAfter: corrupt.byteLength,
+      declaredLength: corrupt.byteLength + 1_024,
+    });
     const port = await listen(target);
     try {
       const response = await pinnedGet(port, "/corrupt");
       const error = await response.text().catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PinnedHttpError);
       expect(error).toMatchObject({ code: "content_decode_failed" });
-      // The response ends early here, so the connection is this path's to close.
+      // The response never finished, so closing it is this path's obligation.
       expect(await awaitDestroyed(connection())).toBe(true);
     } finally {
       connection()?.destroy();
@@ -285,7 +294,12 @@ describe("pinned direct content coding", () => {
     const limit = coded.byteLength - 1;
     expect(coded.byteLength).toBeGreaterThan(limit);
     expect(tiny.byteLength).toBeLessThanOrEqual(limit);
-    const { server: target, connection } = codedTarget("gzip", coded);
+    // Unfinished for the same reason the corrupt case is: the ceiling must be what closes this
+    // connection, not the response having completed.
+    const { server: target, connection } = codedTarget("gzip", coded, {
+      holdAfter: coded.byteLength,
+      declaredLength: coded.byteLength + 1_024,
+    });
     const port = await listen(target);
     try {
       const response = await pinnedGet(port, "/inverted", { maxBytes: limit });
