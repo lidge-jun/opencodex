@@ -7,17 +7,23 @@ import { standaloneRecycleEnv } from "../../src/client/runtime";
 
 describe("standalone recycle environment", () => {
   test("removes a disconnected hub token and its token-file source", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-recycle-env-"));
+    const file = join(dir, "hub-service-token");
     const hubToken = "hub-issued-token";
+    writeFileSync(file, `${hubToken}\n`, "utf8");
     const source = {
       OPENCODEX_API_AUTH_TOKEN: hubToken,
-      OCX_API_TOKEN_FILE: "/tmp/hub-service-token",
+      OCX_API_TOKEN_FILE: file,
       PATH: "/usr/bin",
     };
 
-    expect(standaloneRecycleEnv(source, serviceApiTokenFingerprint(hubToken))).toEqual({
+    const result = standaloneRecycleEnv(source, serviceApiTokenFingerprint(hubToken));
+    expect(result).toEqual({
       PATH: "/usr/bin",
     });
+    expect(result.OCX_API_TOKEN_FILE).toBeUndefined();
     expect(source.OPENCODEX_API_AUTH_TOKEN).toBe(hubToken);
+    expect(source.OCX_API_TOKEN_FILE).toBe(file);
   });
 
   test("preserves an independently configured operator credential", () => {
