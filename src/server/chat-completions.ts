@@ -23,7 +23,7 @@ import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPo
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import { estimateTokens } from "../lib/token-estimate";
-import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
+import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
@@ -153,7 +153,10 @@ async function handleChatCompletionsWithBudget(
     // Preserve the routed destination for Go recognition, then settle the wire before
     // deriving protocol-scoped affinity. Recognition must not inspect the flipped adapter.
     const routedProvider = route.provider;
-    const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, "chat");
+    route.staticPolicy = captureRouteStaticPolicy(
+      route.providerName, route.modelId, routedProvider, route.staticPolicy.effectiveAlias, "chat",
+    );
+    const wireProvider = resolveWireProtocolOverride(route.providerName, route.modelId, routedProvider, "chat", route.staticPolicy);
     route.provider = resolveOpenCodeGoTransport(
       wireProvider,
       getOrAllocateRequestSessionLane(req),

@@ -254,7 +254,7 @@ export async function executeResponsesSidecars(
       return null;
     }
     const rotatedAdapter = resolveSelectionAdapter(
-      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
       config.cacheRetention,
     );
     bindRouteReasoningReplayScope({
