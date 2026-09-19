@@ -1,4 +1,4 @@
-import type { OcxProviderConfig } from "../types";
+import type { ModelCapabilities, OcxProviderConfig } from "../types";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 import type {
@@ -7,8 +7,9 @@ import type {
   ProviderRegistryEntry,
   ResponsesTerminalRepairPolicy,
 } from "./registry/types";
-export type StaticPolicySource = "operator" | "registry" | "hard-pin" | "provider-default" | "unknown";
-
+export type StaticPolicySource =
+  | "operator" | "operator-capability" | "captured-auth"
+  | "registry" | "hard-pin" | "provider-default" | "unknown";
 export type StaticProviderPolicyField =
   | "adapter" | "baseUrl" | "apiKeyTransport" | "headers" | "authMode" | "codexAccountMode"
   | "responsesPath" | "chatCompletionsPath" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip"
@@ -65,11 +66,16 @@ export interface ResolvedModelPolicy {
 }
 export interface ResolveModelPolicyInput {
   readonly providerName: string;
+  /** Final wire identity after resolveModelAlias and resolveOpenAiVirtualModel; public selection stays diagnostic-only. */
   readonly modelId: string;
   readonly provider: Readonly<OcxProviderConfig>;
   readonly registryEntry?: Readonly<ProviderRegistryEntry>;
   readonly transportMatchedRegistry: boolean;
   readonly inboundWire?: InboundWire;
+  /** Exact post-rewrite model capability declaration captured by the caller. */
+  readonly modelCapabilities?: Readonly<ModelCapabilities>;
+  /** Credential-free live admission result: key only after a usable override, otherwise the registry mode. */
+  readonly effectiveAuth?: Readonly<{ authMode: NonNullable<OcxProviderConfig["authMode"]> }>;
   /** Capture-time collision-aware alias decision. Omit to use provider then registry fallback. */
   readonly effectiveAlias?: string | null;
   readonly effectiveAliasSource?: Exclude<StaticPolicySource, "hard-pin" | "provider-default">;
@@ -88,16 +94,13 @@ export function clampObservedModelLimits(
     if (observedValue === undefined) return staticCap;
     return staticCap === undefined ? observedValue : Math.min(staticCap, observedValue);
   };
+  const contextWindow = clamp(policy.contextWindow, observed.contextWindow);
+  const maxInputTokens = clamp(policy.maxInputTokens, observed.maxInputTokens);
+  const maxOutputTokens = clamp(policy.maxOutputTokens, observed.maxOutputTokens);
   return Object.freeze({
-    ...(clamp(policy.contextWindow, observed.contextWindow) !== undefined
-      ? { contextWindow: clamp(policy.contextWindow, observed.contextWindow) }
-      : {}),
-    ...(clamp(policy.maxInputTokens, observed.maxInputTokens) !== undefined
-      ? { maxInputTokens: clamp(policy.maxInputTokens, observed.maxInputTokens) }
-      : {}),
-    ...(clamp(policy.maxOutputTokens, observed.maxOutputTokens) !== undefined
-      ? { maxOutputTokens: clamp(policy.maxOutputTokens, observed.maxOutputTokens) }
-      : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
   });
 }
 function detachedClone<T>(value: T): T {
@@ -158,7 +161,6 @@ function stableUnion(
   if (!registry && !operator) return [undefined, "unknown"];
   return [[...new Set([...(registry ?? []), ...(operator ?? [])])], operator ? "operator" : "registry"];
 }
-
 function staticHeaders(
   registry: Readonly<Record<string, string>> | undefined,
   operator: Readonly<Record<string, string>> | undefined,
@@ -173,7 +175,6 @@ function staticHeaders(
   }
   return [merged, "operator"];
 }
-
 function resolvedBaseUrl(entry: Readonly<ProviderRegistryEntry> | undefined, provider: Readonly<OcxProviderConfig>): string {
   if (!entry) return provider.baseUrl;
   const configured = provider.baseUrl.trim();
@@ -182,29 +183,27 @@ function resolvedBaseUrl(entry: Readonly<ProviderRegistryEntry> | undefined, pro
     ? configured
     : entry.baseUrl;
 }
-
 function wireDefault(
   declared: ModelWireDefault | undefined,
   provider: Readonly<OcxProviderConfig>,
   entry: Readonly<ProviderRegistryEntry> | undefined,
   inbound: InboundWire,
+  effectiveAuthMode: OcxProviderConfig["authMode"] | undefined,
 ): string | undefined {
   if (declared === undefined || !MODEL_ADAPTER_OVERRIDE_ALLOWED.has(provider.adapter)) return undefined;
   if (typeof declared !== "string") {
     if (!declared.inbound.includes(inbound)) return undefined;
-    const authMode = provider.authMode ?? entry?.authKind;
+    const authMode = effectiveAuthMode ?? provider.authMode ?? entry?.authKind;
     if (declared.authModes && authMode && !declared.authModes.includes(authMode)) return undefined;
   }
   const wire = typeof declared === "string" ? declared : declared.wire;
   return MODEL_ADAPTER_OVERRIDE_ALLOWED.has(wire) ? wire : undefined;
 }
-
 export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedModelPolicy {
   const entry = input.transportMatchedRegistry ? input.registryEntry : undefined;
   const provider = input.provider;
   const providerPolicy: Partial<StaticProviderPolicyShape> = {};
   const providerProvenance: Partial<Record<StaticProviderPolicyField, StaticPolicySource>> = {};
-
   const put = <K extends StaticProviderPolicyField>(key: K, value: StaticProviderPolicyShape[K] | undefined, source: StaticPolicySource): void => {
     if (value !== undefined) providerPolicy[key] = detachedClone(value) as never;
     providerProvenance[key] = source;
@@ -225,17 +224,18 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     const [value, source] = mapFill(registryValue, operatorValue);
     put(key, value as StaticProviderPolicyShape[K], source);
   };
-
   put("adapter", entry?.adapter ?? provider.adapter, entry ? "registry" : "operator");
   put("baseUrl", resolvedBaseUrl(entry, provider), entry ? "registry" : "operator");
   putScalar("apiKeyTransport", entry?.apiKeyTransport);
   const [headers, headersSource] = staticHeaders(entry?.staticHeaders, provider.headers);
   put("headers", headers, headersSource);
-  const resolvedAuthMode = entry?.authKind === "forward" || entry?.authKind === "oauth"
-    ? entry.authKind
-    : provider.authMode === "forward" ? undefined : provider.authMode ?? entry?.authKind;
-  put("authMode", resolvedAuthMode, entry?.authKind === "forward" || entry?.authKind === "oauth"
-    ? "registry"
+  const resolvedAuthMode = input.effectiveAuth?.authMode
+    ?? (entry?.authKind === "forward" || entry?.authKind === "oauth"
+      ? entry.authKind
+      : provider.authMode === "forward" ? undefined : provider.authMode ?? entry?.authKind);
+  put("authMode", resolvedAuthMode, input.effectiveAuth
+    ? "captured-auth"
+    : entry?.authKind === "forward" || entry?.authKind === "oauth" ? "registry"
     : provider.authMode !== undefined ? "operator" : entry ? "registry" : "unknown");
   putScalar("codexAccountMode", entry?.codexAccountMode);
   for (const key of [
@@ -281,22 +281,16 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "preserveReasoningContentModels", "requiresReasoningPlaceholderModels",
     "reasoningSplitModels", "reasoningDetailsModels", "thinkingToggleModels", "thinkingBudgetModels",
   ] as const) putUnion(key, entry?.[key]);
-
   const foldedModel = input.modelId.toLowerCase();
   const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined => (
     record?.[input.modelId] ?? Object.entries(record ?? {}).find(([key]) => key.toLowerCase() === foldedModel)?.[1]
   );
-  const modelSource = <T>(
-    operator: Readonly<Record<string, T>> | undefined,
-    registry: Readonly<Record<string, T>> | undefined,
-  ): StaticPolicySource => modelValue(operator) !== undefined
+  const modelSource = <T>(operator: Readonly<Record<string, T>> | undefined, registry: Readonly<Record<string, T>> | undefined): StaticPolicySource => modelValue(operator) !== undefined
     ? "operator"
     : modelValue(registry) !== undefined ? "registry" : "unknown";
   const modelOrProviderSource = <T>(
-    operatorMap: Readonly<Record<string, T>> | undefined,
-    registryMap: Readonly<Record<string, T>> | undefined,
-    operatorDefault: T | undefined,
-    registryDefault: T | undefined,
+    operatorMap: Readonly<Record<string, T>> | undefined, registryMap: Readonly<Record<string, T>> | undefined,
+    operatorDefault: T | undefined, registryDefault: T | undefined,
   ): StaticPolicySource => {
     const exact = modelSource(operatorMap, registryMap);
     return exact !== "unknown" ? exact : operatorDefault !== undefined ? "operator" : registryDefault !== undefined ? "registry" : "unknown";
@@ -304,37 +298,42 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   const configuredAdapter = provider.modelAdapters?.[input.modelId];
   const pin = pinnedWireAdapter(input.providerName, input.modelId);
   const normalizedModelId = input.modelId.trim().toLowerCase();
-  const registryWire = wireDefault(
-    entry?.modelWireDefaults?.[normalizedModelId],
-    provider,
-    entry,
-    input.inboundWire ?? "responses",
-  );
+  const registryWire = wireDefault(entry?.modelWireDefaults?.[normalizedModelId], provider, entry,
+    input.inboundWire ?? "responses", resolvedAuthMode);
   const explicitWire = configuredAdapter && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configuredAdapter)
     ? configuredAdapter
     : undefined;
   const providerAdapter = providerPolicy.adapter ?? provider.adapter;
+  const effectiveProviderForWire = resolvedAuthMode === provider.authMode
+    ? provider
+    : { ...provider, authMode: resolvedAuthMode };
+  const canonicalForward = isCanonicalOpenAiForwardProvider(effectiveProviderForWire);
   const adapter = pin
-    ?? (!isCanonicalOpenAiForwardProvider(provider) ? explicitWire ?? registryWire : undefined)
+    ?? (!canonicalForward ? explicitWire ?? registryWire : undefined)
     ?? providerAdapter;
   const adapterSource: StaticPolicySource = pin
     ? "hard-pin"
-    : explicitWire && !isCanonicalOpenAiForwardProvider(provider)
+    : explicitWire && !canonicalForward
       ? "operator"
-      : registryWire && !isCanonicalOpenAiForwardProvider(provider)
+      : registryWire && !canonicalForward
         ? "registry"
         : "provider-default";
+  const declaredModalities = input.modelCapabilities?.inputModalities;
+  const capabilityModalities = Array.isArray(declaredModalities) && declaredModalities.length > 0
+    ? [...declaredModalities]
+    : undefined;
   const modelContextWindow = modelValue(providerPolicy.modelContextWindows) ?? providerPolicy.contextWindow;
   const modelReasoningEfforts = modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
   const modelSupportsReasoningSummaries = modelValue(providerPolicy.modelSupportsReasoningSummaries)
     ?? (modelValue(providerPolicy.modelReasoningSummaryDelivery) !== undefined ? true : undefined);
   const modelSupportsVerbosity = modelValue(providerPolicy.modelSupportsVerbosity) ?? providerPolicy.supportsVerbosity;
   const modelSupportsServiceTier = modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
-
   const model: ResolvedPerModelStaticPolicy = {
     adapter,
     ...(modelContextWindow !== undefined ? { contextWindow: modelContextWindow } : {}),
-    ...(modelValue(providerPolicy.modelInputModalities) !== undefined ? { inputModalities: modelValue(providerPolicy.modelInputModalities) } : {}),
+    ...(capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) !== undefined
+      ? { inputModalities: capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) }
+      : {}),
     ...(modelValue(providerPolicy.modelMaxInputTokens) !== undefined ? { maxInputTokens: modelValue(providerPolicy.modelMaxInputTokens) } : {}),
     ...(modelValue(providerPolicy.modelMaxOutputTokens) !== undefined ? { maxOutputTokens: modelValue(providerPolicy.modelMaxOutputTokens) } : {}),
     ...(modelReasoningEfforts !== undefined ? { reasoningEfforts: modelReasoningEfforts } : {}),
@@ -357,7 +356,9 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     adapter: adapterSource,
   };
   modelProvenance.contextWindow = modelOrProviderSource(provider.modelContextWindows, entry?.modelContextWindows, provider.contextWindow, entry?.contextWindow);
-  modelProvenance.inputModalities = modelSource(provider.modelInputModalities, entry?.modelInputModalities);
+  modelProvenance.inputModalities = capabilityModalities
+    ? "operator-capability"
+    : modelSource(provider.modelInputModalities, entry?.modelInputModalities);
   modelProvenance.maxInputTokens = modelSource(provider.modelMaxInputTokens, entry?.modelMaxInputTokens);
   modelProvenance.maxOutputTokens = modelSource(provider.modelMaxOutputTokens, entry?.modelMaxOutputTokens);
   modelProvenance.reasoningEfforts = modelOrProviderSource(provider.modelReasoningEfforts, entry?.modelReasoningEfforts, provider.reasoningEfforts, entry?.reasoningEfforts);
@@ -375,7 +376,6 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   modelProvenance.responsesTerminalRepair = model.responsesTerminalRepair === undefined ? "unknown" : "registry";
   modelProvenance.fastTierDescription = model.fastTierDescription === undefined ? "unknown" : "registry";
   modelProvenance.directReasoningEffort = model.directReasoningEffort === undefined ? "unknown" : "registry";
-
   const alias = input.effectiveAlias !== undefined
     ? input.effectiveAlias
     : provider.alias !== undefined

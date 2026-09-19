@@ -3,7 +3,8 @@ import type { OcxProviderConfig } from "../../src/types";
 import { captureWireAdapterHardPins } from "../../src/types";
 import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import { effectiveProviderAliasDecision } from "../../src/providers/default-aliases";
+import { effectiveProviderAliasDecision, resolveModelAlias } from "../../src/providers/default-aliases";
+import { resolveOpenAiVirtualModel } from "../../src/providers/openai-virtual-models";
 import { routedProviderConfig } from "../../src/router";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
@@ -178,6 +179,71 @@ describe("resolved static model policy parity", () => {
     expect(policy.provenance.model.supportsReasoningSummaries).toBe("operator");
   });
 
+  test("nonempty explicit capability modalities outrank the registry map", () => {
+    const configured = provider({ modelCapabilities: { [MODEL]: { inputModalities: ["audio"] } } });
+    const policy = resolveModelPolicy({
+      providerName: "fixture-provider",
+      modelId: MODEL,
+      provider: configured,
+      registryEntry: registry(),
+      transportMatchedRegistry: true,
+      modelCapabilities: configured.modelCapabilities![MODEL],
+    });
+    const current = applyProviderConfigHints("fixture-provider", configured, { provider: "fixture-provider", id: MODEL });
+    expect(policy.model.inputModalities).toEqual(["audio"]);
+    expect(policy.model.inputModalities).toEqual(current.inputModalities);
+    expect(policy.provenance.model.inputModalities).toBe("operator-capability");
+  });
+
+  test("empty explicit capability modalities fall through to the registry map", () => {
+    const policy = resolveModelPolicy({
+      providerName: "fixture-provider",
+      modelId: MODEL,
+      provider: provider(),
+      registryEntry: registry(),
+      transportMatchedRegistry: true,
+      modelCapabilities: { inputModalities: [] },
+    });
+    expect(policy.model.inputModalities).toEqual(["text", "image"]);
+    expect(policy.provenance.model.inputModalities).toBe("registry");
+  });
+
+  test("absent explicit capabilities preserve the current registry-map winner", () => {
+    const policy = resolve(provider());
+    expect(policy.model.inputModalities).toEqual(["text", "image"]);
+    expect(policy.provenance.model.inputModalities).toBe("registry");
+  });
+
+  test("captured effective auth admits a usable key override without credential material", () => {
+    const entry = registry({ authKind: "oauth", allowKeyAuthOverride: true });
+    const configured = provider({ authMode: "key", apiKey: "usable-private-key" });
+    const policy = resolveModelPolicy({
+      providerName: "fixture-provider",
+      modelId: MODEL,
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+      effectiveAuth: { authMode: "key" },
+    });
+    expect(policy.provider.authMode).toBe("key");
+    expect(policy.provenance.provider.authMode).toBe("captured-auth");
+    expect(JSON.stringify(policy)).not.toContain("usable-private-key");
+  });
+
+  test("captured unresolved key authority falls back to registry OAuth", () => {
+    const policy = resolveModelPolicy({
+      providerName: "fixture-provider",
+      modelId: MODEL,
+      provider: provider({ authMode: "key", apiKey: "unresolved-private-reference" }),
+      registryEntry: registry({ authKind: "oauth", allowKeyAuthOverride: true }),
+      transportMatchedRegistry: true,
+      effectiveAuth: { authMode: "oauth" },
+    });
+    expect(policy.provider.authMode).toBe("oauth");
+    expect(policy.provenance.provider.authMode).toBe("captured-auth");
+    expect(JSON.stringify(policy)).not.toContain("unresolved-private-reference");
+  });
+
   test("a custom transport receives no registry policy", () => {
     const configured = provider({
       baseUrl: "https://custom.invalid/v1",
@@ -317,6 +383,58 @@ describe("resolved static model policy parity", () => {
     });
     expect(policy.effectiveAlias).toBe(current);
     expect(policy.provenance.alias).toBe("registry");
+  });
+
+  test("model alias policy resolves against the post-alias native identity", () => {
+    const configured = provider({ modelAliases: { [MODEL]: "short-selector" } });
+    const resolved = resolveModelAlias({ defaultModelAliases: false }, configured, [MODEL], "short-selector");
+    expect(resolved).toBe(MODEL);
+    const policy = resolveModelPolicy({
+      providerName: "fixture-provider",
+      modelId: resolved!,
+      provider: configured,
+      registryEntry: registry(),
+      transportMatchedRegistry: true,
+    });
+    expect(policy.modelId).toBe(MODEL);
+    expect(policy.model.contextWindow).toBe(100_000);
+  });
+
+  test("virtual model policy resolves against the post-rewrite wire identity", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.virtualModels !== undefined)!;
+    const selectedModelId = Object.keys(entry.virtualModels!)[0]!;
+    const resolution = resolveOpenAiVirtualModel(entry.id, selectedModelId)!;
+    const configured = provider({ adapter: entry.adapter, baseUrl: entry.baseUrl, authMode: entry.authKind });
+    const policy = resolveModelPolicy({
+      providerName: entry.id,
+      modelId: resolution.wireModelId,
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+    });
+    expect(policy.modelId).toBe(resolution.wireModelId);
+    expect(policy.modelId).not.toBe(resolution.selectedModelId);
+  });
+
+  test("repeat resolution is deeply equal, frozen, and detached", () => {
+    const configured = provider({ modelInputModalities: { [MODEL]: ["text"] } });
+    const entry = registry();
+    const input = {
+      providerName: "fixture-provider",
+      modelId: MODEL,
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+    } as const;
+    const first = resolveModelPolicy(input);
+    const second = resolveModelPolicy(input);
+    expect(first).toEqual(second);
+    expect(first).not.toBe(second);
+    expect(first.provider).not.toBe(second.provider);
+    expect(first.model).not.toBe(second.model);
+    expect(first.model.inputModalities).not.toBe(second.model.inputModalities);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(second)).toBe(true);
   });
 
   test("result is detached, recursively frozen, and excludes mutable request evidence", () => {

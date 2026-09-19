@@ -30,6 +30,10 @@ that result. A catalog consumer may pass observed context, max-input, or max-out
 resolver's call-local limit projection; the lower observed/static value wins, unknown remains
 unknown, and the projection mutates neither input. P1a establishes this provider-owned contract
 without changing catalog assembly; consumer migration is a separate layer.
+Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
+diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
+capability modalities outrank the registry/config modality map; an empty capability declaration
+falls through to that map.
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 

@@ -318,6 +318,11 @@ frozen and carries field/model provenance. It never persists resolved policy and
 account selection, quota, health, cooldowns, discovered availability, and request-owned evidence.
 Observed context/input/output values are combined only in a call-local projection that can narrow a
 captured static cap but cannot write observations into the static result.
+The resolver's model id is the post-alias, post-virtual-rewrite wire identity. An exact nonempty
+`modelCapabilities[model].inputModalities` declaration outranks the legacy per-model modality map;
+an empty declaration is non-authoritative and falls through. OAuth/key override admission remains a
+live caller decision: the resolver accepts only its credential-free effective auth mode and records
+that provenance, never the key, reference, or usability evidence that produced it.
 
 ## Provider validation ownership
 
