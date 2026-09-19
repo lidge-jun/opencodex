@@ -45,10 +45,10 @@ Proxy-format, adapter, and provider documentation distinguishes server-level SOC
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
-Provider preset totals are recounted from the current registry when a preset lands. The documented
-split is 95 total: 79 key-based, 12 OAuth, three local, and one default ChatGPT-forward preset. The
-English provider guide, all seven translated copies, and all eight quickstarts carry the same
-counts, and the guides carry the same fixed-host discovery limits.
+Provider preset totals are recounted from the current registry when a preset lands. The
+documented split is 95 total: 79 key-based, 12 OAuth, three local, and one default
+ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
+quickstarts carry the same counts, and the guides carry the same fixed-host discovery limits.
 
 That recount is no longer a manual obligation. Seventeen places restate these numbers and sixteen
 of them drifted once already — the English guide reached 95 while every translation and every
