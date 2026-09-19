@@ -2477,6 +2477,32 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread("model-gated-task", config, now + 2, "shared")).toBe("b");
   });
 
+  test("cache affinity preserves an over-threshold shared binding across a model detour", () => {
+    const config = orderedConfig({
+      accountPoolStrategy: "quota",
+      activeCodexAccountId: "a",
+      activeCodexAccountPinned: "a",
+      autoSwitchThreshold: 80,
+      pool: { cacheAffinity: true },
+    });
+    const now = Date.now();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 10);
+
+    expect(resolveCodexAccountForThread("cache-affine-model-detour", config, now, "shared")).toBe("a");
+    updateAccountQuota("a", 90);
+    expect(resolveCodexAccountForThreadDetailed(
+      "cache-affine-model-detour",
+      config,
+      now + 1,
+      "shared",
+      { modelEligibleAccountIds: new Set(["b"]) },
+    )).toMatchObject({ status: "selected", accountId: "b" });
+
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
+    expect(resolveCodexAccountForThread("cache-affine-model-detour", config, now + 2, "shared")).toBe("a");
+  });
+
   test("repeated model-gated round-robin requests reuse a separate detour affinity", () => {
     const now = 1_800_000_000_000;
     const threadId = "model-detour-affinity";
@@ -3174,7 +3200,7 @@ describe("codex account selection order", () => {
       activeCodexAccountPinned: "b",
     });
     updateAccountQuota("a", 10);
-    updateAccountQuota("b", 90);
+    updateAccountQuota("b", 100);
 
     expect(resolveCodexAccountForThreadDetailed(
       null,
@@ -3218,7 +3244,7 @@ describe("codex account selection order", () => {
       activeCodexAccountPinned: "b",
     });
     updateAccountQuota("a", 10);
-    updateAccountQuota("b", 90);
+    updateAccountQuota("b", 100);
 
     expect(resolveCodexAccountForThreadDetailed(
       null,
