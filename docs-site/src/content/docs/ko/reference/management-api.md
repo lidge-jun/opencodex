@@ -95,7 +95,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `POST /api/client-integrations/preview` | 클라이언트 하나의 `apply`, `overwrite`, `disable`을 계획합니다. 본문은 `{ "clientId": "...", "operation": "..." }` | 400 잘못된 클라이언트나 작업, 400 `invalid_aside_profile_path`, 409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/restore/preview` | 실행 취소를 계획합니다. 본문은 `{ "opId": "...", "confirmDrift": false }` | 404 없는 작업, 400 `invalid_aside_profile_path`, 409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Aside 프로필 하나의 변경을 계획합니다. `restore`에는 `opId`가 필요합니다 | 400 잘못된 본문이나 프로필 미지정, 404 없는 프로필이나 작업 |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Aside 프로필 하나의 변경을 계획합니다. `restore`에는 `opId`가 필요합니다 | 400 잘못된 본문이나 프로필 미지정, 404 없는 프로필이나 작업, 409 `integration_preview_unavailable` |
 
 계획에는 `version`, `clientId`, `operation`, `state`, `foreignEdit`, `kind`와 `path` 쌍으로 이루어진
 `changes`, 불투명한 `fingerprint`, `canApply`, `willChange`가 담기고 `refusalReason`과

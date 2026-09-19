@@ -113,7 +113,7 @@ maintenance, ni récupération.
 | --- | --- | --- |
 | `POST /api/client-integrations/preview` | Planifier `apply`, `overwrite` ou `disable` pour un client ; corps `{ "clientId": "...", "operation": "..." }` | 400 client ou opération invalide ; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/restore/preview` | Planifier une annulation ; corps `{ "opId": "...", "confirmDrift": false }` | 404 opération inconnue ; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Planifier la modification d'un seul profil Aside ; `restore` exige un `opId` | 400 corps invalide ou profil non précisé ; 404 profil ou opération inconnus |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Planifier la modification d'un seul profil Aside ; `restore` exige un `opId` | 400 corps invalide ou profil non précisé ; 404 profil ou opération inconnus; 409 `integration_preview_unavailable` |
 
 Un plan contient `version`, `clientId`, `operation`, `state`, `foreignEdit`, une liste `changes`
 de paires `kind` et `path`, une empreinte `fingerprint` opaque, `canApply`, `willChange`, ainsi

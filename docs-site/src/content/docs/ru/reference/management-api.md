@@ -114,7 +114,7 @@ GUI-сессия в стиле loopback не выпускается.
 | --- | --- | --- |
 | `POST /api/client-integrations/preview` | Спланировать `apply`, `overwrite` или `disable` для одного клиента; тело `{ "clientId": "...", "operation": "..." }` | 400 неверный клиент или операция; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/restore/preview` | Спланировать отмену; тело `{ "opId": "...", "confirmDrift": false }` | 404 операция не найдена; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Спланировать изменение одного профиля Aside; для `restore` нужен `opId` | 400 неверное тело или профиль не указан; 404 профиль или операция не найдены |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Спланировать изменение одного профиля Aside; для `restore` нужен `opId` | 400 неверное тело или профиль не указан; 404 профиль или операция не найдены; 409 `integration_preview_unavailable` |
 
 План содержит `version`, `clientId`, `operation`, `state`, `foreignEdit`, список `changes` из пар
 `kind` и `path`, непрозрачный `fingerprint`, `canApply` и `willChange`; `refusalReason` и

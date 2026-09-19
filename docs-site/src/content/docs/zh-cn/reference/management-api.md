@@ -95,7 +95,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `POST /api/client-integrations/preview` | 为一个客户端规划 `apply`、`overwrite` 或 `disable`；请求体为 `{ "clientId": "...", "operation": "..." }` | 400 客户端或操作无效；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/restore/preview` | 规划一次撤销；请求体为 `{ "opId": "...", "confirmDrift": false }` | 404 操作不存在；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | 规划单个 Aside 配置档的变更；`restore` 需要 `opId` | 400 请求体无效或未指定配置档；404 配置档或操作不存在 |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | 规划单个 Aside 配置档的变更；`restore` 需要 `opId` | 400 请求体无效或未指定配置档；404 配置档或操作不存在；409 `integration_preview_unavailable` |
 
 计划包含 `version`、`clientId`、`operation`、`state`、`foreignEdit`，由 `kind` 与 `path` 组成的
 `changes` 列表，不透明的 `fingerprint`，以及 `canApply` 和 `willChange`；`refusalReason` 与

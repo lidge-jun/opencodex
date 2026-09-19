@@ -91,7 +91,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | --- | --- | --- |
 | `POST /api/client-integrations/preview` | 為單一用戶端規劃 `apply`、`overwrite` 或 `disable`；請求內容為 `{ "clientId": "...", "operation": "..." }` | 400 用戶端或操作無效；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/restore/preview` | 規劃一次復原；請求內容為 `{ "opId": "...", "confirmDrift": false }` | 404 操作不存在；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | 規劃單一 Aside 設定檔的變更；`restore` 需要 `opId` | 400 請求內容無效或未指定設定檔；404 設定檔或操作不存在 |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | 規劃單一 Aside 設定檔的變更；`restore` 需要 `opId` | 400 請求內容無效或未指定設定檔；404 設定檔或操作不存在；409 `integration_preview_unavailable` |
 
 計畫包含 `version`、`clientId`、`operation`、`state`、`foreignEdit`，由 `kind` 與 `path` 組成的
 `changes` 清單，不透明的 `fingerprint`，以及 `canApply` 與 `willChange`；`refusalReason` 與
