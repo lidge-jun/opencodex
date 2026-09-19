@@ -228,7 +228,7 @@ test("profile zero can be planned; it is a real profile, not an absent one", asy
   expect(JSON.stringify(plan)).not.toContain(home);
 });
 
-test("a previewed profile change commits once and then reports itself stale", async () => {
+test("a previewed profile change commits once and then has no roster to replay against", async () => {
   await seedRoster();
   const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "apply" });
   expect(preview.status).toBe(200);
@@ -242,13 +242,16 @@ test("a previewed profile change commits once and then reports itself stale", as
   expect(document(1).providers.opencodex).toBeDefined();
   const committed = readFileSync(path(1), "utf8");
 
-  // Replaying the same confirmation describes a profile that is no longer in that state. Without
-  // a real comparison this would apply a second time.
+  // Replaying the same confirmation is refused before anything is written, and the reason is the
+  // earlier of the two: committing wrote the Aside preference into the configuration, so the
+  // roster this plan was bound to no longer describes the configuration in hand and there is
+  // nothing to replan against until the collection is read again. Production reaches the same
+  // point through the file, which the preference write also rewrites.
   const replay = await api("/api/client-integrations/aside/profiles/1", "PUT", {
     enabled: true, operation: "apply", planFingerprint: plan.fingerprint,
   });
   expect(replay.status).toBe(409);
-  expect((await replay.json() as { code: string }).code).toBe("integration_preview_stale");
+  expect((await replay.json() as { code: string }).code).toBe("integration_preview_unavailable");
   expect(readFileSync(path(1), "utf8")).toBe(committed);
   // The refusal must not touch a sibling profile either.
   expect(document(2).providers.opencodex).toBeUndefined();

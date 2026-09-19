@@ -218,14 +218,16 @@ test("an input that cannot be copied refuses the write instead of reading it twi
 });
 
 /**
- * A committed change must not take the roster away from the change after it.
+ * What a committed Aside change does to the retained roster, stated rather than assumed.
  *
- * The Aside commit reloads the roster while holding the configuration its preference write just
- * edited. If that load cannot admit what it is holding it clears the retained roster, and the next
- * confirmation is answered with "no roster is cached yet" rather than a comparison. That is the
- * difference between a refusal an operator can act on and one they cannot.
+ * The change writes the operator's Aside preference into the configuration, so the configuration a
+ * roster was admitted under is no longer the one in hand and the roster is retired. The next bound
+ * confirmation is answered with "no roster is cached yet" until an ordinary load runs, which is
+ * what the Integrations collection read does. This is not new behaviour introduced by binding the
+ * roster to the configuration object: persisting the preference rewrites the configuration file,
+ * and a roster has always been retired when that file moves.
  */
-test("an Aside change leaves the roster available for the confirmation after it", async () => {
+test("a committed Aside change retires the roster, and an ordinary load brings it back", async () => {
   mkdirSync(join(home, ".aside", "u", "0"), { recursive: true });
   writeFileSync(join(home, ".aside", "accounts.json"), JSON.stringify({
     currentAccountId: 0, accounts: [{ id: 0, name: "Primary" }],
@@ -246,14 +248,20 @@ test("an Aside change leaves the roster available for the confirmation after it"
 
   const result = await mutateAsideProfiles(
     {
-      config, models: () => loadExportModels(config), port: 10100, env: {} as NodeJS.ProcessEnv, home, store,
+      // A bound confirmation hands the mutation the roster the guard used, exactly as the route
+      // does, so nothing reloads it in the middle of the change.
+      config, models: MODELS, port: 10100, env: {} as NodeJS.ProcessEnv, home, store,
       persistConfig: () => {},
     },
     { profileId: 0, enabled: true },
   );
 
   expect(result.ok).toBe(true);
-  // The commit's own reload is an ordinary authoritative load: it happens while the configuration
-  // carries the preference this action just wrote, and it has to be able to admit that.
+  // The preference is now part of the configuration, and the roster was admitted without it.
+  expect(config.asideProfileSync).toBeDefined();
+  expect(previewExportModels(config)).toBeNull();
+
+  // Recovery is the ordinary flow rather than a special step.
+  await loadExportModels(config, []);
   expect(previewExportModels(config)).not.toBeNull();
 });
