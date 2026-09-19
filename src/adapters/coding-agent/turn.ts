@@ -411,7 +411,14 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           // The capture-only MCP handler never answers, so the CLI parks after message_stop.
           // The completed tool_use blocks are this turn's structured output: end the leg here
           // and terminate the tree; the client executes, and the next request continues.
-          emitOnce({ type: "done", stopReason: "tool_use", endTurn: false });
+          // Pre-result usage snapshots keep this terminated leg accountable: no result frame
+          // ever arrives for a turn parked on the never-answering capture server.
+          emitOnce({
+            type: "done",
+            stopReason: "tool_use",
+            endTurn: false,
+            ...(state.partialUsage ? { usage: state.partialUsage } : {}),
+          });
           kill();
           break;
         }

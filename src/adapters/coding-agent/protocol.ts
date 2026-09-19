@@ -114,10 +114,8 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** Extract OpenCodex usage from a `result` frame's Anthropic-shaped usage object. */
-export function usageFromResult(message: StreamMessage): OcxUsage | undefined {
-  const usage = asRecord(message.usage);
-  if (!usage) return undefined;
+/** Extract OpenCodex usage from the Anthropic-shaped usage record shared by frames and deltas. */
+function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | undefined {
   const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
   const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
   const cachedInputTokens = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
@@ -133,6 +131,47 @@ export function usageFromResult(message: StreamMessage): OcxUsage | undefined {
   };
 }
 
+/** Extract OpenCodex usage from a `result` frame's Anthropic-shaped usage object. */
+export function usageFromResult(message: StreamMessage): OcxUsage | undefined {
+  const usage = asRecord(message.usage);
+  return usage ? usageFromAnthropicShape(usage) : undefined;
+}
+
+/**
+ * Fold a pre-result usage snapshot into the running partial usage.
+ *
+ * `message_delta` and assistant-frame snapshots are cumulative per message, but a later snapshot
+ * can repeat or extend an earlier one, so each field keeps its maximum. The `result` frame stays
+ * authoritative for a text-only turn; partial state exists so a capture-only tool-bridge turn —
+ * which is terminated at `message_stop` before any result frame can arrive — still reports real
+ * token usage instead of zero.
+ */
+function mergePartialUsage(previous: OcxUsage | undefined, next: OcxUsage): OcxUsage {
+  if (!previous) return next;
+  const inputTokens = Math.max(previous.inputTokens, next.inputTokens);
+  const outputTokens = Math.max(previous.outputTokens, next.outputTokens);
+  const cacheRead = Math.max(
+    previous.cacheReadInputTokens ?? previous.cachedInputTokens ?? 0,
+    next.cacheReadInputTokens ?? next.cachedInputTokens ?? 0,
+  );
+  const cacheCreation = Math.max(previous.cacheCreationInputTokens ?? 0, next.cacheCreationInputTokens ?? 0);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    ...(cacheRead > 0 ? { cachedInputTokens: cacheRead, cacheReadInputTokens: cacheRead } : {}),
+    ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+  };
+}
+
+/** Record one usage snapshot; absent, malformed, or zero-only snapshots leave state untouched. */
+function observePartialUsage(state: StreamParseState, value: unknown): void {
+  const usage = asRecord(value);
+  if (!usage) return;
+  const next = usageFromAnthropicShape(usage);
+  if (next) state.partialUsage = mergePartialUsage(state.partialUsage, next);
+}
+
 /**
  * Mutable per-turn parse state shared across frames of one stream (§十二).
  * Thinking and text states are strictly decoupled.
@@ -146,6 +185,8 @@ export interface StreamParseState {
   sawMessageStop?: boolean;
   /** Completed tool_use content blocks observed in this stream. */
   completedToolCalls?: number;
+  /** Highest-seen usage snapshot from `message_delta`/assistant frames before a terminal result. */
+  partialUsage?: OcxUsage;
 }
 
 /**
@@ -168,7 +209,8 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
   if (type === "assistant") {
     // Fallback path: a complete assistant message. Surface text and thinking independently
     // only when the partial delta stream did not already carry them (§十二).
-    const content = asRecord(message.message)?.content;
+    const messageRecord = asRecord(message.message);
+    const content = messageRecord?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
         const part = asRecord(block);
@@ -183,6 +225,7 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
         }
       }
     }
+    observePartialUsage(state, messageRecord?.usage);
     return events;
   }
 
@@ -293,6 +336,13 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
 
   if (eventType === "message_stop") {
     state.sawMessageStop = true;
+    return events;
+  }
+
+  if (eventType === "message_delta") {
+    // Pre-result usage snapshots: a capture-only tool-bridge turn ends at message_stop with no
+    // result frame, so these snapshots are the only token accounting that leg will ever see.
+    observePartialUsage(state, event.usage);
     return events;
   }
 

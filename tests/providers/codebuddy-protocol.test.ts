@@ -249,6 +249,42 @@ describe("codebuddy stream-json event mapping", () => {
   test("usageFromResult returns undefined when no usage is present", () => {
     expect(usageFromResult({ type: "result" })).toBeUndefined();
   });
+
+  test("message_delta and assistant usage snapshots fold into partialUsage; result stays authoritative", () => {
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
+    // Zero-only snapshots are ignored so a tool-bridge turn without vendor usage stays absent.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 0, output_tokens: 0 } } },
+      state,
+    );
+    expect(state.partialUsage).toBeUndefined();
+    // First real snapshot sticks.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 12, output_tokens: 5 } } },
+      state,
+    );
+    expect(state.partialUsage).toEqual({ inputTokens: 12, outputTokens: 5, totalTokens: 17 });
+    // A later snapshot maxes each field instead of trusting frame order.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 15, output_tokens: 4, cache_read_input_tokens: 3 } } },
+      state,
+    );
+    expect(state.partialUsage).toEqual({
+      inputTokens: 15, outputTokens: 5, totalTokens: 20, cachedInputTokens: 3, cacheReadInputTokens: 3,
+    });
+    // Assistant-frame usage snapshots participate in the same fold.
+    mapStreamMessageToEvents(
+      { type: "assistant", message: { role: "assistant", content: [], usage: { input_tokens: 10, output_tokens: 9 } } },
+      state,
+    );
+    expect(state.partialUsage).toMatchObject({ inputTokens: 15, outputTokens: 9, totalTokens: 24 });
+    // A terminal result frame carries its own usage and does not consult partialUsage.
+    const events = mapStreamMessageToEvents(
+      { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 30, output_tokens: 2 } },
+      state,
+    );
+    expect(events).toEqual([{ type: "done", stopReason: "stop", usage: { inputTokens: 30, outputTokens: 2, totalTokens: 32 } }]);
+  });
 });
 
 describe("codebuddy conversation input builder (Strategy C projection)", () => {

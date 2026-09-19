@@ -152,6 +152,30 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
+  test("a tool-bridge turn reports the partial usage observed before message_stop", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const spawn: SpawnFn = (_cmd, _args) => fakeChild(frameLines([
+      INIT_OK,
+      { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { input_tokens: 12, output_tokens: 5 } } },
+      toolUseStart(cliName),
+      inputJsonDelta("{}"),
+      BLOCK_STOP,
+      { type: "stream_event", event: { type: "message_delta", delta: {}, usage: { input_tokens: 15, output_tokens: 4, cache_read_input_tokens: 3 } } },
+      MESSAGE_STOP,
+      // No result frame: the CLI parks on the never-answering capture server after message_stop.
+    ])) as unknown as ChildProcess;
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      stopReason: "tool_use",
+      endTurn: false,
+      usage: { inputTokens: 15, outputTokens: 5, totalTokens: 20, cachedInputTokens: 3, cacheReadInputTokens: 3 },
+    });
+  });
+
   test("an init frame without the bridge server fails closed", async () => {
     const adapter = createCodeBuddyAdapter(provider(), {
       spawn: () => fakeChild(frameLines([INIT_EMPTY])) as unknown as ChildProcess,
