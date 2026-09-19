@@ -164,6 +164,38 @@ function runtimeConfig(
   } as OcxConfig;
 }
 
+function liveMetricsConfig(): OcxConfig {
+  const config = runtimeConfig("openai-responses");
+  config.providers["openai-apikey"] = {
+    adapter: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "sk-metrics-fixture",
+    authMode: "key",
+  };
+  return config;
+}
+
+function upgradeRequestHeaders(): Record<string, string> {
+  return {
+    connection: "upgrade",
+    upgrade: "websocket",
+    "sec-websocket-version": "13",
+    "sec-websocket-key": Buffer.from("0123456789abcdef").toString("base64"),
+  };
+}
+
+function startLiveMetricsUpstream(): ReturnType<typeof Bun.serve> {
+  return Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket"
+        && server.upgrade(req, { data: {} })) return undefined;
+      return new Response("upgrade required", { status: 426 });
+    },
+    websocket: { message() {} },
+  });
+}
+
 function completedResponseJson(text = "ok"): string {
   return JSON.stringify({
     type: "response.completed",
@@ -489,6 +521,47 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     }
   };
 
+  const startMetricsServerWithLiveRequestControl = (
+    control: "abort" | "upgrade-throw" | "upgrade-false",
+    deps?: Parameters<typeof startServer>[1],
+  ): ReturnType<typeof startServer> => {
+    const nativeServe = Bun.serve.bind(Bun);
+    const serveSpy = spyOn(Bun, "serve").mockImplementation(options => {
+      const fetchHandler = options.fetch;
+      if (typeof fetchHandler !== "function") return nativeServe(options);
+      return nativeServe({
+        ...options,
+        fetch(req, requestServer) {
+          if (new URL(req.url).pathname !== "/v1/realtime") {
+            return Reflect.apply(fetchHandler, requestServer, [req, requestServer]);
+          }
+          let routedRequest = req;
+          if (control === "abort") {
+            const abort = new AbortController();
+            abort.abort(new Error("metrics pre-upgrade cancellation"));
+            routedRequest = new Request(req, { signal: abort.signal });
+          }
+          const routedServer = control === "abort" ? requestServer : new Proxy(requestServer, {
+            get(target, property) {
+              if (property === "upgrade") return () => {
+                if (control === "upgrade-throw") throw new Error("metrics upgrade fixture failure");
+                return false;
+              };
+              const value = Reflect.get(target, property, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+          return Reflect.apply(fetchHandler, routedServer, [routedRequest, routedServer]);
+        },
+      } as Parameters<typeof Bun.serve>[0]);
+    });
+    try {
+      return startMetricsServer(deps);
+    } finally {
+      serveSpy.mockRestore();
+    }
+  };
+
   const stopMetricsServer = async (server: ReturnType<typeof startServer>): Promise<void> => {
     try {
       await server.stop(true);
@@ -571,55 +644,129 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
   });
 
   test("successful live sideband upgrade records HTTP 101 as completed", async () => {
-    const upstream = Bun.serve({
-      port: 0,
-      fetch(req, server) {
-        if (req.headers.get("upgrade")?.toLowerCase() === "websocket"
-          && server.upgrade(req, { data: {} })) return undefined;
-        return new Response("upgrade required", { status: 426 });
-      },
-      websocket: { message() {} },
-    });
-    const config = runtimeConfig("openai-responses");
-    config.providers["openai-apikey"] = {
-      adapter: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      apiKey: "sk-metrics-fixture",
-      authMode: "key",
-    };
-    saveConfig(config);
-    const upstreamUrl = new URL("/upstream", upstream.url);
-    upstreamUrl.protocol = "ws:";
-    let factoryCalls = 0;
-    const server = startMetricsServer({
-      liveSidebandWebSocketFactory: () => {
-        factoryCalls += 1;
-        return new WebSocket(upstreamUrl);
-      },
-    });
-    const finalized = nextFinalRequestLog(entry => entry.status === 101);
-    const url = new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url);
-    url.protocol = "ws:";
-    const socket = new WebSocket(url);
+    const upstream = startLiveMetricsUpstream();
     try {
-      await awaitBounded(new Promise<void>((resolve, reject) => {
-        socket.addEventListener("open", () => resolve(), { once: true });
-        socket.addEventListener("error", () => {
-          void describeUpgradeRefusal(url).then(detail => reject(new Error(`live sideband upgrade failed; ${detail}`)));
-        }, { once: true });
-      }), "live sideband client did not open");
+      saveConfig(liveMetricsConfig());
+      const upstreamUrl = new URL("/upstream", upstream.url);
+      upstreamUrl.protocol = "ws:";
+      let factoryCalls = 0;
+      let server: ReturnType<typeof startServer> | undefined;
+      try {
+        server = startMetricsServer({
+          liveSidebandWebSocketFactory: () => {
+            factoryCalls += 1;
+            return new WebSocket(upstreamUrl);
+          },
+        });
+        const finalized = nextFinalRequestLog(entry => entry.status === 101);
+        try {
+          const url = new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url);
+          url.protocol = "ws:";
+          let socket: WebSocket | undefined;
+          try {
+            const activeSocket = socket = new WebSocket(url);
+            await awaitBounded(new Promise<void>((resolve, reject) => {
+              activeSocket.addEventListener("open", () => resolve(), { once: true });
+              activeSocket.addEventListener("error", () => {
+                void describeUpgradeRefusal(url).then(detail => reject(new Error(`live sideband upgrade failed; ${detail}`)));
+              }, { once: true });
+            }), "live sideband client did not open");
+            const observedRow = await awaitObservation(finalized.promise);
+            expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+            if (observedRow === OBSERVATION_TIMEOUT) throw new Error("101 upgrade finalization was not observed");
+            expect(observedRow.status).toBe(101);
+            expect(factoryCalls).toBe(1);
+            const metrics = await scrapeServer(server);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(1);
+            expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(0);
+          } finally {
+            socket?.close();
+          }
+        } finally {
+          finalized.dispose();
+        }
+      } finally {
+        if (server) await stopMetricsServer(server);
+      }
+    } finally {
+      await upstream.stop(true);
+    }
+  });
+
+  test("pre-upgrade cancellation finalizes exactly one aborted live request", async () => {
+    saveConfig(liveMetricsConfig());
+    const server = startMetricsServerWithLiveRequestControl("abort", {
+      liveSidebandWebSocketFactory: () => { throw new Error("cancelled request reached upstream dial"); },
+    });
+    const finalized = nextFinalRequestLog(entry => entry.status === 499);
+    const rows: RequestLogEntry[] = [];
+    const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
+    try {
+      const response = await fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
+        headers: upgradeRequestHeaders(),
+      });
+      expect(response.status).toBe(499);
+      await response.text();
       const observedRow = await awaitObservation(finalized.promise);
       expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
-      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("101 upgrade finalization was not observed");
-      expect(observedRow.status).toBe(101);
-      expect(factoryCalls).toBe(1);
+      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("499 upgrade cancellation was not finalized");
+      expect(observedRow.status).toBe(499);
+      expect(observedRow.closeReason).toBe("client_cancel");
+      expect(rows.map(entry => entry.status)).toEqual([499]);
       const metrics = await scrapeServer(server);
-      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(1);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(0);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
     } finally {
-      socket.close();
+      disposeRows();
       finalized.dispose();
       await stopMetricsServer(server);
+    }
+  });
+
+  test.each([
+    ["upgrade-throw", 502],
+    ["upgrade-false", 426],
+  ] as const)("%s finalizes exactly one failed live request", async (control, expectedStatus) => {
+    const upstream = startLiveMetricsUpstream();
+    try {
+      saveConfig(liveMetricsConfig());
+      const upstreamUrl = new URL("/upstream", upstream.url);
+      upstreamUrl.protocol = "ws:";
+      let factoryCalls = 0;
+      const server = startMetricsServerWithLiveRequestControl(control, {
+        liveSidebandWebSocketFactory: () => {
+          factoryCalls += 1;
+          return new WebSocket(upstreamUrl);
+        },
+      });
+      const finalized = nextFinalRequestLog(entry => entry.status === expectedStatus);
+      const rows: RequestLogEntry[] = [];
+      const disposeRows = observeRequestLogsForTests(entry => { if (entry.model === "gpt-live") rows.push(entry); });
+      try {
+        const response = await fetch(new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url), {
+          headers: upgradeRequestHeaders(),
+        });
+        expect(response.status).toBe(expectedStatus);
+        await response.text();
+        const observedRow = await awaitObservation(finalized.promise);
+        expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+        if (observedRow === OBSERVATION_TIMEOUT) throw new Error(`${expectedStatus} upgrade refusal was not finalized`);
+        expect(observedRow.status).toBe(expectedStatus);
+        expect(rows.map(entry => entry.status)).toEqual([expectedStatus]);
+        expect(factoryCalls).toBe(1);
+        const metrics = await scrapeServer(server);
+        expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(1);
+        expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+        expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="aborted"}')).toBe(0);
+        expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(0);
+      } finally {
+        disposeRows();
+        finalized.dispose();
+        await stopMetricsServer(server);
+      }
+    } finally {
       await upstream.stop(true);
     }
   });

@@ -1579,8 +1579,20 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
+        let liveRequestFinalized = false;
+        const finalizeLiveRequest = (
+          status: number,
+          meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
+        ): void => {
+          if (liveRequestFinalized) return;
+          liveRequestFinalized = true;
+          addFinalRequestLog(requestId, start, logCtx, status, meta);
+        };
         const turnAdmissionLease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
-        if (!turnAdmissionLease) return serverBusyResponse(req, "active turns", policy);
+        if (!turnAdmissionLease) {
+          finalizeLiveRequest(503);
+          return serverBusyResponse(req, "active turns", policy);
+        }
         const audioController = audioClient ? new AbortController() : undefined;
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
@@ -1600,18 +1612,26 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease)
                 : formatErrorResponse(401, "authentication_error", "opencodex API key required");
         } catch (error) {
-          releaseAcquisition();
+          try { releaseAcquisition(); }
+          finally {
+            finalizeLiveRequest(req.signal.aborted ? 499 : 500,
+              req.signal.aborted ? { closeReason: "client_cancel" } : undefined);
+          }
           throw error;
         }
         if (acquisition?.signal.aborted) {
+          const status = req.signal.aborted ? 499 : acquisition.didExpire() ? 504 : 503;
           try { if (!(resolved instanceof Response) && "finish" in resolved) resolved.finish(); }
-          finally { releaseAcquisition(); }
-          return withCors(formatErrorResponse(req.signal.aborted ? 499 : acquisition.didExpire() ? 504 : 503,
+          finally {
+            try { releaseAcquisition(); }
+            finally { finalizeLiveRequest(status, status === 499 ? { closeReason: "client_cancel" } : undefined); }
+          }
+          return withCors(formatErrorResponse(status,
             "upstream_error", acquisition.didExpire() ? "Audio connection timed out" : "Audio connection canceled"), req, policy);
         }
         if (resolved instanceof Response) {
           releaseAcquisition();
-          addFinalRequestLog(requestId, start, logCtx, resolved.status);
+          finalizeLiveRequest(resolved.status);
           return withCors(resolved, req, policy);
         }
         const audio = "finish" in resolved ? resolved : undefined;
@@ -1624,7 +1644,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           else releaseAcquisition();
         };
         if (req.signal.aborted) {
-          discardUpgrade();
+          try { discardUpgrade(); }
+          finally { finalizeLiveRequest(499, { closeReason: "client_cancel" }); }
           return withCors(formatErrorResponse(499, "client_closed_request", "Audio connection canceled"), req, policy);
         }
         const upstreamHandshake = await openLiveSidebandUpstream(
@@ -1642,7 +1663,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           } else {
             discardUpgrade();
           }
-          addFinalRequestLog(requestId, start, logCtx, upstreamHandshake.status);
+          finalizeLiveRequest(upstreamHandshake.status,
+            upstreamHandshake.status === 499 ? { closeReason: "client_cancel" } : undefined);
           console.error("[live] sideband upstream handshake failed: " + upstreamHandshake.message);
           return withCors(
             formatErrorResponse(upstreamHandshake.status, upstreamHandshake.code, upstreamHandshake.message),
@@ -1658,7 +1680,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             code: "upstream_error",
             message: "voice upstream closed before client upgrade",
           };
-          addFinalRequestLog(requestId, start, logCtx, failure.status);
+          finalizeLiveRequest(failure.status);
           return withCors(formatErrorResponse(failure.status, failure.code, failure.message), req, policy);
         }
         let upgraded = false;
@@ -1690,11 +1712,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             /* ignore */
           }
           closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => discardUpgrade());
+          finalizeLiveRequest(502);
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
           acquisition?.clear();
-          addFinalRequestLog(requestId, start, logCtx, 101);
+          finalizeLiveRequest(101);
           return undefined as unknown as Response;
         }
         try {
@@ -1703,6 +1726,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           /* ignore */
         }
         closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => discardUpgrade());
+        finalizeLiveRequest(426);
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
