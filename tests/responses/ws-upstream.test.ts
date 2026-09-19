@@ -30,9 +30,10 @@ import {
 } from "../../src/server/responses/ws-upstream";
 import type { OcxProviderConfig } from "../../src/types";
 import type { OcxConfig } from "../../src/types";
+import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, shouldUseCodexWsUpstream, streamingInit } from "../helpers/ws-upstream-fixtures";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
-const BOUNDED_WS_RUNTIME = "1.4.0";
 
 // #864 keeps win32 rewrite traffic out of the tee()+JS-pull chain, so
 // `isWin32EagerRewrite(platform, needsClientRewrite)` sends it through the eager
@@ -44,26 +45,6 @@ const BOUNDED_WS_RUNTIME = "1.4.0";
 // `FakeWebSocket.instances`; they hold the marker to this rule rather than to a
 // constant that only held before the backfill landed.
 const EAGER_RELAY_FORCED_BY_PLATFORM = isWin32EagerRewrite(process.platform, true);
-
-function shouldUseCodexWsUpstream(url: string, init?: RequestInit, upstreamWebsocket = false): boolean {
-  return rawShouldUseCodexWsUpstream(url, init, BOUNDED_WS_RUNTIME, upstreamWebsocket);
-}
-
-function codexWsUpstreamFetch(
-  url: string,
-  init: RequestInit,
-  fallback: typeof fetch,
-): Promise<Response> {
-  return rawCodexWsUpstreamFetch(url, init, fallback, BOUNDED_WS_RUNTIME);
-}
-
-function streamingInit(body: Record<string, unknown> = {}): RequestInit {
-  return {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer test" },
-    body: JSON.stringify({ model: "gpt-5.5", stream: true, ...body }),
-  };
-}
 
 describe("shouldUseCodexWsUpstream", () => {
   test("uses HTTP SSE on runtimes without a bounded response sink", async () => {
@@ -230,7 +211,14 @@ beforeEach(() => {
   for (const key of PROXY_ENV_KEYS) delete process.env[key];
 });
 
+// A case that calls handleResponses directly never takes the writer lease startServer takes,
+// so its dispatch is refused. Dropped in teardown so a throwing case cannot leave it behind.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
 afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.WebSocket = RealWebSocket;
   globalThis.fetch = RealFetch;
   FakeWebSocket.instances = [];
@@ -468,6 +456,7 @@ describe("handleResponses Codex WS relay selection", () => {
     const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
     const request = plaintextV2CollaborationRequest();
 
+    takeSpendHome();
     const response = await handleResponses(request, config, { model: "", provider: "" }, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
@@ -533,6 +522,7 @@ describe("handleResponses Codex WS relay selection", () => {
     });
     const config = { ...forwardConfig(), plaintextV2AgentMessages: true } as OcxConfig;
 
+    takeSpendHome();
     const response = await handleResponses(
       plaintextV2CollaborationRequest(),
       config,
@@ -559,6 +549,7 @@ describe("handleResponses Codex WS relay selection", () => {
       });
     });
 
+    takeSpendHome();
     const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
@@ -581,6 +572,7 @@ describe("handleResponses Codex WS relay selection", () => {
       { status: 200, headers: { "content-type": "text/event-stream" } },
     )) as typeof fetch;
 
+    takeSpendHome();
     const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
@@ -602,6 +594,7 @@ describe("handleResponses Codex WS relay selection", () => {
     });
 
     const logCtx = { model: "", provider: "" };
+    takeSpendHome();
     const response = await handleResponses(request(), forwardConfig(), logCtx, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
@@ -621,6 +614,7 @@ describe("handleResponses Codex WS relay selection", () => {
     });
 
     const logCtx = { model: "", provider: "" };
+    takeSpendHome();
     const response = await handleResponses(request(), forwardConfig(), logCtx, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
@@ -645,6 +639,7 @@ describe("handleResponses Codex WS relay selection", () => {
         { status: 200, headers: { "content-type": "text/event-stream" } },
       )) as typeof fetch;
 
+      takeSpendHome();
       const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
 
       expect(FakeWebSocket.instances).toHaveLength(0);
@@ -682,6 +677,7 @@ describe("handleResponses Codex WS relay selection", () => {
       { status: 200, headers: { "content-type": "text/event-stream" } },
     )) as typeof fetch;
 
+    takeSpendHome();
     const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
     const text = await response.text();
 
@@ -730,6 +726,7 @@ describe("codexWsUpstreamFetch", () => {
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } }) });
     };
     globalThis.WebSocket = CapturingSocket as unknown as typeof WebSocket;
+    takeSpendHome();
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer fixture", "content-type": "application/json", "x-openai-internal-codex-responses-lite": "true" },

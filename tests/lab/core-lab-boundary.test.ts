@@ -138,7 +138,11 @@ export function namesLabDirectly(source: string): boolean {
  * routes subagents to a different model than the operator configured. Nothing goes red;
  * the wrong model simply answers.
  */
-const SERVE_ANCHOR = "server = Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost });";
+// The anchor carries the spend-ledger wrapper because the listener is registered for rollback
+// at the moment it is created. It is still the same statement and still the start of the same
+// window; what changed is the expression the listener is assigned from. An anchor that no
+// longer matches makes every scan below measure an empty string, which is why they assert on it.
+const SERVE_ANCHOR = "server = spendLedgerLifecycle.track(Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost }));";
 const ACTIVATION_ANCHOR = "if (labActivationRequired(config, labConfigDir)) {";
 /**
  * The window ends at the RETURN, not at the activation check.
@@ -1017,6 +1021,7 @@ describe("activation window stays synchronous", () => {
     "(...).then()": "Promise.then on the fire-and-forget `import('../codex/plan-from-token')` chain. then() registers a callback and returns immediately; the callback is a nested function this scan skips. Awaiting the import would already fail Guard 3.",
     "(...).catch()": "Promise.catch on that same dynamic-import chain. Same fire-and-forget: it cannot suspend startServer.",
     "backgroundLifecycle.scheduleStartupRun()": "src/server/background-lifecycle.ts owns this object method. The call site cannot resolve the declaration statically; scheduleStartupRun is declared `(): void` and is documented as never blocking listen.",
+    "spendLedgerLifecycle.track()": "Instance method on the lifecycle from acquireSpendLedgerServerLifecycle in src/server/index/spend-ledger-lifecycle.ts, called on each listener as it is created. It binds the listener's stop, records a rollback closure and returns the same server; it is declared `<T>(server: T): T` and contains no await. An `await spendLedgerLifecycle.track(...)` would already fail Guard 3. The lifecycle's release() is not here because it is called inside the async stop wrapper, which this scan skips as a nested function.",
   };
 
   /**
