@@ -776,7 +776,6 @@
     "google-structured-output.test.ts": "adapters/google",
     "google-tool-result-adjacency.test.ts": "adapters/google",
     "google-tool-schema-contract.test.ts": "adapters/google",
-    "google-tool-schema-policy-config.test.ts": "server",
     "google-tool-schema.test.ts": "adapters/google",
     "google-vertex-http.test.ts": "adapters/google",
     "google-vertex-stream.test.ts": "adapters/google",
@@ -1546,6 +1545,7 @@
     "responses-code-mode-patch-compile.test.ts": "responses",
     "gui-codex-usage-score-parity.test.ts": "gui",
     "web-search-sidecar-429.test.ts": "web-search",
+    "management-google-tool-schema-policy.test.ts": "server",
     "codex-shim-destroyed-probe.test.ts": "codex-integration"
   },
   "migrated": [
