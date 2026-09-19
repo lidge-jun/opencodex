@@ -90,8 +90,11 @@ export function outboundProxyConfigured(
  * The proxy URL selected by configured outbound fetch for `url`, or null when none applies.
  *
  * Bun selects by scheme: `HTTPS_PROXY` for `https:` targets, `HTTP_PROXY` for `http:`.
- * A SOCKS5 `ALL_PROXY` is selected by the explicit wrapper first; other ALL_PROXY
- * schemes remain excluded because the native HTTP fetch does not honor them.
+ * A SOCKS5 `ALL_PROXY` is selected by the explicit wrapper first. A non-SOCKS
+ * `ALL_PROXY` is still honoured by the native fetch for plain `http:` targets on
+ * POSIX (the e2e suite proves the request reaches the proxy there); on Windows the
+ * native fetch does not consult `ALL_PROXY` at all, and for `https:` targets the
+ * SOCKS wrapper remains the only `ALL_PROXY` route.
  * Presence of *some* proxy variable (`outboundProxyConfigured`) is not that guarantee.
  */
 export function effectiveProxyFor(
@@ -108,7 +111,12 @@ export function effectiveProxyFor(
   const socksProxy = socks5ProxyFromEnv(env);
   if (socksProxy) return socksProxy;
   const value = env[key]?.trim() || env[key.toLowerCase()]?.trim();
-  return value ? value : null;
+  if (value) return value;
+  if (url.protocol === "http:" && process.platform !== "win32") {
+    const allProxy = env.ALL_PROXY?.trim() || env.all_proxy?.trim();
+    if (allProxy && /^https?:\/\//i.test(allProxy)) return allProxy;
+  }
+  return null;
 }
 
 export function isSocks5ProxyUrl(proxy: string): boolean {
