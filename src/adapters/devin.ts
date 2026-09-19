@@ -329,8 +329,11 @@ function assistantText(message: OcxAssistantMessage): string {
  * clients of the same service write #11 thinking with #12 signature and #18
  * signature_type on the assistant prompt.
  *
- * The signature attests the thinking it was produced with, so a block without
- * one contributes its text and nothing else rather than borrowing a neighbour's.
+ * The wire has room for only one thinking/signature pair. Preserve that
+ * association by replaying the last block with thinking text as a unit rather
+ * than combining independently signed blocks. A signature-only block attests
+ * encrypted thinking that is not being replayed, so it cannot sign a
+ * neighbour's text and is skipped.
  */
 function assistantThinking(
   message: OcxAssistantMessage,
@@ -338,15 +341,33 @@ function assistantThinking(
   const blocks = message.content.filter(
     (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
   );
-  if (blocks.length === 0) return {};
-  const thinking = blocks.map(b => b.thinking).filter(Boolean).join("\n");
-  // Only one signature can ride the prompt, so take the last block that has
-  // one: that is the block the turn actually ended on.
-  const signature = blocks.filter(b => b.signature).at(-1)?.signature;
+  const block = blocks.findLast(b => Boolean(b.thinking));
+  if (!block) return {};
   return {
-    ...(thinking ? { thinking } : {}),
-    ...(signature ? { signature } : {}),
+    ...(block.thinking ? { thinking: block.thinking } : {}),
+    ...(isCognitionReplayableSignature(block.signature) ? { signature: block.signature } : {}),
   };
+}
+
+/**
+ * Field #12 attests the #11 thinking to Cognition, so it can only carry a
+ * signature the service (or the source provider's thinking block) actually
+ * issued. The Responses parser stores a JSON.stringify(reasoningItem) dump on
+ * an unsigned thinking part so the opaque item survives a same-provider round
+ * trip; that serialized item is parseable provider state, not an attestation,
+ * and sending it as the signature hands Cognition a JSON dump where it expects
+ * its own issued token.
+ */
+function isCognitionReplayableSignature(signature: string | undefined): signature is string {
+  if (typeof signature !== "string" || signature.length === 0) return false;
+  if (!signature.startsWith("{")) return true;
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    return !parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || (parsed as { type?: unknown }).type !== "reasoning";
+  } catch {
+    return true;
+  }
 }
 
 export function mapOcxMessagesToDevin(parsed: OcxParsedRequest): ChatHistoryItem[] {
