@@ -613,15 +613,16 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
   // its own deadline, which names neither the slow leg nor whether the reply was ever sent.
   const { server: upstream, seenPaths, seenUpgradeHeaders, probe } = sidebandRelayUpstream(MAX_WS_FRAME_BYTES);
 
-  saveConfig(forwardConfig());
-
-  // Redirect ChatGPT sideband WebSocket targets to the local mock (config stays canonical).
-  // Extracted beside the peer rather than inlined: this case is at its size cap, and the repo
-  // answer to that is a sibling helper, not compressed control flow.
-  const { OriginalWebSocket, restore: restoreWebSocket } = redirectSidebandWebSocket(upstream.port);
-
-  const server = startServer(0);
+  // Created inside the try: a startServer throw used to leak the peer and the socket override.
+  let restoreWebSocket: (() => void) | undefined;
+  let live: ReturnType<typeof startServer> | undefined;
   try {
+    saveConfig(forwardConfig());
+    // Redirect ChatGPT sideband targets to the local mock; the config stays canonical. A sibling
+    // helper because this case is at its size cap and the repo answer is not to compress.
+    const { OriginalWebSocket, restore } = redirectSidebandWebSocket(upstream.port);
+    restoreWebSocket = restore;
+    const server = live = startServer(0);
     const wsUrl = new URL(`/v1/live/rtc_sideband`, server.url);
     wsUrl.protocol = "ws:";
     const client = new OriginalWebSocket(wsUrl.toString(), {
@@ -691,8 +692,8 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
       client.close();
     }
   } finally {
-    restoreWebSocket();
-    await server.stop(true);
+    restoreWebSocket?.();
+    if (live) await live.stop(true);
     await upstream.stop(true);
   }
 }, { timeout: 20_000 });
