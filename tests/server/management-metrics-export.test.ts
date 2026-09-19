@@ -684,12 +684,21 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
 
   test("terminal-free SSE EOF and downstream cancellation remain incomplete and aborted", async () => {
     const encoder = new TextEncoder();
-    installUpstream(originalFetch, send => {
+    installUpstream(originalFetch, (send, request) => {
       if (send === 1) {
         return new Response(responseSse(), { headers: { "content-type": "text/event-stream" } });
       }
+      const signal = request.signal;
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
+          const abort = () => {
+            try { controller.error(signal.reason); } catch { /* stream already settled */ }
+          };
+          if (signal.aborted) {
+            abort();
+            return;
+          }
+          signal.addEventListener("abort", abort, { once: true });
           controller.enqueue(encoder.encode(responseSse()));
         },
       }), { headers: { "content-type": "text/event-stream" } });
