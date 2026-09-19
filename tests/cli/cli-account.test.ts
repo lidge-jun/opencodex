@@ -1701,6 +1701,17 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.output).not.toContain("--flow");
     });
 
+    test("codex cancel without --flow is a usage error, not a server 400", async () => {
+      // The Codex route requires a flowId; sending { flowId: undefined } used
+      // to surface as a bare 400. Fail fast with the flag the login printed.
+      const before = requests.length;
+      const result = await run(["cancel", "chatgpt"]);
+
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("--flow");
+      expect(requests).toHaveLength(before);
+    });
+
     test("an empty pipe is a usage error, not an empty credential POST", async () => {
       const before = requests.length;
       const result = await run(

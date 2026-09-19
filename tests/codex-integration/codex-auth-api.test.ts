@@ -4807,21 +4807,6 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("POST /api/codex-auth/login/cancel expires the pending flow", async () => {
-    const flowId = "flow-cancel-test";
-    const req = new Request("http://localhost/api/codex-auth/login/cancel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ flowId }),
-    });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), {} as any);
-    expect(resp!.status).toBe(200);
-    const statusReq = new Request(`http://localhost/api/codex-auth/login-status?flowId=${flowId}`, { method: "GET" });
-    const statusResp = await handleCodexAuthAPI(statusReq, new URL(statusReq.url), {} as any);
-    const data = await statusResp!.json() as { status: string; error?: string };
-    expect(data).toMatchObject({ status: "error", error: "Login cancelled" });
-  });
-
   describe("POST /api/codex-auth/login/code", () => {
     async function startPendingFlow() {
       const oauth = await import("../../src/oauth");
@@ -4863,6 +4848,33 @@ describe("codex-auth API", () => {
         body: JSON.stringify(body),
       });
     }
+
+    test("cancels only the OAuth attempt owned by the pending flow", async () => {
+      const flow = await startPendingFlow();
+      const cancelSpy = spyOn(flow.oauth, "cancelLoginFlow").mockReturnValue(true);
+      try {
+        const staleReq = new Request("http://localhost/api/codex-auth/login/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowId: "flow-from-old-modal" }),
+        });
+        const staleResp = await handleCodexAuthAPI(staleReq, new URL(staleReq.url), makeConfig());
+        expect(staleResp!.status).toBe(400);
+        expect(cancelSpy).not.toHaveBeenCalled();
+
+        const req = new Request("http://localhost/api/codex-auth/login/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowId: flow.flowId }),
+        });
+        const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+        expect(resp!.status).toBe(200);
+        expect(cancelSpy).toHaveBeenCalledWith("chatgpt", flow.flowId);
+      } finally {
+        cancelSpy.mockRestore();
+        await flow.cleanup();
+      }
+    });
 
     test("accepts a manual code only for the pending flow without reflecting it", async () => {
       const flow = await startPendingFlow();
