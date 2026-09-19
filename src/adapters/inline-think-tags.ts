@@ -45,6 +45,7 @@ export class InlineThinkTagParser {
   private closeTag = "";
 
   private readonly interleaved: boolean;
+  private sawAnswerText = false;
 
   constructor(private readonly budget?: TranslatorBudget, options?: InlineThinkTagOptions) {
     this.interleaved = options?.interleaved === true;
@@ -118,7 +119,11 @@ export class InlineThinkTagParser {
     const idx = this.thinkingBuffer.indexOf(close);
     if (idx >= 0) {
       const thinking = this.thinkingBuffer.slice(0, idx);
-      const after = this.thinkingBuffer.slice(idx + close.length).trimStart();
+      const remainder = this.thinkingBuffer.slice(idx + close.length);
+      // The blank line a model leaves between its leading block and the answer is formatting
+      // noise, so it goes. Once the answer has started, whitespace is the answer's own: a
+      // mid-answer block sits inside markdown or code where indentation is meaningful.
+      const after = this.sawAnswerText ? remainder : remainder.trimStart();
       this.replaceCarry("thinkingBuffer", "");
       const events: AdapterEvent[] = [];
       if (thinking) events.push({ type: "reasoning_raw_delta", text: thinking });
@@ -159,7 +164,7 @@ export class InlineThinkTagParser {
       }
       if (openIndex >= 0 && openTag) {
         const before = this.preBuffer.slice(0, openIndex);
-        if (before) events.push({ type: "text_delta", text: before });
+        if (before) { this.sawAnswerText = true; events.push({ type: "text_delta", text: before }); }
         this.state = "thinking";
         this.closeTag = closeTagFor(openTag);
         this.replaceCarry("thinkingBuffer", this.preBuffer.slice(openIndex + openTag.length));
@@ -172,6 +177,7 @@ export class InlineThinkTagParser {
       // Hold back only as much as a partial open tag could occupy.
       const cut = surrogateSafeCut(this.preBuffer, this.preBuffer.length - (MAX_OPEN_TAG - 1));
       if (cut > 0) {
+        this.sawAnswerText = true;
         events.push({ type: "text_delta", text: this.preBuffer.slice(0, cut) });
         this.replaceCarry("preBuffer", this.preBuffer.slice(cut));
       }

@@ -86,6 +86,15 @@ describe("openai-chat inline <think> recovery", () => {
     expect(events.some(event => event.type === "reasoning_raw_delta")).toBe(false);
   });
 
+  test("the blank line before the answer is dropped, but the answer's own indentation survives", async () => {
+    const events = await collect(adapterFor(true).parseStream(
+      sse("<think>plan</think>\n\nUse this:\n", "<think>check</think>", "    indented line"),
+    ));
+
+    expect(joined(events, "reasoning_raw_delta")).toBe("plancheck");
+    expect(joined(events, "text_delta")).toBe("Use this:\n    indented line");
+  });
+
   test("an unterminated block is flushed as reasoning rather than lost", async () => {
     const events = await collect(adapterFor(true).parseStream(
       sse("<think>cut off mid thought"),

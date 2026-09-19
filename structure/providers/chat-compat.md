@@ -37,7 +37,10 @@ must keep its visible content byte-exact. Once enabled the splitter still engage
 response that opens with a thinking tag, so an answer that merely mentions one is never rewritten;
 after it engages it keeps splitting later blocks, because M-series models interleave thinking with
 answer segments. A block left unterminated at end of stream flushes as reasoning rather than being
-dropped. `src/adapters/inline-think-tags.ts` owns the parser and is shared with the Kiro adapter,
+dropped. Whitespace between the leading block and the start of the answer is dropped as formatting
+noise; once answer text has been emitted, whitespace after a later closing tag is preserved,
+because a mid-answer block sits inside markdown or code where indentation is meaningful.
+`src/adapters/inline-think-tags.ts` owns the parser and is shared with the Kiro adapter,
 which consumes it in single-block mode. Regression coverage is in
 `tests/adapters/openai/openai-chat-inline-think-tags.test.ts`.
 
