@@ -195,12 +195,14 @@ export async function readResponseStream(response: Response, signal: AbortSignal
 /**
  * A tool leg ends at message_stop with no vendor result frame, so positive usage on the
  * completed response is the regression guard for partial-usage accounting on bridge turns.
+ * Both token fields must be positive: a single-field check passed even when the synthesized
+ * tool leg reported zero input tokens (the message_start omission this harness now guards).
  */
 function assertReportedUsage(response: RecordValue): void {
   requireCondition(record(response.usage), "usage_missing");
   const inputTokens = typeof response.usage.input_tokens === "number" ? response.usage.input_tokens : 0;
   const outputTokens = typeof response.usage.output_tokens === "number" ? response.usage.output_tokens : 0;
-  requireCondition(inputTokens > 0 || outputTokens > 0, "usage_zero");
+  requireCondition(inputTokens > 0 && outputTokens > 0, "usage_zero");
 }
 
 export function argumentsMatch(actual: unknown, expected: RecordValue): boolean {

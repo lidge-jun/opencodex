@@ -156,6 +156,16 @@ async function loadTools(path: string): Promise<ToolDefinition[]> {
 
 const catalogPath = process.argv[2];
 if (!catalogPath) throw new Error("missing tool catalog");
+
+// Exit when stdin closes. The MCP stdio binding expects servers to exit on stdin EOF, and the
+// pinned SDK (1.30.0) does not detect EOF itself: without this, the capture server would outlive
+// the CLI it serves — whenever the parent terminates the CLI (message_stop capture path, timeout,
+// crash), the pipe's write end closes, and this server must follow instead of lingering as an
+// orphaned bun process parked on the never-answering CallTool promise.
+const exitOnStdinClose = (): void => process.exit(0);
+process.stdin.on("end", exitOnStdinClose);
+process.stdin.on("close", exitOnStdinClose);
+
 const tools = await loadTools(catalogPath);
 const advertisedNames = new Set(tools.map(tool => tool.name));
 
