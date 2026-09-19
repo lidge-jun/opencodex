@@ -45,3 +45,27 @@ export function parseStrictSemver(value: unknown, maxLength = 128): StrictSemver
     prerelease: Object.freeze(prereleaseParts.map(part => /^\d+$/.test(part) ? BigInt(part) : part)),
   });
 }
+
+/**
+ * SemVer precedence per semver.org: the numeric core first, then prerelease
+ * identifiers (numeric identifiers sort below alphanumeric ones, and a shorter
+ * identifier set below a longer one sharing its prefix). Build metadata is not
+ * part of precedence, which is why StrictSemver does not retain it.
+ */
+export function compareStrictSemver(a: StrictSemver, b: StrictSemver): number {
+  for (let i = 0; i < a.core.length; i++) {
+    if (a.core[i]! !== b.core[i]!) return a.core[i]! > b.core[i]! ? 1 : -1;
+  }
+  if (a.prerelease.length === 0) return b.prerelease.length === 0 ? 0 : 1;
+  if (b.prerelease.length === 0) return -1;
+  for (let i = 0; i < Math.max(a.prerelease.length, b.prerelease.length); i++) {
+    const left = a.prerelease[i];
+    const right = b.prerelease[i];
+    if (left === right) continue;
+    if (left === undefined) return -1;
+    if (right === undefined) return 1;
+    if (typeof left !== typeof right) return typeof left === "bigint" ? -1 : 1;
+    return left > right ? 1 : -1;
+  }
+  return 0;
+}

@@ -303,6 +303,7 @@
   "codex-cli-installation-targets.test.ts": "codex-integration",
   "codex-cli-windows-installation-files.test.ts": "codex-integration",
   "codex-cli-update-launcher-policy.test.ts": "codex-integration",
+  "codex-cli-update-plan.test.ts": "codex-integration",
   "codex-cli-update-zero-effect.test.ts": "codex-integration",
   "codex-composed-acceptance.test.ts": "codex-integration",
   "codex-config-generation.test.ts": "codex-integration",

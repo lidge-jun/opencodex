@@ -198,9 +198,9 @@ describe("Codex CLI update CLI", () => {
   });
 
   test("parses the shared JSON flag spellings within the exact check grammar", () => {
-    expect(parseCodexCliUpdateArgs(["check"])).toEqual({ json: false });
+    expect(parseCodexCliUpdateArgs(["check"])).toEqual({ action: "check", json: false });
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
-      expect(parseCodexCliUpdateArgs(["check", flag])).toEqual({ json: true });
+      expect(parseCodexCliUpdateArgs(["check", flag])).toEqual({ action: "check", json: true });
     }
     for (const args of [
       ["check", "--channel", "latest"],
@@ -217,7 +217,7 @@ describe("Codex CLI update CLI", () => {
    */
   test("the JSON flag is accepted before the check action", () => {
     for (const flag of ["--json", "--json=true", "-json", "—json"]) {
-      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ json: true });
+      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ action: "check", json: true });
     }
     // Duplicate detection and positional validation still hold in that order.
     expect(() => parseCodexCliUpdateArgs(["--json", "check", "--json"])).toThrow();
@@ -374,5 +374,89 @@ describe("Codex CLI update CLI", () => {
     } finally {
       console.log = oldLog;
     }
+  });
+});
+
+/**
+ * Phase 2 verbs. The parser is the authorization boundary here: apply must never be
+ * reachable without a plan id the operator read in a dry-run.
+ */
+describe("Codex CLI update plan and apply grammar", () => {
+  const PLAN_ID = "0123456789abcdef0123456789abcdef";
+
+  test("plan defaults to the stable channel and accepts both option spellings", () => {
+    expect(parseCodexCliUpdateArgs(["plan"])).toEqual({ action: "plan", json: false, channel: "latest" });
+    expect(parseCodexCliUpdateArgs(["plan", "--channel", "latest"])).toEqual({ action: "plan", json: false, channel: "latest" });
+    expect(parseCodexCliUpdateArgs(["plan", "--channel=latest", "--json"])).toEqual({ action: "plan", json: true, channel: "latest" });
+  });
+
+  test("apply requires a well-formed plan id", () => {
+    expect(parseCodexCliUpdateArgs(["apply", "--plan", PLAN_ID])).toEqual({ action: "apply", json: false, planId: PLAN_ID });
+    expect(parseCodexCliUpdateArgs(["--json", "apply", "--plan=" + PLAN_ID])).toEqual({ action: "apply", json: true, planId: PLAN_ID });
+    for (const args of [
+      ["apply"],
+      ["apply", "--plan"],
+      ["apply", "--plan", "short"],
+      ["apply", "--plan", PLAN_ID.toUpperCase()],
+      ["apply", "--plan", PLAN_ID, "--plan", PLAN_ID],
+      ["apply", "--channel", "latest"],
+      ["plan", "--plan", PLAN_ID],
+      ["plan", "--channel", "preview"],
+      ["plan", "extra"],
+    ]) expect(() => parseCodexCliUpdateArgs(args)).toThrow();
+  });
+
+  test("a refused dry-run is a normal answer and still exits 0", async () => {
+    let inspected = 0;
+    const code = await handleCodexCliUpdateCommand(["plan", "--json"], {
+      inspectInstall: async () => { inspected += 1; return report; },
+      createPlan: async () => ({
+        schemaVersion: 1, package: "@openai/codex", channel: "latest",
+        applicable: false, refusal: "not_managed", planId: null,
+        provenance: "app-bundle", managed: false, installedVersion: null,
+        versionEvidence: "unavailable", location: null,
+        targetVersion: null, targetIntegrity: null,
+        session: { state: "not-evaluated", matches: null }, command: null,
+      }),
+    });
+    expect(code).toBe(0);
+    // The plan engine owns inspection; the command must not run a second one.
+    expect(inspected).toBe(0);
+  });
+
+  test("apply passes the operator's plan id through and reports a refusal as nonzero", async () => {
+    const seen: string[] = [];
+    const code = await handleCodexCliUpdateCommand(["apply", "--plan", PLAN_ID, "--json"], {
+      applyPlan: async planId => {
+        seen.push(planId);
+        return {
+          schemaVersion: 1, status: "refused", refusal: "plan_stale", planId: null,
+          targetVersion: null, installedVersionBefore: null, installedVersionAfter: null,
+          installerExitCode: null,
+        };
+      },
+    });
+    expect(seen).toEqual([PLAN_ID]);
+    expect(code).toBe(1);
+  });
+
+  test("a completed apply exits 0", async () => {
+    const code = await handleCodexCliUpdateCommand(["apply", "--plan", PLAN_ID], {
+      applyPlan: async () => ({
+        schemaVersion: 1, status: "applied", refusal: null, planId: PLAN_ID,
+        targetVersion: "1.1.0", installedVersionBefore: "1.0.0", installedVersionAfter: "1.1.0",
+        installerExitCode: 0,
+      }),
+    });
+    expect(code).toBe(0);
+  });
+
+  test("a malformed plan id is rejected before anything is applied", async () => {
+    let applies = 0;
+    const code = await handleCodexCliUpdateCommand(["apply", "--plan", "nope"], {
+      applyPlan: async () => { applies += 1; throw new Error("unreachable"); },
+    });
+    expect(code).toBe(2);
+    expect(applies).toBe(0);
   });
 });

@@ -581,6 +581,45 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
   return matched;
 }
 
+/**
+ * Enumeration outcome for callers that must DEFER on an unreadable process table.
+ *
+ * {@link listCodexAppServerProcesses} maps enumeration failure to an empty list because its
+ * kill contract must never signal a process it could not verify. The Codex CLI update
+ * workflow needs the opposite reading: "no matches" and "could not look" lead to different
+ * decisions, and only the first one may allow an install to proceed.
+ */
+export type CodexAppServerProcessScan =
+  | Readonly<{ kind: "observed"; processes: readonly CodexAppServerProcess[] }>
+  | Readonly<{ kind: "unavailable" }>;
+
+/** Same matcher and snapshot sources as {@link listCodexAppServerProcesses}, failing closed. */
+export function scanCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): CodexAppServerProcessScan {
+  const platform = io.platform ?? process.platform;
+  const getuid = io.getuid ?? (() => {
+    try {
+      return typeof process.getuid === "function" ? process.getuid() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  let snapshots: ProcessSnapshot[];
+  try {
+    snapshots = io.listSnapshots ? io.listSnapshots() : defaultListSnapshots(platform, getuid);
+  } catch {
+    return Object.freeze({ kind: "unavailable" as const });
+  }
+  const seen = new Set<number>();
+  const matched: CodexAppServerProcess[] = [];
+  for (const snapshot of snapshots) {
+    if (seen.has(snapshot.pid)) continue;
+    if (!isCodexAppServerCommandLine(snapshot.commandLine, snapshot.executable)) continue;
+    seen.add(snapshot.pid);
+    matched.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
+  }
+  return Object.freeze({ kind: "observed" as const, processes: Object.freeze(matched) });
+}
+
 export function formatStaleCodexAppServerWarning(
   processes: readonly { pid: number }[],
 ): string {
