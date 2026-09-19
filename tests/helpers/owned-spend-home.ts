@@ -1,4 +1,3 @@
-import { afterEach, beforeEach } from "bun:test";
 import { acquireSpendLedgerOwner, type SpendLedgerOwnerLease } from "../../src/lib/spend-ledger-owner";
 import { resetSharedSpendLedgerForTest } from "../../src/lib/spend-reservation-ledger";
 
@@ -11,19 +10,25 @@ import { resetSharedSpendLedgerForTest } from "../../src/lib/spend-reservation-l
  * real lease here keeps the production rule intact instead of teaching the ledger to make an
  * exception for tests.
  *
- * The lease is released after every case, so a later case under a different state directory
- * finds the directory free.
+ * Returns an idempotent release. Call it FIRST in the case's own teardown, before the state
+ * directory is removed and before the home variable is restored: an open SQLite lease inside a
+ * directory being deleted fails the removal on Windows and leaves an unlinked live database on
+ * POSIX. Ordering is stated by the caller rather than inferred from hook registration order,
+ * which differs between these fixtures and is not a contract either way.
  */
-export function useOwnedSpendHome(): void {
-  let lease: SpendLedgerOwnerLease | undefined;
-  beforeEach(() => {
-    resetSharedSpendLedgerForTest();
-    lease = acquireSpendLedgerOwner();
-  });
-  afterEach(() => {
-    const held = lease;
-    lease = undefined;
-    try { held?.release(); } catch { /* a failed release must not mask the case's result */ }
-    resetSharedSpendLedgerForTest();
-  });
+export function acquireOwnedSpendHome(): () => void {
+  resetSharedSpendLedgerForTest();
+  const lease: SpendLedgerOwnerLease = acquireSpendLedgerOwner();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    try {
+      lease.release();
+    } catch {
+      /* a failed release must not mask the case's own result */
+    } finally {
+      resetSharedSpendLedgerForTest();
+    }
+  };
 }

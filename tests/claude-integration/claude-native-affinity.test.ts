@@ -13,6 +13,7 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
 const metadata = "user_test_account__session_conversation-native";
@@ -23,6 +24,7 @@ let isolated: IsolatedCodexHome;
 let home: string;
 let previousHome: string | undefined;
 let token: string;
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -33,8 +35,13 @@ beforeEach(() => {
   writeFileSync(join(isolated.path, "auth.json"), JSON.stringify({ tokens: { access_token: token, account_id: "fixture-native-main" } }));
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  // Dispatches without starting a server, so the spend-journal lease is taken here.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 afterEach(() => {
+  // Released before the directory is removed, so no live database sits inside it.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearComboSelectionState();
   clearComboTargetCooldowns();

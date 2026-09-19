@@ -1,6 +1,6 @@
 /** Physical response attribution through the real adapter and response/search loops. */
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { useOwnedSpendHome } from "../../helpers/owned-spend-home";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,7 @@ const originalHome = process.env.OPENCODEX_HOME;
 let originalFetch: typeof globalThis.fetch;
 let unexpectedGlobalFetches = 0;
 let home: string;
+let releaseSpendHome: (() => void) | undefined;
 let sent: { authorization: string | null; apiKey: string | null; body: Record<string, unknown> }[];
 
 beforeEach(() => {
@@ -58,13 +59,14 @@ beforeEach(() => {
   clearAccountQuotaCache();
   resetProviderQuotaReconcileStateForTests();
   clearResponseStateForTests();
+  // Dispatching without starting a server means taking the spend-journal lease here, and
+  // releasing it before this case's directory is removed.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
-// This case dispatches without starting a server, so it takes the spend-journal lease itself.
-// Registered after the hook above so the isolated home is already in place.
-useOwnedSpendHome();
-
 afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   adapterRequestsFollow = false;
   try {
     // Provider code may catch the guard's rejection; the attempted network call still fails the test.
