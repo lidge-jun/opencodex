@@ -1,4 +1,7 @@
+import { MAX_DEBUG_LINE_BYTES } from "../lib/debug-log-buffer";
+import { THOUGHT_SIGNATURE_BYPASS } from "./google-antigravity-replay";
 import type { AntigravitySessionAnchor } from "./google-antigravity-wire";
+import { isGoogleThinkingConfigErrorText, isGoogleToolSchemaErrorText } from "./google-wire-compiler";
 
 /**
  * Content-free structural projection of a compiled Google-family wire request (#5008).
@@ -29,6 +32,15 @@ import type { AntigravitySessionAnchor } from "./google-antigravity-wire";
  *
  * This is a projection, not a validator. It does not decide whether a request is acceptable to
  * the upstream, and nothing in the request path consults its output.
+ *
+ * What it costs. With provider debug off the projection never runs: the call site passes a
+ * builder to debugProviderDiagnosticLazy, which returns before invoking it. With provider debug
+ * ON it runs synchronously on the dispatch path, before the request is sent, and it walks every
+ * turn, every part and every call id, then serializes, redacts and writes one line. The cost is
+ * linear in history length, which is largest for exactly the long sessions this exists to
+ * describe. That is the price of observing the real outbound body rather than a reconstruction,
+ * and an operator who turns provider debug on for a 440-message session is paying it on every
+ * turn.
  */
 
 /** Per-turn detail beyond this many turns is dropped; totals are unaffected. */
@@ -41,11 +53,16 @@ export const GOOGLE_WIRE_SHAPE_ORDINAL_CEILING = 16;
 const UPSTREAM_ERROR_SCAN_LIMIT = 2048;
 
 /**
- * The outbound sentinel this proxy fabricates when no real signature exists
- * (THOUGHT_SIGNATURE_BYPASS in google-antigravity-replay.ts). Counted separately because a turn
- * signed only by the sentinel is evidence of a lookup miss, not of reasoning continuity.
+ * Serialized ceiling for one summary, held at half the debug buffer's per-line cap so the event
+ * prefix and any redaction copy still fit under it.
+ *
+ * The item ceilings above are not sufficient on their own: 64 retained turns carrying 16 ordinals
+ * each serialize past the buffer's limit, and the buffer truncates at a byte boundary. That
+ * leaves a consumer with JSON it cannot parse whose retained prefix still says truncated is
+ * false — a cut that hides itself. Trimming here instead keeps the line parseable and keeps the
+ * flag honest.
  */
-const THOUGHT_SIGNATURE_BYPASS = "skip_thought_signature_validator";
+export const GOOGLE_WIRE_SHAPE_MAX_SERIALIZED_BYTES = Math.floor(MAX_DEBUG_LINE_BYTES / 2);
 
 export type GoogleWireTurnRole = "user" | "model" | "other";
 
@@ -256,6 +273,27 @@ function violationFor(turn: TurnFacts, previous: TurnFacts | undefined, isLast: 
   return undefined;
 }
 
+function serializedBytes(summary: GoogleWireShapeSummary): number {
+  return new TextEncoder().encode(JSON.stringify(summary)).length;
+}
+
+/**
+ * Drop per-turn detail from the tail until the summary serializes under its byte budget.
+ *
+ * Trimming from the tail rather than the head is deliberate: the opening turns of a request are
+ * where a first-send ordering violation lives, and they are what a reader needs most.
+ */
+function fitToSerializedBudget(summary: GoogleWireShapeSummary): GoogleWireShapeSummary {
+  if (serializedBytes(summary) <= GOOGLE_WIRE_SHAPE_MAX_SERIALIZED_BYTES) return summary;
+  let kept = summary.turnShapes.length;
+  let fitted: GoogleWireShapeSummary = { ...summary, truncated: true, turnShapes: summary.turnShapes };
+  while (kept > 0 && serializedBytes(fitted) > GOOGLE_WIRE_SHAPE_MAX_SERIALIZED_BYTES) {
+    kept -= 1;
+    fitted = { ...summary, truncated: true, turnShapes: summary.turnShapes.slice(0, kept) };
+  }
+  return fitted;
+}
+
 /**
  * Project the structure of a compiled Google wire request body.
  *
@@ -368,7 +406,7 @@ export function summarizeGoogleWireShape(
   let unmatchedResponses = 0;
   for (const ordinal of responseOrdinals) if (!callOrdinals.has(ordinal)) unmatchedResponses += 1;
 
-  return {
+  return fitToSerializedBudget({
     version: 1,
     truncated,
     turns: contents.length,
@@ -399,7 +437,7 @@ export function summarizeGoogleWireShape(
       ? null
       : { ordinal: facts.sendOrdinal, errorClass: facts.errorClass ?? null },
     turnShapes,
-  };
+  });
 }
 
 /**
@@ -415,7 +453,9 @@ export function classifyGoogleWireUpstreamError(message: unknown): GoogleWireUps
     return "turn-adjacency";
   }
   if (/thought[_\s-]?signature|TYPE_BYTES/i.test(scanned)) return "thought-signature";
-  if (/input[_\s]schema|json\s+schema|function[_\s]declarations?|x-mcp-header/i.test(scanned)) return "tool-schema";
-  if (/thinking[_\s-]?(?:config|level)/i.test(scanned)) return "thinking-config";
+  // Shared with the wire compiler's repair path so a payload cannot be repaired as one class
+  // and described as another.
+  if (isGoogleToolSchemaErrorText(scanned)) return "tool-schema";
+  if (isGoogleThinkingConfigErrorText(scanned)) return "thinking-config";
   return "other";
 }

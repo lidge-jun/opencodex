@@ -629,7 +629,7 @@ export function antigravityUsesReplayCache(model: string): boolean {
  * neither the wire metadata nor the replay cache can supply a real one, this is the official
  * validator-bypass token.
  */
-const THOUGHT_SIGNATURE_BYPASS = "skip_thought_signature_validator";
+export const THOUGHT_SIGNATURE_BYPASS = "skip_thought_signature_validator";
 
 /**
  * True when the model speaks the Gemini wire dialect that requires a thought signature on the

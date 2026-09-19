@@ -208,10 +208,25 @@ function functionDeclarations(root: JsonObject): JsonObject[] {
   });
 }
 
+/**
+ * Upstream INVALID_ARGUMENT text blaming a tool or function declaration schema.
+ *
+ * Shared with the diagnostic error classifier so the repair path and the description of why a
+ * request was rejected cannot drift into disagreeing about the same payload.
+ */
+export function isGoogleToolSchemaErrorText(errorPayload: string): boolean {
+  return /(?:input[_ ]schema|json schema|function[_ ]declarations?|x-mcp-header)/i.test(errorPayload);
+}
+
+/** Upstream INVALID_ARGUMENT text blaming the thinking configuration. */
+export function isGoogleThinkingConfigErrorText(errorPayload: string): boolean {
+  return /thinking[_ ]?(?:config|level)/i.test(errorPayload);
+}
+
 /** Build a changed request for one known-safe replay of an INVALID_ARGUMENT response. */
 export function repairGoogleInvalidRequestBody(body: string, errorPayload: string): string | undefined {
-  const schemaError = /(?:input[_ ]schema|json schema|function[_ ]declarations?|x-mcp-header)/i.test(errorPayload);
-  const thinkingError = /thinking[_ ]?(?:config|level)/i.test(errorPayload);
+  const schemaError = isGoogleToolSchemaErrorText(errorPayload);
+  const thinkingError = isGoogleThinkingConfigErrorText(errorPayload);
   if (!schemaError && !thinkingError) return undefined;
   let parsed: unknown;
   try {

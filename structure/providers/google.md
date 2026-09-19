@@ -90,8 +90,22 @@ id, Codex thread and session ids, and the first user message. Totals stay exact 
 request while per-turn detail stops at a fixed ceiling and sets `truncated`, so a long agentic
 session still reports its real counts.
 
-It is a projection, not a validator. Nothing in the request path consults its output, and the
-provider-debug gate sits at the call site so a request pays nothing for the walk while debug is
-off. `antigravitySessionAnchor` in `google-antigravity-wire.ts` is the matching content-free read
-of the session boundary: it reports which of the four anchor classes produced the session id
-without reporting the id.
+It is a projection, not a validator. Nothing in the request path consults its output.
+`antigravitySessionAnchor` in `google-antigravity-wire.ts` is the matching content-free read of
+the session boundary: it reports which of the four anchor classes produced the session id without
+reporting the id, and it reads the same decision the id derivation reads, so the two cannot
+disagree about which regime a request is in.
+
+The adapter passes a builder to `debugProviderDiagnosticLazy`, never a built object. That gates
+before invoking it, so a request with provider debug off never pays the walk, and it evaluates
+the projection inside the logger's own try/catch, so a throw in a diagnostic cannot turn a built
+request into a rejected one. With provider debug ON the projection runs synchronously on the
+dispatch path before the request is sent, and its cost is linear in history length — largest for
+exactly the long sessions it exists to describe. Observing the real outbound body rather than a
+reconstruction is what that buys.
+
+Two ceilings bound the output, and both are needed. The item ceilings cap retained turns and the
+per-turn ordinal lists; the serialized ceiling, held at half `MAX_DEBUG_LINE_BYTES`, then trims
+turn detail from the tail until the summary fits. Without the second, a worst case inside the
+first serializes past the debug buffer's per-line cap, and the buffer truncates at a byte
+boundary: the consumer gets unparseable JSON whose retained prefix still reads `truncated: false`.

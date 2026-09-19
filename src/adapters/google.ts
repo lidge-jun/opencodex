@@ -1,6 +1,5 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
-import { debugDroppedFrame, debugProviderDiagnostic } from "../lib/debug";
-import { isDebugEnabled } from "../lib/debug-settings";
+import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
@@ -991,20 +990,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           // Vertex and AI Studio share one decision. A second check here would append a
           // duplicate nudge whenever signature sanitization reshapes the tail afterwards.
         }
-        // Opt-in structural description of the request that is about to leave (#5008). The
-        // gate is here rather than inside the logger because the projection walks every turn,
-        // and a 440-message session should cost nothing while provider debug is off. It reads
-        // `request` and writes nothing back, so the bytes below are the same either way.
-        if (isDebugEnabled()) {
-          debugProviderDiagnostic("google", "antigravity-wire-shape", summarizeGoogleWireShape(request, {
-            sessionAnchor: antigravitySessionAnchor(parsed),
-            // Signed at translation time, from client history or the durable store. The
-            // Antigravity session cache signs afterwards, inside applyAntigravityReplay, and the
-            // projection attributes that remainder to the cache rather than to this count.
-            historySignedCalls: replayedCallIds.length,
-            replayScopeBound: parsed._reasoningReplayScope !== undefined,
-          }));
-        }
+        // Opt-in structural description of the request that is about to leave (#5008).
+        //
+        // Passed as a BUILDER, not a value: the lazy form gates before invoking it, so a session
+        // with provider debug off never pays the walk, and it evaluates the projection inside its
+        // own try/catch, so a throw in here cannot turn a built request into a rejected one. The
+        // projection only reads `request`, so the bytes below are the same either way.
+        debugProviderDiagnosticLazy("google", "antigravity-wire-shape", () => summarizeGoogleWireShape(request, {
+          sessionAnchor: antigravitySessionAnchor(parsed),
+          // Signed at translation time, from client history or the durable store. The
+          // Antigravity session cache signs afterwards, inside applyAntigravityReplay, and the
+          // projection attributes that remainder to the cache rather than to this count.
+          historySignedCalls: replayedCallIds.length,
+          replayScopeBound: parsed._reasoningReplayScope !== undefined,
+        }));
         const envelope = {
           model: wireModelId,
           // The envelope's `userAgent` field is a protocol constant ("antigravity"), distinct from

@@ -3,11 +3,14 @@ import { createGoogleAdapter as createGoogleAdapterProduction } from "../../../s
 import { antigravitySessionAnchor, antigravitySessionId } from "../../../src/adapters/google-antigravity-wire";
 import {
   classifyGoogleWireUpstreamError,
+  GOOGLE_WIRE_SHAPE_MAX_SERIALIZED_BYTES,
   GOOGLE_WIRE_SHAPE_TURN_CEILING,
   summarizeGoogleWireShape,
 } from "../../../src/adapters/google-wire-shape";
-import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
+import { debugProviderDiagnosticLazy } from "../../../src/lib/debug";
+import { getDebugLogEntries, MAX_DEBUG_LINE_BYTES, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../../../src/lib/debug-settings";
+import { createRequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../../src/lib/request-execution-budget";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import {
   callId,
@@ -22,6 +25,7 @@ import {
   unidentifiedCallTurn,
   userTurn,
   WIRE_MARKERS,
+  type WireTurn,
 } from "../../fixtures/google-wire-shape-cases";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -35,6 +39,18 @@ const provider = {
   project: "proj-123",
   apiKey: "ya29.token",
 } as OcxProviderConfig;
+
+/** Exactly `sends` physical sends allowed, with no reserve and no alternate target. */
+function budgetOf(sends: number) {
+  const policy: RequestExecutionBudgetPolicy = {
+    maxTotalModelSends: sends,
+    baseSendAllowance: sends,
+    finalRecoveryAllowance: 0,
+    maxAlternateTargetSends: 0,
+    maxTargetTransitions: 0,
+  };
+  return createRequestExecutionBudget(policy, "lr-google-wire-shape-test");
+}
 
 function parsedToolSession(rounds: number, threads: { parent?: string; own?: string } = {}): OcxParsedRequest {
   const messages: unknown[] = [{ role: "user", content: "opening turn" }];
@@ -87,16 +103,10 @@ describe("google wire shape projection is inert", () => {
     expect(JSON.stringify(body)).toBe(before);
   });
 
-  test("provider debug changes neither the compiled request, the headers, nor the send count", async () => {
+  test("provider debug changes neither the compiled request nor the headers", async () => {
     const adapter = createGoogleAdapter(provider);
     const request = parsedToolSession(4, { parent: "tp-9f31", own: "tc-4a02" });
-    let fetchCalls = 0;
-    const realFetch = globalThis.fetch;
     const realError = console.error;
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      throw new Error("buildRequest must not send");
-    }) as typeof globalThis.fetch;
     console.error = () => {};
     try {
       setDebugSettings({ debug: false });
@@ -111,11 +121,75 @@ describe("google wire shape projection is inert", () => {
       expect(JSON.stringify(on.headers)).toBe(JSON.stringify(off.headers));
       // The envelope requestId is a fresh uuid per build and is the only difference allowed.
       expect(onEnvelope.requestId).not.toBe(offEnvelope.requestId);
-      expect(fetchCalls).toBe(0);
     } finally {
-      globalThis.fetch = realFetch;
       console.error = realError;
     }
+  });
+
+  // buildRequest never calls fetch, so counting fetches around it proves nothing about the
+  // diagnostic. The send count worth pinning is the one the budget and the physical-send
+  // observer see on the real dispatch path, with the request the diagnostic just described.
+  test("provider debug changes neither the physical send count nor the bytes dispatched", async () => {
+    const adapter = createGoogleAdapter(provider);
+    const parsedRequest = parsedToolSession(4, { parent: "tp-9f31", own: "tc-4a02" });
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      const run = async (debug: boolean) => {
+        setDebugSettings({ debug });
+        const built = await adapter.buildRequest(parsedRequest);
+        const sends: number[] = [];
+        const dispatched: string[] = [];
+        const executor = (async (_input: unknown, init?: { body?: unknown }) => {
+          dispatched.push(typeof init?.body === "string" ? init.body : "");
+          return new Response(JSON.stringify({ response: { candidates: [] } }), {
+            status: 200, headers: { "content-type": "application/json" },
+          });
+        }) as unknown as typeof globalThis.fetch;
+        const response = await adapter.fetchResponse!(built, {
+          executor,
+          sendBudget: budgetOf(3),
+          onPhysicalSend: send => { sends.push(send.ordinal); },
+          timeoutMs: 5_000,
+        });
+        expect(response.status).toBe(200);
+        const envelope = JSON.parse(dispatched[0]!) as Record<string, unknown>;
+        return { sends, request: JSON.stringify(envelope.request) };
+      };
+      const off = await run(false);
+      const on = await run(true);
+      // Exactly one physical send either way, and the budget saw the same single dispatch.
+      expect(off.sends).toEqual([1]);
+      expect(on.sends).toEqual(off.sends);
+      // And the bytes that actually left are identical, not merely the bytes that were built.
+      expect(on.request).toBe(off.request);
+    } finally {
+      console.error = realError;
+    }
+  });
+
+  // Proven by execution, not asserted: the exact expression google.ts hands to the lazy logger,
+  // given a body that throws when the projection reads it.
+  test("a projection that throws is swallowed and emits nothing", () => {
+    const hostile = {
+      get contents(): never { throw new Error("projection boom"); },
+    };
+    setDebugSettings({ debug: true });
+    resetDebugLogBufferForTests();
+    expect(() => debugProviderDiagnosticLazy(
+      "google", "antigravity-wire-shape", () => summarizeGoogleWireShape(hostile),
+    )).not.toThrow();
+    expect(getDebugLogEntries()).toEqual([]);
+  });
+
+  test("the builder is never invoked while provider debug is off", () => {
+    let built = 0;
+    setDebugSettings({ debug: false });
+    debugProviderDiagnosticLazy("google", "antigravity-wire-shape", () => {
+      built += 1;
+      return {};
+    });
+    expect(built).toBe(0);
   });
 
   test("the emitted diagnostic carries no prompt, argument, result, id or signature", async () => {
@@ -305,6 +379,49 @@ describe("google wire shape projection describes structure", () => {
     expect(summary.distinctCallIds).toBe(20);
     expect(summary.turnShapes[1]?.calls).toHaveLength(16);
     expect(summary.truncated).toBe(true);
+  });
+
+  // The item ceilings alone are not enough: 64 retained turns carrying 16 ordinals each serialize
+  // past the debug buffer's per-line cap, and the buffer cuts at a byte boundary. This drives the
+  // worst case through the REAL buffer and parses what comes back out of it.
+  test("the worst case inside the item ceilings still parses out of the real debug buffer", () => {
+    const contents: WireTurn[] = [userTurn()];
+    for (let round = 0; round < 32; round++) {
+      const ids = Array.from({ length: 16 }, (_unused, i) => callId(round * 16 + i + 1));
+      contents.push(modelCallTurn(ids, { signature: WIRE_MARKERS.signature }), toolResultTurn(ids));
+    }
+    const summary = summarizeGoogleWireShape(compiledWireBody(contents, { toolDeclarations: 37 }), {
+      sessionAnchor: "parent-and-own", historySignedCalls: 32, replayScopeBound: true,
+    });
+    expect(summary.turns).toBe(65);
+    expect(summary.functionCalls).toBe(512);
+    expect(summary.truncated).toBe(true);
+    // The size budget bit before the turn ceiling did, which is the whole point.
+    expect(summary.turnShapes.length).toBeLessThan(GOOGLE_WIRE_SHAPE_TURN_CEILING);
+    expect(new TextEncoder().encode(JSON.stringify(summary)).length)
+      .toBeLessThanOrEqual(GOOGLE_WIRE_SHAPE_MAX_SERIALIZED_BYTES);
+
+    setDebugSettings({ debug: true });
+    resetDebugLogBufferForTests();
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      debugProviderDiagnosticLazy("google", "antigravity-wire-shape", () => summary);
+    } finally {
+      console.error = realError;
+    }
+    const entries = getDebugLogEntries();
+    expect(entries).toHaveLength(1);
+    const line = entries[0]!.line;
+    expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(MAX_DEBUG_LINE_BYTES);
+    // Parseable, and still honest about having been cut. A buffer-truncated line would fail the
+    // parse, and its retained prefix would still have read truncated:false.
+    const roundTripped = JSON.parse(line.slice(line.indexOf("] ") + 2)) as
+      { truncated: boolean; turns: number; functionCalls: number; turnShapes: unknown[] };
+    expect(roundTripped.truncated).toBe(true);
+    expect(roundTripped.turns).toBe(65);
+    expect(roundTripped.functionCalls).toBe(512);
+    expect(roundTripped.turnShapes.length).toBe(summary.turnShapes.length);
   });
 
   test("compaction shortens the request without changing what the projection reports about a turn", () => {
