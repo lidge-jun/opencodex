@@ -181,11 +181,16 @@ beforeEach(() => {
 
 afterEach(async () => {
   let responseStatePending = true;
+  let cancelFailure: unknown;
   try {
     // Rows that assert only on a status leave a transformed body unread. Cancelling those first
-    // means no reader is still attached when the listeners stop and the lease is given back.
+    // means no reader is still attached when the listeners stop and the lease is given back. A
+    // cancel that throws fails the case rather than being swallowed, but not before every other
+    // turn and the listeners below have had their chance to close.
     for (const turn of pendingTurns.splice(0)) {
-      if (!turn.bodyUsed && turn.body && !turn.body.locked) await turn.body.cancel().catch(() => {});
+      if (turn.bodyUsed || !turn.body || turn.body.locked) continue;
+      try { await turn.body.cancel(); }
+      catch (error) { cancelFailure ??= error; }
     }
     for (const server of servers.splice(0)) await server.stop(true);
     await flushResponseState();
@@ -213,6 +218,7 @@ afterEach(async () => {
     clearCodexUpstreamHealth();
     clearRequestLogsForTests();
   }
+  if (cancelFailure !== undefined) throw cancelFailure;
   expect(responseStatePending).toBe(false);
 });
 
@@ -264,18 +270,18 @@ async function postLogged(
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
   takeSpendHome();
-  const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
-  }), config, logCtx, options));
+  }), config, logCtx, options);
   loggedRequestSequence += 1;
-  return responseWithDeferredRequestLog(
+  return trackTurn(responseWithDeferredRequestLog(
     response,
     `combo-test-${loggedRequestSequence}`,
     start,
     logCtx,
-  );
+  ));
 }
 
 async function postModelLogged(
@@ -288,18 +294,18 @@ async function postModelLogged(
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
   takeSpendHome();
-  const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model, input: "hello", stream: false, ...raw }),
-  }), config, logCtx, options));
+  }), config, logCtx, options);
   loggedRequestSequence += 1;
-  return responseWithDeferredRequestLog(
+  return trackTurn(responseWithDeferredRequestLog(
     response,
     `direct-test-${loggedRequestSequence}`,
     start,
     logCtx,
-  );
+  ));
 }
 
 async function latestAttemptReceipts(config: OcxConfig) {
@@ -3862,13 +3868,13 @@ describe("combo compact failover", () => {
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const start = Date.now();
     takeSpendHome();
-    const response = trackTurn(await handleResponsesCompact(compactRequest({
+    const response = await handleResponsesCompact(compactRequest({
       model: "combo/free",
       stream: false,
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] }],
-    }), config, logCtx));
+    }), config, logCtx);
     loggedRequestSequence += 1;
-    return responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx);
+    return trackTurn(responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx));
   }
 
   function canonicalPoolConfig(
