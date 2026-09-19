@@ -63,6 +63,36 @@ export function encodeReasoningEnvelope(envelope: ReasoningEnvelope, budget?: Tr
   }
 }
 
+/**
+ * Whether a thinking part's `signature` is an attestation some provider issued, rather than
+ * the serialized reasoning item the parser parks in the same field.
+ *
+ * `src/responses/parser.ts` stores `JSON.stringify(reasoningItem)` on an UNSIGNED thinking
+ * part so the opaque item survives a same-provider round trip. Every adapter that forwards a
+ * signature upstream is forwarding an opaque attestation, and a provider asked to verify our
+ * own parser state cannot recognize it. The predicate lives beside the envelope code that owns
+ * this field's representation rather than in one adapter, because a private second copy is how
+ * the side that writes the field and a side that reads it come to disagree about what it holds.
+ *
+ * This is a deny-list for exactly that one shape, not a guess at what an attestation looks
+ * like. `src/adapters/anthropic.ts` applies a stricter allow-list on top of it, because an
+ * Anthropic signature has a known base64 spelling; that shape is a fact about Anthropic's wire
+ * and is not assumed of any other provider's token here.
+ */
+export function isProviderIssuedThinkingSignature(
+  signature: string | undefined,
+): signature is string {
+  if (typeof signature !== "string" || signature.length === 0) return false;
+  if (!signature.startsWith("{")) return true;
+  try {
+    const parsed: unknown = JSON.parse(signature);
+    return !parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || (parsed as { type?: unknown }).type !== "reasoning";
+  } catch {
+    return true;
+  }
+}
+
 /** Decode an ocxr1 envelope; returns null for native (OpenAI-encrypted) blobs or garbage. */
 export function decodeReasoningEnvelope(encryptedContent: string, budget?: TranslatorBudget): ReasoningEnvelope | null {
   if (!encryptedContent.startsWith(OCX_REASONING_PREFIX)) return null;

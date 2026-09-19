@@ -1786,8 +1786,10 @@ describe("fallback freeform wrappers stream one stable representation (#5047)", 
     expect(inputView(await streamExec([wrapper])))
       .toEqual({ concatenated: wrapper, done: wrapper, itemInput: wrapper });
 
-    // A non-string value is not a wrapper either, and it never matched `{"code":"`, so it was
-    // never held: this pins that ordinary bodies keep streaming immediately.
+    // A non-string value is not a wrapper either. Since #5151 an object-shaped body is held
+    // until it parses, because a canonical `input` can still arrive after any property, so
+    // what this pins is the bytes rather than when they leave: the object reaches the client
+    // byte-exact and unrepaired. Bodies that are not objects still stream as they arrive.
     const numeric = JSON.stringify({ code: 1 });
     expect(inputView(await streamExec([numeric])))
       .toEqual({ concatenated: numeric, done: numeric, itemInput: numeric });
