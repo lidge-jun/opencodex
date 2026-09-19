@@ -33,7 +33,13 @@ export function setFetchCodeBuddyModelsForTests(next: CodeBuddyModelsFetcher | n
   codeBuddyModelsFetcherForTests = next;
 }
 
-const ROSTER_LINE = /--model <model>\s+Model for the current session\. Please provide the model ID\. Currently supported: \(([^)]*)\)/;
+// Anchor on the stable tail marker only. The vendor wraps long option descriptions at the
+// terminal width, so the sentence between `--model <model>` and `Currently supported:` can
+// contain arbitrary whitespace/newlines (and the intro sentence has changed wording across
+// CLI releases). Requiring the full English sentence made discovery fail on any reflow.
+// The roster list itself is a single parenthesised group; allow it to span lines as well,
+// since a very long roster also wraps.
+const ROSTER_LINE = /Currently supported:\s*\(([^)]*)\)/;
 
 /**
  * Parse the account-scoped model roster out of `codebuddy --help`.
@@ -76,11 +82,16 @@ function execCodeBuddy(
 }
 
 /**
- * Discover the account-scoped roster the CLI exposes for this key via the --help surface.
+ * Discover the account-scoped roster the CLI exposes via the --help surface.
  *
- * The roster line is printed per signed-in account (an isolated home yields only the
- * anonymous floor), so the credential and region env travel with the probe and the
- * caller binds the result to the key's fingerprint.
+ * The roster line reflects the CLI's signed-in account state under the caller's home
+ * (verified 2026-09-19: a probe with a deliberately wrong key still prints the home
+ * account's roster, while an isolated home prints only the anonymous floor regardless
+ * of the key). The home is deliberately NOT isolated — isolation would regress every
+ * install to the stale anonymous list this discovery exists to replace. The credential
+ * and region env still travel with the probe for the region switch, and the caller
+ * binds the cached result to the key's fingerprint so a key switch cannot observe a
+ * roster cached for the previous key.
  */
 export async function fetchCodeBuddyModels(
   profile: CodeBuddyProfile,
