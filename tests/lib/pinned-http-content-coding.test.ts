@@ -65,7 +65,11 @@ function socksProxy(): TcpServer {
 }
 
 /** A peer that answers one coded body and records the request head it was asked with. */
-function codedTarget(coding: string, payload: Uint8Array, options?: { truncateAfter?: number }) {
+function codedTarget(
+  coding: string,
+  payload: Uint8Array,
+  options?: { truncateAfter?: number; holdAfter?: number; declaredLength?: number },
+) {
   let requestText = "";
   let connection: Socket | undefined;
   const server = createTcpServer(socket => {
@@ -78,7 +82,15 @@ function codedTarget(coding: string, payload: Uint8Array, options?: { truncateAf
       if (!requestText.includes("\r\n\r\n")) return;
       const head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-encoding: "
         + coding
-        + "\r\ncontent-length: " + payload.byteLength + "\r\n\r\n";
+        + "\r\ncontent-length: " + (options?.declaredLength ?? payload.byteLength) + "\r\n\r\n";
+      const hold = options?.holdAfter;
+      if (hold !== undefined) {
+        // Promise more than is sent and then stay open. The response is still in flight, so a
+        // cancellation has to travel backwards to close it; an already-finished body would be
+        // released by ordinary end-of-stream and prove nothing about cancellation.
+        socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload.subarray(0, hold))]));
+        return;
+      }
       const truncate = options?.truncateAfter;
       if (truncate === undefined) {
         socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload)]));
@@ -234,12 +246,21 @@ describe("pinned direct content coding", () => {
   });
 
   test("cancelling a coded body propagates through the decoder and releases the peer", async () => {
-    const body = Buffer.alloc(256 * 1024, 0x62);
-    const { server: target, connection } = codedTarget("gzip", gzipSync(body));
+    const coded = gzipSync(Buffer.alloc(256 * 1024, 0x62));
+    // Send almost all of it, promise more than that, and never finish: the body is still open
+    // when the caller gives up.
+    const { server: target, connection } = codedTarget("gzip", coded, {
+      holdAfter: coded.byteLength - 16,
+      declaredLength: coded.byteLength + 1_024,
+    });
     const port = await listen(target);
     try {
       const response = await pinnedGet(port, "/cancel");
       const reader = response.body!.getReader();
+      // Read once so the pipeline is actually running before cancellation, rather than
+      // cancelling a body nothing has started to consume.
+      const first = await reader.read();
+      expect(first.done).toBe(false);
       // A caller's own reason must travel the decode pipeline without the transport turning it
       // into a failure of its own.
       await reader.cancel(new Error("caller stopped reading"));
@@ -252,14 +273,19 @@ describe("pinned direct content coding", () => {
   });
 
   test("the byte ceiling still binds the bytes that arrive, not only the decoded ones", async () => {
-    // Incompressible content keeps the coded length close to the decoded length, so a ceiling
-    // below both is the socket-side counter doing its original job. That counter predates this
-    // decode path and must keep working after it.
-    const incompressible = randomBytes(64 * 1024);
-    const { server: target } = codedTarget("gzip", gzipSync(incompressible));
+    // Deliberately inverted: gzip framing costs more than these bytes save, so the coded body is
+    // larger than the decoded one. With the ceiling above the decoded size, only the socket-side
+    // counter can refuse this, which is what makes the case an oracle for that counter rather
+    // than one the decoded guard could also satisfy. The sizes are asserted, not assumed.
+    const tiny = randomBytes(8);
+    const coded = gzipSync(tiny);
+    const limit = coded.byteLength - 1;
+    expect(coded.byteLength).toBeGreaterThan(limit);
+    expect(tiny.byteLength).toBeLessThanOrEqual(limit);
+    const { server: target } = codedTarget("gzip", coded);
     const port = await listen(target);
     try {
-      const response = await pinnedGet(port, "/incompressible", { maxBytes: 4 * 1024 });
+      const response = await pinnedGet(port, "/inverted", { maxBytes: limit });
       const error = await response.text().catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PinnedHttpError);
       expect(error).toMatchObject({ code: "output_byte_limit" });
