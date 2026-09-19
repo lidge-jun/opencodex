@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { saveCredential } from "../../src/oauth/store";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
 /**
  * One logical request, one send budget -- asserted as a COUNT, because the defect in #4546 is a
@@ -156,11 +157,13 @@ describe("upstream sends per logical request", () => {
     }
   });
 
-  test("a Devin turn the budget refuses last logs no send at the request boundary", async () => {
+  test("a Devin turn the budget refuses logs no send at the request boundary", async () => {
     // The defect this pins lives in the outer runTurn path, not in the adapter: the attempt's
-    // first send was logged before the adapter ran, so a request whose allowance earlier combo
-    // members had already spent recorded a send Devin never made. The direct-adapter case in
-    // tests/adapters covers the executor side; only this one can see `sendCount`.
+    // first send was logged before the adapter ran, so a request with nothing left to spend
+    // recorded a send Devin never made. The direct-adapter case in tests/adapters covers the
+    // executor side; only this one can see `sendCount`. The budget is handed in already spent
+    // rather than arranged through combo arithmetic, which is how an earlier attempt at this
+    // case ended up admitting the send it meant to refuse.
     const previousHome = process.env.OPENCODEX_HOME;
     const previousJwtFlag = process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
     const home = mkdtempSync(join(tmpdir(), "devin-send-denied-"));
@@ -189,34 +192,43 @@ describe("upstream sends per logical request", () => {
       });
     }) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
-    // Devin sits last behind chat targets that spend the allowance first, which is the shape
-    // that leaves nothing for its initial send.
     const config = {
-      defaultProvider: "t0",
-      providers: {
-        t0: transientChatProvider("t0"),
-        devin: { adapter: "devin", baseUrl: DEVIN_API_SERVER, models: ["swe-2"] },
-      },
-      combos: {
-        fan: {
-          strategy: "failover",
-          targets: [{ provider: "t0", model: "model-t0" }, { provider: "devin", model: "swe-2" }],
-        },
-      },
+      defaultProvider: "devin",
+      providers: { devin: { adapter: "devin", baseUrl: DEVIN_API_SERVER, models: ["swe-2"] } },
     } as unknown as OcxConfig;
+    // The real budget factory with nothing to give: the state an earlier combo fan-out or
+    // empty-response recovery leaves behind, stated directly instead of inferred.
+    const spent = createRequestExecutionBudget({
+      maxTotalModelSends: 0,
+      baseSendAllowance: 0,
+      finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0,
+      maxTargetTransitions: 0,
+    }, "devin-denied-initial-send");
 
     try {
-      const response = await handleResponses(responsesRequest("combo/fan"), config, logCtx);
+      const response = await handleResponses(
+        responsesRequest("devin/swe-2"), config, logCtx, { sendBudget: spent },
+      );
       const body = await response.text();
-      const devinAttempt = (logCtx.attempts ?? []).find(attempt => attempt.adapter === "devin");
+      const attempts = logCtx.attempts ?? [];
 
+      // The attempt must EXIST and be empty. An absent attempt would satisfy a zero count
+      // without proving the refusal was recorded against the turn that was refused.
+      expect(attempts).toHaveLength(1);
       expect({
-        devinCalls: urls.filter(url => url.includes("GetChatMessage")).length,
-        devinSendCount: devinAttempt?.sendCount ?? 0,
-      }, `status ${response.status}: ${body.slice(0, 200)}`).toEqual({ devinCalls: 0, devinSendCount: 0 });
-      // The members that did send still account for themselves, so the refusal removed a
-      // phantom rather than suppressing real counts.
-      expect(totalSends(logCtx)).toBe(urls.filter(url => !url.includes("GetChatMessage")).length);
+        adapter: attempts[0]?.adapter,
+        sendCount: attempts[0]?.sendCount,
+        chatCalls: urls.filter(url => url.includes("GetChatMessage")).length,
+        totalSends: totalSends(logCtx),
+        refused: body.includes("request_send_budget_exhausted"),
+      }, `status ${response.status}: ${body.slice(0, 240)}`).toEqual({
+        adapter: "devin",
+        sendCount: 0,
+        chatCalls: 0,
+        totalSends: 0,
+        refused: true,
+      });
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
