@@ -38,6 +38,8 @@ export type ExemptionReason =
   | "test-seam"
   /** The CLI reaches the same data through a local transport instead of HTTP. */
   | "local-transport"
+  /** Machine scrape target whose HTTP exposition is the operator contract. */
+  | "scrape-target"
   /** Older clients use this alias; the current CLI drives its declared replacement. */
   | "compatibility-alias"
   /** Unreachable in the live dispatch order; delete rather than expose. */
@@ -234,6 +236,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/trash/restore", module: "server/management/logs-usage-routes", mutates: true },
   { method: "PUT", path: "/api/debug", module: "server/management/logs-usage-routes", mutates: true },
   { method: "PUT", path: "/api/storage/cleanup-policy", module: "server/management/logs-usage-routes", mutates: true },
+  // server/management/metrics-routes
+  { method: "GET", path: "/api/metrics", module: "server/management/metrics-routes", mutates: false, exempt: { reason: "scrape-target", why: "This machine scrape target exposes authenticated text exposition for monitoring systems; a CLI JSON verb would be a different contract." } },
   // server/management/model-routes
   { method: "GET", path: "/api/aliases", module: "server/management/model-routes", mutates: false },
   { method: "GET", path: "/api/catalog", module: "server/management/model-routes", mutates: false },

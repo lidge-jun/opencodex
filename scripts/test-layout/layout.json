@@ -924,6 +924,7 @@
     "main-quota-provenance.test.ts": "codex-integration",
     "main-quota-window-observation.test.ts": "codex-integration",
     "management-api-logs-metrics.test.ts": "server",
+    "management-metrics-export.test.ts": "server",
     "management-client-config-route.test.ts": "server",
     "management-integration-journal-delete.test.ts": "server",
     "management-integration-routes.test.ts": "server",
