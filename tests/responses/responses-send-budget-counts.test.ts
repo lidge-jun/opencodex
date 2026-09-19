@@ -217,12 +217,17 @@ describe("upstream sends per logical request", () => {
       // without proving the refusal was recorded against the turn that was refused.
       expect(attempts).toHaveLength(1);
       expect({
+        // Pinned, not merely reported in the failure message. The refusal reaches the client as
+        // an error code on a buffered FAILED response, so the outer HTTP status stays 200; a
+        // reader who assumes 429 here would be describing a transport this path never uses.
+        status: response.status,
         adapter: attempts[0]?.adapter,
         sendCount: attempts[0]?.sendCount,
         chatCalls: urls.filter(url => url.includes("GetChatMessage")).length,
         totalSends: totalSends(logCtx),
         refused: body.includes("request_send_budget_exhausted"),
       }, `status ${response.status}: ${body.slice(0, 240)}`).toEqual({
+        status: 200,
         adapter: "devin",
         sendCount: 0,
         chatCalls: 0,
