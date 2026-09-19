@@ -60,7 +60,11 @@ Pending-prune maintenance and client transaction recovery each write, so they ar
 with no default that a preview passes as false. And a preview takes its model roster from the
 retained export snapshot instead of gathering one, because discovery refreshes credentials and
 writes the provider cache. With no usable snapshot the request is refused, which covers a cold
-process and equally a snapshot retired because the configuration or the provider cache moved. The
+process and equally a snapshot retired because the configuration or the provider cache moved. A
+roster is identified by both the configuration file it was admitted under and the in-memory
+configuration it was built from (`src/config/admitted-identity.ts`), captured before the gather and
+required to be unchanged after it, so a configuration edited mid-load leaves no snapshot rather
+than one recorded under an identity its rows never had. The
 Integrations collection read populates one when discovery succeeds and the configuration can be
 identified, so the page an operator opens before confirming anything is the usual way back rather
 than a guarantee.

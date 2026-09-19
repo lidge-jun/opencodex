@@ -10,7 +10,7 @@
  */
 import type { CatalogModel } from "../../codex/catalog";
 import { observeModelCacheRevision } from "../../codex/model-cache";
-import { readConfigAdmissionSnapshot } from "../../config/diagnostics";
+import { admittedConfigIdentity } from "../../config/admitted-identity";
 import {
   catalogModelSlug,
   filterCatalogVisibleModels,
@@ -257,6 +257,11 @@ export async function loadExportModels(
   config: OcxConfig,
   models?: readonly CatalogModel[],
 ): Promise<ExportModel[]> {
+  // Which configuration these rows are about to be chosen under, read before the gather starts.
+  // Reading it afterwards would let a configuration edit that landed while the gather was awaiting
+  // be attributed to a roster built under the previous one, which is the same substitution the
+  // per-provider revision below prevents one layer down.
+  const admittedAtChoice = admittedConfigIdentity(config);
   // The gather stamps each provider as it chooses its rows, so the roster and the revisions that
   // vouch for it come from the same moment. Sampling afterwards would let a concurrent flight's
   // publication be recorded against rows it never produced.
@@ -275,7 +280,12 @@ export async function loadExportModels(
   // A deep clone, not a frozen view of the caller's array. Freezing the array alone left the model
   // objects shared, so a caller mutating one in place would have silently rewritten the roster a
   // later preview plans against, and the fingerprint would have moved with it.
-  const configKey = exportSnapshotKey(config);
+  // Provable, and still the same one the rows were chosen under. Comparing rather than re-reading
+  // is what makes this fail closed: a configuration that moved during the load leaves no snapshot
+  // rather than leaving one recorded under an identity its rows never had.
+  const configKey = admittedAtChoice !== null && admittedConfigIdentity(config) === admittedAtChoice
+    ? admittedAtChoice
+    : null;
   // No provable configuration identity means no honest snapshot to keep.
   if (configKey === null) {
     lastExportSnapshot = null;
@@ -296,9 +306,9 @@ export async function loadExportModels(
  * The completed export roster from the last ordinary load, if it still describes this config.
  *
  * A preview may not gather, so it reads only what an authoritative load already finished. The key
- * is a digest over the provider graph's shape, the blocklist and custom models, so changing any of
- * them retires the snapshot rather than letting a preview plan against a roster the user no longer
- * has. Credentials are not part of it and are never read here.
+ * names both the configuration file the roster was admitted under and the in-memory configuration
+ * it was actually built from, so changing either one retires the snapshot rather than letting a
+ * preview plan against a roster the user no longer has.
  *
  * A cold process has no snapshot and the caller answers a bounded refusal. Recovery is the
  * ordinary flow rather than a special step: the Integrations collection read calls
@@ -351,39 +361,10 @@ function stampFrom(config: OcxConfig, gathered: ReadonlyMap<string, string>): st
 export function exportSnapshotIdentity(config: OcxConfig): string | null {
   const snapshot = lastExportSnapshot;
   if (snapshot === null) return null;
-  const configKey = exportSnapshotKey(config);
+  const configKey = admittedConfigIdentity(config);
   if (configKey === null || snapshot.key !== configKey) return null;
   if (snapshot.cacheStamp !== modelCacheStamp(config)) return null;
   return `${snapshot.key}:${snapshot.generation}`;
-}
-
-/**
- * What configuration this roster was derived under, or null when that cannot be established.
- *
- * A hand-written list of the fields that seemed to matter was the wrong instrument: it is only as
- * complete as whoever last thought about it, and a field it forgets is a roster change nothing
- * notices. The admission snapshot hashes the configuration file in the same read it parses, so it
- * covers every field without anyone maintaining a list.
- *
- * Null when the file cannot be read. That is deliberate and fails closed: with no way to say which
- * configuration a roster belongs to, there is no honest snapshot to keep or to serve.
- *
- * Known residual, not closed by this: the digest describes the file on disk, and the roster was
- * built from an in-memory configuration that a caller supplied. Proving those two are the same
- * needs the admitted configuration to carry its own revision, which is separate work.
- */
-function exportSnapshotKey(_config: OcxConfig): string | null {
-  const snapshot = readConfigAdmissionSnapshot();
-  if (snapshot.contentSha256 !== null) return snapshot.contentSha256;
-  /*
-   * A file that is not there is a well-defined configuration, not an unprovable one: it means
-   * defaults, and it is the ordinary state of a fresh install. Collapsing it into the unreadable
-   * case would have refused every preview on a machine with no config file, including CI.
-   *
-   * A file that exists and cannot be parsed is genuinely unprovable, and that still fails closed.
-   */
-  const { source, error } = snapshot.diagnostics;
-  return source === "default" && error === null ? "absent" : null;
 }
 
 /** Test seam: a fresh process has no snapshot, and suites must be able to reproduce that. */
@@ -411,7 +392,7 @@ export function previewExportSnapshot(
   // believing it held the identity of another.
   const snapshot = lastExportSnapshot;
   if (snapshot === null) return null;
-  const configKey = exportSnapshotKey(config);
+  const configKey = admittedConfigIdentity(config);
   if (configKey === null || snapshot.key !== configKey) return null;
   // A completed discovery retires the snapshot: the configuration is unchanged, but the models it
   // resolves to are not the ones this roster was built from.

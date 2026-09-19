@@ -99,6 +99,27 @@ describe("a preview reads only a roster an authoritative load already finished",
     expect(previewExportModels(added)).toBeNull();
   });
 
+  test("a preview is refused to a caller holding a different in-memory configuration", async () => {
+    resetExportSnapshotForTests();
+    await loadExportModels(CONFIG, SUPPLIED);
+    expect(previewExportModels(CONFIG)).not.toBeNull();
+
+    // Same configuration file, different configuration object. The file digest alone cannot see
+    // this, and neither could a hand-written list of the fields that seemed to matter: fastRows
+    // changes what the export projection emits and no such list ever mentioned it.
+    expect(previewExportModels({ ...CONFIG, fastRows: false } as OcxConfig)).toBeNull();
+
+    // A difference that changes nothing about the roster is still a different configuration. The
+    // identity is structural precisely so it does not depend on anyone deciding which fields count.
+    expect(previewExportModels({ ...CONFIG, shutdownTimeoutMs: 7_000 } as OcxConfig)).toBeNull();
+
+    // A separate object describing the same configuration is the same configuration: this is an
+    // identity of the content, not of the object a caller happens to be holding.
+    const equivalent = previewExportModels({ ...CONFIG } as OcxConfig);
+    expect(equivalent).not.toBeNull();
+    expect(equivalent).toEqual(previewExportModels(CONFIG));
+  });
+
   test("a completed discovery retires the snapshot even though the config never changed", async () => {
     resetExportSnapshotForTests();
     await loadExportModels(CONFIG, SUPPLIED);
