@@ -140,6 +140,10 @@ Appliquer, Remplacer, Désactiver et Restaurer commencent désormais par un aper
 indique exactement quels réglages gérés vont changer, avec les chemins concernés dans les limites prévues
 et la nature de chaque modification : ajout, mise à jour ou suppression. Examinez ce plan avant de confirmer.
 
+Lorsqu’un plan n’indique aucune modification, cela signifie que le document client géré est déjà dans l’état
+demandé. Pour un profil Aside sélectionné, la confirmation peut tout de même enregistrer sa préférence de
+synchronisation, même si le document géré ne change pas.
+
 Si le fichier change après votre examen, l'écriture est refusée car le plan est devenu obsolète. La boîte de
 dialogue remplace l'ancien plan par le nouveau et vous demande de confirmer à nouveau ; elle ne relance jamais
 l'écriture automatiquement. Si l'aperçu est temporairement indisponible, rechargez normalement la page et

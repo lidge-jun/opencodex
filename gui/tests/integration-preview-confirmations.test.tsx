@@ -6,7 +6,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import ConsequenceDialog from "../src/pages/integrations/ConsequenceDialog";
 import IntegrationPlanDetails from "../src/pages/integrations/IntegrationPlanDetails";
 import RestoreDialog from "../src/pages/integrations/RestoreDialog";
-import { IntegrationApiError, type IntegrationMutationPlan } from "../src/pages/integrations/integration-api";
+import { bindingFor, IntegrationApiError, type IntegrationMutationPlan, type IntegrationPlanBinding } from "../src/pages/integrations/integration-api";
 
 const copy = {
   titleKey: "integrations.dialog.apply.title" as const,
@@ -76,6 +76,42 @@ test("plan details render a semantic safe-path list without surrounding private 
   expect(list).not.toBeNull();
   expect(list?.querySelector("code")?.textContent).toBe("providers.opencodex");
   expect(container.textContent).not.toContain(privateCanary);
+});
+
+test("a profile no-op explains document scope and still confirms its fingerprint", async () => {
+  const noOpPlan: IntegrationMutationPlan = {
+    ...plan("p1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    clientId: "aside",
+    profileId: 2,
+    operation: "disable",
+    state: "absent",
+    changes: [],
+    willChange: false,
+  };
+  let confirmed: IntegrationPlanBinding | null = null;
+  await act(async () => {
+    root?.render(
+      <LanguageProvider>
+        <ConsequenceDialog
+          copy={{
+            titleKey: "integrations.dialog.disable.title",
+            changesKey: "integrations.dialog.disable.changes",
+            breakageKey: "integrations.dialog.disable.breakage",
+            undoKey: "integrations.dialog.disable.undo",
+            confirmKey: "integrations.dialog.disable.confirm",
+          }}
+          plan={noOpPlan}
+          onClose={() => {}}
+          onConfirm={candidate => { if (candidate) confirmed = bindingFor(candidate); }}
+        />
+      </LanguageProvider>,
+    );
+  });
+  expect(container.textContent).toContain("No changes to the managed client document are needed");
+  expect(container.textContent).toContain("The profile sync preference will still be saved");
+  const confirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Disable") as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+  expect(confirmed).toEqual({ operation: "disable", planFingerprint: noOpPlan.fingerprint });
 });
 
 test("a stale confirmation replaces the plan and requires a second explicit press", async () => {

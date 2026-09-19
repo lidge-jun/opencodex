@@ -162,6 +162,9 @@ kutusu, yönetilen ayarlardan tam olarak hangilerinin değişeceğini, sınırl�
 her değişikliğin bir değer eklediğini, güncellediğini veya kaldırdığını gösterir. Onaylamadan önce bu
 planı inceleyin.
 
+Bir plan değişiklik olmadığını bildiriyorsa yönetilen istemci belgesi zaten istenen durumdadır. Seçili
+bir Aside profilinde onaylama, yönetilen belge değişmese bile profilin eşitleme tercihini kaydedebilir.
+
 Dosya siz inceledikten sonra değişirse yazma işlemi eski plan nedeniyle reddedilir. İletişim kutusu
 eski planı güncel planla değiştirir ve yeniden açıkça onaylamanızı ister; yazma işlemini hiçbir zaman
 otomatik olarak yeniden denemez. Önizleme geçici olarak kullanılamıyorsa sayfayı normal şekilde

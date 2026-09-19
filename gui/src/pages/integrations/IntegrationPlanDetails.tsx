@@ -50,7 +50,10 @@ function Plan({ plan }: { plan: IntegrationMutationPlan }) {
       </p>
       {plan.foreignEdit !== "none" && <p>{t(FOREIGN_EDIT_KEYS[plan.foreignEdit])}</p>}
       {!plan.willChange && plan.canApply && (
-        <p>{t(plan.operation === "disable" ? "integrations.plan.noop.disabled" : "integrations.plan.noop.applied")}</p>
+        <>
+          <p>{t(plan.operation === "disable" ? "integrations.plan.noop.disabled" : "integrations.plan.noop.applied")}</p>
+          {plan.profileId !== undefined && <p>{t("integrations.plan.noop.profilePreference")}</p>}
+        </>
       )}
       {!plan.canApply && <p>{t(refusalKey ?? "integrations.plan.refused")}</p>}
       {plan.changes.length > 0 && (

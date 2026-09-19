@@ -206,6 +206,10 @@ Apply, Replace, Disable, and Restore now begin with a preview. The dialog shows 
 managed settings will change, including the bounded change paths and whether each change adds,
 updates, or removes a value. Review that plan before confirming.
 
+When a plan reports no changes, it means the managed client document already has the requested
+state. For a selected Aside profile, confirming can still save that profile's sync preference even
+though the managed document does not change.
+
 If the file changes after you review it, the write is refused as stale. The dialog replaces the
 old plan with the updated one and asks you to confirm again; it never retries the write
 automatically. If a preview is temporarily unavailable, reload the page normally and start the
