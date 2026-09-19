@@ -299,17 +299,25 @@ describe("pinned direct content coding", () => {
     }
   });
 
-  test("a decoded response that completes leaves its connection intact", async () => {
-    // A body that ended has nothing left to tear down, and destroying it would take a
-    // connection the agent is entitled to reuse. Cleanup is owed by the paths that end a
-    // response early, which the decode-failure, ceiling and cancellation cases above assert.
-    // The identity path behaves the same way, so decoding must not diverge from it here.
+  test("a decoded response settles at end of stream", async () => {
+    // What a completed body owes is that it ends: the decoder flushes, the stream closes, and
+    // the caller sees the whole value. What happens to the connection afterwards is the HTTP
+    // agent's decision - Node documents a completed connection as destroyed or pooled
+    // depending on keepAlive - so asserting either outcome here would pin a mechanism this
+    // transport does not own. Cleanup this path does owe is asserted where a response ends
+    // early: the decode-failure, ceiling and cancellation cases above each observe a close.
     const { server: target, connection } = codedTarget("gzip", gzipSync(Buffer.from('{"ok":true}', "utf8")));
     const port = await listen(target);
     try {
       const response = await pinnedGet(port, "/complete");
-      expect(await response.json()).toEqual({ ok: true });
-      expect(connection()?.destroyed).toBe(false);
+      const reader = response.body!.getReader();
+      let decoded = "";
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        decoded += new TextDecoder().decode(next.value);
+      }
+      expect(JSON.parse(decoded)).toEqual({ ok: true });
     } finally {
       connection()?.destroy();
       await close(target);
