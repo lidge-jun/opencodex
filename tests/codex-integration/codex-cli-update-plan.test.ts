@@ -317,6 +317,8 @@ describe("Codex CLI update apply", () => {
       [{ inspect: async () => report({ packageVersion: "9.9.9" }) }, "9.9.9"],
       [{ inspect: async () => report({ provenance: "version-manager" }) }, null],
       [{ inspect: async () => report({ versionEvidence: { kind: "advisory-runtime" } }) }, null],
+      // A different npm-global candidate at the target version is not the planned install.
+      [{ inspect: async () => report({ location: "<npm-global>/other/@openai/codex", packageVersion: "1.1.0" }) }, null],
     ];
     for (const [override, after] of cases) {
       // The first inspection builds the plan, so these must still produce a plan id;

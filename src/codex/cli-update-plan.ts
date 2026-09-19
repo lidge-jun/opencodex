@@ -454,6 +454,7 @@ export async function applyCodexCliUpdatePlan(
 
   const after = readback
     && readback.provenance === "npm-global"
+    && readback.location === plan.location
     && readback.versionEvidence.kind === "package-manifest"
     ? readback.packageVersion
     : null;
