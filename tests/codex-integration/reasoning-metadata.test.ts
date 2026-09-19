@@ -16,6 +16,7 @@ import type { OcxProviderConfig } from "../../src/types";
 const ZEN_GO: OcxProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "https://opencode.ai/zen/go/v1",
+  apiKey: "test-zen-go-key",
 } as OcxProviderConfig;
 
 const MUSE_SPARK = "muse-spark-1.3-contributor";
@@ -63,8 +64,8 @@ function metadataFileV2(providers: Record<string, unknown>, apis: Record<string,
   };
 }
 
-function supportFile(rows: Record<string, unknown>): Record<string, string> {
-  return { "reasoning-support-cache.json": JSON.stringify({ version: 1, rows }) };
+function supportFile(rows: Record<string, unknown>, version = 2): Record<string, string> {
+  return { "reasoning-support-cache.json": JSON.stringify({ version, rows }) };
 }
 
 afterEach(() => {
@@ -130,23 +131,40 @@ describe("models.dev reasoning metadata", () => {
 });
 
 describe("learned rung refusals", () => {
-  const refused = () => ({
-    ["opencode-go|" + DEEPSEEK_FLASH + "|max"]: { effort: "max", at: Date.now() },
-  });
-
   test("drops a refused rung from a metadata-derived ladder", async () => {
-    const { effort } = await load({
+    const { effort, metadata } = await load({
       ...metadataFile({ "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } } }),
-      ...supportFile(refused()),
     });
+    expect(metadata.recordUnsupportedReasoningEffort(ZEN_GO, DEEPSEEK_FLASH, "max")).toBe(true);
     expect(effort.configuredReasoningEfforts(ZEN_GO, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
     expect(effort.mapReasoningEffort(ZEN_GO, DEEPSEEK_FLASH, "max")).toBe("high");
   });
 
   test("drops a refused rung from a ladder pinned in the registry too", async () => {
-    const { effort } = await load(supportFile(refused()));
+    const { effort, metadata } = await load();
+    expect(metadata.recordUnsupportedReasoningEffort(ZEN_GO, DEEPSEEK_FLASH, "max")).toBe(true);
     const pinned = { ...ZEN_GO, modelReasoningEfforts: { [DEEPSEEK_FLASH]: ["low", "high", "max"] } } as OcxProviderConfig;
     expect(effort.configuredReasoningEfforts(pinned, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+  });
+
+  test("keeps learned refusals isolated between credentials at the same destination", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    const lowEntitlement = { ...ZEN_GO, apiKey: "low-entitlement-key" } as OcxProviderConfig;
+    const highEntitlement = { ...ZEN_GO, apiKey: "high-entitlement-key" } as OcxProviderConfig;
+    expect(metadata.recordUnsupportedReasoningEffort(lowEntitlement, DEEPSEEK_FLASH, "max")).toBe(true);
+    expect(effort.configuredReasoningEfforts(lowEntitlement, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    expect(effort.configuredReasoningEfforts(highEntitlement, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
+  });
+
+  test("ignores legacy destination-wide support rows", async () => {
+    const legacyRows = { ["opencode-go|" + DEEPSEEK_FLASH + "|max"]: { effort: "max", at: Date.now() } };
+    const { effort } = await load({
+      ...metadataFile({ "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } } }),
+      ...supportFile(legacyRows, 1),
+    });
+    expect(effort.configuredReasoningEfforts(ZEN_GO, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
   });
 
   test("records the refusal and plans the next lower published rung once", async () => {
