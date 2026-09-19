@@ -167,7 +167,6 @@ describe("Codex CLI update plan identity", () => {
       { resolveTarget: () => ({ kind: "resolved", version: "1.1.0", integrity: "sha512-BBBB" }) },
       { inspect: async () => report({ packageVersion: "1.0.1", candidateVersion: "1.0.1" }) },
       { inspect: async () => report({ location: "<npm-global>/other/@openai/codex" }) },
-      { inspect: async () => report({ shim: { status: "matched", backingKind: "backup" } }) },
     ];
     for (const variant of variants) {
       const plan = await applicablePlan(variant);
@@ -195,10 +194,8 @@ describe("Codex CLI update plan identity", () => {
       channel: "latest" as const,
       targetVersion: "1.1.0",
       targetIntegrity: "sha512-AAAA",
-      shimEligible: false,
     };
     expect(codexCliUpdatePlanId(bound)).toBe(codexCliUpdatePlanId(bound));
-    expect(codexCliUpdatePlanId({ ...bound, shimEligible: true })).not.toBe(codexCliUpdatePlanId(bound));
   });
 });
 
@@ -209,7 +206,6 @@ function applyDeps(
   return {
     ...planDeps(),
     runInstaller: version => { installs.push(version); return { exitCode: 0 }; },
-    restoreShim: async () => ({ status: "restored" }),
     ...overrides,
   };
 }
@@ -287,7 +283,6 @@ describe("Codex CLI update apply", () => {
     expect(result.status).toBe("applied");
     expect(result.installedVersionBefore).toBe("1.0.0");
     expect(result.installedVersionAfter).toBe("1.1.0");
-    expect(result.shim).toEqual({ attempted: false, restored: false, status: null });
   });
 
   test("a nonzero installer exit never overrides a readback that shows the target", async () => {
@@ -339,86 +334,6 @@ describe("Codex CLI update apply", () => {
       expect(result.status).toBe("ambiguous");
       expect(result.installedVersionAfter).toBe(after);
     }
-  });
-});
-
-describe("Codex CLI update shim repair", () => {
-  async function applyWithShim(
-    preShim: CodexCliInstallReport["shim"],
-    postShim: CodexCliInstallReport["shim"],
-    restore: () => Promise<{ status: string }>,
-  ) {
-    const deps = planDeps({ inspect: async () => report({ shim: preShim }) });
-    const plan = await createCodexCliUpdatePlan(deps);
-    let calls = 0;
-    return await applyCodexCliUpdatePlan(plan.planId!, {
-      ...deps,
-      runInstaller: () => ({ exitCode: 0 }),
-      restoreShim: restore,
-      inspect: async () => {
-        calls += 1;
-        return calls === 1
-          ? report({ shim: preShim })
-          : report({ packageVersion: "1.1.0", shim: postShim });
-      },
-    });
-  }
-
-  test("an untracked shim is left alone", async () => {
-    let restores = 0;
-    const result = await applyWithShim(
-      { status: "not-tracked", backingKind: null },
-      { status: "not-tracked", backingKind: null },
-      async () => { restores += 1; return { status: "restored" }; },
-    );
-    expect(result.status).toBe("applied");
-    expect(restores).toBe(0);
-    expect(result.shim.attempted).toBe(false);
-  });
-
-  test("a shim that was matched before the update is restored after it", async () => {
-    const result = await applyWithShim(
-      { status: "matched", backingKind: "backup" },
-      { status: "not-tracked", backingKind: null },
-      async () => ({ status: "restored" }),
-    );
-    expect(result.status).toBe("applied");
-    expect(result.shim).toEqual({ attempted: true, restored: true, status: "restored" });
-  });
-
-  test("a shim that cannot be restored is reported, not silently swallowed", async () => {
-    for (const status of ["ineligible", "deferred", "disabled"]) {
-      const result = await applyWithShim(
-        { status: "matched", backingKind: "backup" },
-        { status: "unknown", backingKind: null },
-        async () => ({ status }),
-      );
-      // The update itself succeeded; the operator still has a broken launcher to fix.
-      expect(result.status).toBe("applied_shim_repair_required");
-      expect(result.installedVersionAfter).toBe("1.1.0");
-      expect(result.shim.status).toBe(status);
-    }
-  });
-
-  test("a throwing restore does not turn a completed update into a crash", async () => {
-    const result = await applyWithShim(
-      { status: "matched", backingKind: "backup" },
-      { status: "unknown", backingKind: null },
-      async () => { throw new Error("lock held"); },
-    );
-    expect(result.status).toBe("applied_shim_repair_required");
-    expect(result.shim).toEqual({ attempted: true, restored: false, status: "failed" });
-  });
-
-  test("a shim that survived the update needs no repair", async () => {
-    let restores = 0;
-    const result = await applyWithShim(
-      { status: "matched", backingKind: "backup" },
-      { status: "matched", backingKind: "backup" },
-      async () => { restores += 1; return { status: "restored" }; },
-    );
-    expect(result.status).toBe("applied");
-    expect(restores).toBe(0);
   });
 });
 

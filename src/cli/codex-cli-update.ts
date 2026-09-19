@@ -92,7 +92,6 @@ function planSummary(plan: CodexCliUpdatePlan): string[] {
     `channel: ${plan.channel}`,
     `target-version: ${plan.targetVersion ?? "unresolved"}`,
     `target-integrity: ${plan.targetIntegrity ?? "unresolved"}`,
-    `shim-eligible: ${plan.shimEligible ? "yes" : "no"}`,
     `session: ${plan.session.state}${plan.session.matches === null ? "" : ` (${plan.session.matches})`}`,
   ];
   if (plan.planId) lines.push(`plan: ${plan.planId}`);
@@ -101,9 +100,6 @@ function planSummary(plan: CodexCliUpdatePlan): string[] {
 }
 
 function applySummary(result: CodexCliUpdateApplyResult): string[] {
-  const shim = result.shim.attempted
-    ? (result.shim.restored ? "restored" : `repair-required (${result.shim.status ?? "unknown"})`)
-    : "untouched";
   return [
     `status: ${result.status}`,
     `reason: ${result.refusal ?? "none"}`,
@@ -112,7 +108,6 @@ function applySummary(result: CodexCliUpdateApplyResult): string[] {
     `installed-before: ${result.installedVersionBefore ?? "unavailable"}`,
     `installed-after: ${result.installedVersionAfter ?? "unavailable"}`,
     `installer-exit: ${result.installerExitCode ?? "unavailable"}`,
-    `shim: ${shim}`,
   ];
 }
 
