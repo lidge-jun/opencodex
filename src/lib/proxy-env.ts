@@ -114,7 +114,12 @@ export function effectiveProxyFor(
   if (value) return value;
   if (url.protocol === "http:" && process.platform !== "win32") {
     const allProxy = env.ALL_PROXY?.trim() || env.all_proxy?.trim();
-    if (allProxy && /^https?:\/\//i.test(allProxy)) return allProxy;
+    if (allProxy) {
+      try {
+        const scheme = new URL(allProxy).protocol;
+        if (scheme === "http:" || scheme === "https:") return allProxy;
+      } catch { /* not a usable proxy URL */ }
+    }
   }
   return null;
 }
