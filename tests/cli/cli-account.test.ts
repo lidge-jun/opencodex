@@ -53,6 +53,7 @@ let autoSwitchThreshold = 80;
 let activeReadFailure: { status: number; error: string } | null = null;
 let oauthListFailure: { provider: string; status: number; error: string } | null = null;
 let keyListFailure: { provider: string; status: number; error: string } | null = null;
+let codexListFailure: { status: number; error: string } | null = null;
 let codexRefreshFailure: MockFailure | null = null;
 /** When set, the provider-quotas stub includes this row as a passive Muse observation. */
 let museProviderQuotaReport: Record<string, unknown> | null = null;
@@ -140,6 +141,9 @@ async function mockManagementApi(req: Request): Promise<Response> {
   const body = req.method === "PUT" || req.method === "POST" ? await req.json().catch(() => undefined) : undefined;
   requests.push({ method: req.method, path: url.pathname, search: url.search, body });
 
+  if (req.method === "GET" && url.pathname === "/api/codex-auth/accounts" && codexListFailure) {
+    return json({ error: codexListFailure.error }, codexListFailure.status);
+  }
   if ((req.method === "GET" && url.pathname === "/api/codex-auth/accounts")
     || (req.method === "POST" && url.pathname === "/api/codex-auth/accounts/refresh")) {
     if ((url.searchParams.get("refresh") === "1" || req.method === "POST") && codexRefreshFailure) {
@@ -180,6 +184,13 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json({ ok: true, id: payload.id, priority: account.priority });
   }
 
+  if (req.method === "PUT" && url.pathname === "/api/codex-auth/accounts/pause") {
+    const payload = body as { id: string; paused: boolean };
+    const account = codexAccounts.find(entry => entry.id === payload.id);
+    if (!account) return json({ error: "account not found" }, 404);
+    account.paused = payload.paused;
+    return json({ ok: true, id: payload.id, paused: payload.paused });
+  }
   if (url.pathname === "/api/codex-auth/active") {
     if (req.method === "PUT") {
       const accountId = (body as { accountId?: string }).accountId;
@@ -534,6 +545,7 @@ beforeEach(() => {
   oauthListFailure = null;
   keyListFailure = null;
   codexRefreshFailure = null;
+  codexListFailure = null;
   museProviderQuotaReport = null;
   autoSwitchUpdateFailure = null;
   deleteFailure = null;
@@ -807,6 +819,82 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     expect(result.code).toBe(0);
     expect(put?.body).toEqual({ accountId: "__main__" });
+  });
+
+  test("7b: use openai <alias> resolves the alias to the stored account id", async () => {
+    codexAccounts.push({ id: "chatgpt_2", alias: "sub2", plan: "pro", quota: null });
+    const result = await run(["use", "openai", "sub2"]);
+    const put = requests.filter(request =>
+      request.method === "PUT" && request.path === "/api/codex-auth/active"
+    ).at(-1);
+
+    expect(result.code).toBe(0);
+    expect(put?.body).toEqual({ accountId: "chatgpt_2" });
+    expect(result.stdout).toContain("chatgpt_2");
+  });
+
+  test("7c: use openai auto clears the pin and says the pool decides from here", async () => {
+    const result = await run(["use", "openai", "auto"]);
+    const put = requests.filter(request =>
+      request.method === "PUT" && request.path === "/api/codex-auth/active"
+    ).at(-1);
+
+    expect(result.code).toBe(0);
+    expect(put?.body).toEqual({ accountId: null });
+    expect(result.stdout).toContain("automatic account selection");
+    expect(result.stderr).not.toContain("may override this pin");
+    const machine = await run(["use", "openai", "auto", "--json"]);
+    expect(JSON.parse(machine.stdout)).toMatchObject({ ok: true, provider: "openai", activeId: null });
+  });
+
+  test("7d: an alias that matches nothing, or two accounts, exits one before any write", async () => {
+    codexAccounts.push(
+      { id: "chatgpt_2", alias: "Work", plan: "pro", quota: null },
+      { id: "chatgpt_3", alias: "work", plan: "pro", quota: null },
+    );
+    const writes = () => requests.filter(request =>
+      request.method === "PUT" && request.path === "/api/codex-auth/active"
+    );
+    const missing = await run(["use", "openai", "nope"]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain('Account not found: no Codex account has the id or alias "nope"');
+    const ambiguous = await run(["use", "openai", "WORK"]);
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.stderr).toContain("names 2 accounts");
+    expect(writes()).toHaveLength(0);
+    // An exact match wins over the case-folded one.
+    const exact = await run(["use", "openai", "Work"]);
+    expect(exact.code).toBe(0);
+    expect(writes().at(-1)?.body).toEqual({ accountId: "chatgpt_2" });
+  });
+
+  test("7e: priority, pause and clear-cooldown accept the alias too", async () => {
+    codexAccounts.push({ id: "chatgpt_2", alias: "sub2", plan: "pro", quota: null });
+    const priority = await run(["priority", "openai", "sub2", "first"]);
+    expect(priority.code).toBe(0);
+    expect(requests.filter(r => r.path === "/api/codex-auth/accounts/priority").at(-1)?.body).toMatchObject({ id: "chatgpt_2" });
+    const pause = await run(["pause", "openai", "sub2"]);
+    expect(pause.code).toBe(0);
+    expect(requests.filter(r => r.path === "/api/codex-auth/accounts/pause").at(-1)?.body).toEqual({ id: "chatgpt_2", paused: true });
+    const missing = await run(["pause", "openai", "nope"]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain('Account not found: no Codex account has the id or alias "nope"');
+  });
+
+  test("7f: auto is reserved everywhere, and a broken account list falls back to the id as given", async () => {
+    const rename = await run(["alias", "openai", "chatgpt_1", "auto"]);
+    expect(rename.code).toBe(1);
+    expect(rename.stderr).toContain("reserved");
+    expect(requests.some(request => request.path === "/api/codex-auth/accounts/alias")).toBe(false);
+    const pause = await run(["pause", "openai", "auto"]);
+    expect(pause.code).toBe(1);
+    expect(pause.stderr).toContain("reserved");
+    // The list only serves alias resolution: without it the argument is sent as an id, as before.
+    codexListFailure = { status: 500, error: "list unavailable" };
+    const raw = await run(["use", "openai", "chatgpt_1"]);
+    expect(raw.code).toBe(0);
+    expect(requests.filter(request => request.method === "PUT" && request.path === "/api/codex-auth/active").at(-1)?.body)
+      .toEqual({ accountId: "chatgpt_1" });
   });
 
   test("8: an unknown provider exits one and stderr names candidates", async () => {

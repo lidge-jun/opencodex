@@ -1,5 +1,6 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
 import { loadConfig } from "../config";
+import { explainCodexUseOutcome, resolveCodexUseTarget } from "./account-target";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import {
@@ -43,18 +44,18 @@ const ACCOUNT_USAGE = `Usage:
   ocx account list [provider] [--json] [--all] [--quota [--refresh]]
   ocx account history openai <pool-account-id> [--limit <1-200>] [--json]
   ocx account current <provider> [--json]
-  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
-  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
-  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
-  ocx account pause <provider> <account-id|main> [--json]
-  ocx account resume <provider> <account-id|main> [--json]
+  ocx account alias <provider> <account-or-key-id|alias> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account pause <provider> <account-id|alias|main> [--json]
+  ocx account resume <provider> <account-id|alias|main> [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
-  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
-  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account remove <provider> <account-or-key-id|alias|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|alias|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
   ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
   ocx account import-orca --source <orca-data-directory> --registry <orca-data.json> [--apply] [--json]
@@ -66,7 +67,9 @@ const ACCOUNT_USAGE = `Usage:
   ocx account main <doctor|list|register|add|reauth|switch|recover> ...
 
 List and switch provider accounts and API-key pools (masked output only).
-'main' selects the Codex App login for the openai account pool.`;
+'main' selects the Codex App login for the openai account pool; 'auto' clears the
+selection so the pool places work by its own strategy. A Codex account can be named
+by the alias set with 'ocx account alias' wherever an id is accepted.`;
 
 function consumeFlag(args: string[], flag: string): boolean {
   const idx = args.indexOf(flag);
@@ -310,9 +313,15 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   if (!baseUrl) return proxyUnreachable();
 
   let res: ApiResult;
-  let activeId: string;
+  let activeId: string | null;
   if (c.type === "codex") {
-    activeId = id === MAIN_ALIAS ? MAIN_CODEX_ID : id;
+    const target = await resolveCodexUseTarget(deps, baseUrl, id);
+    if ("networkDown" in target) return proxyUnreachable(target.transportError);
+    if ("error" in target) {
+      console.error(`Error: ${target.error}`);
+      return 1;
+    }
+    activeId = target.accountId;
     res = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/active", { accountId: activeId });
   } else if (c.type === "oauth") {
     activeId = id;
@@ -336,26 +345,11 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
       ...(pinDrainReason !== undefined ? { pinDrained: true, pinDrainReason } : {}),
     }, null, 2));
   } else {
-    console.log(`${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
+    console.log(activeId === null
+      ? `${name}: automatic account selection (pin cleared)`
+      : `${name}: active ${c.type === "api-key" ? "key" : "account"} is now ${displayId(activeId)}`);
   }
-  if (c.type === "codex") {
-    console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
-    const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    const threshold = active.status === 200 && typeof active.json.autoSwitchThreshold === "number"
-      ? active.json.autoSwitchThreshold
-      : undefined;
-    if (pinDrainReason !== undefined) {
-      // "may override" is the right caveat for a pin that is currently fine and could be
-      // overtaken later. It is the wrong sentence for one the next request will discard, and
-      // printing only that is what left the operator believing the account was pinned.
-      const because = pinDrainReason === "quota_threshold"
-        ? `is at or above the auto-switch threshold${threshold !== undefined ? ` (${threshold}%)` : ""}`
-        : `cannot currently be selected (${pinDrainReason})`;
-      console.error(`Note: ${displayId(activeId)} ${because}, so routing releases this pin on its next request.`);
-    } else if (threshold !== undefined && threshold > 0) {
-      console.error(`Note: auto-switch (threshold ${threshold}%) may override this pin.`);
-    }
-  }
+  if (c.type === "codex") await explainCodexUseOutcome(deps, baseUrl, activeId, pinDrainReason);
   return 0;
 }
 

@@ -8,6 +8,7 @@ import type { AccountDeps } from "../../src/cli/account-api";
  * got the same hedge as the healthy case. The route now reports the drain it evaluated.
  */
 const BASE_URL = "http://127.0.0.1:10100";
+const KNOWN_ACCOUNTS = ["pool_cool", "pool_gone", "pool_hot"];
 
 function deps(putJson: Record<string, unknown>, thresholdJson: Record<string, unknown>): AccountDeps {
   return {
@@ -20,6 +21,10 @@ function deps(putJson: Record<string, unknown>, thresholdJson: Record<string, un
       }
       if (path === "/api/codex-auth/active") {
         return new Response(JSON.stringify(thresholdJson), { status: 200 });
+      }
+      if (path === "/api/codex-auth/accounts") {
+        // `use` resolves its argument against the pool before writing the pin.
+        return new Response(JSON.stringify({ accounts: KNOWN_ACCOUNTS.map(id => ({ id })) }), { status: 200 });
       }
       return new Response("{}", { status: 404 });
     }) as unknown as typeof fetch,
