@@ -454,6 +454,8 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
 
 test("sparse JSON completion inference precedes function repair in client output and replay", async () => {
   const expected = '{"cell_id":"4","yield_time_ms":120000}';
+  // Dispatches directly rather than through a server, so it takes the lease itself.
+  takeSpendHome();
   const item = { type: "function_call", id: "fc_sparse_wait", call_id: "call_sparse_wait", name: "wait", arguments: '{"cell_id":4,"yield_time_ms":120000.0}' };
   let responseId = `resp_sparse_${crypto.randomUUID()}`;
   let capturedInput: Array<Record<string, unknown>> = [];

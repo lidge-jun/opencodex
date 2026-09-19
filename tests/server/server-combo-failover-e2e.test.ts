@@ -175,14 +175,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
   let responseStatePending = true;
   try {
     for (const server of servers.splice(0)) await server.stop(true);
     await flushResponseState();
     responseStatePending = responseStatePersistPendingForTests();
   } finally {
+    // After the listeners are stopped and the response state is flushed, both of which can
+    // still account against the journal, and before the home below is removed.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     clearResponseStateForTests();
     clearCursorThreadContinuityForTests();
     globalThis.fetch = originalFetch;
@@ -2022,8 +2024,8 @@ describe("server combo failover 030 activation matrix", () => {
       "chatgpt-account-id": authKind === "mismatched-account" ? "other-account"
         : authKind === "org-only-jwt" ? "org-foreign" : "acct-scoped-sidecar",
     };
+    takeSpendHome();
     const response = authKind === "chat-valid"
-      takeSpendHome();
       ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify({ model: "combo/free", messages: [{ role: "user", content: "search" }], stream: true, tools: [{ type: "web_search" }] }),

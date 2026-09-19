@@ -16,6 +16,9 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 // journal and needs the writer lease startServer would have taken. Without it the turn is refused
 // and the symptom is this file's own waitFor timing out, which names nothing.
 let releaseSpendHome: (() => void) | undefined;
+// Every synthetic client this file opens, so teardown can close them before the lease is given
+// back rather than leaving a handler mid-turn against a journal nobody owns.
+const clients: Array<{ close(): void }> = [];
 
 type Frame = Record<string, any>;
 const realSocket = globalThis.WebSocket;
@@ -54,17 +57,18 @@ const waitFor = async (condition: () => boolean) => {
   throw new Error("fixture condition timed out");
 };
 function downstream(fields: Frame = {}, settings = config(), credential = "test") {
+  releaseSpendHome ??= acquireOwnedSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
   const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `fixture-${credential}`, session_id: `fixture-${credential}` }) } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
+  clients.push(ws);
   send({ type: "response.create", model: "gpt-5.5", input: "initial", ...fields });
   return { ws, sent, send, handler };
 }
 async function begin(fields: Frame = {}, credential = "test") {
-  releaseSpendHome ??= acquireOwnedSpendHome();
   const client = downstream(fields, config(), credential);
   await waitFor(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = Socket.all.find(s => s.options.headers.authorization === `Bearer ${credential}`)!;
@@ -86,11 +90,14 @@ beforeEach(() => {
   clearRequestLogsForTests();
 });
 afterEach(() => {
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
+  for (const client of clients.splice(0)) client.close();
   for (const socket of Socket.all) socket.close();
   Socket.all = [];
   runOptionalShutdownHooks();
+  // Released only after the clients, the upstream sockets and the shutdown hooks, because each
+  // of those can still settle a turn that accounts against the journal this lease owns.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.WebSocket = realSocket;
   globalThis.fetch = realFetch;
   for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }

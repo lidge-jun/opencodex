@@ -2160,6 +2160,12 @@ describe("native passthrough terminal finalization", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     // Force win32 so eager-relay decision path is reachable via streamMode override.
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // Ownership identity lowercases the state directory on win32, so the lease this file took
+    // under the real platform stops matching the directory the dispatch checks the moment the
+    // override lands, and the turn is refused with no terminal at all. Retake it under the
+    // platform this case is pretending to run on, and give it back before restoring.
+    releaseSpendHome?.();
+    releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await postSpawn(
         cfg,
@@ -2177,6 +2183,8 @@ describe("native passthrough terminal finalization", () => {
         responseText,
       };
     } finally {
+      releaseSpendHome?.();
+      releaseSpendHome = undefined;
       if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
     }
   }

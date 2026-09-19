@@ -228,8 +228,10 @@ describe("Cursor effort variant rows", () => {
         reasoning_effort: "high",
       });
     } finally {
-      releaseSpendHome();
       upstream.server.stop(true);
+      // The fake upstreams stop first: a turn still settling against the journal must not
+      // outlive the lease that owns it.
+      releaseSpendHome();
     }
   });
 
@@ -254,8 +256,8 @@ describe("Cursor effort variant rows", () => {
         reasoning_effort: "high",
       });
     } finally {
-      releaseSpendHome();
       upstream.server.stop(true);
+      releaseSpendHome();
     }
   });
 
@@ -286,8 +288,8 @@ describe("Cursor effort variant rows", () => {
         reasoning_effort: "high",
       });
     } finally {
-      releaseSpendHome();
       upstream.server.stop(true);
+      releaseSpendHome();
     }
   });
 
@@ -362,9 +364,9 @@ describe("Cursor effort variant rows", () => {
       expect(intended.captured.every(body => body.model === "private-model")).toBe(true);
       expect(fallback.captured).toHaveLength(0);
     } finally {
-      releaseSpendHome();
       intended.server.stop(true);
       fallback.server.stop(true);
+      releaseSpendHome();
     }
   });
 

@@ -12,6 +12,9 @@ import { acquireOwnedSpendHome } from "./owned-spend-home";
 // journal and needs the writer lease startServer would have taken. Without it the turn is refused
 // and the symptom is the fixture's own wait timing out, which names nothing.
 let releaseSpendHome: (() => void) | undefined;
+// Every synthetic client this fixture opens, so teardown can close them before the lease is
+// given back rather than leaving a handler mid-turn against a journal nobody owns.
+const clients: Array<{ close(): void }> = [];
 
 export type Frame = Record<string, any>;
 const realSocket = globalThis.WebSocket;
@@ -56,18 +59,19 @@ export const waitForInjection = async (condition: () => boolean) => {
   throw new Error("injection fixture condition timed out");
 };
 export function injectionClient(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
+  releaseSpendHome ??= acquireOwnedSpendHome();
   const handler = createWebsocketHandler({ config: settings, deps: {} } as ServeOptionsContext);
   const sent: Frame[] = [];
   const ws = { readyState: 1, data: { headers: new Headers({ authorization: `Bearer ${credential}`, "thread-id": `injection-fixture-${++nextId}`, "openai-beta": "fixture_beta=v1" }) } as WsData,
     send: (text: string) => { sent.push(JSON.parse(text)); return 1; }, close() { handler.close(ws, 1000, "fixture close"); },
   } as unknown as ServerWebSocket<WsData>;
   const send = (frame: Frame) => handler.message(ws, JSON.stringify(frame));
+  clients.push(ws);
   send({ type: "response.create", model: settings.defaultProvider === "api" ? "api/gpt-5.6-sol" : "gpt-5.6-sol", input: "initial", multi_agent: { enabled: true },
     tools: [{ type: "function", name: "get_value", parameters: { type: "object", properties: {} } }], ...fields });
   return { ws, sent, send, handler };
 }
 export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
-  releaseSpendHome ??= acquireOwnedSpendHome();
   const client = injectionClient(fields, settings, credential);
   await waitForInjection(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = InjectionSocket.all.at(-1)!;
@@ -106,10 +110,13 @@ export function installInjectionFixture() {
     clearRequestLogsForTests();
   });
   afterEach(() => {
-    releaseSpendHome?.();
-    releaseSpendHome = undefined;
+    for (const client of clients.splice(0)) client.close();
     for (const socket of InjectionSocket.all) socket.close();
     InjectionSocket.all = []; runOptionalShutdownHooks();
+    // Released only after the clients, the upstream sockets and the shutdown hooks: each can
+    // still settle a turn that accounts against the journal this lease owns.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.WebSocket = realSocket; globalThis.fetch = realFetch;
     for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }
   });

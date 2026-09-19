@@ -1111,9 +1111,6 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   const invokeMessages = async (): Promise<number> => {
     const turnAdmissionLease = tryAdmitTurn();
     if (!turnAdmissionLease) throw new Error("test turn admission unavailable");
-    // Held for exactly this dispatch, beside the turn lease it already takes. File-wide would be
-    // wrong: most cases in this file start a real server, and that server takes the same lease.
-    const releaseSpendHome = acquireOwnedSpendHome();
     const start = Date.now();
     try {
       const response = await handleClaudeMessages(
@@ -1133,10 +1130,13 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
       await response.text();
       return response.status;
     } finally {
-      releaseSpendHome();
       turnAdmissionLease.release();
     }
   };
+  // One lease for the whole case rather than one per invocation: both turns run against the same
+  // home, and re-taking it between them would discard the ledger this case is still accounting
+  // into. File-wide would be wrong the other way, since most cases here start a real server.
+  const releaseSpendHome = acquireOwnedSpendHome();
   try {
     expect(await invokeMessages()).toBe(200);
 
@@ -1166,6 +1166,8 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   } finally {
     await forward.stop(true);
     await routed.stop(true);
+    // After both upstreams are down, so nothing is still settling against the journal.
+    releaseSpendHome();
   }
 });
 
