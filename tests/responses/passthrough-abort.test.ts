@@ -59,7 +59,9 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
       capsSource.indexOf("export function selectEagerPath"),
     );
 
-    expect(sseBranch).toContain("const terminalRepairPolicy = providerModelResponsesTerminalRepair(");
+    // The captured static policy now supplies the repair decision; the real platform gate and
+    // pure native relay invariants below are unchanged.
+    expect(sseBranch).toContain("const terminalRepairPolicy = route.staticPolicy.model.responsesTerminalRepair;");
     expect(sseBranch).toContain("const passthroughSseBody = terminalRepairPolicy");
     expect(sseBranch).toContain(": upstreamResponse.body;");
     // Native tee stays inside the bounded observer. The production owner passes
