@@ -7,6 +7,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { enforceUsageLedgerSizeLimit } from "./ledger-retention";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -941,10 +942,12 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
       ensuredUsageLogDir = null;
       ensuredUsageLogFile = null;
       doAppend();
+      enforceUsageLedgerSizeLimit(path);
       return;
     }
     throw error;
   }
+  enforceUsageLedgerSizeLimit(path);
 }
 
 export type UsageLogRevision = {

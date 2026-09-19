@@ -150,12 +150,6 @@
   min-width: 0;
   /* Inset table from border+surface so cells aren't flush to the frame. */
   padding: var(--space-3);
-  /*
-    The model and provider tables are the two long regions on this tab; unbounded they push the
-    rest of the report far below the fold. Cap them and scroll inside instead. A partially
-    visible last row is the scroll affordance. `overscroll-behavior: auto` hands the wheel back
-    to the page at either end, which keeps the sections below reachable by scrolling.
-  */
   max-height: min(574px, 58vh);
   overflow-y: auto;
   overscroll-behavior: auto;
@@ -165,17 +159,9 @@
 /* Keep column labels visible while the body scrolls under them. */
 .usw-section .tbl-wrap thead th {
   position: sticky;
-  /*
-    The wrapper's own top padding scrolls with the content, so the header must stick at the
-    negative padding offset and repaint that strip; otherwise rows show through the gap.
-  */
   top: calc(-1 * var(--space-3));
   z-index: 1;
   background: var(--surface);
-  /*
-    A sticky cell keeps its own border only while the table is at rest, so redraw the seam as a
-    shadow. The first value repaints the padding strip above; the second holds the rule below.
-  */
   border-bottom-color: transparent;
   box-shadow:
     0 calc(-1 * var(--space-3)) 0 var(--surface),
@@ -187,7 +173,6 @@
 }
 
 /* ── Responsive ───────────────────────────────────────── */
-/* The layout is single-column at every width, so these blocks no longer switch the grid. */
 
 @container usage-workspace (max-width: 720px) {
   .usage-workspace-root {
@@ -214,6 +199,69 @@
   gap: 6px;
 }
 
+/* Retention belongs to Usage, but stays a compact setting row rather than a second dashboard card. */
+.usage-retention-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  min-width: 0;
+}
+
+.usage-retention-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.usage-retention-heading .h-section {
+  margin: 0;
+  font-size: var(--text-body);
+}
+
+.usage-retention-heading p {
+  margin: var(--space-1) 0 0;
+  max-width: 68ch;
+}
+
+.usage-retention-editor {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.usage-retention-limit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.usage-retention-limit .field-label {
+  white-space: nowrap;
+}
+
+.usage-retention-editor .codex-auto-switch-input {
+  width: 104px;
+}
+
+.usage-retention-current {
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* Match the Models context-cap cluster: keep the remembered value visible when off,
+   but visually demote it so Unlimited remains the active state. */
+.usage-retention-limit.is-disabled {
+  opacity: 0.55;
+}
+
 @media (max-width: 640px) {
   .usage-source-row { align-items: flex-start; flex-direction: column; }
+  .usage-retention-heading { align-items: flex-start; }
+  .usage-retention-current { white-space: normal; }
 }

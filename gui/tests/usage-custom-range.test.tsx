@@ -35,9 +35,19 @@ beforeEach(() => {
   // The page also has a held memory cache: each test gets a distinct report identity.
   apiBase = `http://usage-custom-${++sequence}`;
   requests = [];
-  globalThis.fetch = ((input: RequestInfo | URL) => new Promise<Response>(resolve => {
-    requests.push({ url: String(input), resolve });
-  })) as typeof fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/api/storage/usage-ledger-retention")) {
+      return Promise.resolve(Response.json({
+        enabled: false,
+        maxBytes: 1024 * 1024 * 1024,
+        currentBytes: 0,
+      }));
+    }
+    return new Promise<Response>(resolve => {
+      requests.push({ url, resolve });
+    });
+  }) as typeof fetch;
 });
 
 afterEach(async () => {

@@ -1058,6 +1058,15 @@ export interface OcxConfig {
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+  /**
+   * Opt-in byte ceiling for the append-only `usage.jsonl` ledger. When the file
+   * exceeds this limit after a write, the oldest rows are discarded and the file
+   * is atomically replaced with only the newest complete rows that fit.
+   *
+   * Absent or undefined means no limit — the historical default. The floor is
+   * 1 MiB; values below it are treated as unconfigured.
+   */
+  usageLedgerMaxBytes?: number;
 }
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";

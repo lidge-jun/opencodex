@@ -1436,6 +1436,7 @@
     "usage-debug.test.ts": "usage",
     "usage-failure-persistence.test.ts": "usage",
     "usage-ledger-scanner.test.ts": "usage",
+    "ledger-retention.test.ts": "usage",
     "usage-log.test.ts": "usage",
     "usage-provider-label.test.ts": "usage",
     "usage-shape-extraction.test.ts": "usage",

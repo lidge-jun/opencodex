@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { resolveCodexHomeDir } from "../../codex/home";
 import {
   compactCodexLogs,
@@ -18,6 +19,13 @@ import {
   readManagementJsonBody,
 } from "./body";
 import type { ManagementContext } from "./context";
+import { usageLogPath } from "../../usage/log";
+import {
+  DEFAULT_USAGE_LEDGER_MAX_BYTES,
+  MIN_USAGE_LEDGER_MAX_BYTES,
+  setUsageLedgerMaxBytes,
+} from "../../usage/ledger-retention";
+import { saveConfigPreservingClaudeCode } from "../../config";
 
 const INSPECTION_FAILED_MESSAGE = "Codex log inspection failed";
 
@@ -108,6 +116,78 @@ async function readProtectMode(ctx: ManagementContext): Promise<"compat" | "quie
 export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
   const protectionDeps = deps.codexLogGuardProtectionDeps;
+
+  if (url.pathname === "/api/storage/usage-ledger-retention" && req.method === "GET") {
+    if (ctx.principal !== "gui-session") {
+      return jsonResponse({ error: "GUI session required" }, 403, req, config);
+    }
+    let currentBytes = 0;
+    try {
+      currentBytes = statSync(usageLogPath()).size;
+    } catch {
+      currentBytes = 0;
+    }
+    const enabled = typeof config.usageLedgerMaxBytes === "number" && config.usageLedgerMaxBytes >= MIN_USAGE_LEDGER_MAX_BYTES;
+    const maxBytes = enabled ? config.usageLedgerMaxBytes! : DEFAULT_USAGE_LEDGER_MAX_BYTES;
+    return jsonResponse({ enabled, maxBytes, currentBytes }, 200, req, config);
+  }
+
+  if (url.pathname === "/api/storage/usage-ledger-retention" && req.method === "PUT") {
+    if (ctx.principal !== "gui-session") {
+      return jsonResponse({ error: "GUI session required" }, 403, req, config);
+    }
+    let body: unknown;
+      try {
+        body = await readManagementJsonBody(req);
+      } catch (error) {
+        const tooLarge = managementBodyTooLargeResponse(error, req, config);
+        if (tooLarge) return tooLarge;
+        return jsonResponse({ error: "invalid_json" }, 400, req, config);
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return jsonResponse({ error: "invalid_request" }, 400, req, config);
+      }
+      const candidate = body as Record<string, unknown>;
+      if (typeof candidate.enabled !== "boolean") {
+        return jsonResponse({ error: "invalid_enabled" }, 400, req, config);
+      }
+      let maxBytes = DEFAULT_USAGE_LEDGER_MAX_BYTES;
+      if (candidate.maxBytes !== undefined) {
+        if (typeof candidate.maxBytes !== "number" || !Number.isSafeInteger(candidate.maxBytes) || candidate.maxBytes < MIN_USAGE_LEDGER_MAX_BYTES) {
+          return jsonResponse({ error: "invalid_max_bytes" }, 400, req, config);
+        }
+        maxBytes = candidate.maxBytes;
+      } else if (typeof config.usageLedgerMaxBytes === "number" && config.usageLedgerMaxBytes >= MIN_USAGE_LEDGER_MAX_BYTES) {
+        maxBytes = config.usageLedgerMaxBytes;
+      }
+
+      const previousMaxBytes = config.usageLedgerMaxBytes;
+      if (candidate.enabled) {
+        config.usageLedgerMaxBytes = maxBytes;
+        setUsageLedgerMaxBytes(maxBytes);
+      } else {
+        config.usageLedgerMaxBytes = undefined;
+        setUsageLedgerMaxBytes(undefined);
+      }
+
+      const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+      try {
+        persistConfig(config);
+      } catch {
+        config.usageLedgerMaxBytes = previousMaxBytes;
+        setUsageLedgerMaxBytes(previousMaxBytes);
+        return jsonResponse({ error: "config_write_failed" }, 500, req, config);
+      }
+
+      let currentBytes = 0;
+      try {
+        currentBytes = statSync(usageLogPath()).size;
+      } catch {
+        currentBytes = 0;
+      }
+
+      return jsonResponse({ enabled: candidate.enabled, maxBytes, currentBytes }, 200, req, config);
+  }
 
   if (url.pathname === "/api/storage/codex-logs") {
     if (req.method !== "GET") return null;

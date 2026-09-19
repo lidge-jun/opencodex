@@ -226,6 +226,12 @@ export const configSchema = z.object({
   }).optional().catch(undefined),
   // Model ids excluded from the Grok Build managed block (dashboard switches).
   grokExcludedModels: z.array(z.string()).optional(),
+  // Opt-in usage ledger byte ceiling. An invalid hand edit degrades to undefined (no limit)
+  // rather than failing the parse: a malformed number must not cost the operator their
+  // providers or trigger the backup-and-defaults repair path. The 1 MiB floor is enforced
+  // at runtime in the retention module, not here: a value the schema accepts but the
+  // runtime ignores is safer than one the schema rejects and that triggers a config reset.
+  usageLedgerMaxBytes: z.number().int().positive().optional().catch(undefined),
   // Invalid values degrade to undefined ("auto") instead of failing the whole
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.

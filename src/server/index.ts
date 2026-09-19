@@ -50,6 +50,7 @@ import {
   setLiveStateStoreConfig,
 } from "../lib/state-store-registrations";
 import { startUserCostOverlayReconciler } from "../usage/user-cost-overlay-reconciler";
+import { setUsageLedgerMaxBytes } from "../usage/ledger-retention";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -225,6 +226,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   warnPlaintextV2AgentMessagesStartup(config);
   warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
+  setUsageLedgerMaxBytes(config.usageLedgerMaxBytes);
   applyProxyEnv(config, true);
   assertServerAuthConfig(config);
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);

@@ -35,7 +35,8 @@ export type ReplacePublisher =
   | "lab-ledger"
   | "remote-workspace"
   | "storage-cleanup"
-  | "tray";
+  | "tray"
+  | "usage-ledger-retention";
 
 /** The Windows error codes this module treats as a momentary hold. */
 export type ReplaceRetryCode = "EBUSY" | "EPERM" | "EACCES";

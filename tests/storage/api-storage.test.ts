@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { handleStorageLogGuardRoutes } from "../../src/server/management/storage-log-guard-routes";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -146,5 +147,59 @@ describe("GET /api/storage", () => {
     } finally {
       await server.stop(true);
     }
+  });
+});
+
+describe("usage ledger retention management route", () => {
+  test("rejects admin-token principals because the route is GUI-session-only", async () => {
+    const url = new URL("http://127.0.0.1/api/storage/usage-ledger-retention");
+    const response = await handleStorageLogGuardRoutes({
+      req: new Request(url),
+      url,
+      config: baseConfig(),
+      deps: {},
+      version: "test",
+      principal: "admin-token",
+      convergeCodexCatalog: async () => { throw new Error("unused"); },
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: "GUI session required" });
+  });
+
+  test("supports GET and PUT policy management", async () => {
+    const url = new URL("http://127.0.0.1/api/storage/usage-ledger-retention");
+    const cfg = baseConfig();
+    const getRes = await handleStorageLogGuardRoutes({
+      req: new Request(url),
+      url,
+      config: cfg,
+      deps: {},
+      version: "test",
+      principal: "gui-session",
+      convergeCodexCatalog: async () => { throw new Error("unused"); },
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+    expect(getRes?.status).toBe(200);
+    expect(await getRes?.json()).toMatchObject({ enabled: false, maxBytes: expect.any(Number), currentBytes: expect.any(Number) });
+
+    const putUrl = new URL("http://127.0.0.1/api/storage/usage-ledger-retention");
+    const putRes = await handleStorageLogGuardRoutes({
+      req: new Request(putUrl, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true, maxBytes: 8 * 1024 * 1024 }),
+      }),
+      url: putUrl,
+      config: cfg,
+      deps: { saveConfigPreservingClaudeCode: () => {} },
+      version: "test",
+      principal: "gui-session",
+      convergeCodexCatalog: async () => { throw new Error("unused"); },
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+    expect(putRes?.status).toBe(200);
+    expect(await putRes?.json()).toMatchObject({ enabled: true, maxBytes: 8 * 1024 * 1024 });
   });
 });

@@ -326,6 +326,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/update/badge", module: "server/management/sidebar-routes", mutates: false },
   { method: "POST", path: "/api/github/star", module: "server/management/sidebar-routes", mutates: true, exempt: { reason: "session-only", why: "User-consent boundary in AGENTS_INSTALL.md: starring spends the user's identity. Must never gain a CLI verb." } },
   // server/management/storage-log-guard-routes
+  { method: "GET", path: "/api/storage/usage-ledger-retention", module: "server/management/storage-log-guard-routes", mutates: false, exempt: { reason: "session-only", why: "Usage history retention query driven via Usage GUI dashboard session." } },
+  { method: "PUT", path: "/api/storage/usage-ledger-retention", module: "server/management/storage-log-guard-routes", mutates: true, exempt: { reason: "session-only", why: "Usage history retention setting driven via Usage GUI dashboard session." } },
   { method: "GET", path: "/api/storage/codex-logs", module: "server/management/storage-log-guard-routes", mutates: false },
   { method: "POST", path: "/api/storage/codex-logs/compact", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/protect", module: "server/management/storage-log-guard-routes", mutates: true },
