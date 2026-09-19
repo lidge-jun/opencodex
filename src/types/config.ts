@@ -883,6 +883,11 @@ export interface OcxConfig {
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
   images?: OcxImagesConfig;
+  /**
+   * Dictation (mic → text) backend selection. Unset keeps Codex's historical ChatGPT dictation
+   * stream; a custom provider can be selected globally or per active model.
+   */
+  dictation?: OcxDictationConfig;
   /** /v1/alpha/search relay for codex's built-in web search client. */
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */
@@ -1311,6 +1316,34 @@ export interface OcxImagesConfig {
   videoMaxRounds?: number;
   /** Per-video generation timeout (ms) including polling. Default 300000 (5 min). */
   videoTimeoutMs?: number;
+}
+
+/**
+ * A custom dictation backend: a WebSocket endpoint that speaks the same frame protocol Codex
+ * already uses with ChatGPT's dictation stream (client `session.start` / `audio.append` /
+ * `session.close`; server `speech_start`, `transcript.delta|segment|final`, `transcript.done`,
+ * `transcript.failed`). The proxy relays frames verbatim, so any endpoint implementing that
+ * protocol works without a provider adapter.
+ */
+export interface OcxDictationProviderConfig {
+  /** Upstream WebSocket URL (ws:// or wss://). */
+  url: string;
+  /** Extra handshake headers. Values may use an ${ENV_VAR} reference. */
+  headers?: Record<string, string>;
+  /** WebSocket subprotocols offered on the upstream handshake. */
+  protocols?: string[];
+}
+
+export interface OcxDictationConfig {
+  /** Backend used when `byModel` has no match. "openai" (default) keeps ChatGPT dictation. */
+  default?: string;
+  /**
+   * Per `provider/model` override. Keys match the active model's namespaced id exactly (for
+   * example "zai/glm-5.3-flash"); values are "openai" or a key in `providers`.
+   */
+  byModel?: Record<string, string>;
+  /** Custom dictation backends addressed by `default` or `byModel`. */
+  providers?: Record<string, OcxDictationProviderConfig>;
 }
 
 export interface OcxSearchConfig {
