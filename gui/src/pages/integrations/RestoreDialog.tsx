@@ -64,13 +64,17 @@ export default function RestoreDialog({
   const [pending, setPending] = useState(false);
   const [previewFailure, setPreviewFailure] = useState<string | null>(null);
   const [mutationFailure, setMutationFailure] = useState<string | null>(null);
-  onCloseRef.current = onClose;
-  onRestoredRef.current = onRestored;
-  onReconcileRef.current = onReconcile;
-  tRef.current = t;
   const scopedProfileId = row.clientId === "aside" ? profileId ?? row.profileId : undefined;
   const plan = boundPlan?.plan ?? null;
   const drift = plan?.foreignEdit === "drift";
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onRestoredRef.current = onRestored;
+    onReconcileRef.current = onReconcile;
+    tRef.current = t;
+  }, [onClose, onReconcile, onRestored, t]);
+
   const dismiss = useCallback(() => {
     if (pending) return;
     previewGenerationRef.current += 1;
