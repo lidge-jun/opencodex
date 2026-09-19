@@ -7,12 +7,21 @@ import {
   clearGenericFailoverHealth,
   eligibleFailoverAccounts,
   genericFailoverRetryAfterSeconds,
+  genericOAuthMaxFailovers,
+  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  getAccountHealthRecord,
   hasFailoverAccountQuorum,
+  isAccountHealthy,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
+  isGenericOAuthFailoverStatus,
+  loadHealthCache,
   noteGenericPoolSelection,
   preferredInitialAccount,
+  recordAccountHealthy,
+  recordAccountValidationRequired,
   rotateGenericOAuthAccountOn429,
+  rotateGenericOAuthAccountOnError,
 } from "../../src/oauth/generic-account-failover";
 import { getAccountSet, markAccountNeedsReauth, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
@@ -385,7 +394,7 @@ describe("sidecar on429 wiring", () => {
     const rotators = {
       key: /hasKeyPoolFailover\(/g,
       anthropic: /rotateAnthropicAccountOn429\(/g,
-      generic: /rotateGenericOAuthAccountOn429\(/g,
+      generic: /rotateGenericOAuthAccountOn(?:429|Error)\(/g,
     };
     const counts = Object.fromEntries(
       Object.entries(rotators).map(([name, re]) => [name, (coreSource.match(re) ?? []).length]),
@@ -669,5 +678,141 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
 
     const next = rotateGenericOAuthAccountOn429(cfg, "xai", sorted[0]!, null);
     expect(next).toBe(sorted[1]!);
+  });
+});
+
+describe("403 and 401 failover and proactive steering", () => {
+  test("isGenericOAuthFailoverStatus matches 429, 403, and 401", () => {
+    expect(isGenericOAuthFailoverStatus(429)).toBe(true);
+    expect(isGenericOAuthFailoverStatus(403)).toBe(true);
+    expect(isGenericOAuthFailoverStatus(401)).toBe(true);
+    expect(isGenericOAuthFailoverStatus(200)).toBe(false);
+    expect(isGenericOAuthFailoverStatus(400)).toBe(false);
+    expect(isGenericOAuthFailoverStatus(500)).toBe(false);
+    expect(isGenericOAuthFailoverStatus(502)).toBe(false);
+  });
+
+  test("rotateGenericOAuthAccountOnError rotates on 403/401 with max cooldown", async () => {
+    const gaConfig: OcxConfig = {
+      oauthAccountFailover: { enabled: true },
+      providers: {
+        "google-antigravity": {
+          adapter: "google-gemini",
+          baseUrl: "https://generativelanguage.googleapis.com",
+          authMode: "oauth",
+          oauthAccountFailover: { enabled: true },
+        } as unknown as OcxProviderConfig,
+      },
+    } as unknown as OcxConfig;
+
+    for (let i = 0; i < 2; i++) {
+      await saveCredential("google-antigravity", {
+        access: "access-" + i,
+        refresh: "refresh-" + i,
+        expires: Date.now() + 3_600_000,
+        accountId: "ga-acc-" + i,
+      } as never, { addAccount: true });
+    }
+    const ids = getAccountSet("google-antigravity")?.accounts.map(a => a.id) ?? [];
+    expect(ids.length).toBe(2);
+    await setActiveAccount("google-antigravity", ids[0]!);
+
+    const now = Date.now();
+    const rotated = rotateGenericOAuthAccountOnError(gaConfig, "google-antigravity", ids[0]!, 403, null, now);
+    expect(rotated).toBe(ids[1]!);
+
+    // Should proactively steer to ids[1] on next pre-dispatch because active account is cooled
+    const steered = preferredInitialAccount(gaConfig, "google-antigravity", now + 1000);
+    expect(steered).toBe(ids[1]!);
+  });
+
+  test("genericOAuthMaxFailovers scales dynamically with pool size", async () => {
+    expect(genericOAuthMaxFailovers()).toBe(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST);
+    expect(genericOAuthMaxFailovers("unknown-provider")).toBe(1);
+
+    // 1 account -> 1
+    await saveCredential("xai", { access: "a0", refresh: "r0", expires: Date.now() + 3600000, accountId: "acc-0" } as never, { addAccount: true });
+    expect(genericOAuthMaxFailovers("xai")).toBe(1);
+
+    // 2 accounts -> 3 (floor)
+    await saveCredential("xai", { access: "a1", refresh: "r1", expires: Date.now() + 3600000, accountId: "acc-1" } as never, { addAccount: true });
+    expect(genericOAuthMaxFailovers("xai")).toBe(3);
+
+    // 5 accounts -> 4 (total - 1)
+    for (let i = 2; i < 5; i++) {
+      await saveCredential("xai", { access: `a${i}`, refresh: `r${i}`, expires: Date.now() + 3600000, accountId: `acc-${i}` } as never, { addAccount: true });
+    }
+    expect(genericOAuthMaxFailovers("xai")).toBe(4);
+
+    // 20 accounts -> 15 (cap)
+    for (let i = 5; i < 20; i++) {
+      await saveCredential("xai", { access: `a${i}`, refresh: `r${i}`, expires: Date.now() + 3600000, accountId: `acc-${i}` } as never, { addAccount: true });
+    }
+    expect(genericOAuthMaxFailovers("xai")).toBe(15);
+  });
+
+  test("persistent health store records status, survives cache reload, and supports self-healing", async () => {
+    const gaConfig: OcxConfig = {
+      oauthAccountFailover: { enabled: true },
+      providers: {
+        "google-antigravity": {
+          adapter: "google-gemini",
+          baseUrl: "https://generativelanguage.googleapis.com",
+          authMode: "oauth",
+          oauthAccountFailover: { enabled: true },
+        } as unknown as OcxProviderConfig,
+      },
+    } as unknown as OcxConfig;
+
+    for (let i = 0; i < 3; i++) {
+      await saveCredential("google-antigravity", {
+        access: "access-" + i,
+        refresh: "refresh-" + i,
+        expires: Date.now() + 3_600_000,
+        accountId: "ga-persist-" + i,
+      } as never, { addAccount: true });
+    }
+    const ids = getAccountSet("google-antigravity")?.accounts.map(a => a.id) ?? [];
+    expect(ids.length).toBe(3);
+    await setActiveAccount("google-antigravity", ids[0]!);
+
+    const now = Date.now();
+    // Rotate with 403 and error message
+    rotateGenericOAuthAccountOnError(
+      gaConfig,
+      "google-antigravity",
+      ids[0]!,
+      403,
+      null,
+      now,
+      undefined,
+      "VALIDATION_REQUIRED: Please visit https://accounts.google.com",
+    );
+
+    expect(isAccountHealthy("google-antigravity", ids[0]!, now)).toBe(false);
+    const rec = getAccountHealthRecord("google-antigravity", ids[0]!);
+    expect(rec?.status).toBe("validation_required");
+    expect(rec?.lastError).toContain("VALIDATION_REQUIRED");
+
+    // Proactive steering steers away from ids[0]
+    expect(preferredInitialAccount(gaConfig, "google-antigravity", now + 1000)).toBe(ids[1]!);
+
+    // Re-load cache from disk to verify persistence across restarts
+    loadHealthCache();
+    expect(isAccountHealthy("google-antigravity", ids[0]!, now)).toBe(false);
+    const reloaded = getAccountHealthRecord("google-antigravity", ids[0]!);
+    expect(reloaded?.status).toBe("validation_required");
+    expect(reloaded?.lastError).toContain("VALIDATION_REQUIRED");
+    expect(preferredInitialAccount(gaConfig, "google-antigravity", now + 1000)).toBe(ids[1]!);
+
+    // Self-healing: simulate re-verification
+    recordAccountHealthy("google-antigravity", ids[0]!, now + 2000);
+    expect(isAccountHealthy("google-antigravity", ids[0]!, now + 2000)).toBe(true);
+    const healed = getAccountHealthRecord("google-antigravity", ids[0]!);
+    expect(healed?.status).toBe("healthy");
+    expect(healed?.cooldownUntil).toBe(0);
+
+    // After healing and active is healthy, preferredInitialAccount returns null (keeps active)
+    expect(preferredInitialAccount(gaConfig, "google-antigravity", now + 2000)).toBeNull();
   });
 });

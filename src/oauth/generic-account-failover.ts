@@ -14,6 +14,9 @@
  * (`oauth/anthropic-routing.ts` owns affinity and a fail-closed local-cli credential rule).
  * Both are excluded by `isGenericFailoverProvider`.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFile, getConfigDir } from "../config";
 import { getAccountSet } from "./store";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import {
@@ -37,8 +40,17 @@ import { parseRetryAfterMs } from "../combos/failover";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
-/** Cap same-request rotations so a short Retry-After cannot spin. Mirrors the Anthropic bound. */
-export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 3;
+/** Cap same-request rotations so a short Retry-After cannot spin. Default raised to accommodate multi-account pools. */
+export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 15;
+
+/** Dynamic per-request failover cap based on account pool size. */
+export function genericOAuthMaxFailovers(providerName?: string): number {
+  if (!providerName) return GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST;
+  const set = getAccountSet(providerName);
+  const total = set?.accounts.length ?? 0;
+  if (total <= 1) return 1;
+  return Math.max(3, Math.min(total - 1, 15));
+}
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
@@ -67,9 +79,16 @@ const PRESENCE_CACHE_TTL_MS = 2_000;
  */
 const EXCLUDED_PROVIDERS = new Set(["openai", "anthropic"]);
 
-interface AccountHealth {
+export type AccountHealthStatus = "healthy" | "validation_required" | "auth_failure" | "quota_exhausted" | "unknown";
+
+export interface AccountHealthRecord {
+  status: AccountHealthStatus;
   cooldownUntil: number;
-  cooldownSource: "retry-after" | "default";
+  cooldownSource?: "retry-after" | "default" | "error" | "probe";
+  lastCheckedAt: number;
+  lastVerifiedAt?: number;
+  lastError?: string;
+  family?: QuotaModelFamily;
 }
 
 interface PresenceEntry {
@@ -77,8 +96,124 @@ interface PresenceEntry {
   readAt: number;
 }
 
-/** Process-local, like the Anthropic pool's: a restart is allowed to forget a cooldown. */
-const health = new Map<string, AccountHealth>();
+/** File-backed dynamic health store (~/.opencodex/oauth-account-health.json). Survives restarts without touching auth.json. */
+const health = new Map<string, AccountHealthRecord>();
+let healthCacheLoaded = false;
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+function getHealthFilePath(): string {
+  return join(getConfigDir(), "oauth-account-health.json");
+}
+
+export function loadHealthCache(): void {
+  const filePath = getHealthFilePath();
+  try {
+    if (existsSync(filePath)) {
+      const raw = readFileSync(filePath, "utf-8");
+      const data = JSON.parse(raw);
+      health.clear();
+      for (const [key, value] of Object.entries(data)) {
+        if (value && typeof value === "object") {
+          health.set(key, value as AccountHealthRecord);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[opencodex] Failed to load oauth-account-health.json:", err);
+  }
+  healthCacheLoaded = true;
+}
+
+export function saveHealthCache(): void {
+  const filePath = getHealthFilePath();
+  try {
+    const obj: Record<string, AccountHealthRecord> = {};
+    for (const [key, value] of health.entries()) {
+      obj[key] = value;
+    }
+    atomicWriteFile(filePath, JSON.stringify(obj, null, 2) + "\n");
+  } catch (err) {
+    console.warn("[opencodex] Failed to save oauth-account-health.json:", err);
+  }
+}
+
+export function ensureHealthCache(): void {
+  if (!healthCacheLoaded) {
+    loadHealthCache();
+  }
+}
+
+export function getAccountHealthRecord(provider: string, accountId: string, family?: QuotaModelFamily): AccountHealthRecord | undefined {
+  ensureHealthCache();
+  return health.get(healthKey(provider, accountId, family)) ?? health.get(healthKey(provider, accountId));
+}
+
+export function isAccountHealthy(provider: string, accountId: string, now = Date.now()): boolean {
+  ensureHealthCache();
+  const entry = health.get(healthKey(provider, accountId));
+  if (!entry) return true;
+  if (entry.cooldownUntil > now && (entry.status === "validation_required" || entry.status === "auth_failure")) {
+    return false;
+  }
+  if (entry.status === "validation_required" || entry.status === "auth_failure") {
+    return false;
+  }
+  return true;
+}
+
+export function recordAccountHealthy(providerName: string, accountId: string, now = Date.now()): void {
+  ensureHealthCache();
+  const key = healthKey(providerName, accountId);
+  health.set(key, {
+    status: "healthy",
+    cooldownUntil: 0,
+    cooldownSource: "probe",
+    lastCheckedAt: now,
+    lastVerifiedAt: now,
+    lastError: undefined,
+  });
+  saveHealthCache();
+}
+
+export function recordAccountValidationRequired(
+  providerName: string,
+  accountId: string,
+  errorMsg?: string,
+  now = Date.now(),
+): void {
+  ensureHealthCache();
+  const key = healthKey(providerName, accountId);
+  const existing = health.get(key);
+  health.set(key, {
+    status: "validation_required",
+    cooldownUntil: now + 30 * 60_000,
+    cooldownSource: "error",
+    lastCheckedAt: now,
+    lastVerifiedAt: existing?.lastVerifiedAt,
+    lastError: errorMsg || "VALIDATION_REQUIRED: Verification required in browser",
+  });
+  saveHealthCache();
+}
+
+export function recordAccountAuthFailure(
+  providerName: string,
+  accountId: string,
+  errorMsg?: string,
+  now = Date.now(),
+): void {
+  ensureHealthCache();
+  const key = healthKey(providerName, accountId);
+  const existing = health.get(key);
+  health.set(key, {
+    status: "auth_failure",
+    cooldownUntil: now + 15 * 60_000,
+    cooldownSource: "error",
+    lastCheckedAt: now,
+    lastVerifiedAt: existing?.lastVerifiedAt,
+    lastError: errorMsg || "401 Unauthorized",
+  });
+  saveHealthCache();
+}
 
 /** Provider -> recent eligible-account count. TTL-bounded; never holds credential material. */
 const presence = new Map<string, PresenceEntry>();
@@ -87,13 +222,29 @@ const healthKey = (provider: string, accountId: string, family?: QuotaModelFamil
   family ? `${provider}\u0000${accountId}\u0000${family}` : `${provider}\u0000${accountId}`;
 
 function isCooled(provider: string, accountId: string, now: number, family?: QuotaModelFamily): boolean {
-  const entry = health.get(healthKey(provider, accountId, family));
-  if (!entry) return false;
-  if (entry.cooldownUntil <= now) {
-    health.delete(healthKey(provider, accountId, family));
-    return false;
+  ensureHealthCache();
+  const accountEntry = health.get(healthKey(provider, accountId));
+  if (accountEntry) {
+    if (accountEntry.cooldownUntil > now) return true;
+    if (accountEntry.status === "quota_exhausted") {
+      accountEntry.status = "healthy";
+      accountEntry.cooldownUntil = 0;
+      saveHealthCache();
+    }
   }
-  return true;
+
+  if (family) {
+    const famEntry = health.get(healthKey(provider, accountId, family));
+    if (famEntry) {
+      if (famEntry.cooldownUntil > now) return true;
+      if (famEntry.status === "quota_exhausted") {
+        famEntry.status = "healthy";
+        famEntry.cooldownUntil = 0;
+        saveHealthCache();
+      }
+    }
+  }
+  return false;
 }
 
 /** True when this provider participates in generic rotation at all. */
@@ -177,10 +328,17 @@ function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, n
   return config.oauthAccountFailover?.enabled === true && hasFailoverAccountQuorum(providerName, now);
 }
 
-/** Accounts that may serve traffic right now: not cooled, not flagged for reauth. */
+/** Accounts that may serve traffic right now: not cooled, not flagged for reauth, and healthy. */
 export function eligibleFailoverAccounts(providerName: string, now = Date.now(), family?: QuotaModelFamily): string[] {
+  ensureHealthCache();
   const set = getAccountSet(providerName);
   if (!set) return [];
+  const valid = set.accounts
+    .filter(account => account.needsReauth !== true
+      && !isCooled(providerName, account.id, now, family)
+      && isAccountHealthy(providerName, account.id, now))
+    .map(account => account.id);
+  if (valid.length > 0) return valid;
   return set.accounts
     .filter(account => account.needsReauth !== true && !isCooled(providerName, account.id, now, family))
     .map(account => account.id);
@@ -314,6 +472,7 @@ export function rotateGenericOAuthAccountOn429(
   retryAfterHeader: string | null | undefined,
   now = Date.now(),
   requestedModelId?: string | null,
+  cooldownOverrideMs?: number,
 ): string | null {
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
   const set = getAccountSet(providerName);
@@ -325,12 +484,20 @@ export function rotateGenericOAuthAccountOn429(
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
   // A Retry-After from upstream still wins — it is the server's own instruction.
   const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
-  const cooldownMs = exhausted ?? Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
+  const cooldownMs = cooldownOverrideMs ?? exhausted ?? Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  health.set(healthKey(providerName, failedAccountId, family), {
+  const key = healthKey(providerName, failedAccountId, family);
+  const existing = health.get(key) ?? health.get(healthKey(providerName, failedAccountId));
+  health.set(key, {
+    status: existing?.status === "validation_required" ? "validation_required" : "quota_exhausted",
     cooldownUntil: now + cooldownMs,
     cooldownSource: parsed ? "retry-after" : "default",
+    lastCheckedAt: now,
+    lastVerifiedAt: existing?.lastVerifiedAt,
+    lastError: existing?.lastError,
+    family,
   });
+  saveHealthCache();
   sweepExpiredOnWrite(now);
 
   const eligible = eligibleFailoverAccounts(providerName, now, family).filter(id => id !== failedAccountId);
@@ -373,6 +540,42 @@ export function rotateGenericOAuthAccountOn429(
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
   return rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
+}
+
+/**
+ * Statuses that warrant rotating to the next account in the pool.
+ * - 429: Rate limit / Quota exhausted
+ * - 403: Forbidden / Permission Denied / Verification required (e.g. Google Cloud Code Assist VALIDATION_REQUIRED)
+ * - 401: Unauthorized / Expired / Revoked token
+ */
+export function isGenericOAuthFailoverStatus(status: number, providerName?: string): boolean {
+  if (status === 429) return true;
+  if (status === 403 || status === 401) return true;
+  return false;
+}
+
+/**
+ * Rotate account on 429 or auth/permission errors (403/401).
+ * For 403/401, records health status dynamically in ~/.opencodex/oauth-account-health.json
+ * without mutating auth.json credentials.
+ */
+export function rotateGenericOAuthAccountOnError(
+  config: OcxConfig,
+  providerName: string,
+  failedAccountId: string,
+  status: number,
+  retryAfterHeader?: string | null,
+  now = Date.now(),
+  requestedModelId?: string | null,
+  errorText?: string,
+): string | null {
+  if (status === 403) {
+    recordAccountValidationRequired(providerName, failedAccountId, errorText || "HTTP 403: VALIDATION_REQUIRED", now);
+  } else if (status === 401) {
+    recordAccountAuthFailure(providerName, failedAccountId, errorText || "HTTP 401: Unauthorized", now);
+  }
+  const cooldownOverrideMs = status === 403 ? 30 * 60_000 : status === 401 ? 15 * 60_000 : undefined;
+  return rotateGenericOAuthAccountOn429(config, providerName, failedAccountId, retryAfterHeader, now, requestedModelId, cooldownOverrideMs);
 }
 
 /**
@@ -443,21 +646,16 @@ export function preferredInitialAccount(
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
-  if (activeRow && activeRow.needsReauth !== true
-    && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
-    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId)) return null;
+  const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+  const activeHealthy = activeRow && activeRow.needsReauth !== true
+    && !isCooled(providerName, activeRow.id, now, family)
+    && isAccountHealthy(providerName, activeRow.id, now)
+    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId);
+  if (activeHealthy) return null;
 
-  // Evidence is required BEFORE eligibility narrows the field. Without this, a provider
-  // with no quota data at all could still be redirected: cool the active account with a
-  // 429 and the eligible list collapses to one candidate, which any ranking returns
-  // unchanged — an answer that looks ranked but was never measured. The no-op guarantee
-  // for quota-less providers has to be checked on the full roster.
-  if (!hasHeadroomEvidence(providerName, order, requestedModelId)) return null;
-
-  // Cooldowns are respected here, unlike in the presence count: this picks the account to
-  // send to right now, and one inside its 429 window is the single candidate we hold
-  // positive evidence against.
-  const eligible = order.filter(id => !isCooled(providerName, id, now, classifyModelFamilyForQuota(providerName, requestedModelId)));
+  // Cooldowns and health status are respected here: this picks the account to
+  // send to right now, and one inside its cooldown window or flagged for verification is excluded.
+  const eligible = eligibleFailoverAccounts(providerName, now, family);
   if (eligible.length === 0) return null;
 
   // Start the ring at the active account so an unranked outcome reproduces today's choice.
@@ -466,20 +664,27 @@ export function preferredInitialAccount(
   const candidates = ring.filter(id => eligible.includes(id));
   if (candidates.length === 0) return null;
 
-  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
-  // Nothing to do when the ranking agrees with the account we would have used anyway.
-  //
-  // A proposal still needs guarded selection commit after credential resolution: a
-  // removal, reauth verdict, or manual choice can arrive during that await.
-  return best && best !== active ? best : null;
+  if (hasHeadroomEvidence(providerName, order, requestedModelId)) {
+    const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
+    return best && best !== active ? best : null;
+  }
+
+  // Active account is unhealthy (cooled or needs reauth) and provider has no quota telemetry:
+  // proactively steer to the next uncooled eligible candidate in the ring so we avoid hammering
+  // an account known to be in cooldown or failing auth.
+  const nextCandidate = candidates.find(id => id !== active) ?? candidates[0] ?? null;
+  return nextCandidate && nextCandidate !== active ? nextCandidate : null;
 }
 
 /** Earliest remaining cooldown, for a client-facing Retry-After when every account is cooled. */
 export function genericFailoverRetryAfterSeconds(providerName: string, now = Date.now()): number | null {
-  const prefix = `${providerName}\u0000`;
+  ensureHealthCache();
+  const set = getAccountSet(providerName);
+  if (!set) return null;
   let earliest: number | null = null;
-  for (const [key, entry] of health) {
-    if (!key.startsWith(prefix) || entry.cooldownUntil <= now) continue;
+  for (const account of set.accounts) {
+    const entry = health.get(healthKey(providerName, account.id));
+    if (!entry || entry.cooldownUntil <= now) continue;
     if (earliest === null || entry.cooldownUntil < earliest) earliest = entry.cooldownUntil;
   }
   return earliest === null ? null : Math.max(1, Math.ceil((earliest - now) / 1000));
@@ -492,13 +697,126 @@ export function forgetGenericFailoverRoster(providerName: string): void {
 
 /** Test seam and manual-recovery hook. */
 export function clearGenericFailoverHealth(providerName?: string): void {
+  ensureHealthCache();
   if (!providerName) {
     health.clear();
     presence.clear();
+    saveHealthCache();
+    stopGenericAccountHealthSweep();
     return;
   }
   presence.delete(providerName);
   for (const key of [...health.keys()]) {
     if (key.startsWith(`${providerName}\u0000`)) health.delete(key);
+  }
+  saveHealthCache();
+}
+
+/** Probe an account against upstream to verify whether it can serve requests. */
+export async function probeGenericOAuthAccount(
+  providerName: string,
+  accountId: string,
+): Promise<{ ok: boolean; status: number; reason?: string }> {
+  if (providerName === "google-antigravity") {
+    try {
+      const snap = await getValidAccessSnapshotForAccount("google-antigravity", accountId);
+      if (!snap.accessToken || !snap.projectId) {
+        return { ok: false, status: 401, reason: "Missing accessToken or projectId" };
+      }
+      const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${snap.accessToken}`,
+          "Content-Type": "application/json",
+          "User-Agent": "antigravity/ide/2.5.5 (Windows; x64) OpenCodex/1.0.0",
+          "x-goog-api-client": "google-cloud-code-assist/0.1.0",
+        },
+        body: JSON.stringify({
+          model: "gemini-3.8-flash-medium",
+          userAgent: "antigravity",
+          requestType: "agent",
+          project: snap.projectId,
+          request: {
+            contents: [{ role: "user", parts: [{ text: "ping" }] }],
+            generationConfig: { maxOutputTokens: 1 },
+          },
+        }),
+      });
+      if (res.status === 200) {
+        return { ok: true, status: 200 };
+      }
+      const text = await res.text().catch(() => "");
+      let reason: string | undefined;
+      try {
+        const j = JSON.parse(text);
+        reason = j?.error?.details?.[0]?.reason || j?.error?.message;
+      } catch {
+        reason = text.slice(0, 80);
+      }
+      return { ok: false, status: res.status, reason };
+    } catch (err: any) {
+      return { ok: false, status: 500, reason: err?.message || String(err) };
+    }
+  }
+  return { ok: true, status: 200 };
+}
+
+/** Background sweep to probe accounts in cooldown or validation_required state, auto-restoring re-verified accounts. */
+export async function sweepAndHealAccounts(providerName = "google-antigravity"): Promise<void> {
+  ensureHealthCache();
+  const set = getAccountSet(providerName);
+  if (!set || set.accounts.length === 0) return;
+  const now = Date.now();
+
+  for (const account of set.accounts) {
+    const entry = health.get(healthKey(providerName, account.id));
+    const needsProbe = !entry
+      || entry.status === "validation_required"
+      || entry.status === "unknown"
+      || (entry.status === "healthy" && now - entry.lastCheckedAt > 24 * 60 * 60_000);
+
+    if (!needsProbe) continue;
+
+    const result = await probeGenericOAuthAccount(providerName, account.id);
+    if (result.ok) {
+      const wasBad = entry && entry.status === "validation_required";
+      recordAccountHealthy(providerName, account.id, now);
+      if (wasBad) {
+        console.log(`[opencodex] Self-healing: account ${providerName}/${account.id.slice(0, 8)} re-verified & restored to rotation pool!`);
+      }
+    } else if (result.status === 403 && (result.reason === "VALIDATION_REQUIRED" || result.reason?.includes("Verify your account"))) {
+      recordAccountValidationRequired(providerName, account.id, result.reason, now);
+    } else if (result.status === 429) {
+      const key = healthKey(providerName, account.id);
+      health.set(key, {
+        status: "quota_exhausted",
+        cooldownUntil: now + 60_000,
+        cooldownSource: "probe",
+        lastCheckedAt: now,
+      });
+      saveHealthCache();
+    } else if (result.status === 401) {
+      recordAccountAuthFailure(providerName, account.id, result.reason, now);
+    }
+  }
+}
+
+export function startGenericAccountHealthSweep(): void {
+  if (sweepTimer) return;
+  const initial = setTimeout(() => {
+    void sweepAndHealAccounts("google-antigravity");
+  }, 5_000);
+  initial.unref?.();
+
+  sweepTimer = setInterval(() => {
+    void sweepAndHealAccounts("google-antigravity");
+  }, 10 * 60_000);
+  sweepTimer.unref?.();
+}
+
+export function stopGenericAccountHealthSweep(): void {
+  if (sweepTimer) {
+    clearInterval(sweepTimer);
+    sweepTimer = null;
   }
 }

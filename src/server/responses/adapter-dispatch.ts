@@ -53,7 +53,10 @@ import {
 } from "../../oauth/anthropic-routing";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  genericOAuthMaxFailovers,
   isGenericOAuthFailoverEnabled,
+  isGenericOAuthFailoverStatus,
+  rotateGenericOAuthAccountOnError,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
@@ -779,41 +782,52 @@ export async function prepareAdapterExchange(
       // Anthropic are excluded by isGenericFailoverProvider: their pools own quota scopes,
       // probe leases and affinity that this must not reimplement.
       while (
-        upstreamResponse.status === 429
+        isGenericOAuthFailoverStatus(upstreamResponse.status, route.providerName)
         && transportState.genericFailoverAccountId
-        && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        && transportState.genericFailovers < genericOAuthMaxFailovers(route.providerName)
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
         // Intersection with the shared request budget. This arm re-sends through
         // rebuildAndRefetch, so the roster cap alone would let one request walk the roster on
         // an allowance the rest of the request cannot see. A refusal ends the ladder with the
-        // real 429 already in hand, which is the decided exhaustion contract.
+        // real error already in hand, which is the decided exhaustion contract.
         //
         // Who settles this reservation depends on who dispatches the replay (#4709). An
         // adapter that owns its ladder -- Kiro's reset loop, Cursor's transport loop --
         // reserves once per physical send and would charge the same replay again; the helper
         // path reports it again through `onSendsConsumed`. Both turned one physical send into
         // two charges, and once the allowance was spent, into a synthetic error in place of
-        // the 429 this hop was recovering from. The wire protocol is resolved from the
+        // the error this hop was recovering from. The wire protocol is resolved from the
         // provider and model, not from the account, so an account rotation cannot move the
         // replay between these two shapes.
         const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
         const hop = reserveCredentialHop(
           "auth-recovery",
-          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
+          `${route.providerName}|${route.modelId}|adapter-recovery-oauth-failover`,
           // Only a helper-routed replay reports this send back. A reset-only refetch reports
           // nothing and an adapter ladder settles the booking itself, so promising an external
           // report on either would leave a booking pending until it swallowed a later charge.
           !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
         );
         if (!hop.allowed) break;
-        const nextAccountId = rotateGenericOAuthAccountOn429(
+        let errorDetails: string | undefined;
+        if (upstreamResponse.status === 403 || upstreamResponse.status === 401) {
+          try {
+            const cloned = upstreamResponse.clone();
+            errorDetails = await cloned.text().catch(() => undefined);
+          } catch {
+            // ignore
+          }
+        }
+        const nextAccountId = rotateGenericOAuthAccountOnError(
           config,
           route.providerName,
           transportState.genericFailoverAccountId,
+          upstreamResponse.status,
           upstreamResponse.headers.get("retry-after"),
           Date.now(),
           route.modelId,
+          errorDetails,
         );
         if (!nextAccountId) {
           hop.permit?.release();

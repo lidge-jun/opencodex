@@ -17,6 +17,10 @@ import {
   syncCatalogAutoRefreshCadence,
 } from "../codex/catalog-auto-refresh";
 import {
+  startGenericAccountHealthSweep,
+  stopGenericAccountHealthSweep,
+} from "../oauth/generic-account-failover";
+import {
   cancelQueuedStorageWorkerSpawns,
   drainStorageWorkers,
 } from "../storage/worker-lifecycle";
@@ -95,6 +99,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next poll tick retries.
       });
+    startGenericAccountHealthSweep();
     return { memoryWatchdog, stateStoreSweeper };
   } catch (error) {
     memoryWatchdog?.stop();
@@ -102,6 +107,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
     stopStorageCleanupScheduler();
     stopQuotaResetPoller();
     stopCatalogAutoRefresh();
+    stopGenericAccountHealthSweep();
     setLivePolicyOwner(null);
     throw error;
   }
@@ -115,6 +121,7 @@ function stopProcessLoops(): void {
   stopStorageCleanupScheduler();
   stopQuotaResetPoller();
   stopCatalogAutoRefresh();
+  stopGenericAccountHealthSweep();
   setLivePolicyOwner(null);
 }
 
