@@ -646,7 +646,7 @@ export function preferModelEntitledAccount(
  *
  * Downward moves are deliberately left to {@link applyQuotaAutoSwitch}: this only
  * fires when the tier filter has already excluded `active`, and only toward a
- * tier that strictly outranks it. Threads bound by affinity never reach here.
+ * tier that strictly outranks it. Bound threads reach it only through explicit priority failback.
  */
 export function pickPriorityPreemption(
   config: OcxConfig,

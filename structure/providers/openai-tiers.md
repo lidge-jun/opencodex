@@ -332,7 +332,7 @@ and lets the configured strategy pick within that tier. A tier drains only when 
 the auto-switch threshold, cooling down, soft-avoided, paused, or needs reauth; unknown quota never
 drains a tier, and every tier drained leaves the eligible list untouched. Ordering never admits an
 account that pause, cooldown, health, or reauth already excluded, and never overrides those
-exclusions. It adds no new rebind cause for a bound thread, which still moves only for the reasons it
+exclusions. By default it adds no new rebind cause for a bound thread, which moves for the reasons it
 already had: a quota-strategy re-evaluation when `pool.cacheAffinity` is off (threshold) or the bound
 account cannot serve (the default), an account that stopped being selectable, or affinity expiry. A
 conversation carrying live uploaded-file references raises that bar to the default one regardless of
@@ -676,7 +676,7 @@ extend that observation.
 
 ## Bound-thread rebind destination
 
-A quota-strategy re-evaluation may move a LIVE thread binding only to an account that has genuine
+An ordinary quota-strategy re-evaluation may move a LIVE thread only to an account that has genuine
 quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing.
 Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the
 80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt
@@ -728,3 +728,15 @@ often that refusal fires and can never replace it.
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 `src/codex/auth-api/login-flow.ts` distinguishes HTTP 429 from an attempted warmup as `codex_warmup_rate_limited` and preserves that code in OAuth status. Failed attempted warmup does not persist replacement credentials; quota-confirmed deferred registration and HTTP 401/403 handling remain separate. `src/codex/warmup.ts` retains a known 429 when bounded error-body draining times out.
+
+## Ongoing priority failback
+
+`codexAccountPriorityFailback: true` explicitly permits bound quota-strategy tasks to return to a
+strictly higher priority with known below-threshold headroom. It defaults off and requires a positive
+threshold. This separate preference can intentionally lose a warm cache; ordinary rebinding stays strictly cooler.
+The shared `routing.ts` helper gives preview and resolve the same result after generation, refusal,
+health, pin and model checks; independent/model lanes retain their shared-cursor isolation. Stale quota
+and short-window observation timestamps do not authorize this optional move. `account-priority.ts` owns
+the five-minute cadence; `auth-api/pool-mode-gate.ts` bounds request-triggered attempts, including failures,
+while preserving main-owner claims and per-credential WHAM dispatch backoff. No requests means no new polling.
+The split config schema degrades malformed optional values to false. Exact-account and Direct routes are unchanged.

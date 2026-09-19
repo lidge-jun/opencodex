@@ -409,3 +409,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](runtime.md).
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+[Ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) keeps model-detour and independent-quota affinity isolated; preview remains read-only and no child changes an unrelated shared cursor.

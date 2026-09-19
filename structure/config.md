@@ -461,3 +461,5 @@ exclusive `--socks5-off`. The start owner persists only an explicitly requested
 change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
 never echo user-supplied credentials, and status messages redact proxy URLs.
 The parser regression cases live in `tests/cli/start-args.test.ts`.
+
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades malformed values to false without discarding providers. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.

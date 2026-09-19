@@ -3,6 +3,15 @@ import { DEFAULT_ACCOUNT_PRIORITY, normalizeAccountPriority } from "./pool-rotat
 import type { OcxConfig } from "../types";
 import { deleteConfigTopLevelKey } from "../config/rebase-provenance";
 
+/** Shared cadence for the opt-in live priority recheck and its observation freshness. */
+export const CODEX_PRIORITY_FAILBACK_REFRESH_MS = 5 * 60_000;
+
+export function codexAccountPriorityFailbackEnabled(config: OcxConfig): boolean {
+  return config.codexAccountPriorityFailback === true
+    && (config.accountPoolStrategy ?? "quota") === "quota"
+    && (config.autoSwitchThreshold ?? 80) > 0;
+}
+
 /**
  * Which ids may carry a selection order: any pool account, plus the synthetic
  * `__main__` Desktop login. Owned here rather than by the config schema because
