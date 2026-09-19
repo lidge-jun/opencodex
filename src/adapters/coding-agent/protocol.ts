@@ -142,6 +142,10 @@ export interface StreamParseState {
   sawPartialThinking: boolean;
   sawTerminalResult: boolean;
   openToolCallId?: string;
+  /** A `message_stop` stream event arrived: the assistant message is complete. */
+  sawMessageStop?: boolean;
+  /** Completed tool_use content blocks observed in this stream. */
+  completedToolCalls?: number;
 }
 
 /**
@@ -281,12 +285,43 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
   if (eventType === "content_block_stop") {
     if (state.openToolCallId) {
       state.openToolCallId = undefined;
+      state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
       events.push({ type: "tool_call_end" });
     }
     return events;
   }
 
+  if (eventType === "message_stop") {
+    state.sawMessageStop = true;
+    return events;
+  }
+
   return events;
+}
+
+/**
+ * Validate a `system/init` frame against an active capture-only tool bridge.
+ *
+ * With the bridge armed, the CLI must report exactly the bridge's MCP server as connected: a
+ * missing or failed server means the model never saw the advertised catalog, so the turn fails
+ * closed instead of silently degrading to a text-only answer.
+ */
+export function toolBridgeInitError(message: StreamMessage, serverName: string): string | undefined {
+  if (message.type !== "system" || message.subtype !== "init") return undefined;
+  const servers = message.mcp_servers;
+  if (!Array.isArray(servers) || servers.length !== 1) {
+    return "Coding-agent system/init reported an unexpected MCP server set for the tool bridge.";
+  }
+  const server = servers[0];
+  if (
+    !server
+    || typeof server !== "object"
+    || server.name !== serverName
+    || server.status !== "connected"
+  ) {
+    return `Coding-agent system/init did not report the ${serverName} MCP server as connected.`;
+  }
+  return undefined;
 }
 
 /** One content part on the stream-json input wire (Anthropic message shape). */

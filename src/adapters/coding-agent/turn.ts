@@ -1,8 +1,18 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { commandInvocation } from "../../lib/win-exec";
 import type { IncomingMeta } from "../base";
-import { buildConversationInput, CodingAgentProtocolError, mapStreamMessageToEvents, readJsonLines, type StreamParseState } from "./protocol";
+import {
+  buildConversationInput,
+  CodingAgentProtocolError,
+  mapStreamMessageToEvents,
+  readJsonLines,
+  toolBridgeInitError,
+  type StreamParseState,
+} from "./protocol";
 import { resolveCodingAgentBinary, resolveProfileByBaseUrl, type CodingAgentProviderProfile, type WhichFn } from "./profile";
 
 /** Injectable spawn for tests; production uses node:child_process. */
@@ -74,7 +84,29 @@ export interface CodingAgentTurnInput {
   buildArgs: (profile: CodingAgentProviderProfile, parsed: OcxParsedRequest, provider: OcxProviderConfig) => string[];
   /** Family-specific scoped env builder (credential + region switch on top of baseScopedEnv). */
   buildEnv: (profile: CodingAgentProviderProfile, apiKey: string) => Record<string, string>;
+  /**
+   * Opt-in capture-only tool bridge. When present with a non-empty catalog, the turn writes a
+   * validated catalog plus an MCP config to a private temp dir, passes `--mcp-config` (with exact
+   * `--allowedTools`) alongside the family's tools-disabled args, translates captured tool_use
+   * names back to request wire names, and terminates the process tree at `message_stop` because
+   * the capture-only MCP handler intentionally never answers. Execution stays with the client.
+   */
+  toolBridge?: CodingAgentToolBridgeInput;
   deps: CodingAgentDeps;
+}
+
+/** Opt-in capture-only tool bridge for one coding-agent CLI turn. */
+export interface CodingAgentToolBridgeInput {
+  /** MCP server name advertised to the CLI; tool_use blocks render it as `mcp__<name>__<tool>`. */
+  serverName: string;
+  /** Absolute path of the capture-only MCP server module, run with the serving runtime. */
+  serverModulePath: string;
+  /** Validated tool catalog advertised over ListTools; the server never executes a call. */
+  tools: ReadonlyArray<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  /** CLI-emitted tool name (`mcp__<server>__<tool>`) to the request's wire tool name. */
+  emittedNameMap: Map<string, string>;
+  /** Captured tool_use blocks accepted in one assistant message. */
+  maxTurnToolCalls: number;
 }
 
 /**
@@ -138,7 +170,61 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     return;
   }
 
+  const toolBridge = input.toolBridge;
+  let toolBridgeDir: string | undefined;
+  let toolBridgeMcpConfigPath: string | undefined;
+  if (toolBridge) {
+    if (toolBridge.tools.length === 0 || toolBridge.emittedNameMap.size === 0) {
+      emit({
+        type: "error",
+        message: "Coding-agent tool bridge was supplied without any isolated tools.",
+        status: 500,
+        errorType: "server_error",
+        code: "tool_bridge_empty",
+        retryable: false,
+      });
+      return;
+    }
+    try {
+      toolBridgeDir = await mkdtemp(join(tmpdir(), "ocx-coding-agent-tools-"));
+      const catalogPath = join(toolBridgeDir, "catalog.json");
+      toolBridgeMcpConfigPath = join(toolBridgeDir, "mcp.json");
+      await writeFile(catalogPath, JSON.stringify(toolBridge.tools), { encoding: "utf8", mode: 0o600 });
+      await writeFile(
+        toolBridgeMcpConfigPath,
+        JSON.stringify({
+          mcpServers: {
+            [toolBridge.serverName]: {
+              type: "stdio",
+              command: process.execPath,
+              args: [toolBridge.serverModulePath, catalogPath],
+              defer_loading: false,
+              alwaysLoad: true,
+            },
+          },
+        }),
+        { encoding: "utf8", mode: 0o600 },
+      );
+    } catch (err) {
+      emit({
+        type: "error",
+        message: `Failed to prepare the coding-agent tool bridge: ${err instanceof Error ? err.message : String(err)}`,
+        status: 500,
+        errorType: "server_error",
+        code: "tool_bridge_setup_failed",
+        retryable: false,
+      });
+      if (toolBridgeDir) await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+      return;
+    }
+  }
+
   const args = buildArgs(profile, parsed, provider);
+  if (toolBridge && toolBridgeMcpConfigPath) {
+    // Exact names close the wildcard domain; --strict-mcp-config (family args) keeps user
+    // servers out, so the capture server is the only capability this turn can reach.
+    args.push("--allowedTools", [...toolBridge.emittedNameMap.keys()].join(","), "--mcp-config", toolBridgeMcpConfigPath);
+  }
   const env = buildEnv(profile, apiKey);
   const invocation = commandInvocation(binary, args, deps.platform ?? process.platform, { env });
 
@@ -250,12 +336,84 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     const stdout = child.stdout;
     if (!stdout) throw new CodingAgentProtocolError(`${profile.label} CLI produced no stdout stream`);
     try {
+      let initValidated = false;
+      let toolCallStarts = 0;
+      let failClosed = false;
       for await (const message of readJsonLines(stdout)) {
         if (incoming.abortSignal?.aborted) break;
+        if (toolBridge) {
+          const initError = toolBridgeInitError(message, toolBridge.serverName);
+          if (initError) {
+            emitOnce({
+              type: "error",
+              message: initError,
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_bridge_init_mismatch",
+              retryable: false,
+            });
+            kill();
+            break;
+          }
+          if (message.type === "system" && message.subtype === "init") initValidated = true;
+        }
         for (const event of mapStreamMessageToEvents(message, state)) {
+          if (toolBridge && event.type === "tool_call_start") {
+            toolCallStarts += 1;
+            if (toolCallStarts > toolBridge.maxTurnToolCalls) {
+              emitOnce({
+                type: "error",
+                message: `Coding-agent CLI returned more than the ${toolBridge.maxTurnToolCalls}-tool-call turn limit.`,
+                status: 502,
+                errorType: "upstream_error",
+                code: "tool_call_limit",
+                retryable: false,
+              });
+              failClosed = true;
+              kill();
+              break;
+            }
+            const wireName = toolBridge.emittedNameMap.get(event.name);
+            if (wireName === undefined) {
+              emitOnce({
+                type: "error",
+                message: "Coding-agent CLI called a tool outside the isolated catalog.",
+                status: 502,
+                errorType: "upstream_error",
+                code: "undeclared_tool_call",
+                retryable: false,
+              });
+              failClosed = true;
+              kill();
+              break;
+            }
+            emitOnce({ ...event, name: wireName });
+            continue;
+          }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }
             : event);
+        }
+        if (failClosed) break;
+        if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
+          if (!initValidated) {
+            emitOnce({
+              type: "error",
+              message: "Coding-agent tool bridge init frame was not observed before the first tool call.",
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_bridge_init_missing",
+              retryable: false,
+            });
+            kill();
+            break;
+          }
+          // The capture-only MCP handler never answers, so the CLI parks after message_stop.
+          // The completed tool_use blocks are this turn's structured output: end the leg here
+          // and terminate the tree; the client executes, and the next request continues.
+          emitOnce({ type: "done", stopReason: "tool_use", endTurn: false });
+          kill();
+          break;
         }
         if (terminalEmitted) break;
       }
@@ -268,6 +426,9 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     turnError = err instanceof Error ? err.message : String(err);
   } finally {
     cleanup();
+    if (toolBridgeDir) {
+      await rm(toolBridgeDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   // Reap the process so no zombie is left behind (§三十): wait for the real `close`, and

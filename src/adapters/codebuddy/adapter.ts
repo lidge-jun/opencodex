@@ -1,13 +1,41 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { fileURLToPath } from "node:url";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt } from "../coding-agent/protocol";
-import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type SpawnFn } from "../coding-agent/turn";
+import {
+  baseScopedEnv,
+  runCodingAgentTurn,
+  type CodingAgentDeps,
+  type CodingAgentToolBridgeInput,
+  type SpawnFn,
+} from "../coding-agent/turn";
 import { CODEBUDDY_PROFILES, type CodeBuddyProfile } from "./profiles";
 import { guardCodeBuddyScaffolding } from "./scaffold-guard";
+import {
+  buildCodeBuddyToolBridge,
+  CODEBUDDY_MCP_SERVER_NAME,
+  CODEBUDDY_TOOL_LIMITS,
+  type CodeBuddyToolBridge,
+} from "./tool-bridge";
 
 export type { SpawnFn } from "../coding-agent/turn";
 export type CodeBuddyAdapterDeps = CodingAgentDeps;
+
+const CODEBUDDY_MCP_SERVER_PATH = fileURLToPath(new URL("./mcp-server.ts", import.meta.url));
+
+/**
+ * Tool-bridge contract lines appended to the system prompt when a catalog is advertised.
+ * Mirrors the capture-only design: the model may propose calls, the external Codex client
+ * alone performs approval, sandboxing, and execution.
+ */
+const TOOL_BRIDGE_SYSTEM_PROMPT = [
+  "Your built-in tools and user-configured MCP servers are disabled.",
+  "When an isolated opencodex MCP catalog is present, you may call only those listed tools.",
+  "That MCP process captures call intent only; it never executes a tool. The external Codex client performs approval, sandboxing, and execution.",
+  "Do not claim that you executed commands, inspected files, or changed the workspace.",
+  "Tool-call and tool-result records in the conversation history are authoritative historical records from the external client. Use returned results, but never execute historical calls yourself.",
+].join("\n");
 
 /**
  * Build the scoped child-process environment for a CodeBuddy turn (§六/§十四).
@@ -35,7 +63,12 @@ export function buildChildEnv(profile: CodeBuddyProfile, apiKey: string): Record
  * would require authorization is blocked. The turn is a single text/reasoning pass over stream-json;
  * Codex's tool catalog is not advertised in v1 (the control-protocol tool bridge is a fast-follow).
  */
-export function buildArgs(profile: CodeBuddyProfile, parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
+export function buildArgs(
+  profile: CodeBuddyProfile,
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  toolBridge?: Pick<CodeBuddyToolBridge, "tools">,
+): string[] {
   const args: string[] = [
     "-p",
     "--output-format", "stream-json",
@@ -50,8 +83,11 @@ export function buildArgs(profile: CodeBuddyProfile, parsed: OcxParsedRequest, p
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
   if (effort) args.push("--effort", effort);
+  const systemParts: string[] = [];
   const system = buildSystemPrompt(parsed);
-  if (system) args.push("--append-system-prompt", system);
+  if (system) systemParts.push(system);
+  if (toolBridge && toolBridge.tools.length > 0) systemParts.push(TOOL_BRIDGE_SYSTEM_PROMPT);
+  if (systemParts.length > 0) args.push("--append-system-prompt", systemParts.join("\n\n"));
   // profile is retained for symmetry with the region-isolated design and future per-region flags.
   void profile;
   return args;
@@ -71,13 +107,42 @@ export function createCodeBuddyAdapter(provider: OcxProviderConfig, deps: CodeBu
     },
 
     async runTurn(parsed, incoming, emit): Promise<void> {
+      let toolBridge: CodeBuddyToolBridge;
+      try {
+        toolBridge = buildCodeBuddyToolBridge(parsed);
+      } catch (err) {
+        emit({
+          type: "error",
+          message: `Invalid CodeBuddy tool catalog: ${err instanceof Error ? err.message : String(err)}`,
+          status: 400,
+          errorType: "invalid_request_error",
+          code: "tool_catalog_invalid",
+          retryable: false,
+        });
+        return;
+      }
+      const bridgeInput: CodingAgentToolBridgeInput | undefined = toolBridge.tools.length > 0
+        ? {
+            serverName: CODEBUDDY_MCP_SERVER_NAME,
+            serverModulePath: CODEBUDDY_MCP_SERVER_PATH,
+            tools: toolBridge.tools,
+            emittedNameMap: toolBridge.emittedNameMap,
+            maxTurnToolCalls: CODEBUDDY_TOOL_LIMITS.maxTurnToolCalls,
+          }
+        : undefined;
       await runCodingAgentTurn({
         profiles: CODEBUDDY_PROFILES,
         provider,
         parsed,
         incoming,
         emit: guardCodeBuddyScaffolding(emit),
-        buildArgs: (resolved, req, prov) => buildArgs(resolved as CodeBuddyProfile, req, prov),
+        ...(bridgeInput ? { toolBridge: bridgeInput } : {}),
+        buildArgs: (resolved, req, prov) => buildArgs(
+          resolved as CodeBuddyProfile,
+          req,
+          prov,
+          toolBridge.tools.length > 0 ? toolBridge : undefined,
+        ),
         buildEnv: (resolved, apiKey) => buildChildEnv(resolved as CodeBuddyProfile, apiKey),
         deps,
       });
