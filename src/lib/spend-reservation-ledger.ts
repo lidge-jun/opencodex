@@ -65,12 +65,25 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
-import { assertSpendLedgerOwnerHeld, assertStorageOwned, bindSpendLedgerOwnerHome, mintSpendLedgerStorage, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot, spendLedgerStoragePath, type SpendLedgerStorage } from "./spend-ledger-owner";
+import { acquireSpendLedgerOwner, assertSpendLedgerOwnerHeld, assertStorageOwned, bindSpendLedgerOwnerHome, mintSpendLedgerStorage, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot, spendLedgerStoragePath, type SpendLedgerOwnerLease, type SpendLedgerStorage } from "./spend-ledger-owner";
+
+/**
+ * A lease this module took because the journal was needed and nobody held one.
+ *
+ * Kept for the life of the process, like the lease a server takes: the release path is the
+ * same one, and SQLite hands the directory back if the process dies.
+ */
+let onDemandLease: SpendLedgerOwnerLease | undefined;
 
 // The singleton belongs to the state directory it was built for. Releasing ownership hands that
 // directory to whoever comes next, so the in-memory copy goes with it and the next construction
 // replays the journal.
-onSpendLedgerOwnerReleased(() => { sharedLedger = undefined; });
+onSpendLedgerOwnerReleased(() => {
+  sharedLedger = undefined;
+  // The release that triggered this hook is the one that ended that lease; dropping the
+  // reference here must not try to release it a second time.
+  onDemandLease = undefined;
+});
 
 export const SPEND_LEDGER_JOURNAL_FILENAME = "spend-ledger.jsonl";
 /**
@@ -1119,8 +1132,12 @@ export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined): SpendR
  * configures no ceiling must not open a journal merely because the server started.
  */
 export function configureSharedSpendLedger(policy: SpendReservationPolicy): void {
-  assertSpendLedgerOwnerHeld();
-  if (sharedLedger) bindSpendLedgerOwnerHome();
+  // Recording a policy value touches no journal, so it needs no ownership. Changing a ledger
+  // that already exists does, because that ledger is a live view of an owned directory.
+  if (sharedLedger) {
+    assertSpendLedgerOwnerHeld();
+    bindSpendLedgerOwnerHome();
+  }
   sharedPolicy = policy;
   sharedLedger?.reconfigure(policy);
 }
@@ -1133,6 +1150,13 @@ export function configureSharedSpendLedger(policy: SpendReservationPolicy): void
  * than inheriting figures from the previous one.
  */
 export function sharedSpendLedger(): SpendReservationLedger {
+  // Ownership is required to touch the journal, but requiring it to have been taken ELSEWHERE
+  // is a different rule, and a wrong one: `startServer` takes the lease up front while
+  // `handleResponses` is an equally supported entry point that does not. Take it here when no
+  // one has, so the guarantee is "no unowned writer" rather than "no writer outside one
+  // entrypoint". On demand does not mean optional: a directory another process owns is refused
+  // exactly as before, and this call fails closed with it.
+  if (spendLedgerOwnerSnapshot().ownership !== "held") onDemandLease ??= acquireSpendLedgerOwner();
   assertSpendLedgerOwnerHeld();
   bindSpendLedgerOwnerHome();
   if (!sharedLedger) {
@@ -1188,6 +1212,11 @@ export function spendLedgerDiagnosticsSnapshot(): {
  * durable record and the next construction replays it.
  */
 export function resetSharedSpendLedgerForTest(): void {
+  const lease = onDemandLease;
+  onDemandLease = undefined;
+  if (lease) {
+    try { lease.release(); } catch { /* a failed release must not mask the reset */ }
+  }
   sharedLedger = undefined;
   sharedPolicy = DEFAULT_SPEND_RESERVATION_POLICY;
   resetSpendLedgerOwnerBindingForTest();
