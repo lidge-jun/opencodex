@@ -27,8 +27,10 @@ Static policy and observed catalog evidence are separate authorities.
 hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
 metadata, cache freshness, availability, credentials, account state, quota and health never enter
 that result. A catalog consumer may pass observed context, max-input, or max-output values to the
-resolver's call-local limit projection; the lower observed/static value wins, unknown remains
-unknown, max input never exceeds the resolved context window, and the projection mutates neither input. P1a establishes this provider-owned contract
+resolver's call-local limit projection; the lower observed/static value wins, and an observed value
+may fill an absent static one only inside that call-local projection — the frozen static policy is
+unchanged and never widened — max input never exceeds the resolved context window, and the
+projection mutates neither input. P1a establishes this provider-owned contract
 without changing catalog assembly; consumer migration is a separate layer.
 Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
 diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
