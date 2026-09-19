@@ -462,3 +462,82 @@ describe("optional Codex hint filtering preserves relay semantics", () => {
     });
   }
 });
+
+/**
+ * #5176 evidence: a final upstream refusal reaches Codex as a retryable failure.
+ *
+ * Codex classifies a `response.failed` terminal by `error.code` alone
+ * (codex-rs/codex-api/src/sse/responses.rs:417-467). Only the codes collected in
+ * CODEX_TERMINAL_CODES below end the turn; every other code falls through to the
+ * trailing `_ => ApiError::Retryable` arm, which the client retries up to
+ * `stream_max_retries` and renders as `Reconnecting N/5`. Codex has no handler
+ * for a bare `error` event at all, so the terminal this relay synthesizes is the
+ * only thing that carries the refusal to the client.
+ *
+ * `upstreamErrorTailFrame` (src/server/relay.ts) stamps `upstream_server_error`
+ * on that terminal unconditionally: the upstream message survives, its verdict
+ * does not. A refusal the upstream marked terminal is therefore delivered as a
+ * retryable transport failure. These cases pin the mapping as it stands.
+ */
+describe("upstream refusal terminal mapping (#5176 evidence)", () => {
+  // codex-rs/codex-api/src/sse/responses.rs:423-450, in branch order.
+  const CODEX_TERMINAL_CODES = new Set([
+    "context_length_exceeded",
+    "insufficient_quota",
+    "usage_not_included",
+    "cyber_policy",
+    "misalignment_policy_violation",
+    "invalid_prompt",
+    "bio_policy",
+  ]);
+
+  // The upstream copy quoted in #5176, and the code Codex pairs with safety-refusal
+  // copy in its own fixture (responses.rs:1358-1366).
+  const SAFETY_REFUSAL_MESSAGE =
+    "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+  const SAFETY_REFUSAL_CODE = "invalid_prompt";
+
+  const synthesizedError = (out: string): { code: string; message: string; type: string } => {
+    const dataLine = out.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
+    if (!dataLine) throw new Error("missing synthesized response.failed payload");
+    const parsed = JSON.parse(dataLine) as {
+      response: { error: { code: string; message: string; type: string } };
+    };
+    return parsed.response.error;
+  };
+
+  const relayFor = (mode: "tee" | "eager", chunks: string[]) => mode === "tee"
+    ? relaySseWithFailedTail(sourceStream(chunks), new AbortController())
+    : relaySseEagerBounded(sourceStream(chunks), new AbortController(), parityHooks);
+
+  test.each([
+    ["tee", "flat"],
+    ["tee", "nested"],
+    ["eager", "flat"],
+    ["eager", "nested"],
+  ] as const)("%s %s bare refusal keeps the message and drops the terminal verdict", async (mode, shape) => {
+    const bare = shape === "flat"
+      ? { type: "error", code: SAFETY_REFUSAL_CODE, message: SAFETY_REFUSAL_MESSAGE }
+      : {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: SAFETY_REFUSAL_CODE,
+          message: SAFETY_REFUSAL_MESSAGE,
+        },
+      };
+    const original = 'data: {"type":"response.in_progress"}\n\n'
+      + "data: " + JSON.stringify(bare) + "\n\n";
+
+    const out = await drain(relayFor(mode, [original]));
+    const error = synthesizedError(out);
+
+    // The refusal text survives, which is why the client quotes it verbatim.
+    expect(error.message).toBe(SAFETY_REFUSAL_MESSAGE);
+    // The upstream verdict was terminal ...
+    expect(CODEX_TERMINAL_CODES.has(SAFETY_REFUSAL_CODE)).toBe(true);
+    // ... and the synthesized terminal is not.
+    expect(error.code).toBe("upstream_server_error");
+    expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+  });
+});
