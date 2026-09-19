@@ -1340,8 +1340,16 @@ export async function preparePassthroughExchange(
       // refusal: whatever the entitlement was when upstream declined, it is not that now. Both
       // ids are cleared because the wire model can differ from the routed one.
       if (upstreamResponse.ok) {
-        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, route.modelId);
-        clearCodexModelDenialEvidence(admissionState.authCtx.accountId, parsed.modelId);
+        clearCodexModelDenialEvidence(
+          admissionState.authCtx.accountId,
+          route.modelId,
+          admissionState.authCtx.kind === "pool" ? admissionState.authCtx.generation : undefined,
+        );
+        clearCodexModelDenialEvidence(
+          admissionState.authCtx.accountId,
+          parsed.modelId,
+          admissionState.authCtx.kind === "pool" ? admissionState.authCtx.generation : undefined,
+        );
       }
       const model400Denial = await codexPoolAccountModel400Denial(
         upstreamResponse,
@@ -1354,7 +1362,11 @@ export async function preparePassthroughExchange(
         // answer about this model, and the roster cache that selection otherwise reads expires
         // five minutes after a catalog sync fills it -- so without remembering this, the next
         // request selects the same account on quota alone and takes the same 400 (#4906).
-        recordCodexModelDenialEvidence(admissionState.authCtx.accountId, model400Denial);
+        recordCodexModelDenialEvidence(
+          admissionState.authCtx.accountId,
+          model400Denial,
+          admissionState.authCtx.kind === "pool" ? admissionState.authCtx.generation : undefined,
+        );
         poolRetryOutcome = 400;
       } else if (!admissionState.authCtx.fixedAccount && await shouldRetryCodexPoolAccountQuota(
         upstreamResponse,

@@ -101,6 +101,24 @@ export function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig)
   }
 }
 
+export function warnDegradedCompactionRouting(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).compactionRouting;
+  if (raw !== undefined && validated.compactionRouting === undefined) {
+    console.warn("⚠️  config.json compactionRouting is invalid (expected { model, reasoningEffort?, triggers? } with a nonblank model, a declared effort, and triggers drawn without repetition from \"manual\" and \"auto\") — compaction keeps the conversation model");
+  }
+}
+
+/**
+ * Top-level opt-in blocks whose hand-edited form degrades to "off" instead of failing the whole
+ * schema. Grouped behind one entry point because `src/config.ts` sits at its file-size cap, and
+ * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
+ */
+export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  warnDegradedStreamMode(rawParsed, validated);
+  warnDegradedCompactionRouting(rawParsed, validated);
+}
+
 /**
  * Load-time degradation for `retryOn429` (loadConfig only): one hand-edited invalid optional
  * field (e.g. `attempts: 0` or a string) must not trip the whole provider schema and hide every

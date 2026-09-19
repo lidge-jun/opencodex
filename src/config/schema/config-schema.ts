@@ -21,6 +21,7 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  compactionRoutingSchema,
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
@@ -125,6 +126,7 @@ export const configSchema = z.object({
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
+  compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.

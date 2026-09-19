@@ -264,6 +264,8 @@ export interface ProviderRegistryEntry {
   modelServiceTierCapabilityBaseUrlGuard?: (baseUrl: string) => boolean;
   /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
+  /** Registry default for dropping replayed reasoning items for Responses upstreams that reject them. */
+  dropResponsesReasoningItems?: boolean;
   /** Registry defaults for per-model Codex reasoning propagation; explicit user keys win during enrichment. */
   modelSupportsReasoningSummaries?: Record<string, boolean>;
   /** Registry defaults for per-model Codex Responses verbosity support. */

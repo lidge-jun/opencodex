@@ -370,6 +370,23 @@ export function isCodexAccountGenerationLive(id: string, generation: number): bo
   return !!record?.credential && record.deletedAt == null && record.generation === generation;
 }
 
+/**
+ * The same verdict as {@link isCodexAccountGenerationLive}, over ONE store load.
+ *
+ * `readCodexAccountRecord` is `loadCodexAccountRecordStore()[id]`, so asking it per row
+ * reloads, reparses and renormalizes the whole file per row — the exact shape
+ * {@link loadCodexAccountRecordSnapshot} was added to avoid. The denial reader resolves
+ * several accounts in one synchronous pass on the request path, so it opens one checker and
+ * closes over the snapshot instead.
+ */
+export function beginCodexAccountGenerationLiveCheck(): (id: string, generation: number) => boolean {
+  const snapshot = loadCodexAccountRecordSnapshot();
+  return (id, generation) => {
+    const record = snapshot[id];
+    return !!record?.credential && record.deletedAt == null && record.generation === generation;
+  };
+}
+
 export function saveCodexAccountCredentialIfGeneration(
   id: string,
   generation: number,

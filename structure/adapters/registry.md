@@ -52,6 +52,19 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   adapter accepts them on return. One tool's canonical identity can be another tool's advertised
   local name, and resolving that name to either owner would dispatch the call to a tool the caller
   may not have named, so it is treated as ambiguous and fails before dispatch too.
+  Assistant reasoning replay likewise follows the Cognition wire shape. One history prompt carries
+  a single thinking/signature pair, so every block with text is replayed at #11 and #12 is attached
+  only when the text being replayed is the text that signature attests — the single-block case.
+  Several independently signed blocks send the joined chain unsigned rather than pairing one
+  block's attestation with another block's words, and rather than dropping reasoning the turn
+  produced to keep a pair. A signature-only block carries encrypted thinking that is not replayed,
+  so it contributes neither the text nor the signature. The signature is replayed only when the
+  source envelope actually carried one: the serialized reasoning item the Responses parser parks
+  on unsigned thinking parts is provider state, not an attestation, and
+  `isProviderIssuedThinkingSignature` in `src/responses/reasoning-envelope.ts` denies that one
+  shape beside the code that writes it. It is a deny-list rather than a guess at what an opaque
+  token looks like; the stricter base64 allow-list in `src/adapters/anthropic.ts` is a fact about
+  Anthropic's wire and is not assumed of Cognition's.
 
   There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
   `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's
@@ -218,3 +231,5 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 ## Devin image boundary
 
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
+
+A [compaction routing override](../transports/responses.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.

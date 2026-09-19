@@ -27,7 +27,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
-| Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
+| Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts`, `src/responses/freeform-wrapper-scan.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder over one bounded JSON classification of the prefix, so property order and escaped key spellings preview as the wrapper completion unwraps them. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
 | Meta Muse Responses tool names | `src/responses/muse-tool-name-alias.ts`, `src/adapters/openai-responses.ts` | `api.meta.ai` only: function names over 64 characters or containing characters outside `[a-zA-Z0-9_-]` become collision-safe wire aliases and are restored before the client sees them. |
 | Google / Vertex / Antigravity | `src/adapters/google.ts`, `src/adapters/google-http.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/google-tool-schema.ts`, `src/adapters/google-truncation.ts`, `src/adapters/google-errors.ts`, `src/adapters/google-antigravity-wire.ts`, `src/adapters/google-antigravity-replay.ts`, `src/adapters/google-wire-shape.ts` | Vertex and Antigravity install a Google-family `fetchResponse` and so own their retry policy, while AI Studio Gemini leaves it undefined and uses the default server fetch path. The Google-family wrapper reuses shared abort/deadline helpers, upstream error normalization, and policy-aware wire-body repair: strict initial schema loss sends nothing, while strict repair withholding returns the original 400 without a changed send. The final compiler produces the [content-free tool-schema loss contract](../providers/google.md#google-tool-schema-loss-reporting). `google-wire-shape.ts` remains diagnostic-only. |
 | Mimo Free | `src/adapters/mimo-free.ts` | Client identity and JWT handling are transport-local; the per-install client id lives in the opencodex state root. |
@@ -129,6 +129,14 @@ requests use the explicit tunnel fetch. Both retain NO_PROXY semantics. The wrap
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
+
+Every request through this wrapper is proxy-originated, so it fills a default
+`User-Agent: opencodex` when the request headers name no User-Agent of their own; registry
+static headers, provider `headers` values, and vendor-specific client fingerprints keep their
+value and are never given a second User-Agent. The value survives, not its spelling: the pinned
+and SOCKS transports rebuild the header set through `new Headers()`, which lowercases every name.
+Inference traffic never uses this wrapper, so client fingerprints on proxied traffic are
+unaffected (#5104).
 
 Two fake-IP DNS accommodations exist, both for resolved answers only (a literal address in the URL
 still rejects). The IANA benchmark range (198.18/15 and its IPv4-mapped IPv6 spellings) is admitted
@@ -295,3 +303,5 @@ is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+The [compaction routing override](responses.md#compaction-routing-overrides) selects a target before the existing native compact or routed Responses transport is resolved.

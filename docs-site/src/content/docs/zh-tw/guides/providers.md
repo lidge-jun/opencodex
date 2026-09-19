@@ -239,7 +239,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 94 個 preset：78 個 key-based、12 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 95 個 preset：79 個 key-based、12 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -325,7 +325,7 @@ key，走帶 key 的 **`opencode-zen`** preset。若 OpenCode 日後公布 keyle
 跟進；在此之前，這個 preset 的作用是記錄該限制。上游條款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
 大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；少數只提供 Anthropic-compatible endpoint 的
-provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）。Volcengine Agent Plan 透過
+provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）。在已驗證的 Ark Coding Plan 工具 continuation 中，把上一輪 Responses 回傳的 `reasoning` item 原樣送回會得到 `400 InvalidParameter`，因此 Coding Plan preset 會在轉送 continuation input 前移除這類 item；該輪的 reasoning 狀態會因此遺失，可用 `dropResponsesReasoningItems: false` 關閉。已經以 `openai-chat` 儲存的 Coding Plan 設定不會被改寫，仍走 Chat；要切換請手動把 `adapter` 改成 `openai-responses`、`responsesPath` 設為 `/responses`，或刪除後重新加入該 preset。Volcengine Coding Plan 與 Agent Plan 透過
 `openai-responses` 使用原生 Responses endpoint。內建 DeepSeek preset 也會把 `deepseek-v4-flash` 路由到
 原生 Responses endpoint，並保持上游 SSE streaming。若該模型完成所有 output item 卻省略最後的
 Responses event，opencodex 會套用 5 秒、model-scoped 的 grace repair；malformed 或 partial stream 會以

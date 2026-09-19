@@ -202,9 +202,18 @@ Each `startServer` invocation owns a private, one-shot readiness gate created be
 binds. `handleStart` supplies its gate and transitions it only after the shared catalog sync and
 best-effort Claude Code roster reconciliation have both settled. The catalog sync remains the
 authority for ready versus failed; a roster warning does not make an otherwise healthy proxy fail.
-Calls without a supplied gate receive a fresh private gate that intentionally remains pending. Only
-`ok: true` with no nonempty warning becomes ready; `null`, a throw, `ok !== true`, or a nonempty
-warning becomes failed. State is isolated per server instance.
+Calls without a supplied gate receive a fresh private gate that intentionally remains pending.
+`ok: true` becomes ready; `null`, a throw, or `ok !== true` becomes failed. State is isolated per
+server instance.
+
+A nonempty catalog-sync `warning` does not become failed. `ok` is the sync's verdict on the
+essential work (write admission and config injection); `warning` names a degradation of artifacts
+in the local Codex home that the sync deliberately continued past — no catalog source, omitted
+combos, a conversation-history relabel left to Codex's own writer, or a caught catalog-refresh
+exception after which injection still runs. None of those stops the process from serving HTTP or
+routing to a provider. Treating them as terminal is what #5181 reported: a single-replica
+Kubernetes deployment lost its only Service endpoint while every non-Codex route stayed healthy.
+This is the same boundary the Claude roster reconciliation already has, applied to the catalog sync.
 
 Exact unauthenticated `GET /readyz` returns sanitized identity fields plus pending, ready, or failed:
 `200` for ready, or `503` with `Retry-After: 1` for pending and terminal failed. The full CLI syntax
@@ -508,3 +517,6 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+Compaction routing selects its configured model at Responses ingress under the
+[compaction routing contract](transports/responses.md#compaction-routing-overrides). Catalog selection remains conversation-owned.

@@ -746,9 +746,22 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     id: "volcengine-coding-plan",
     label: "Volcengine Ark Coding Plan",
     baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
-    adapter: "openai-chat",
+    responsesPath: "/responses",
+    adapter: "openai-responses",
     authKind: "key",
+    supportsServiceTier: false,
     preserveCustomDestination: true,
+    // A row already saved on Chat keeps Chat. This is a `preserveCustomDestination` key entry,
+    // so `providerMatchesRegistryTransport` refuses the adapter mismatch and the request path
+    // returns the stored row untouched; the alias below still hands it this entry's metadata.
+    // Deliberately no startup config migration: the Z.AI one (`zai-responses-migration.ts`) is
+    // safe only because it rewrites rows the router already canonicalizes, and it gates on
+    // `providerMatchesRegistryTransport` to guarantee that. A Chat row here is NOT canonicalized,
+    // so migrating it would change a wire the operator is actually using, and a marker added
+    // now cannot tell the old default apart from a deliberate pre-upgrade Chat choice.
+    destinationAliases: [{ baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", adapter: "openai-chat" }],
+    // Validated Ark Coding Plan continuations reject replayed reasoning items.
+    dropResponsesReasoningItems: true,
     dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
     defaultModel: "ark-code-latest",
     models: VOLCENGINE_CODING_PLAN_MODELS,
@@ -798,6 +811,21 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: "qwen3.8-max",
     models: ALIBABA_TOKEN_PLAN_MODELS,
     liveModels: false,
+    // Alibaba documents an OpenAI-compatible Responses API on this same /compatible-mode/v1 base
+    // and ships an official Codex integration guide on wire_api = "responses" (#5097). The
+    // gateway serves the same models over both wires, and qwen3.8-flash, qwen3.7-plus and
+    // glm-5.3 carry live end-to-end evidence there (custom tools, reasoning replay, streaming,
+    // multi-turn continuation).
+    //
+    // That is deliberately NOT expressed as a modelWireDefaults pin. Pinning would move every
+    // existing Codex user of those models onto a different upstream with no config change, and
+    // one delta is unresolved: preserveReasoningContentModels below is read by the CHAT adapter,
+    // while the Responses serializer reads preserveResponsesReasoningContent, which this entry
+    // does not set. On the Responses wire those models would replay with blanked reasoning
+    // content -- less state than they carry today. Z.AI and DeepSeek set both flags together for
+    // exactly this reason. Until that flag is justified against this gateway, Responses stays a
+    // documented per-model modelAdapters opt-in;
+    // tests/providers/alibaba-token-plan-responses-optin.test.ts holds both halves.
     note: "Token Plan Personal Edition · China (Beijing)",
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,

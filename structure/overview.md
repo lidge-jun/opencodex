@@ -194,3 +194,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+Codex compaction can select a request-local model through the
+[existing Responses handlers](transports/responses.md#compaction-routing-overrides) for the configured
+manual and automatic triggers, while subsequent turns keep their conversation settings.

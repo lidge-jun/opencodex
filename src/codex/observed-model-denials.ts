@@ -48,8 +48,55 @@ const OBSERVED_DENIAL_TTL_MS = 6 * 60 * 60_000;
 /** Bounded like the roster cache: pool size times flagship count, with room to spare. */
 const OBSERVED_DENIAL_MAX_ENTRIES = 512;
 
-/** `accountId\u0000modelId` -> expiry. Insertion order is the eviction order. */
-const observedDenials = new Map<string, number>();
+/**
+ * One entry of refusal evidence.
+ *
+ * `generation` is the credential generation the refusal was observed under (#4952). Evidence
+ * is about a CREDENTIAL, not an account id: reauthenticating the same internal account can
+ * swap the subscription underneath it, so a refusal from the previous credential says nothing
+ * about the replacement. Carrying the generation lets a reader ignore superseded evidence and
+ * lets a late reply from an older generation be refused rather than applied.
+ *
+ * It is OPTIONAL because not every account that can be refused has one. A `main-pool` context
+ * — the stored main login taking part in rotation — carries a real `accountId` and a
+ * `writerGeneration`, but no pool credential generation, because its credential lives in
+ * `auth.json` rather than the pool store. Dropping its evidence would have silently reverted
+ * #4906 for that account: the pool would re-send the same model to the login that just refused
+ * it, on every request, forever. An entry without a generation is account-scoped, and the
+ * generation fences below simply do not apply to it. This is the same rule the quota writer
+ * already uses in `core-codex-account.ts`, where an absent credential generation skips the
+ * liveness check instead of discarding the write.
+ */
+interface ObservedDenial {
+  expiresAt: number;
+  generation?: number;
+}
+
+/** `accountId\u0000modelId` -> entry. Insertion order is the eviction order. */
+const observedDenials = new Map<string, ObservedDenial>();
+
+/** Whether `generation` is still the account's live credential. */
+type GenerationLiveCheck = (accountId: string, generation: number) => boolean;
+
+/**
+ * Opens one liveness check.
+ *
+ * A FACTORY rather than a bare predicate because the production implementation reads the
+ * credential store, and a lookup can ask about several accounts. Loading once per lookup and
+ * closing over that snapshot is the shape `loadCodexAccountRecordSnapshot` exists for; a bare
+ * predicate would reload and reparse the whole store per row, on the request path.
+ *
+ * Injected rather than imported at module scope so this stays a leaf module: `account-store`
+ * reads the credential file, and a unit test of this map should not have to stand one up.
+ */
+type GenerationLiveCheckFactory = () => GenerationLiveCheck;
+
+let beginGenerationLiveCheck: GenerationLiveCheckFactory = () => () => true;
+
+/** Wire the liveness predicate. Called once at startup; tests substitute their own. */
+export function setObservedDenialGenerationCheck(begin: GenerationLiveCheckFactory): void {
+  beginGenerationLiveCheck = begin;
+}
 
 function denialKey(accountId: string, modelId: string): string {
   return `${accountId}\u0000${modelId}`;
@@ -72,12 +119,24 @@ function modelIdOfDenialKey(key: string): string {
 export function recordObservedCodexModelDenial(
   accountId: string,
   modelId: string,
+  generation: number | undefined,
   now = Date.now(),
 ): void {
+  // A refusal dispatched under generation G can arrive after G+1 has been saved. Reject it
+  // BEFORE touching the map at all, not merely when this key already holds newer evidence:
+  // with no entry for this key the stale row would otherwise be inserted, and at the entry
+  // bound it would evict a valid row that nothing can restore (#4952).
+  if (generation !== undefined && !beginGenerationLiveCheck()(accountId, generation)) return;
   const key = denialKey(accountId, modelId);
+  const existing = observedDenials.get(key);
+  // Second fence, for the window where the replacement credential has been dispatched but the
+  // store read above still answers live. Both sides must name a generation to be comparable;
+  // an account-scoped entry is not older or newer than a credential-scoped one.
+  if (existing !== undefined && existing.generation !== undefined && generation !== undefined
+    && existing.generation > generation) return;
   // Delete before set so the refreshed entry moves to the back of the eviction order.
   observedDenials.delete(key);
-  observedDenials.set(key, now + OBSERVED_DENIAL_TTL_MS);
+  observedDenials.set(key, { expiresAt: now + OBSERVED_DENIAL_TTL_MS, generation });
   while (observedDenials.size > OBSERVED_DENIAL_MAX_ENTRIES) {
     const oldest = observedDenials.keys().next();
     if (oldest.done) break;
@@ -91,8 +150,20 @@ export function recordObservedCodexModelDenial(
  * A success is newer and stronger evidence than the refusal that preceded it: whatever the
  * entitlement was when upstream refused, it is not that now.
  */
-export function clearObservedCodexModelDenial(accountId: string, modelId: string): void {
-  observedDenials.delete(denialKey(accountId, modelId));
+export function clearObservedCodexModelDenial(
+  accountId: string,
+  modelId: string,
+  generation: number | undefined,
+): void {
+  const key = denialKey(accountId, modelId);
+  const existing = observedDenials.get(key);
+  if (!existing) return;
+  // The mirror of the write fence: a success dispatched under G arriving after G+1 was
+  // refused must not clear the replacement's evidence (#4952). Equal generations clear,
+  // because that is the ordinary "this account just served this model" case.
+  if (existing.generation !== undefined && generation !== undefined
+    && existing.generation > generation) return;
+  observedDenials.delete(key);
 }
 
 /**
@@ -119,19 +190,41 @@ export function forgetObservedCodexModelDenialsForAccount(accountId: string | nu
 export function observedDeniedCodexAccountIdsForModel(
   modelId: string | undefined,
   now = Date.now(),
+  options: { excludeAccountIds?: ReadonlySet<string> } = {},
 ): ReadonlySet<string> | undefined {
   if (!modelId) return undefined;
   const denied = new Set<string>();
-  for (const [key, expiresAt] of [...observedDenials]) {
-    if (expiresAt <= now) {
+  // Opened lazily and at most once: a lookup that matches no credential-scoped row must not
+  // read the credential store at all.
+  let isLive: GenerationLiveCheck | undefined;
+  for (const [key, entry] of [...observedDenials]) {
+    if (entry.expiresAt <= now) {
       observedDenials.delete(key);
       continue;
     }
-    if (modelIdOfDenialKey(key) === modelId) denied.add(accountIdOfDenialKey(key));
+    // Model and the caller's exclusion fence FIRST. The issue asks for identity validation
+    // after the exclusion read, and an excluded account — a draining profile switch, or a
+    // request-owned credential — must produce no credential-store read on its behalf.
+    if (modelIdOfDenialKey(key) !== modelId) continue;
+    const accountId = accountIdOfDenialKey(key);
+    if (options.excludeAccountIds?.has(accountId)) continue;
+    if (entry.generation !== undefined) {
+      isLive ??= beginGenerationLiveCheck();
+      // Superseded evidence stops denying the replacement. It is SKIPPED, not deleted: the
+      // predicate cannot tell "this account reauthenticated" from "the credential store could
+      // not be read", and deleting on the second would throw away valid evidence that a
+      // transient read failure was never entitled to touch. Skipping already delivers the
+      // routing outcome the issue asks for, on every read, without depending on the
+      // conditional account-wide forget that cannot run when no roster was ever cached.
+      // Superseded rows still leave by TTL, by eviction, and by the account-wide forget.
+      if (!isLive(accountId, entry.generation)) continue;
+    }
+    denied.add(accountId);
   }
   return denied.size > 0 ? denied : undefined;
 }
 
 export function resetObservedCodexModelDenialsForTests(): void {
   observedDenials.clear();
+  beginGenerationLiveCheck = () => () => true;
 }

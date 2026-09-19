@@ -105,18 +105,26 @@ export function poolAccountDto(
   const plan = codexPlanValue(account.plan);
   const quota = quotaForPlan(quotaResult.quota, plan);
   const runtimeReauth = isAccountNeedsReauth(account.id);
+  const rawReauthReason: CodexAccountReauthReason | undefined = !hasCredential
+    ? "missing_credential"
+    : quotaResult.reauthReason
+      ? quotaResult.reauthReason
+      : runtimeReauth
+        ? "refresh_failed"
+        : undefined;
   const needsReauth = !hasCredential || quotaResult.needsReauth || runtimeReauth;
-  const health = projectCodexAccountHealth({ accountId: account.id, needsReauth });
+  const healthReason = rawReauthReason === "quota_unauthorized" || rawReauthReason === "missing_credential"
+    ? "unauthorized"
+    : "refresh_failed";
+  const health = projectCodexAccountHealth({
+    accountId: account.id,
+    needsReauth,
+    reauthReason: needsReauth ? healthReason : undefined,
+  });
   // `needsReauth` is an OR of three independent causes plus a persisted verdict resolved inside the
   // health projection. Emitting only the boolean is what left #4212's reporter guessing which
   // account took their model away and why, so name the cause they actually have to act on.
-  const reauthReason: CodexAccountReauthReason | undefined = !hasCredential
-    ? "missing_credential"
-    : runtimeReauth
-      ? "refresh_failed"
-      : quotaResult.needsReauth
-        ? "quota_unauthorized"
-        : health.status === "reauth_required" ? health.reason : undefined;
+  const reauthReason: CodexAccountReauthReason | undefined = rawReauthReason ?? (health.status === "reauth_required" ? health.reason : undefined);
   return {
     id: account.id,
     email: projectEmail(account.email, maskEmails) ?? account.email,
