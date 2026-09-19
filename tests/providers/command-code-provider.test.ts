@@ -1040,4 +1040,25 @@ describe("Command Code provider", () => {
     expect(commandCodeSessionId(unclassifiedCache)).not.toBe(commandCodeSessionId(unclassifiedCache));
     expect(commandCodeSessionId(parsed())).not.toBe(commandCodeSessionId(parsed()));
   });
+  test("buildRequest top-level context fields respect projectContext option", async () => {
+    // 1. Omitted / off returns empty context sentinels
+    const reqOmitted = await createCommandCodeAdapter(provider).buildRequest(parsed());
+    const bodyOmitted = JSON.parse(reqOmitted.body as string);
+    expect(bodyOmitted.memory).toBe("");
+    expect(bodyOmitted.taste).toBeNull();
+    expect(bodyOmitted.skills).toBeNull();
+
+    const reqOff = await createCommandCodeAdapter({ ...provider, projectContext: "off" }).buildRequest(parsed());
+    const bodyOff = JSON.parse(reqOff.body as string);
+    expect(bodyOff.memory).toBe("");
+    expect(bodyOff.taste).toBeNull();
+    expect(bodyOff.skills).toBeNull();
+
+    // 2. On returns loaded project context
+    const reqOn = await createCommandCodeAdapter({ ...provider, projectContext: "on" }).buildRequest(parsed());
+    const bodyOn = JSON.parse(reqOn.body as string);
+    expect(typeof bodyOn.memory).toBe("string");
+    expect(bodyOn.taste === null || typeof bodyOn.taste === "string").toBe(true);
+    expect(bodyOn.skills === null || typeof bodyOn.skills === "string").toBe(true);
+  });
 });
