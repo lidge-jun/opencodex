@@ -908,6 +908,8 @@ describe("doctor version skew projection", () => {
       const output = logged.join("\n");
       expect(output).toContain("[WARN] unable to scan $CODEX_HOME/agents/*.toml:");
       expect(output).not.toContain("no per-role model_fallback fields");
+      // The dependent derived-role scan shares the listing; a missing guard would warn twice.
+      expect(output.match(/\[WARN\] unable to scan \$CODEX_HOME\/agents\/\*\.toml:/g) ?? []).toHaveLength(1);
     } finally {
       for (const cleanup of restore.reverse()) cleanup();
       process.exitCode = previousExitCode;
