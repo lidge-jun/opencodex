@@ -195,10 +195,15 @@ describe("SOCKS5 upload lifecycle", () => {
     }
   });
 
-  test("an abort reason that is not an Error reaches the caller unchanged", async () => {
-    // `AbortSignal.reason` is whatever the caller passed. The socket reader already preserves a
-    // string or an object, so wrapping one here would make the same abort look different
-    // depending on which race won it.
+  // `AbortSignal.reason` is whatever the caller passed, and several waiters inside this
+  // transport can win the race that settles an abort. They disagree about a reason they consider
+  // absent - one substitutes an Error for null, others coerce anything that is not an Error - so
+  // without a single answer the same abort surfaces differently depending on scheduling.
+  test.each([
+    ["a string", "caller gave up"],
+    ["null", null],
+    ["a plain object", { cancelled: true }],
+  ] as const)("an abort reason that is %s reaches the caller unchanged", async (_label, reason) => {
     const { server: target, uploading } = uploadObserver();
     const proxy = socksProxy();
     const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
@@ -208,9 +213,9 @@ describe("SOCKS5 upload lifecycle", () => {
       const pending = post(targetPort, proxyPort, body.stream, controller.signal);
       const outcome = pending.then(() => "resolved" as const, (error: unknown) => error);
       expect(await settlesWithin(uploading)).toBe(true);
-      controller.abort("caller gave up");
+      controller.abort(reason);
       expect(await settlesWithin(outcome)).toBe(true);
-      expect(await outcome).toBe("caller gave up");
+      expect(await outcome).toBe(reason);
     } finally {
       await Promise.all([close(proxy), close(target)]);
     }

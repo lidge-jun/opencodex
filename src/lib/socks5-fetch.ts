@@ -557,10 +557,10 @@ async function finalResponseHead(
 function abortRejection(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
   let onAbort = (): void => { /* replaced below */ };
   const promise = new Promise<never>((_resolve, reject) => {
-    // The caller's reason is passed through whatever it is. `SocketReader` already preserves a
-    // string, an object or null here, and coercing only this path to an Error would make the
-    // same abort look different depending on which race happened to win it.
-    onAbort = () => reject(signal.reason ?? new Error("The operation was aborted"));
+    // Reject with the caller's reason exactly, including `null` and `false`. A real
+    // `AbortSignal` always has one — `abort()` with no argument supplies an AbortError — so
+    // the fallback covers only a hand-built signal that exposes none.
+    onAbort = () => reject(signal.reason === undefined ? new Error("The operation was aborted") : signal.reason);
     if (signal.aborted) onAbort();
     else signal.addEventListener("abort", onAbort, { once: true });
   });
@@ -727,6 +727,13 @@ export async function socks5Fetch(
     request.signal.removeEventListener("abort", onAbort);
     reader?.dispose();
     socket.destroy();
+    // An aborted caller gets its own reason back. Several waiters inside this transport can win
+    // the race that settles an abort, and they do not agree on what to do with a reason they
+    // consider absent: the socket reader substitutes an Error for a null reason, others coerce
+    // anything that is not an Error. Without this, the same `abort(null)` surfaces as an Error
+    // or as null depending on scheduling. `undefined` is left alone so a hand-built signal
+    // still reaches the thrown cause below.
+    if (request.signal.aborted && request.signal.reason !== undefined) throw request.signal.reason;
     throw error;
   }
 }
