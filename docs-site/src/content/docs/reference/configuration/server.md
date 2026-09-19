@@ -494,6 +494,52 @@ Auto auth selects subscription when stored Claude auth is found, proxy when none
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
 
+## Manual compaction
+
+In **Dashboard → Overview → Manual compaction**, choose a model and optional reasoning effort,
+then click **Save**. Select **Use conversation model** and save to remove the override.
+Changes apply to the next manual `/compact` request without restarting the proxy.
+
+Set `manualCompaction` in OpenCodex `config.json` to override the model used by Codex's
+manual `/compact` command. The setting is disabled when omitted.
+
+```json
+{
+  "manualCompaction": {
+    "model": "provider/model-id",
+    "reasoningEffort": "low"
+  }
+}
+```
+
+`model` accepts native model IDs, provider-qualified model IDs, and configured combos.
+`reasoningEffort` is optional; omit it to preserve the incoming effort. Supported declarations
+are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
+Existing provider effort rules still apply. The native `/responses/compact` endpoint keeps
+its existing behavior and does not forward reasoning settings.
+
+OpenCodex changes only requests with explicit `request_kind: "compaction"` and
+`compaction.trigger: "manual"` metadata, sent to `/v1/responses/compact` or to `/v1/responses`
+with a `compaction_trigger` input item. Automatic compaction and later conversation turns
+keep their original routing and settings. Missing, malformed, or conflicting metadata does
+not activate the override, including on older clients without trigger metadata. WebSocket
+requests use each frame's metadata rather than the connection's earlier handshake metadata.
+
+The selected model's provider receives the entire conversation for summarization, including
+conversations that normally run on another provider. A combo selector sends it to every combo
+target, including failover targets. The dashboard panel states this next to the model picker
+and names the destination provider, or the combo's target providers, once a model is chosen.
+The override reuses the existing compaction handlers and summary formats. When the selected
+model shares the conversation model's provider and account-routing identity (provider name,
+Codex account mode, and account namespace), the request keeps the caller's credential and may
+use that backend's native compact endpoint. Otherwise, including when either side is a combo or
+the conversation model is remembered as a combo target, OpenCodex runs the portable summarizer
+instead, so the summary stays readable when the conversation resumes on its own model, and the
+caller's credential does not cross to the other provider. The selected model must support the
+input size and content. This setting does
+not guarantee a cache hit for automatic compaction. Restart the proxy after editing
+`config.json` by hand. Dashboard saves apply immediately.
+
 ## Shadow calls
 
 Codex uses small helper models for tasks such as titles and commit messages. Enable

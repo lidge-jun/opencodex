@@ -411,7 +411,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // therefore be the last routed transform that may depend on those declarations. Structural
       // sanitizers below can still run after it.
       outBody = normalizeResponsesCodeMode(outBody, parsed, provider);
-      if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
+      if (parsed._compactionRequest === true && (!isCanonicalOpenAiForwardProvider(provider) || parsed._portableCompaction === true)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
       // Run after routed compaction so nested input_image parts are replaced before a malformed

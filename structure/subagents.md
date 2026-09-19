@@ -410,3 +410,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](runtime.md).
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+The [manual compaction override](transports/responses.md#manual-compaction-overrides) uses explicit request-kind and trigger metadata, independently of spawned-child markers.

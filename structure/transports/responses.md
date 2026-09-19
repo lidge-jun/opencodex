@@ -903,6 +903,41 @@ The [explicit model-capability contract](../config.md#explicit-per-model-capabil
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior. Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate. Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
+## Manual compaction overrides
+
+`src/server/responses/manual-compaction.ts` applies `manualCompaction` before model routing in
+both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"`
+and `compaction.trigger: "manual"` in `x-codex-turn-metadata`, supplied as a header or embedded
+in Responses `client_metadata`, and on `/v1/responses` a `compaction_trigger` input item as
+well, so metadata alone cannot move an ordinary turn. Every supplied metadata copy must agree;
+malformed, absent, automatic, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
+only per-frame metadata; handshake headers can describe an earlier request.
+
+The override changes only the model and optional reasoning effort. Existing native forwarding,
+routed summaries, capability handling, and retry budgets remain authoritative; native compact
+still removes reasoning before sending. Internal handoffs carry the override record (with the
+conversation's source model) as a recursion guard so combo children and fallback attempts
+retain their selected targets. Manual overrides bypass shadow interception and conversation
+combo recall, and do not publish replacement combo/handoff recall. They never change the
+conversation's configured model or later automatic-compaction requests.
+
+`manualCompactionKeepsProviderIdentity` compares the source model's concrete route with the
+selected route (provider name, Codex account mode and namespace; combos on either side never
+match, and a bare source model the lane remembers as a combo target counts as a combo source,
+recorded as `sourceCombo` when the override is applied, and a configured combo target is recorded as
+`targetCombo` so its concretely routed children stay portable too). A matching identity keeps the caller's credential and may use the native compact
+endpoint. A mismatch marks the credential domain as rewritten, exactly like a shadow
+intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
+skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
+`request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
+build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
+backend that minted it; the conversation model would otherwise resume with an omission marker
+in place of its history.
+
+`tests/responses/responses-manual-compaction.test.ts` covers trigger selection, config validation,
+native and routed handlers, same-provider credential retention, cross-provider portable summaries
+and their replay, combo failover, and subsequent conversation settings.
+
 ## Core module ownership
 
 `src/server/responses/core.ts` is the public ingress and compatibility-export surface.
