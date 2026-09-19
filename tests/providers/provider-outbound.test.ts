@@ -207,6 +207,95 @@ describe("provider outbound GET transport", () => {
     }
   });
 
+  test("scheme-mismatched proxy variables keep the DNS-pinned transport", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      for (const { url, proxyKey } of [
+        { url: "http://provider.example/v1/models", proxyKey: "HTTPS_PROXY" },
+        { url: "https://provider.example/v1/models", proxyKey: "HTTP_PROXY" },
+      ] as const) {
+        for (const key of proxyKeys) delete process.env[key];
+        process.env[proxyKey] = "http://127.0.0.1:9";
+        const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+        const resolveOptions: { allowBenchmarkAddresses?: boolean }[] = [];
+        const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+        dependencies.resolveAddresses = mock(async (_url: string, options?: { allowBenchmarkAddresses?: boolean }) => {
+          resolveOptions.push({ allowBenchmarkAddresses: options?.allowBenchmarkAddresses });
+          return {
+            hostname: "provider.example",
+            addresses: [{ address: "93.184.216.34", family: 4 }],
+            privateNetwork: false,
+          };
+        }) as ProviderOutboundDependencies["resolveAddresses"];
+
+        const response = await providerOutboundGet(
+          "custom",
+          { baseUrl: new URL(url).origin + "/v1" },
+          url,
+          {},
+          dependencies,
+        );
+
+        expect(response.status).toBe(204);
+        expect(captured.address).toBe("93.184.216.34");
+        expect(resolveOptions).toEqual([{ allowBenchmarkAddresses: false }]);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a NO_PROXY match keeps the request on the DNS-pinned transport", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    process.env.NO_PROXY = "provider.example";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+      const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+
+      const response = await providerOutboundGet(
+        "custom",
+        { baseUrl: "https://provider.example/v1" },
+        "https://provider.example/v1/models",
+        {},
+        dependencies,
+      );
+
+      expect(response.status).toBe(204);
+      expect(captured.address).toBe("93.184.216.34");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a scheme-mismatched proxy variable does not demand NO_PROXY for private providers", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTP_PROXY = "http://127.0.0.1:9";
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response(null, { status: 200 }), {
+      privateNetwork: true,
+      address: "192.168.1.50",
+    });
+
+    const response = await providerOutboundGet(
+      "ollama-lan",
+      { baseUrl: "https://ollama.lan:11434/v1", allowPrivateNetwork: true },
+      "https://ollama.lan:11434/v1/models",
+      {},
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(captured.address).toBe("192.168.1.50");
+  });
+
   test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
@@ -544,7 +633,7 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
 });
 
 describe("effectiveProxyFor picks the variable Bun fetch actually honours", () => {
-  test("scheme-matched selection; HTTP ALL_PROXY is never consulted", async () => {
+  test("scheme-matched selection; HTTP ALL_PROXY only counts for http: targets", async () => {
     const { effectiveProxyFor } = await import("../../src/lib/proxy-env");
     const https = new URL("https://opencode.ai/zen/v1/models");
     const http = new URL("http://ollama.lan:11434/v1/models");
@@ -555,6 +644,18 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(https, { ALL_PROXY: "socks5://127.0.0.1:1080" })).toBe("socks5://127.0.0.1:1080");
     expect(effectiveProxyFor(http, { HTTP_PROXY: "http://p:5" })).toBe("http://p:5");
     expect(effectiveProxyFor(http, { HTTPS_PROXY: "http://p:6" })).toBeNull();
+    // Bun's native fetch honours a non-SOCKS ALL_PROXY for plain http: targets on
+    // POSIX but not on Windows; https: targets only ever use the socks5 wrapper.
+    expect(effectiveProxyFor(http, { ALL_PROXY: "http://p:7" }))
+      .toBe(process.platform === "win32" ? null : "http://p:7");
+    expect(effectiveProxyFor(http, { ALL_PROXY: "ftp://p:8" })).toBeNull();
+    expect(effectiveProxyFor(http, { ALL_PROXY: "http://" })).toBeNull();
+    // A malformed or non-http(s) scheme-matched variable is not a proxy Bun fetch
+    // can use either: it must not count as "the proxy that applies".
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "http://" })).toBeNull();
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "not a url" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "http://" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "socks5://p:9" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
     expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
   });
