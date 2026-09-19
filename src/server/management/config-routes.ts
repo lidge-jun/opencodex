@@ -1,3 +1,5 @@
+import { compactionRoutingSchema } from "../../config/schema/leaf-validators";
+import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -342,6 +344,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         reason: "not_requested",
         retryable: false,
       }),
+      compactionRouting: config.compactionRouting ?? null,
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -433,6 +436,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
+      compactionRouting?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -444,8 +448,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
-      && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      && body.codexClientCompaction === undefined
+      && body.compactionRouting === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, or compactionRouting" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -474,6 +479,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
+    }
+    const compactionRouting = body.compactionRouting == null
+      ? body.compactionRouting
+      : compactionRoutingSchema.safeParse(body.compactionRouting);
+    if (compactionRouting != null && !compactionRouting.success) {
+      return jsonResponse({ error: "compactionRouting requires a model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" }, 400);
     }
     let quotaAutoRefreshChange: { id: string; window: "fiveHour" | "weekly"; enabled: boolean } | undefined;
     if (body.codexQuotaAutoRefresh !== undefined) {
@@ -504,6 +515,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
+    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting"]);
     const previousSettings = {
       codexAutoStart: config.codexAutoStart,
       hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -570,6 +582,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
       else if (body.codexClientCompaction === false) deleteConfigTopLevelKey(config, "codexClientCompaction");
+      if (compactionRouting === null) deleteConfigTopLevelKey(config, "compactionRouting");
+      else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
       if (quotaAutoRefreshChange) {
         const { id, window, enabled } = quotaAutoRefreshChange;
         const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
@@ -618,6 +632,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexClientCompaction) {
         config.codexClientCompaction = previousSettings.codexClientCompaction;
       } else deleteConfigTopLevelKey(config, "codexClientCompaction");
+      restoreCompactionRouting();
       throw error;
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
@@ -669,6 +684,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
+      compactionRouting: config.compactionRouting ?? null,
       codexMainAccountHardLock: config.codexMainAccountHardLock === true,
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealth(config),

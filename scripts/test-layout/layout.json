@@ -1211,6 +1211,7 @@
     "responses-account-label.test.ts": "responses",
     "responses-canonical-only-top-level-fields.test.ts": "responses",
     "responses-compact-handoff-admission.test.ts": "responses",
+    "responses-compaction-override.test.ts": "responses",
     "responses-compaction-routing.test.ts": "responses",
     "responses-compaction.test.ts": "responses",
     "responses-console-go-upload-retry.test.ts": "responses",

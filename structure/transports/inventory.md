@@ -295,3 +295,5 @@ is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+The [compaction routing override](responses.md#compaction-routing-overrides) selects a target before the existing native compact or routed Responses transport is resolved.

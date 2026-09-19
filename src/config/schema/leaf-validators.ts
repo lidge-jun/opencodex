@@ -38,11 +38,20 @@ import {
   isHostedToolUnsupportedForModel,
 } from "../../responses/hosted-tool-policy";
 import { getConfigDir } from "../paths";
+import { COMPACTION_TRIGGERS } from "./compaction-triggers";
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
+
+export const compactionRoutingSchema = z.object({
+  model: z.string().trim().min(1),
+  reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
+  triggers: z.array(z.enum(COMPACTION_TRIGGERS)).nonempty()
+    .refine(values => new Set(values).size === values.length, "triggers must not repeat a value")
+    .optional(),
+}).strict();
 
 /**
  * Bounds for the opt-in same-target 429 wait-and-retry policy. Single source of truth

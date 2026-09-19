@@ -118,6 +118,7 @@ import {
   codexLogAccountId,
 } from "./core-codex-account";
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
+import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -147,6 +148,12 @@ export async function prepareResponsesRequest(
       return clientCancelledResponse();
     }
     return decodeRequestErrorResponse(err, "responses");
+  }
+  if (!options.comboAttempt && !options.compactionRoutingOverride && inboundWire === "responses") {
+    options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
+      endpoint: "responses",
+      transport: options.inboundTransport,
+    });
   }
   // An effort row naming a table-less combo (`combo/x--high`) must reach the combo dispatcher
   // as its base id, so the selector is normalized here, before comboIdFromRawBody reads model.
@@ -179,7 +186,7 @@ export async function prepareResponsesRequest(
   }
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
-  if (!options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)) {
+  if (!options.comboAttempt && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const rawModel = (body as { model?: unknown }).model;
     const rawInput = (body as { input?: unknown }).input;
     const isCompactionTrigger = Array.isArray(rawInput)
@@ -201,7 +208,7 @@ export async function prepareResponsesRequest(
   // hops — which only exist inside that loop — are unreachable (#4129). Rewrite the selector
   // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
   // LOOKUP so the check can never observe a one-candidate collapse.
-  if (!options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)) {
+  if (!options.comboAttempt && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const shadowIntercept = config.shadowCallIntercept;
     const rawShadowModel = (body as { model?: unknown }).model;
     if (shadowIntercept?.enabled && shadowIntercept.model && typeof rawShadowModel === "string"
@@ -380,7 +387,7 @@ export async function prepareResponsesRequest(
   if (!logCtx.conversationId) {
     logCtx.conversationId = resolvedConversationId;
   }
-  logCtx.requestedModel = parsed.modelId;
+  logCtx.requestedModel = options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   // What this request may spend beyond its input, for the durable spend reservation (#4707).
   // Read from the caller rather than from the adapter's serialized body, because the
@@ -410,7 +417,7 @@ export async function prepareResponsesRequest(
         : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
-    if (_sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+    if (!options.compactionRoutingOverride && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
       const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
       let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
       try {
@@ -438,8 +445,17 @@ export async function prepareResponsesRequest(
         shadowRoute = targetRoute;
       }
     }
-    if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
+    if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = shadowRoute ?? resolveRoute(parsed.modelId);
+    if (options.compactionRoutingOverride && !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)) {
+      credentialDomainWasRewritten = true;
+      // The destination does not share the conversation's credential domain, so it can neither
+      // verify the source backend's reasoning ciphertext nor decode its native compaction blob.
+      // This is the same condition an account change already reports (account-change-state.ts),
+      // and the serializer turns a stored summary into readable text instead of dropping it.
+      parsed._stripReasoningEncryptedContent = true;
+      if (parsed._compactionRequest === true) parsed._portableCompaction = true;
+    }
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {

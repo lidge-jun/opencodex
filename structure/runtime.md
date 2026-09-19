@@ -472,3 +472,6 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+Codex compaction uses a request-local model override for the configured triggers; the
+[Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.

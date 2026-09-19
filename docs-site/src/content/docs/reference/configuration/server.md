@@ -494,6 +494,68 @@ Auto auth selects subscription when stored Claude auth is found, proxy when none
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
 
+## Compaction routing
+
+In **Dashboard → Overview → Compaction routing**, choose a model, which triggers it applies to,
+and an optional reasoning effort, then click **Save**. Select **Use conversation model** and save
+to remove the override. Changes apply to the next compaction request without restarting the proxy.
+
+Set `compactionRouting` in OpenCodex `config.json` to override the model Codex's compaction
+requests use. The setting is disabled when omitted.
+
+```json
+{
+  "compactionRouting": {
+    "model": "provider/model-id",
+    "reasoningEffort": "low",
+    "triggers": ["manual"]
+  }
+}
+```
+
+`model` accepts native model IDs, provider-qualified model IDs, and configured combos.
+`reasoningEffort` is optional; omit it to preserve the incoming effort. Supported declarations
+are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
+Existing provider effort rules still apply. The native `/responses/compact` endpoint keeps
+its existing behavior and does not forward reasoning settings.
+
+`triggers` names which compaction requests the override covers, using Codex's own
+`compaction.trigger` values: `"manual"` for a `/compact` you typed, `"auto"` for the automatic
+compaction Codex runs when a thread approaches its context limit. Omit `triggers` and the
+override applies to manual `/compact` only, leaving automatic compaction exactly where it
+routes today. Use `["auto"]` or `["manual", "auto"]` to route automatic compaction as well.
+
+Routing automatic compaction is what lets a long thread on a routed provider keep going when
+the canonical OpenAI quota is exhausted. Codex picks a bare native model for the compaction
+turn, and OpenCodex reserves that for an enabled canonical `openai` provider whenever one
+exists, so the compaction fails with a quota error before the routed turn begins even though
+the thread itself runs elsewhere. Naming `"auto"` here points the compaction at a
+provider-qualified model with its own credentials and quota.
+
+OpenCodex changes only requests with explicit `request_kind: "compaction"` metadata whose
+`compaction.trigger` is one of the values you listed, sent to `/v1/responses/compact` or to
+`/v1/responses` with a `compaction_trigger` input item. Later conversation turns keep their
+original routing and settings. Missing, malformed, or conflicting metadata does not activate the
+override, including on older clients without trigger metadata; when several copies of the
+metadata are supplied they must name the same trigger. WebSocket requests use each frame's
+metadata rather than the connection's earlier handshake metadata.
+
+The selected model's provider receives the entire conversation for summarization, including
+conversations that normally run on another provider. A combo selector sends it to every combo
+target, including failover targets. The dashboard panel states this next to the model picker
+and names the destination provider, or the combo's target providers, once a model is chosen.
+When the override covers automatic compaction, that transfer happens without you asking for it,
+at whatever point Codex decides to compact; the dashboard panel says so as well.
+The override reuses the existing compaction handlers and summary formats. When the selected
+model shares the conversation model's provider and account-routing identity (provider name,
+Codex account mode, and account namespace), the request keeps the caller's credential and may
+use that backend's native compact endpoint. Otherwise, including when either side is a combo or
+the conversation model is remembered as a combo target, OpenCodex runs the portable summarizer
+instead, so the summary stays readable when the conversation resumes on its own model, and the
+caller's credential does not cross to the other provider. The selected model must support the
+input size and content. Restart the proxy after editing
+`config.json` by hand. Dashboard saves apply immediately.
+
 ## Shadow calls
 
 Codex uses small helper models for tasks such as titles and commit messages. Enable

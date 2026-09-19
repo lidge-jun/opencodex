@@ -60,6 +60,7 @@ import {
   remoteGuiConfigSchema,
   runtimeRoleSchema,
   spendSchema,
+  compactionRoutingSchema,
 } from "./schema/leaf-validators";
 
 export type ConfigDiagnostics = {
@@ -562,6 +563,10 @@ function managementIngressConfigError(value: unknown): string | null {
 }
 
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
+  const compactionRouting = rawConfigRecord(value)?.compactionRouting;
+  if (compactionRouting !== undefined && !compactionRoutingSchema.safeParse(compactionRouting).success) {
+    return { ok: false, error: "schema_invalid: compactionRouting: requires a nonblank model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" };
+  }
   const boundaryError = configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
