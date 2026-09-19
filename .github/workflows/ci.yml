@@ -1211,8 +1211,11 @@ jobs:
           dispatch=not-requested
           windows=not-requested
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            dispatch=requested
-            # `lane=macos-control` is the one dispatch that deliberately omits Windows.
+            # Mirror the diagnostic job allowlist; release-gates requests neither suite.
+            if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
+              dispatch=requested
+            fi
+            # Only the default/all lane requests the nine Windows suite shards.
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
