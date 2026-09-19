@@ -1792,17 +1792,28 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
   // Synchronous validation (validated request/ack): reject un-parseable input and
   // authorization responses (url/query kind) whose state is missing or mismatched
   // once the flow has registered its expected state. Raw codes stay in-session-PKCE
-  // protected. Early posts (flow not yet waiting, no expectedState) are stashed and
-  // re-validated by the callback loop.
+  // protected — but a raw paste carrying an explicit #state suffix is state-bearing
+  // and checked too. Early posts (flow not yet waiting, no expectedState) are
+  // stashed and re-validated by the callback loop.
   const parsed = parseCallbackInput(trimmed);
   // Command Code's manual fallback accepts a pasted JSON callback payload
   // (`{ apiKey, state, ... }`) which has no `code` param. Let it through the
   // shared gate so the provider-specific parser can validate it.
   const isCommandCodeJson = provider === "command-code" && trimmed.startsWith("{") && !parsed.code;
   if (!parsed.code && !isCommandCodeJson) return { ok: false, error: "no authorization code found in input" };
-  if (parsed.kind !== "raw" && slot.expectedState !== undefined) {
+  // A raw paste carrying an explicit code#state suffix is state-bearing too: it
+  // must match the expected state rather than bypass validation.
+  const stateBearing = parsed.kind !== "raw" || parsed.state !== undefined;
+  if (stateBearing && slot.expectedState !== undefined) {
     if (parsed.state === undefined) return { ok: false, error: "redirect URL is missing the state parameter" };
-    if (parsed.state !== slot.expectedState) return { ok: false, error: "state mismatch — paste the redirect URL from THIS login attempt" };
+    if (parsed.state !== slot.expectedState) {
+      return {
+        ok: false,
+        error: parsed.kind === "raw"
+          ? "state mismatch — paste the bare code, or the correct code#state from THIS login attempt"
+          : "state mismatch — paste the redirect URL from THIS login attempt",
+      };
+    }
   }
   if (slot.resolve) {
     const resolve = slot.resolve;
