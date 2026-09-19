@@ -135,7 +135,7 @@ Les vérifications de quota Google Antigravity utilisent des points de terminais
 
 Les déclarations d’outils Google sont compilées selon la classe du point de terminaison sélectionné.
 Lorsque le débogage du fournisseur est activé — avec `ocx debug provider on`, le bouton Logs du
-tableau de bord ou `OCX_DEBUG=1` — l’élargissement de compatibilité émet un enregistrement
+tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion de compatibilité émet un enregistrement
 `[ocx:google:google-tool-schema-loss]` (à suivre avec `ocx debug provider logs -f`) ne contenant que
 la version du rapport, la classe du point de terminaison, un indicateur `lossy`, des catégories de
 perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de

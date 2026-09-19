@@ -115,7 +115,7 @@ Google Antigravity 账户和提供方的配额查询（包括模型列表回退�
 ### Google 工具架构损失诊断
 
 Google 工具声明会按所选端点类别进行编译。通过 `ocx debug provider on`、仪表盘 Logs 开关或
-`OCX_DEBUG=1` 启用提供方调试后，兼容性放宽会输出一条
+`OCX_DEBUG=1` 启用提供方调试后，兼容性转换中的架构损失会输出一条
 `[ocx:google:google-tool-schema-loss]` 记录（可用 `ocx debug provider logs -f` 持续查看），
 其中仅包含报告版本、端点类别、`lossy` 指示器、带有上限计数的固定损失类别和截断标志，
 绝不包含工具名、属性名、路径、值或架构文本。此诊断只观察现有的兼容转换，不会拒绝请求。

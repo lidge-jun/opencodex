@@ -65,7 +65,7 @@ export type GoogleToolSchemaLossCategory =
   | "const-value-filtered"
   | "numeric-bound-dropped"
   | "size-bound-dropped"
-  | "type-union-widened"
+  | "type-union-collapsed"
   | "unsupported-type-widened"
   | "nullability-overridden"
   | "conditional-dropped"
@@ -244,7 +244,7 @@ function normalizeType(
   }
 
   addGoogleToolSchemaLoss(state.report, "unsupported-type-widened", unsupported);
-  if (nonNullTypes.size > 1) addGoogleToolSchemaLoss(state.report, "type-union-widened");
+  if (nonNullTypes.size > 1) addGoogleToolSchemaLoss(state.report, "type-union-collapsed");
 
   if (!sawNull) return;
   if (out.type !== undefined) out.nullable = true;

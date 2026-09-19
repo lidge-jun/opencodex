@@ -121,8 +121,8 @@ Google Antigravity 계정·제공자 할당량 확인은 모델 목록 폴백을
 ### Google 도구 스키마 손실 진단
 
 Google 도구 선언은 선택된 엔드포인트 클래스에 맞춰 컴파일됩니다. `ocx debug provider on`,
-대시보드 Logs 토글 또는 `OCX_DEBUG=1`로 프로바이더 디버그를 켜면 호환성을 위해 제약을
-완화할 때 `[ocx:google:google-tool-schema-loss]` 레코드를 기록합니다
+대시보드 Logs 토글 또는 `OCX_DEBUG=1`로 프로바이더 디버그를 켜면 호환성 변환 중 스키마 손실이
+발생하면 `[ocx:google:google-tool-schema-loss]` 레코드를 기록합니다
 (`ocx debug provider logs -f`로 tail할 수 있습니다). 이 레코드에는 보고서 버전, 엔드포인트
 클래스, `lossy` 표시, 상한이 있는 개수를 포함한 고정 손실 범주, 잘림 여부만 들어갑니다.
 도구명과 속성명, 경로, 값, 스키마 본문은 포함하지 않습니다. 이 진단은 기존 호환 변환을

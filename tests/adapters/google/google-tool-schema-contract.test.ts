@@ -204,7 +204,7 @@ describe("Google tool-schema loss report", () => {
       },
     });
     expect(result.lossReport.categories).toEqual({
-      "type-union-widened": 1,
+      "type-union-collapsed": 1,
       "unsupported-type-widened": 2,
       "nullability-overridden": 1,
     });
