@@ -1557,9 +1557,15 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // Raw trailer messages never leave this parser: they can reflect the
     // credential carried by the request. The allowlisted code and the hex
     // trace id are the only upstream-controlled fields that reach the error.
+    // The stated delay rides along in our own words so a client can still
+    // tell how long to wait when local retry gives up, exceeds its cap, or
+    // is disabled; the `~` keeps it from re-parsing as a downstream hint.
     throw new CloudChatError(
       `Cognition chat failed${trailerError.code ? ` (${trailerError.code})` : ''} ` +
-      `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`,
+      `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})` +
+      (trailerError.retryAfterSeconds === undefined
+        ? ''
+        : `; retry after ~${trailerError.retryAfterSeconds}s`),
       trailerError.code,
       trailerError.traceId,
       connectTrailerHttpStatus(trailerError.code, trailerError.message),

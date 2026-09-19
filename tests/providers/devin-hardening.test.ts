@@ -559,4 +559,47 @@ describe("devin cloud trailer errors", () => {
       clearCachedCatalog();
     }
   });
+
+  test("carries our own retry-seconds wording without the raw trailer text", async () => {
+    const credential = "devin-session-token$header.payload.signature";
+    const trailer = Buffer.from(JSON.stringify({
+      error: {
+        code: "resource_exhausted",
+        message: `Your limit will reset in 35 seconds. ${credential}`,
+      },
+    }));
+    const envelope = Buffer.alloc(5 + trailer.length);
+    envelope[0] = 0x02;
+    envelope.writeUInt32BE(trailer.length, 1);
+    trailer.copy(envelope, 5);
+
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("catalog unavailable", { status: 503 })
+        : new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    try {
+      let caught: unknown;
+      try {
+        for await (const _event of streamChatEvents({
+          apiKey: credential,
+          modelUid: "swe-2-high",
+          messages: [{ role: "user", content: "hi" }],
+        })) { /* no data frames */ }
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("retry after ~35s");
+      expect((caught as Error).message).not.toContain(credential);
+      expect((caught as Error).message).not.toContain("Your limit will reset");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
+  });
 });
