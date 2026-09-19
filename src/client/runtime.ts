@@ -4,6 +4,7 @@ import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { findAvailablePort } from "../server/ports";
 import { startMachineListener } from "./machine-listener";
 import { readClientConnectionState } from "./state";
@@ -17,7 +18,20 @@ function cleanup(): void {
   removeRuntimePort(process.pid);
 }
 
-export function scheduleStandaloneRecycle(): void {
+export function standaloneRecycleEnv(
+  env: NodeJS.ProcessEnv,
+  disconnectedTokenFingerprint: string,
+): NodeJS.ProcessEnv {
+  const childEnv = { ...env };
+  const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
+  if (admissionToken && serviceApiTokenFingerprint(admissionToken) === disconnectedTokenFingerprint) {
+    delete childEnv.OPENCODEX_API_AUTH_TOKEN;
+    delete childEnv.OCX_API_TOKEN_FILE;
+  }
+  return childEnv;
+}
+
+export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string): void {
   if (recycleScheduled) return;
   recycleScheduled = true;
   const timer = setTimeout(() => {
@@ -46,7 +60,7 @@ export function scheduleStandaloneRecycle(): void {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
-        env: { ...process.env },
+        env: standaloneRecycleEnv(process.env, disconnectedTokenFingerprint),
       });
       child.unref();
     }
