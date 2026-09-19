@@ -10,7 +10,11 @@
  */
 import type { CatalogModel } from "../../codex/catalog";
 import { observeModelCacheRevision } from "../../codex/model-cache";
-import { admittedConfigIdentity } from "../../config/admitted-identity";
+import {
+  captureExportConfigAdmission,
+  isExportConfigAdmissionCurrent,
+  type ExportConfigAdmission,
+} from "../../config/admitted-identity";
 import {
   catalogModelSlug,
   filterCatalogVisibleModels,
@@ -30,7 +34,7 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import type { OcxConfig } from "../../types";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
-import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 
@@ -257,22 +261,37 @@ export async function loadExportModels(
   config: OcxConfig,
   models?: readonly CatalogModel[],
 ): Promise<ExportModel[]> {
-  // Which configuration these rows are about to be chosen under, read before the gather starts.
-  // Reading it afterwards would let a configuration edit that landed while the gather was awaiting
-  // be attributed to a roster built under the previous one, which is the same substitution the
-  // per-provider revision below prevents one layer down.
-  const admittedAtChoice = admittedConfigIdentity(config);
+  // Initial selection adopts into the live configuration and persists it, so it has to finish
+  // before anything is admitted. Admitting first would bind this roster to bytes the same load is
+  // about to rewrite, and finalizing against a detached copy would adopt the choices into the copy
+  // while leaving the live configuration pending.
+  if (models === undefined && pendingModelSelectionProviders(config).size > 0) {
+    const { resolvePendingInitialModelSelection } = await import("../../providers/initial-model-selection-runtime");
+    await resolvePendingInitialModelSelection(config);
+  }
+  // The configuration this pass will use from beginning to end, proved to be the one on disk.
+  // Without it there is nothing that may be retained, and the caller still gets its rows: only the
+  // preview authority is withheld.
+  const admission = captureExportConfigAdmission(config);
+  const admitted = admission?.config ?? config;
   // The gather stamps each provider as it chooses its rows, so the roster and the revisions that
   // vouch for it come from the same moment. Sampling afterwards would let a concurrent flight's
   // publication be recorded against rows it never produced.
   const gathered = new Map<string, string>();
-  const rows = await listManagementModelRows(
-    config,
-    models === undefined ? { providerContentRevisions: gathered } : { models },
-  );
+  // Gathering here rather than through the shared fetch is what keeps the detached copy out of the
+  // initial-selection finalizer: the projection below takes a roster, and that branch performs no
+  // discovery and no configuration write. The entitlement refresh keeps the budget it has always
+  // had, and runs alongside as it did inside the projection.
+  const roster = models === undefined
+    ? (await Promise.all([
+      (await import("../../codex/catalog")).gatherRoutedModels(admitted, { providerContentRevisions: gathered }),
+      ensureCodexEntitlementFreshness(admitted, { waitMs: 3_000 }),
+    ]))[0]
+    : models;
+  const rows = await listManagementModelRows(admitted, { models: roster });
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
-  const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), config));
+  const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), admitted));
   const exported = rows.filter(row => !row.disabled && (row.native || visibleRouted.has(row))).map(toExportModel);
   // Retain the FINAL projection, not an input to it. A preview that rebuilt from raw provider
   // caches would miss static and forward providers, which never populate one, and would skip the
@@ -280,22 +299,18 @@ export async function loadExportModels(
   // A deep clone, not a frozen view of the caller's array. Freezing the array alone left the model
   // objects shared, so a caller mutating one in place would have silently rewritten the roster a
   // later preview plans against, and the fingerprint would have moved with it.
-  // Provable, and still the same one the rows were chosen under. Comparing rather than re-reading
-  // is what makes this fail closed: a configuration that moved during the load leaves no snapshot
-  // rather than leaving one recorded under an identity its rows never had.
-  const configKey = admittedAtChoice !== null && admittedConfigIdentity(config) === admittedAtChoice
-    ? admittedAtChoice
-    : null;
-  // No provable configuration identity means no honest snapshot to keep.
-  if (configKey === null) {
+  // Still the configuration these rows were chosen under, on disk and in hand alike. Revalidating
+  // rather than re-reading an identity is what makes this fail closed: a configuration that moved
+  // during the load leaves no snapshot rather than one recorded under a state its rows never had.
+  if (admission === null || !isExportConfigAdmissionCurrent(admission, config)) {
     lastExportSnapshot = null;
     return exported;
   }
   lastExportSnapshot = {
-    key: configKey,
+    admission,
     // Prefer the revisions the gather stamped; fall back to observing only when the roster was
     // supplied and no gather happened, where there is nothing tighter to use.
-    cacheStamp: gathered.size > 0 ? stampFrom(config, gathered) : modelCacheStamp(config),
+    cacheStamp: gathered.size > 0 ? stampFrom(admitted, gathered) : modelCacheStamp(admitted),
     generation: ++exportSnapshotGeneration,
     models: Object.freeze(structuredClone(exported)),
   };
@@ -305,20 +320,38 @@ export async function loadExportModels(
 /**
  * The completed export roster from the last ordinary load, if it still describes this config.
  *
- * A preview may not gather, so it reads only what an authoritative load already finished. The key
- * names both the configuration file the roster was admitted under and the in-memory configuration
- * it was actually built from, so changing either one retires the snapshot rather than letting a
- * preview plan against a roster the user no longer has.
+ * A preview may not gather, so it reads only what an authoritative load already finished. The
+ * admission it carries proved, when the roster was built, that the configuration in hand was the
+ * one on disk; a later read repeats that proof, so a rewritten file, an edited resident object or
+ * a mutated working copy each retire the snapshot rather than letting a preview plan against a
+ * configuration nobody has.
  *
- * A cold process has no snapshot and the caller answers a bounded refusal. Recovery is the
- * ordinary flow rather than a special step: the Integrations collection read calls
- * `loadExportModels`, so the page an operator must open before confirming anything is the page
- * that populates this.
+ * A cold process has no snapshot and the caller answers a bounded refusal, and an ordinary load
+ * populates one: the Integrations collection read calls `loadExportModels`, so the page an
+ * operator opens before confirming anything is usually the page that fills this in. That is not a
+ * repair for every refusal. A configuration that disagrees with its file keeps refusing however
+ * many times the page is opened, because nothing here reloads or reconciles anything; once the
+ * two agree again the next ordinary read rebuilds the snapshot by itself.
  */
 let lastExportSnapshot:
-  | { key: string; cacheStamp: string; generation: number; models: readonly ExportModel[] }
+  | { admission: ExportConfigAdmission; cacheStamp: string; generation: number; models: readonly ExportModel[] }
   | null = null;
 let exportSnapshotGeneration = 0;
+
+/**
+ * A process-local prefix for the roster identity a caller carries between a preview and the
+ * mutation that confirms it.
+ *
+ * The identity used to be the configuration digest with a counter appended, which handed a
+ * dashboard an opaque-looking string that was in fact a fingerprint of the operator's
+ * configuration file. It only has to be unforgeable within this process and distinct across
+ * restarts, so it says nothing about the configuration at all.
+ */
+const rosterIdentityPrefix = `r${Math.trunc(Math.random() * 0xffffffff).toString(36)}`;
+
+function rosterIdentity(generation: number): string {
+  return `${rosterIdentityPrefix}:${generation}`;
+}
 
 /**
  * Where the gathered half of the roster stands, observed without changing it.
@@ -361,10 +394,9 @@ function stampFrom(config: OcxConfig, gathered: ReadonlyMap<string, string>): st
 export function exportSnapshotIdentity(config: OcxConfig): string | null {
   const snapshot = lastExportSnapshot;
   if (snapshot === null) return null;
-  const configKey = admittedConfigIdentity(config);
-  if (configKey === null || snapshot.key !== configKey) return null;
+  if (!isExportConfigAdmissionCurrent(snapshot.admission, config)) return null;
   if (snapshot.cacheStamp !== modelCacheStamp(config)) return null;
-  return `${snapshot.key}:${snapshot.generation}`;
+  return rosterIdentity(snapshot.generation);
 }
 
 /** Test seam: a fresh process has no snapshot, and suites must be able to reproduce that. */
@@ -392,8 +424,9 @@ export function previewExportSnapshot(
   // believing it held the identity of another.
   const snapshot = lastExportSnapshot;
   if (snapshot === null) return null;
-  const configKey = admittedConfigIdentity(config);
-  if (configKey === null || snapshot.key !== configKey) return null;
+  // The roster was built from a configuration proved to be the one on disk; this asks whether both
+  // are still that same configuration, and reads nothing but the file to answer.
+  if (!isExportConfigAdmissionCurrent(snapshot.admission, config)) return null;
   // A completed discovery retires the snapshot: the configuration is unchanged, but the models it
   // resolves to are not the ones this roster was built from.
   if (snapshot.cacheStamp !== modelCacheStamp(config)) return null;
@@ -402,7 +435,7 @@ export function previewExportSnapshot(
   // going anywhere near this module.
   return {
     models: structuredClone(snapshot.models) as readonly ExportModel[],
-    identity: `${snapshot.key}:${snapshot.generation}`,
+    identity: rosterIdentity(snapshot.generation),
   };
 }
 

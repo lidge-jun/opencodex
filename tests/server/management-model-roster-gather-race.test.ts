@@ -144,18 +144,51 @@ describe("an export load retains what its rows were chosen under", () => {
     expect(previewExportModels(config)).toBeNull();
   });
 
-  test("a configuration edited during the load leaves no snapshot at all", async () => {
+  test("a configuration edited during the load changes neither the rows nor what is retained", async () => {
     const { config, exported } = await loadWhileBetaIsHeld(edited => {
-      // Management routes edit the live configuration in place. This one lands after the gather
-      // has chosen its providers, so the rows cannot include the new one and never could have.
-      edited.providers.gamma = { adapter: "openai-chat", baseUrl: "https://gamma.gather-race.test/v1", models: [] };
+      // Management routes edit the live configuration in place. This edit would remove the row
+      // below from the projection, which is what makes it visible: the load gathered under the
+      // configuration it admitted and has to project under that same one.
+      edited.disabledModels = ["alpha/alpha-chosen"];
     });
 
+    // Gathered under the admitted configuration and projected under it too. Reading the live
+    // object for the projection would have produced rows belonging to neither configuration.
     expect(alphaRows(exported)).toEqual(["alpha/alpha-chosen"]);
-    expect(exported.some(model => model.provider === "gamma")).toBe(false);
-    // Retaining would record this roster under a configuration that has a provider it does not
-    // cover, and a later preview would serve it as the full picture. Refusing costs one ordinary
-    // load and is the only honest answer.
+    // Retaining would record this roster under a configuration that does not produce it. Refusing
+    // costs one ordinary load and is the only honest answer.
     expect(previewExportModels(config)).toBeNull();
+  });
+
+  test("replacing a provider's transport executor retires the roster it gathered", async () => {
+    const { config, exported } = await loadWhileBetaIsHeld(() => {});
+    expect(previewExportModels(config)).toEqual(exported);
+
+    // The executor is the one part of a provider that is not data, so it is held by reference
+    // rather than compared as content. A different executor can answer differently, so a roster
+    // gathered through the previous one is no longer a roster for this configuration.
+    // The executor is not part of the configuration's declared shape; the transport reads it off
+    // the provider at call time, which is exactly why it is held by reference here.
+    (config.providers.alpha as { fetch?: typeof fetch }).fetch = (async () => new Response("{}")) as typeof fetch;
+    expect(previewExportModels(config)).toBeNull();
+  });
+
+  test("a configuration carrying an accessor is refused without the accessor being read", async () => {
+    let reads = 0;
+    const { config, exported } = await loadWhileBetaIsHeld(edited => {
+      Object.defineProperty(edited, "disabledModels", {
+        configurable: true,
+        enumerable: true,
+        get: () => { reads += 1; return []; },
+      });
+    });
+
+    // The rows are still the ordinary answer; only the preview authority is withheld.
+    expect(alphaRows(exported)).toEqual(["alpha/alpha-chosen"]);
+    expect(previewExportModels(config)).toBeNull();
+    // A copier that serialized the configuration would have called this and then compared whatever
+    // it chose to return. Refusing without invoking it is the difference between reading a
+    // configuration and asking it what it would like to be.
+    expect(reads).toBe(0);
   });
 });
