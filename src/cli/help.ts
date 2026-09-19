@@ -89,6 +89,7 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config <sub>            Validated configuration show/get/set/import/export
+  ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Read-only Compatibility Lab projection inspection
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
