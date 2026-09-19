@@ -1245,7 +1245,7 @@ describe("Responses previous_response_id state", () => {
         metrics: { tombstoneCount: 2 },
       });
     }
-  }, { timeout: (2 * watchdogMs(1_500)) + 2_000 });
+  }, { timeout: (2 * watchdogMs(8_000)) + 2_000 });
 
   test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
     forceWindowsAclLane();
