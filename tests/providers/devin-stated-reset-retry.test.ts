@@ -28,6 +28,15 @@ async function drain(source: AsyncGenerator<CloudChatEvent>): Promise<CloudChatE
   return out;
 }
 
+function eosEnvelope(payload: object): Buffer {
+  const body = Buffer.from(JSON.stringify(payload));
+  const envelope = Buffer.alloc(5 + body.length);
+  envelope[0] = 0x02;
+  envelope.writeUInt32BE(body.length, 1);
+  body.copy(envelope, 5);
+  return envelope;
+}
+
 describe("streamChatEventsWithResetRetry", () => {
   test("admits and reports every inference POST through one shared budget", async () => {
     let spendReservations = 0;
@@ -254,14 +263,6 @@ describe("streamChatEventsWithResetRetry", () => {
     // CloudChatError cannot prove the contract: this drives the real stream
     // through a Connect EOS trailer and expects the typed retryAfterSeconds the
     // parser preserved to schedule the replay.
-    const eosEnvelope = (payload: object) => {
-      const body = Buffer.from(JSON.stringify(payload));
-      const envelope = Buffer.alloc(5 + body.length);
-      envelope[0] = 0x02;
-      envelope.writeUInt32BE(body.length, 1);
-      body.copy(envelope, 5);
-      return envelope;
-    };
     const credential = "devin-session-token$header.payload.signature";
     const chatEnvelopes = [
       eosEnvelope({
@@ -296,6 +297,54 @@ describe("streamChatEventsWithResetRetry", () => {
       expect(chatCalls).toBe(2);
       expect(waits).toEqual([35_000]);
       expect(out).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
+  });
+
+  test("a stated window beyond the ceiling still reports the wait outward", async () => {
+    // When the stated delay exceeds the local cap the original trailer error
+    // propagates. Its message must carry the seconds in our own words so the
+    // client can tell how long to wait — without the raw trailer text, which
+    // can reflect the request credential.
+    const credential = "devin-session-token$header.payload.signature";
+    const chatEnvelopes = [
+      eosEnvelope({
+        error: {
+          code: "resource_exhausted",
+          message: `Your limit will reset in 35 seconds. ${credential}`,
+        },
+      }),
+    ];
+    let chatCalls = 0;
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.includes("GetChatMessage")) {
+        return new Response("catalog unavailable", { status: 503 });
+      }
+      const envelope = chatEnvelopes[Math.min(chatCalls, chatEnvelopes.length - 1)];
+      chatCalls += 1;
+      return new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    try {
+      let caught: unknown;
+      try {
+        await drain(streamChatEventsWithResetRetry(
+          { apiKey: "k", modelUid: "swe-2", messages: [] } as unknown as CloudChatRequest,
+          { sleep: async () => {}, maxWaitMs: 10_000 },
+        ));
+      } catch (error) {
+        caught = error;
+      }
+      expect(chatCalls).toBe(1);
+      expect(caught).toBeInstanceOf(CloudChatError);
+      const message = (caught as Error).message;
+      expect(message).toContain("retry after ~35s");
+      expect(message).not.toContain(credential);
+      expect(message).not.toContain("Your limit will reset");
     } finally {
       globalThis.fetch = originalFetch;
       clearCachedCatalog();
