@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
-import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
+import CockpitToolsCard from "../src/components/provider-workspace/CockpitToolsCard";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import type { ProviderAuthHandlers } from "../src/components/provider-workspace/types";
 
@@ -60,7 +60,11 @@ async function mount() {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    root.render(<LanguageProvider><ProviderAuthPanel item={ITEM} apiBase="/proxy" authHandlers={handlers()} /></LanguageProvider>);
+    root.render(
+      <LanguageProvider>
+        <CockpitToolsCard apiBase="/proxy" onImportSuccess={() => retryAccounts("google-antigravity")} />
+      </LanguageProvider>
+    );
   });
 }
 
@@ -195,4 +199,122 @@ test("rejects contradictory status/code pairs without exposing backend codes or 
     expect(host.textContent).not.toContain(CANARY);
     expect(retryAccounts).not.toHaveBeenCalled();
   }
+});
+
+test("imports account from clipboard and never renders canary token", async () => {
+  const readText = mock(async () => JSON.stringify([{ email: "clipboard@example.test", refresh_token: CANARY }]));
+  Object.defineProperty(win.navigator, "clipboard", {
+    configurable: true,
+    value: { readText },
+  });
+
+  await mount();
+  const clipboardBtn = host.querySelector("#cockpit-import-clipboard-btn");
+  expect(clipboardBtn).toBeTruthy();
+
+  await act(async () => {
+    clipboardBtn?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  expect(readText).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("/proxy/api/oauth/accounts/import");
+  expect(JSON.parse(String(init.body))).toEqual({
+    provider: "google-antigravity", format: "cockpit-tools",
+    document: [{ email: "clipboard@example.test", refresh_token: CANARY }],
+  });
+  expect(retryAccounts).toHaveBeenCalledWith("google-antigravity");
+  expect(host.textContent).toContain("Import complete: 1 imported, 0 updated, 0 failed, 0 unsupported.");
+  expect(host.textContent).not.toContain(CANARY);
+});
+
+test("normalizes a single object from clipboard into an array", async () => {
+  const readText = mock(async () => JSON.stringify({ email: "single@example.test", refresh_token: CANARY }));
+  Object.defineProperty(win.navigator, "clipboard", {
+    configurable: true,
+    value: { readText },
+  });
+
+  await mount();
+  const clipboardBtn = host.querySelector("#cockpit-import-clipboard-btn");
+  await act(async () => {
+    clipboardBtn?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(JSON.parse(String(init.body))).toEqual({
+    provider: "google-antigravity", format: "cockpit-tools",
+    document: [{ email: "single@example.test", refresh_token: CANARY }],
+  });
+});
+
+test("falls back to manual paste textarea when clipboard read fails, then imports successfully", async () => {
+  const readText = mock(async () => { throw new Error("Permission denied"); });
+  Object.defineProperty(win.navigator, "clipboard", {
+    configurable: true,
+    value: { readText },
+  });
+
+  await mount();
+  const clipboardBtn = host.querySelector("#cockpit-import-clipboard-btn");
+  await act(async () => {
+    clipboardBtn?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  const textarea = host.querySelector("#cockpit-import-manual-text") as HTMLTextAreaElement;
+  expect(textarea).toBeTruthy();
+  const submitBtn = host.querySelector("#cockpit-import-submit-btn");
+  expect(submitBtn).toBeTruthy();
+
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!
+      .set!.call(textarea, JSON.stringify([{ email: "manual@example.test", refresh_token: CANARY }]));
+    textarea.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+
+  await act(async () => {
+    submitBtn?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain("Import complete: 1 imported, 0 updated, 0 failed, 0 unsupported.");
+  expect(host.textContent).not.toContain(CANARY);
+});
+
+test("toggles manual paste textarea directly and imports account", async () => {
+  await mount();
+  const manualBtn = host.querySelector("#cockpit-import-manual-btn");
+  expect(manualBtn).toBeTruthy();
+  expect(host.querySelector("#cockpit-import-manual-text")).toBeFalsy();
+
+  await act(async () => {
+    manualBtn?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  const textarea = host.querySelector("#cockpit-import-manual-text") as HTMLTextAreaElement;
+  expect(textarea).toBeTruthy();
+
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!
+      .set!.call(textarea, JSON.stringify([{ email: "toggle@example.test", refresh_token: CANARY }]));
+    textarea.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+
+  const submitBtn = host.querySelector("#cockpit-import-submit-btn");
+  await act(async () => {
+    submitBtn?.dispatchEvent(new win.Event("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain("Import complete: 1 imported, 0 updated, 0 failed, 0 unsupported.");
+  expect(host.textContent).not.toContain(CANARY);
+  expect(host.querySelector("#cockpit-import-manual-text")).toBeFalsy();
 });

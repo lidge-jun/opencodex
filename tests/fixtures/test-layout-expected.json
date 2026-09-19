@@ -602,7 +602,6 @@
   "google-provider-metadata-roundtrip.test.ts": "adapters/google",
   "google-signature-history-roundtrip.test.ts": "adapters/google",
   "google-tool-result-adjacency.test.ts": "adapters/google",
-  "google-tool-schema-contract.test.ts": "adapters/google",
   "google-tool-schema.test.ts": "adapters/google",
   "google-vertex-http.test.ts": "adapters/google",
   "google-vertex-stream.test.ts": "adapters/google",
@@ -1382,6 +1381,8 @@
   "ci-structure-gate.test.ts": "ci-workflows",
   "responses-code-mode-patch-compile.test.ts": "responses",
   "gui-codex-usage-score-parity.test.ts": "gui",
+  "google-tool-schema-contract.test.ts": "adapters/google",
   "web-search-sidecar-429.test.ts": "web-search",
-  "codex-shim-destroyed-probe.test.ts": "codex-integration"
+  "codex-shim-destroyed-probe.test.ts": "codex-integration",
+  "gui-account-quota-analysis.test.ts": "gui"
 }
