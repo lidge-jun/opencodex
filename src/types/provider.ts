@@ -901,6 +901,8 @@ export interface OcxProviderConfig {
    * "cloud-code-assist" = Google Antigravity (Cloud Code Assist) OAuth + CCA envelope.
    */
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
+  googleToolSchemaPolicy?: "compatible" | "reject-lossy";
   /** Vertex AI GCP project id (or GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env). */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global" (or GOOGLE_CLOUD_LOCATION env). */

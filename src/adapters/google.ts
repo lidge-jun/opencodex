@@ -739,6 +739,7 @@ function invalidGoogleShapeEvent(
 }
 
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
+  const toolSchemaPolicy = provider.googleToolSchemaPolicy ?? "compatible";
   const toolSchemaProfile = {
     endpointClass: provider.googleMode ?? "ai-studio",
   } satisfies GoogleToolSchemaProfile;
@@ -808,7 +809,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
           fetchResponse: (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> =>
-            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(request, ctx),
+            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
+              request,
+              ctx,
+              { toolSchemaProfile, toolSchemaPolicy },
+            ),
           formatErrorBody: (status: number, _headers: Headers, payloadText: string): string =>
             (provider.googleMode === "cloud-code-assist" ? safeAntigravityHttpErrorMessage : safeVertexHttpErrorMessage)(status, payloadText),
         }
@@ -979,7 +984,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
           draftRequest.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
         }
-        const compiled = compileGoogleWireBody(draftRequest, toolSchemaProfile);
+        const compiled = compileGoogleWireBody(draftRequest, toolSchemaProfile, toolSchemaPolicy);
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         const request = compiled.body;
         restoreGoogleToolName = compiled.restoreToolName;
@@ -1030,7 +1035,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       if (provider.googleMode === "vertex") {
-        const compiled = compileGoogleWireBody(body, toolSchemaProfile);
+        const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
@@ -1077,7 +1082,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
       headers["x-goog-api-key"] = apiKey;
 
-      const compiled = compileGoogleWireBody(body, toolSchemaProfile);
+      const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
       reportToolSchemaLoss(compiled.toolSchemaLossReport);
       restoreGoogleToolName = compiled.restoreToolName;
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };

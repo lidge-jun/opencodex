@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import {
+  addGoogleToolSchemaLoss,
   createGoogleToolSchemaLossReport,
+  GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT,
   mergeGoogleToolSchemaLossReport,
   sanitizeGeminiToolParametersWithReport,
   type GoogleToolSchemaLossReport,
+  type GoogleToolSchemaPolicy,
   type GoogleToolSchemaProfile,
 } from "./google-tool-schema";
 
@@ -11,6 +14,20 @@ type JsonObject = Record<string, unknown>;
 
 const GOOGLE_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const GOOGLE_THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+
+export class GoogleToolSchemaPolicyError extends Error {
+  readonly phase = "initial" as const;
+  readonly endpointClass: GoogleToolSchemaProfile["endpointClass"];
+  readonly categories: GoogleToolSchemaLossReport["categories"];
+
+  constructor(report: GoogleToolSchemaLossReport) {
+    const categories = { ...report.categories };
+    super(`google tool schema policy rejected lossy initial compilation (${report.endpointClass}; categories=${JSON.stringify(categories)})`);
+    this.name = "GoogleToolSchemaPolicyError";
+    this.endpointClass = report.endpointClass;
+    this.categories = categories;
+  }
+}
 
 function isObject(value: unknown): value is JsonObject {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -196,6 +213,7 @@ function compileToolConfig(value: unknown, toWireName: (name: string) => string)
 export function compileGoogleWireBody(
   input: unknown,
   profile: GoogleToolSchemaProfile = { endpointClass: "ai-studio" },
+  policy: GoogleToolSchemaPolicy = "compatible",
 ): {
   body: JsonObject;
   restoreToolName: (name: string) => string;
@@ -210,6 +228,9 @@ export function compileGoogleWireBody(
   if (isObject(source.systemInstruction)) body.systemInstruction = source.systemInstruction;
   const tools = compileTools(source.tools, names.toWire, profile, toolSchemaLossReport);
   if (tools) body.tools = tools;
+  if (policy === "reject-lossy" && toolSchemaLossReport.lossy) {
+    throw new GoogleToolSchemaPolicyError(toolSchemaLossReport);
+  }
   const generationConfig = compileGenerationConfig(source.generationConfig);
   if (generationConfig) body.generationConfig = generationConfig;
   const toolConfig = compileToolConfig(source.toolConfig, names.toWire);
@@ -241,8 +262,18 @@ export function isGoogleThinkingConfigErrorText(errorPayload: string): boolean {
   return /thinking[_ ]?(?:config|level)/i.test(errorPayload);
 }
 
+export interface GoogleInvalidRequestRepair {
+  body: string;
+  toolSchemaLoss?: GoogleToolSchemaLossReport;
+  toolSchemaDeclarationCount?: number;
+}
+
 /** Build a changed request for one known-safe replay of an INVALID_ARGUMENT response. */
-export function repairGoogleInvalidRequestBody(body: string, errorPayload: string): string | undefined {
+export function repairGoogleInvalidRequestBodyWithReport(
+  body: string,
+  errorPayload: string,
+  profile: GoogleToolSchemaProfile = { endpointClass: "ai-studio" },
+): GoogleInvalidRequestRepair | undefined {
   const schemaError = isGoogleToolSchemaErrorText(errorPayload);
   const thinkingError = isGoogleThinkingConfigErrorText(errorPayload);
   if (!schemaError && !thinkingError) return undefined;
@@ -255,6 +286,8 @@ export function repairGoogleInvalidRequestBody(body: string, errorPayload: strin
   if (!isObject(parsed)) return undefined;
   const root = isObject(parsed.request) ? parsed.request : parsed;
   let changed = false;
+  let toolSchemaLoss: GoogleToolSchemaLossReport | undefined;
+  let toolSchemaDeclarationCount: number | undefined;
 
   if (thinkingError && isObject(root.generationConfig) && "thinkingConfig" in root.generationConfig) {
     delete root.generationConfig.thinkingConfig;
@@ -270,6 +303,9 @@ export function repairGoogleInvalidRequestBody(body: string, errorPayload: strin
       const index = indexed === undefined ? -1 : Number.parseInt(indexed, 10);
       const rejected = declarations[index];
       const targets = rejected ? [rejected] : declarations;
+      toolSchemaLoss = createGoogleToolSchemaLossReport(profile);
+      addGoogleToolSchemaLoss(toolSchemaLoss, "repair-opened-schema", targets.length);
+      toolSchemaDeclarationCount = Math.min(targets.length, GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT);
       for (const declaration of targets) {
         declaration.parameters = { type: "object", properties: {} };
         delete declaration.parametersJsonSchema;
@@ -277,5 +313,13 @@ export function repairGoogleInvalidRequestBody(body: string, errorPayload: strin
       changed = true;
     }
   }
-  return changed ? JSON.stringify(parsed) : undefined;
+  return changed ? {
+    body: JSON.stringify(parsed),
+    ...(toolSchemaLoss ? { toolSchemaLoss, toolSchemaDeclarationCount } : {}),
+  } : undefined;
+}
+
+/** Compatibility facade for callers that need only the changed body. */
+export function repairGoogleInvalidRequestBody(body: string, errorPayload: string): string | undefined {
+  return repairGoogleInvalidRequestBodyWithReport(body, errorPayload)?.body;
 }

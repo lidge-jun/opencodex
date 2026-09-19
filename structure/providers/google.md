@@ -102,6 +102,16 @@ and 1,024 visited nodes; reporting stops with those limits and does not inspect 
 debug is enabled. `generationConfig.responseMimeType` and `generationConfig.responseJsonSchema`
 are output-schema fields and never enter tool-schema sanitation or loss accounting.
 
+`googleToolSchemaPolicy` is provider-scoped. Omission and `compatible` retain the report-only body
+and existing repair replay. `reject-lossy` refuses an initially lossy compilation before
+`buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
+resolved policy into their 400 compatibility repair: indexed repair reports one opened declaration,
+unindexed repair reports every declaration it would open, and strict policy returns the original
+400 without a changed repair send. The `google-tool-schema-repair` diagnostic contains only endpoint
+class, fixed category counts, declaration count, truncation, and whether that send was allowed.
+AI Studio direct mode continues to disable 400 repair entirely. Output schemas remain outside both
+initial and repair policy.
+
 ## Google wire-shape projection
 
 `src/adapters/google-wire-shape.ts` describes a compiled Google request without carrying any of

@@ -108,6 +108,10 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/codex/shim.ts` | Codex autostart shim: replaces the `codex` binary with a wrapper that auto-starts the proxy on demand. It skips startup for management subcommands even when value-taking global flags precede the subcommand, and transactionally restores complete, stable external launcher replacements without a watcher or PATH rediscovery. |
 | `src/service.ts` | OS service manager (macOS launchd, Linux systemd, Windows schtasks): always-on proxy with crash restart. Facade over the `src/service/` leaves — `src/service/launchd.ts`, `src/service/systemd.ts`, `src/service/windows-ops.ts`, `src/service/windows-scheduler.ts`, `src/service/windows-taskxml.ts`, `src/service/state.ts`, `src/service/guards.ts`, `src/service/health.ts`, `src/service/repair.ts`, `src/service/orchestration.ts`, `src/service/diagnostics.ts`, `src/service/cli.ts`. |
 
+`src/cli/provider.ts` accepts the Google-only `--google-tool-schema-policy` creation flag and rejects
+an unknown value or non-Google effective adapter before persistence. The persisted field and default
+are owned by the [config contract](config.md#config-surface).
+
 The `src/` root stays thin: process entry (`src/cli.ts`, `src/index.ts`), shared config/types,
 router, bridge, service manager, reasoning-effort definitions, and the stall-timeout budget live
 there. Feature code is grouped by responsibility:

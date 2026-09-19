@@ -115,6 +115,11 @@ be treated as implemented:
 
 ## API ownership
 
+The provider editor admits `googleToolSchemaPolicy` as an editor-safe, non-secret field. Its value
+is validated as `compatible` or `reject-lossy` before live adoption and persistence; an invalid
+value changes neither state. Omission remains absent and is resolved by the Google adapter rather
+than materialized by the management API.
+
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
 Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not

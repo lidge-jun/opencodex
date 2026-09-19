@@ -603,6 +603,7 @@
   "google-signature-history-roundtrip.test.ts": "adapters/google",
   "google-tool-result-adjacency.test.ts": "adapters/google",
   "google-tool-schema-contract.test.ts": "adapters/google",
+  "google-tool-schema-policy-config.test.ts": "server",
   "google-tool-schema.test.ts": "adapters/google",
   "google-vertex-http.test.ts": "adapters/google",
   "google-vertex-stream.test.ts": "adapters/google",

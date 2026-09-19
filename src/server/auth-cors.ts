@@ -948,6 +948,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   upstreamHttpVersion: "editor",
   upstreamWebsocket: "editor",
   directGeminiWireRenames: "editor",
+  googleToolSchemaPolicy: "editor",
   disabled: "editor",
   codexAccountMode: "editor",
   apiKey: "redacted",

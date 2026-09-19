@@ -139,9 +139,12 @@ tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion d
 `[ocx:google:google-tool-schema-loss]` (à suivre avec `ocx debug provider logs -f`) ne contenant que
 la version du rapport, la classe du point de terminaison, un indicateur `lossy`, des catégories de
 perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
-propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Ce diagnostic
-observe la conversion compatible existante sans rejeter la requête. Les schémas de sortie natifs
-n’entrent pas dans ce diagnostic. Consultez la
+propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
+absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. `reject-lossy` refuse
+la perte initiale avant l’envoi. Pour Vertex et Cloud Code Assist, une réparation qui supprimerait
+des contraintes émet un enregistrement `google-tool-schema-repair` également sans contenu et renvoie
+le 400 d’origine sans nouvel envoi. AI Studio direct ne tente jamais cette réparation. Les schémas
+de sortie natifs restent hors de ces deux chemins. Consultez la
 [référence des commandes de débogage](/fr/reference/cli/agents/).
 
 

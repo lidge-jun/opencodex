@@ -28,6 +28,11 @@ deduplication and credential storage separately from Codex config injection.
 
 ## Config surface
 
+Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
+`ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the
+effective adapter is `google`. Omission remains absent in `config.json`; the adapter resolves it to
+`compatible` in memory.
+
 ### OpenCodex home and live process state
 
 `initializePersistedConfigIfMissing` in `src/config.ts` is the create-only path consumed by
@@ -316,6 +321,9 @@ CLI writes, and management DTO validation. `src/config.ts` imports those checks 
 and re-exports them as a compatibility facade; it must not grow a second copy. Validation error text,
 ordering, and cross-field rules are part of the write/load contract because management requests and
 hand-edited `config.json` must accept and reject the same provider shapes.
+
+The Google tool-schema policy uses a closed enum at this boundary. Unknown values fail config load,
+management admission, and command-line creation rather than silently degrading to compatible mode.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-provider-validation-ownership.md)
 

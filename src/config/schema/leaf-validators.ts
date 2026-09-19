@@ -268,6 +268,7 @@ export const providerConfigSchema = z.object({
   // canonical ChatGPT backend WS selection is independent of this flag.
   upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
+  googleToolSchemaPolicy: z.enum(["compatible", "reject-lossy"]).optional(),
   noStructuredOutputModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),

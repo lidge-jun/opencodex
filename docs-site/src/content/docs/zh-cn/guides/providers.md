@@ -118,8 +118,11 @@ Google 工具声明会按所选端点类别进行编译。通过 `ocx debug prov
 `OCX_DEBUG=1` 启用提供方调试后，兼容性转换中的架构损失会输出一条
 `[ocx:google:google-tool-schema-loss]` 记录（可用 `ocx debug provider logs -f` 持续查看），
 其中仅包含报告版本、端点类别、`lossy` 指示器、带有上限计数的固定损失类别和截断标志，
-绝不包含工具名、属性名、路径、值或架构文本。此诊断只观察现有的兼容转换，不会拒绝请求。
-原生输出架构不属于此诊断范围。请参阅[调试命令参考](/zh-cn/reference/cli/agents/)。
+绝不包含工具名、属性名、路径、值或架构文本。省略策略或使用 `compatible` 时只观察转换。
+`reject-lossy` 会在发送前拒绝初始损失。对于 Vertex 和 Cloud Code Assist，会移除约束的修复
+会输出同样不含内容的 `google-tool-schema-repair` 记录，并在不发送修改请求的情况下返回原始
+400。直连 AI Studio 不执行该修复。原生输出架构不属于这两条策略路径。
+请参阅[调试命令参考](/zh-cn/reference/cli/agents/)。
 
 
 Nous refresh 发生终止性失败后，请运行 `ocx login nous` 重新认证。
