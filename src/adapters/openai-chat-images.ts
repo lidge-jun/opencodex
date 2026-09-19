@@ -13,7 +13,9 @@ import {
 export const OPENAI_CHAT_IMAGE_BASE64_BUDGET = 3_670_016; // 3.5MiB
 
 export interface NormalizeOpenAIChatImagesOptions
-  extends Pick<NormalizeOptions, "encode" | "tierBias" | "validate"> {}
+  extends Pick<NormalizeOptions, "encode" | "tierBias" | "validate"> {
+  abortSignal?: AbortSignal;
+}
 
 /** Whether `value` is a plain object, so message and part shapes can be walked safely. */
 function isRecord(value: unknown): value is Record<string, unknown> {
