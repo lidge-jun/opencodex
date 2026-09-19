@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createConnection, createServer as createTcpServer, type AddressInfo, type Server as TcpServer, type Socket } from "node:net";
+import { randomBytes } from "node:crypto";
 import { gzipSync, deflateSync } from "node:zlib";
 import { PinnedHttpError, pinnedHttpGet } from "../../src/lib/pinned-http";
 import { socks5Fetch } from "../../src/lib/socks5-fetch";
@@ -64,9 +65,11 @@ function socksProxy(): TcpServer {
 }
 
 /** A peer that answers one coded body and records the request head it was asked with. */
-function codedTarget(coding: string, payload: Uint8Array) {
+function codedTarget(coding: string, payload: Uint8Array, options?: { truncateAfter?: number }) {
   let requestText = "";
+  let connection: Socket | undefined;
   const server = createTcpServer(socket => {
+    connection = socket;
     socket.once("error", () => { /* the caller may reset this peer */ });
     let request = Buffer.alloc(0);
     socket.on("data", chunk => {
@@ -76,10 +79,31 @@ function codedTarget(coding: string, payload: Uint8Array) {
       const head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-encoding: "
         + coding
         + "\r\ncontent-length: " + payload.byteLength + "\r\n\r\n";
-      socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload)]));
+      const truncate = options?.truncateAfter;
+      if (truncate === undefined) {
+        socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload)]));
+        return;
+      }
+      // Announce the whole coded length, send a valid prefix of it, then vanish. The decoder
+      // sees a truncated stream; the caller's real problem is the connection.
+      socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload.subarray(0, truncate))]));
+      socket.destroy();
     });
   });
-  return { server, requestHead: () => requestText };
+  return { server, requestHead: () => requestText, connection: () => connection };
+}
+
+/**
+ * Wait for a socket to be observably destroyed, under a bounded deadline.
+ *
+ * The contract is that the transport releases the connection, not that it does so inside any
+ * particular window, so this waits for the state the contract promises rather than sleeping for
+ * a fixed time and asserting something about machine load.
+ */
+async function awaitDestroyed(socket: Socket | undefined, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (socket?.destroyed !== true && Date.now() < deadline) await Bun.sleep(5);
+  return socket?.destroyed === true;
 }
 
 function pinnedGet(port: number, path: string, options?: { maxBytes?: number; headers?: HeadersInit }): Promise<Response> {
@@ -188,6 +212,71 @@ describe("pinned direct content coding", () => {
       expect(error).toBeInstanceOf(PinnedHttpError);
       expect(error).toMatchObject({ code: "output_byte_limit" });
     } finally {
+      await close(target);
+    }
+  });
+
+  test("a reset during a valid coded body reports the transport failure, not a decode failure", async () => {
+    // The decoder sees a truncated stream either way, so this is the case where naming every
+    // pipeline failure a decode failure would tell the caller the peer sent unreadable bytes
+    // when what actually happened is that the connection died mid-body.
+    const gzipped = gzipSync(Buffer.from(JSON.stringify({ ok: true, note: "half sent" }), "utf8"));
+    const { server: target } = codedTarget("gzip", gzipped, { truncateAfter: Math.max(1, gzipped.byteLength - 4) });
+    const port = await listen(target);
+    try {
+      const response = await pinnedGet(port, "/reset");
+      const error = await response.text().catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toMatchObject({ code: "content_decode_failed" });
+    } finally {
+      await close(target);
+    }
+  });
+
+  test("cancelling a coded body propagates through the decoder and releases the peer", async () => {
+    const body = Buffer.alloc(256 * 1024, 0x62);
+    const { server: target, connection } = codedTarget("gzip", gzipSync(body));
+    const port = await listen(target);
+    try {
+      const response = await pinnedGet(port, "/cancel");
+      const reader = response.body!.getReader();
+      // A caller's own reason must travel the decode pipeline without the transport turning it
+      // into a failure of its own.
+      await reader.cancel(new Error("caller stopped reading"));
+      // Cancellation propagates through the decoder to the socket rather than stopping at it.
+      expect(await awaitDestroyed(connection())).toBe(true);
+    } finally {
+      connection()?.destroy();
+      await close(target);
+    }
+  });
+
+  test("the byte ceiling still binds the bytes that arrive, not only the decoded ones", async () => {
+    // Incompressible content keeps the coded length close to the decoded length, so a ceiling
+    // below both is the socket-side counter doing its original job. That counter predates this
+    // decode path and must keep working after it.
+    const incompressible = randomBytes(64 * 1024);
+    const { server: target } = codedTarget("gzip", gzipSync(incompressible));
+    const port = await listen(target);
+    try {
+      const response = await pinnedGet(port, "/incompressible", { maxBytes: 4 * 1024 });
+      const error = await response.text().catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(PinnedHttpError);
+      expect(error).toMatchObject({ code: "output_byte_limit" });
+    } finally {
+      await close(target);
+    }
+  });
+
+  test("a decoded response releases its connection once the body is consumed", async () => {
+    const { server: target, connection } = codedTarget("gzip", gzipSync(Buffer.from('{"ok":true}', "utf8")));
+    const port = await listen(target);
+    try {
+      const response = await pinnedGet(port, "/release");
+      expect(await response.json()).toEqual({ ok: true });
+      expect(await awaitDestroyed(connection())).toBe(true);
+    } finally {
+      connection()?.destroy();
       await close(target);
     }
   });

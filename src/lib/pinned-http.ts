@@ -43,8 +43,12 @@ export type PinnedHttpGetOptions = PinnedHttpRequestOptions;
  * a small compressed response expand past a ceiling the caller set precisely so it would not
  * have to hold an unbounded body in memory.
  *
- * A decoder failure is named here rather than surfaced as whatever the platform threw, because
- * the caller's alternative is a bare TypeError from a stream it never constructed.
+ * Only a decoder failure is renamed. A mid-body reset, a stalled response and an exceeded
+ * socket-byte ceiling all reach this pipeline as "the stream failed", and calling any of them a
+ * decode failure would tell the caller the peer sent unreadable bytes when the truth is that the
+ * connection died. The source failure is recorded as it passes so the original error survives;
+ * what is left after that is the decompressor's own, and that one is named because the caller's
+ * alternative is a bare TypeError from a stream it never constructed.
  */
 function decodedBody(
   source: ReadableStream<Uint8Array>,
@@ -53,13 +57,35 @@ function decodedBody(
   context: string,
   release: () => void,
 ): ReadableStream<Uint8Array> {
+  // Interposed purely to attribute failures. Once bytes enter the decompressor, a transport
+  // error and a corrupt trailer are indistinguishable from the far side of the pipe.
+  let sourceFailure: { error: unknown } | undefined;
+  const sourceReader = source.getReader();
+  const attributed = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await sourceReader.read();
+        if (next.done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (error) {
+        sourceFailure = { error };
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return sourceReader.cancel(reason);
+    },
+  });
   // `DecompressionStream` declares its writable side as `WritableStream<BufferSource>`, and
   // TypeScript measures `WritableStream` as invariant in its chunk type, so the pair is not
   // assignable to `ReadableWritablePair<Uint8Array, Uint8Array>` even though every chunk this
   // body produces is a valid `BufferSource`. The conversion states that relationship and
   // nothing else; it does not widen what is actually written.
   const decompressor = new DecompressionStream(format) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
-  const reader = source.pipeThrough(decompressor).getReader();
+  const reader = attributed.pipeThrough(decompressor).getReader();
   let decoded = 0;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
@@ -76,9 +102,13 @@ function decodedBody(
         }
         controller.enqueue(next.value);
       } catch (error) {
-        const named = error instanceof PinnedHttpError
-          ? error
-          : new PinnedHttpError("content_decode_failed", `${context} could not decode its ${format} body`);
+        // A failure the socket stream raised is the caller's answer, whatever shape it has.
+        // Only what the decompressor itself rejected is renamed.
+        const named = sourceFailure !== undefined
+          ? sourceFailure.error
+          : error instanceof PinnedHttpError
+            ? error
+            : new PinnedHttpError("content_decode_failed", `${context} could not decode its ${format} body`);
         // Cancelling the decoded reader propagates back through the decompressor to the socket
         // stream's own `cancel`, which destroys the request; `release` covers the case where
         // that propagation is already finished.
