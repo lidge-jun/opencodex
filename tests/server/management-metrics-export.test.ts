@@ -534,11 +534,12 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     saveConfig(runtimeConfig("openai-responses"));
     const server = startMetricsServer();
     try {
-      const response = await sendResponsesRequest(server);
-      await response.text().catch(() => "");
+      await expect(sendResponsesRequest(server)).rejects.toThrow();
       const metrics = await scrapeServer(server);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="failed"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(0);
+      expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
+      expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="failed"}')).toBe(1);
     } finally {
       await stopMetricsServer(server);
     }
@@ -546,6 +547,8 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
 
   test("terminal-free SSE EOF and downstream cancellation remain incomplete and aborted", async () => {
     const encoder = new TextEncoder();
+    let signalUpstreamCancel: (() => void) | undefined;
+    const upstreamCancelled = new Promise<void>(resolve => { signalUpstreamCancel = resolve; });
     installUpstream(originalFetch, send => {
       if (send === 1) {
         return new Response(responseSse(), { headers: { "content-type": "text/event-stream" } });
@@ -553,6 +556,9 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(encoder.encode(responseSse()));
+        },
+        cancel() {
+          signalUpstreamCancel?.();
         },
       }), { headers: { "content-type": "text/event-stream" } });
     });
@@ -563,6 +569,13 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       await incomplete.text();
       const cancelled = await sendResponsesRequest(server, true);
       await cancelled.body?.cancel("metrics cancellation test");
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("upstream cancellation was not observed")), 5_000);
+        void upstreamCancelled.then(() => {
+          clearTimeout(timeout);
+          resolve();
+        }, reject);
+      });
       const metrics = await scrapeServer(server);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="incomplete"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="aborted"}')).toBe(1);

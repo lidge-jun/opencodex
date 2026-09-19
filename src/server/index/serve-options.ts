@@ -1359,29 +1359,38 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         let logged = false;
         const finalizeNativePassthroughLog = (
           status: number,
-          meta: { terminalStatus?: ResponsesTerminalStatus; closeReason: "terminal" | "client_cancel" },
+          meta: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
         ) => {
           if (logged) return;
           logged = true;
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleResponses(req, config, logCtx, {
-            turnAdmissionLease,
-            admission,
-            onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
-            abortSignal: req.signal,
-            onFirstOutput: () => recordFirstOutput(logCtx, start),
-            onNativePassthroughTerminal: status => {
-              finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
-                terminalStatus: status,
-                closeReason: "terminal",
-              });
-            },
-            onNativePassthroughCancel: () => {
-              finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
-            },
-          });
+          let response: Response;
+          try {
+            response = await handleResponses(req, config, logCtx, {
+              turnAdmissionLease,
+              admission,
+              onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
+              abortSignal: req.signal,
+              onFirstOutput: () => recordFirstOutput(logCtx, start),
+              onNativePassthroughTerminal: status => {
+                finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
+                  terminalStatus: status,
+                  closeReason: "terminal",
+                });
+              },
+              onNativePassthroughCancel: () => {
+                finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
+              },
+            });
+          } catch (error) {
+            // A bounded upstream body can fail before handleResponses returns a client response.
+            // Finalize before rethrow so accounting observes the physical send while the caller
+            // retains the existing reset/rejection instead of receiving a synthesized response.
+            finalizeNativePassthroughLog(502, { closeReason: "non_stream" });
+            throw error;
+          }
           return withRequestLogId(
             withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy),
             requestId,
