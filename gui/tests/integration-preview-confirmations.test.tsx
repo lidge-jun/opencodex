@@ -269,6 +269,8 @@ test("restore preview can be cancelled and aborts a late read", async () => {
     ) : null;
   }
   await act(async () => { root?.render(<LanguageProvider><Harness /></LanguageProvider>); });
+  await waitFor(() => previewSignal !== undefined && resolvePreview !== undefined);
+  expect(previewSignal?.aborted).toBe(false);
   const cancel = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Cancel") as HTMLButtonElement;
   expect(cancel.disabled).toBe(false);
   await act(async () => { cancel.click(); });
