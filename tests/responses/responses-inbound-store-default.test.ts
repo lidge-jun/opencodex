@@ -70,7 +70,7 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
     const { urls, bodies } = captureUpstream();
     // Direct dispatch needs the writer lease to prevent spend-ledger ownership failures.
     releaseSpendHome = acquireOwnedSpendHome();
-    await handleResponses(
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -84,6 +84,10 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
       config,
       { model: "", provider: "" },
     );
+    // Every row here asks for a stream and then reads only the captured upstream REQUEST, so
+    // the turn's own body was left live. Draining it lets the parser, the completion callbacks
+    // and the lifetime cleanup finish before the teardown below hands back the writer lease.
+    await turn.text();
     let parsed: Record<string, unknown> | null = null;
     try { parsed = bodies[0] ? (JSON.parse(bodies[0]) as Record<string, unknown>) : null; } catch { parsed = null; }
     return { url: urls[0] ?? "", body: parsed };

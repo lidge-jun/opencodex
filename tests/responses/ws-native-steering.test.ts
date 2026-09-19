@@ -93,19 +93,25 @@ afterEach(async () => {
   // handler.close only STARTS the pump cancellation. Waiting for the socket to drop its stream
   // cancel and its native control is what proves the turn finished accounting; releasing the
   // lease before that leaves a reader settling against a journal nobody owns.
-  for (const client of clients.splice(0)) {
-    client.close();
-    await waitFor(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
+  //
+  // The rest runs even when that wait gives up, and the failure still propagates. A wait that
+  // expired is NOT evidence the turn settled: it means this fixture could not prove it, and the
+  // case should say so while still handing back the lease and the globals it replaced.
+  try {
+    for (const client of clients.splice(0)) {
+      client.close();
+      await waitFor(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
+    }
+  } finally {
+    for (const socket of Socket.all) socket.close();
+    Socket.all = [];
+    runOptionalShutdownHooks();
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.WebSocket = realSocket;
+    globalThis.fetch = realFetch;
+    for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }
   }
-  for (const socket of Socket.all) socket.close();
-  Socket.all = [];
-  runOptionalShutdownHooks();
-  // Released only once those have all settled.
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
-  globalThis.WebSocket = realSocket;
-  globalThis.fetch = realFetch;
-  for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }
 });
 
 test("configuration is explicit opt-in and malformed values fail closed", () => {
