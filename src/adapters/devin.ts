@@ -311,8 +311,9 @@ function assistantText(message: OcxAssistantMessage): string {
  * clients of the same service write #11 thinking with #12 signature and #18
  * signature_type on the assistant prompt.
  *
- * The signature attests the thinking it was produced with, so a block without
- * one contributes its text and nothing else rather than borrowing a neighbour's.
+ * The wire has room for only one thinking/signature pair. Preserve that
+ * association by replaying the last non-empty block as a unit rather than
+ * combining independently signed blocks.
  */
 function assistantThinking(
   message: OcxAssistantMessage,
@@ -320,14 +321,11 @@ function assistantThinking(
   const blocks = message.content.filter(
     (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
   );
-  if (blocks.length === 0) return {};
-  const thinking = blocks.map(b => b.thinking).filter(Boolean).join("\n");
-  // Only one signature can ride the prompt, so take the last block that has
-  // one: that is the block the turn actually ended on.
-  const signature = blocks.filter(b => b.signature).at(-1)?.signature;
+  const block = blocks.findLast(b => Boolean(b.thinking || b.signature));
+  if (!block) return {};
   return {
-    ...(thinking ? { thinking } : {}),
-    ...(signature ? { signature } : {}),
+    ...(block.thinking ? { thinking: block.thinking } : {}),
+    ...(block.signature ? { signature: block.signature } : {}),
   };
 }
 

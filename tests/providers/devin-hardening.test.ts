@@ -496,6 +496,32 @@ describe("devin reasoning replay", () => {
     expect(history.find(m => m.role === "assistant")?.thinking).toBe("only thought");
   });
 
+  test("multiple thinking blocks keep the final block's text and signature together", () => {
+    const history = mapOcxMessagesToDevin(parsedWith([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "first thought", signature: "sig-first" },
+          { type: "thinking", thinking: "final thought", signature: "sig-final" },
+        ],
+      },
+    ]));
+    expect(history[0]?.thinking).toBe("final thought");
+    expect(history[0]?.signature).toBe("sig-final");
+
+    const unsignedLast = mapOcxMessagesToDevin(parsedWith([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "signed thought", signature: "sig-signed" },
+          { type: "thinking", thinking: "unsigned thought" },
+        ],
+      },
+    ]));
+    expect(unsignedLast[0]?.thinking).toBe("unsigned thought");
+    expect(unsignedLast[0]?.signature).toBeUndefined();
+  });
+
   test("the encoded prompt carries thinking at #11 and its signature at #12", () => {
     const req = buildGetChatMessageRequestForTests({
       apiKey: "devin-session-token$x",

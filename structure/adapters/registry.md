@@ -52,6 +52,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   adapter accepts them on return. One tool's canonical identity can be another tool's advertised
   local name, and resolving that name to either owner would dispatch the call to a tool the caller
   may not have named, so it is treated as ambiguous and fails before dispatch too.
+  Assistant reasoning replay likewise follows the Cognition wire shape: because one history prompt
+  carries only one thinking/signature pair, the adapter selects the final non-empty thinking block
+  as a unit and never combines text from one block with another block's signature.
 
   There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
   `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's
