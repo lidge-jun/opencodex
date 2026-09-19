@@ -251,6 +251,21 @@ describe("resolved static model policy parity", () => {
     expect(policy.provenance.model.inputModalities).toBe("operator");
   });
 
+  test("registry exact key beats operator family with matching provenance", () => {
+    const modelId = "ModelA:variant";
+    const entry = registry({ modelInputModalities: { [modelId]: ["text", "image"] } });
+    const configured = provider({ modelInputModalities: { ModelA: ["audio"] } });
+    const policy = resolveModelPolicy({
+      providerName: entry.id,
+      modelId,
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+    });
+    expect(policy.model.inputModalities).toEqual(["text", "image"]);
+    expect(policy.provenance.model.inputModalities).toBe("registry");
+  });
+
   test("captured effective auth admits a usable key override without credential material", () => {
     const entry = PROVIDER_REGISTRY.find(candidate => (
       candidate.authKind === "oauth" && candidate.allowKeyAuthOverride === true

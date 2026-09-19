@@ -8,6 +8,7 @@ import {
   anthropicFamilyContextWindow,
   detachedClone,
   legacyModelValue,
+  legacyModelSource,
   mapFill,
   nestedMapFill,
   positiveCapMap,
@@ -263,9 +264,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   }
   const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined =>
     legacyModelValue(record, input.modelId);
-  const modelSource = <T>(operator: Readonly<Record<string, T>> | undefined, registry: Readonly<Record<string, T>> | undefined): StaticPolicySource => modelValue(operator) !== undefined
-    ? "operator"
-    : modelValue(registry) !== undefined ? "registry" : "unknown";
+  const modelSource = <T>(operator: Readonly<Record<string, T>> | undefined, registry: Readonly<Record<string, T>> | undefined): StaticPolicySource =>
+    legacyModelSource(operator, registry, input.modelId);
   const modelOrProviderSource = <T>(
     operatorMap: Readonly<Record<string, T>> | undefined, registryMap: Readonly<Record<string, T>> | undefined,
     operatorDefault: T | undefined, registryDefault: T | undefined,

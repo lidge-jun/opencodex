@@ -332,7 +332,8 @@ captured key authority; exact-model provenance comes from the merged key/registr
 back to the resolved provider capability provenance. A model max-input value is bounded by its
 resolved context window.
 Legacy model maps resolve exact id, then the base before a colon suffix, then case-folded exact id;
-the separately captured explicit capability row remains exact-only.
+the separately captured explicit capability row remains exact-only. Per-model provenance is assigned
+from the key that wins that same merged lookup, not from an independent source search.
 
 ## Provider validation ownership
 

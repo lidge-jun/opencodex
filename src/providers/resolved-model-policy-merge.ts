@@ -112,6 +112,27 @@ export function legacyModelValue<T>(record: Readonly<Record<string, T>> | undefi
   return Object.entries(record).find(([key]) => key.toLowerCase() === folded)?.[1];
 }
 
+/** Provenance from the same merged-key walk as legacyModelValue. */
+export function legacyModelSource<T>(
+  operator: Readonly<Record<string, T>> | undefined,
+  registry: Readonly<Record<string, T>> | undefined,
+  modelId: string,
+): StaticPolicySource {
+  const merged = { ...(registry ?? {}), ...(operator ?? {}) };
+  let winningKey: string | undefined;
+  if (Object.hasOwn(merged, modelId)) winningKey = modelId;
+  const colon = modelId.indexOf(":");
+  if (winningKey === undefined && colon > 0 && Object.hasOwn(merged, modelId.slice(0, colon))) {
+    winningKey = modelId.slice(0, colon);
+  }
+  if (winningKey === undefined) {
+    const folded = modelId.toLowerCase();
+    winningKey = Object.keys(merged).find(key => key.toLowerCase() === folded);
+  }
+  if (winningKey === undefined) return "unknown";
+  return Object.hasOwn(operator ?? {}, winningKey) ? "operator" : "registry";
+}
+
 export function anthropicFamilyContextWindow(
   record: Readonly<Record<string, number>> | undefined,
   id: string,
