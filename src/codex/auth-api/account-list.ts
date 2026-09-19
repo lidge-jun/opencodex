@@ -107,15 +107,15 @@ export function poolAccountDto(
   const runtimeReauth = isAccountNeedsReauth(account.id);
   const rawReauthReason: CodexAccountReauthReason | undefined = !hasCredential
     ? "missing_credential"
-    : quotaResult.reauthReason
-      ? quotaResult.reauthReason
-      : runtimeReauth
-        ? "refresh_failed"
-        : undefined;
+    : quotaResult.reauthReason;
   const needsReauth = !hasCredential || quotaResult.needsReauth || runtimeReauth;
+  // An in-memory reauth mark carries no cause of its own, so it must not name one: passing
+  // a caller reason here would outrank the stored verdict's http_status inside the
+  // projection and hide unauthorized/forbidden until the mark is gone. With no caller
+  // reason the projection falls back to the persisted cause, then to refresh_failed.
   const healthReason = rawReauthReason === "quota_unauthorized" || rawReauthReason === "missing_credential"
     ? "unauthorized"
-    : "refresh_failed";
+    : rawReauthReason;
   const health = projectCodexAccountHealth({
     accountId: account.id,
     needsReauth,
