@@ -509,5 +509,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
 
-Manual compaction selects its configured model at Responses ingress under the
-[manual compaction contract](transports/responses.md#manual-compaction-overrides). Catalog selection remains conversation-owned.
+Compaction routing selects its configured model at Responses ingress under the
+[compaction routing contract](transports/responses.md#compaction-routing-overrides). Catalog selection remains conversation-owned.

@@ -135,4 +135,4 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 Image-bearing Codex history follows the selected model's existing compaction handling after a
-[manual compaction override](../transports/responses.md#manual-compaction-overrides).
+[compaction routing override](../transports/responses.md#compaction-routing-overrides).

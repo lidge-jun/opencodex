@@ -4,14 +4,14 @@ import { Window } from "happy-dom";
 import { act, StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
-import ManualCompactionPanel from "../src/components/ManualCompactionPanel";
+import CompactionRoutingPanel from "../src/components/CompactionRoutingPanel";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "HTMLElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<string, PropertyDescriptor | undefined>;
 let win: Window;
 let root: Root | undefined;
 let container: HTMLDivElement;
-let setting: { model: string; reasoningEffort?: string } | null;
+let setting: { model: string; reasoningEffort?: string; triggers?: string[] } | null;
 let failLoad: boolean;
 let failSave: boolean;
 let writes: unknown[];
@@ -34,9 +34,9 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body));
       writes.push(body);
       if (failSave) return Response.json({ error: "fixture failure" }, { status: 500 });
-      setting = body.manualCompaction;
+      setting = body.compactionRouting;
     } else if (failLoad) return Response.json({ error: "unavailable" }, { status: 503 });
-    return Response.json({ manualCompaction: setting });
+    return Response.json({ compactionRouting: setting });
   } });
 });
 
@@ -56,11 +56,11 @@ async function render(base = "") {
     win.document.body.appendChild(container);
     root = (await import("react-dom/client")).createRoot(container);
   }
-  await act(async () => { root!.render(<StrictMode><LanguageProvider><ManualCompactionPanel apiBase={base} models={models} /></LanguageProvider></StrictMode>); });
+  await act(async () => { root!.render(<StrictMode><LanguageProvider><CompactionRoutingPanel apiBase={base} models={models} /></LanguageProvider></StrictMode>); });
   await flush();
 }
 async function choose(id: string, label: string) {
-  await act(async () => { container.querySelector<HTMLButtonElement>(`#manual-compaction-${id}`)!.click(); });
+  await act(async () => { container.querySelector<HTMLButtonElement>(`#compaction-routing-${id}`)!.click(); });
   const option = [...win.document.querySelectorAll('[role="option"]')].find(node => node.textContent === label);
   expect(option).toBeDefined();
   await act(async () => { (option as unknown as HTMLButtonElement).click(); });
@@ -74,17 +74,40 @@ test("saves model and optional effort, reloads, removes effort, and clears overr
   await choose("model", "gateway/cheap");
   await choose("effort", "Low");
   await save();
-  expect(writes).toEqual([{ manualCompaction: { model: "gateway/cheap", reasoningEffort: "low" } }]);
+  expect(writes).toEqual([{ compactionRouting: { model: "gateway/cheap", reasoningEffort: "low" } }]);
   expect(container.querySelector('[role="status"]')?.textContent).toBe("Compaction settings saved.");
   await render("/reloaded");
-  expect(container.querySelector('#manual-compaction-effort')?.textContent).toContain("Low");
+  expect(container.querySelector('#compaction-routing-effort')?.textContent).toContain("Low");
   await choose("effort", "Keep request effort");
   await save();
-  expect(writes.at(-1)).toEqual({ manualCompaction: { model: "gateway/cheap" } });
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap" } });
   await choose("model", "Use conversation model");
   await save();
-  expect(writes.at(-1)).toEqual({ manualCompaction: null });
-  expect(container.querySelector<HTMLButtonElement>('#manual-compaction-effort')!.disabled).toBe(true);
+  expect(writes.at(-1)).toEqual({ compactionRouting: null });
+  expect(container.querySelector<HTMLButtonElement>('#compaction-routing-effort')!.disabled).toBe(true);
+});
+
+test("the trigger selection round-trips and discloses automatic compaction", async () => {
+  await render();
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('#compaction-routing-triggers')?.textContent).toContain("Manual /compact only");
+  expect(container.textContent).not.toContain("Automatic compaction runs on its own");
+  await choose("triggers", "Manual and automatic");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", triggers: ["manual", "auto"] } });
+  expect(container.textContent).toContain("Automatic compaction runs on its own");
+  await render("/reloaded");
+  expect(container.querySelector('#compaction-routing-triggers')?.textContent).toContain("Manual and automatic");
+  await choose("triggers", "Automatic only");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", triggers: ["auto"] } });
+  // Manual-only is sent as an omitted `triggers`, so the default save keeps the payload the
+  // manual-only override already used.
+  await choose("triggers", "Manual /compact only");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap" } });
+  await choose("model", "Use conversation model");
+  expect(container.querySelector<HTMLButtonElement>('#compaction-routing-triggers')!.disabled).toBe(true);
 });
 
 test("failed save retains the draft and allows retry", async () => {
@@ -93,7 +116,7 @@ test("failed save retains the draft and allows retry", async () => {
   failSave = true;
   await save();
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not save");
-  expect(container.querySelector('#manual-compaction-model')?.textContent).toContain("gateway/cheap");
+  expect(container.querySelector('#compaction-routing-model')?.textContent).toContain("gateway/cheap");
   expect(saveButton().disabled).toBe(false);
   expect(setting).toBeNull();
   failSave = false;
@@ -105,16 +128,16 @@ test("failed load disables editing and retry recovers", async () => {
   failLoad = true;
   await render();
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not load");
-  expect(container.querySelector<HTMLButtonElement>('#manual-compaction-model')!.disabled).toBe(true);
+  expect(container.querySelector<HTMLButtonElement>('#compaction-routing-model')!.disabled).toBe(true);
   failLoad = false;
   await act(async () => { [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === "Retry")!.click(); });
-  expect(container.querySelector<HTMLButtonElement>('#manual-compaction-model')!.disabled).toBe(false);
+  expect(container.querySelector<HTMLButtonElement>('#compaction-routing-model')!.disabled).toBe(false);
 });
 
 test("retains a saved model missing from the current catalog", async () => {
   setting = { model: "gateway/retired", reasoningEffort: "high" };
   await render();
-  expect(container.querySelector('#manual-compaction-model')?.textContent).toContain("gateway/retired");
+  expect(container.querySelector('#compaction-routing-model')?.textContent).toContain("gateway/retired");
   expect(saveButton().disabled).toBe(true);
 });
 

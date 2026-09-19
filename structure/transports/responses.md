@@ -903,25 +903,36 @@ The [explicit model-capability contract](../config.md#explicit-per-model-capabil
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior. Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate. Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
-## Manual compaction overrides
+## Compaction routing overrides
 
-`src/server/responses/manual-compaction.ts` applies `manualCompaction` before model routing in
-both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"`
-and `compaction.trigger: "manual"` in `x-codex-turn-metadata`, supplied as a header or embedded
-in Responses `client_metadata`, and on `/v1/responses` a `compaction_trigger` input item as
-well, so metadata alone cannot move an ordinary turn. Every supplied metadata copy must agree;
-malformed, absent, automatic, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
+`src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
+both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
+`x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
+`/v1/responses` a `compaction_trigger` input item as well, so metadata alone cannot move an
+ordinary turn. Every supplied metadata copy must agree, both that the request is a compaction and
+on which trigger it carries; copies that name different triggers are rejected rather than reconciled.
+Malformed, absent, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
 only per-frame metadata; handshake headers can describe an earlier request.
+
+`compactionRouting.triggers` names the `compaction.trigger` values the override covers, drawn
+from Codex's own `manual` and `auto`. Omission means `["manual"]`, so a block that does not
+mention triggers routes manual `/compact` only and leaves automatic compaction exactly where it
+routes today. `["auto"]` or `["manual", "auto"]` is the opt-in for #5012: an automatic
+pre-sampling compaction on a routed thread otherwise stays bound to the canonical `openai`
+reservation in `routeCompactionModel`, because that reservation releases only when no enabled
+canonical `openai` provider exists (#2901), not when its quota is exhausted. A hand-edited
+`triggers` the schema would reject disables the whole block instead of widening it, so a
+malformed edit can never route more than it names.
 
 The override changes only the model and optional reasoning effort. Existing native forwarding,
 routed summaries, capability handling, and retry budgets remain authoritative; native compact
 still removes reasoning before sending. Internal handoffs carry the override record (with the
 conversation's source model) as a recursion guard so combo children and fallback attempts
-retain their selected targets. Manual overrides bypass shadow interception and conversation
+retain their selected targets. Overrides bypass shadow interception and conversation
 combo recall, and do not publish replacement combo/handoff recall. They never change the
-conversation's configured model or later automatic-compaction requests.
+conversation's configured model or any compaction request outside the configured triggers.
 
-`manualCompactionKeepsProviderIdentity` compares the source model's concrete route with the
+`compactionRoutingKeepsProviderIdentity` compares the source model's concrete route with the
 selected route (provider name, Codex account mode and namespace; combos on either side never
 match, and a bare source model the lane remembers as a combo target counts as a combo source,
 recorded as `sourceCombo` when the override is applied, and a configured combo target is recorded as
@@ -934,7 +945,7 @@ build both honor for canonical ChatGPT destinations. Native ciphertext is replay
 backend that minted it; the conversation model would otherwise resume with an omission marker
 in place of its history.
 
-`tests/responses/responses-manual-compaction.test.ts` covers trigger selection, config validation,
+`tests/responses/responses-compaction-override.test.ts` covers trigger selection, config validation,
 native and routed handlers, same-provider credential retention, cross-provider portable summaries
 and their replay, combo failover, and subsequent conversation settings.
 

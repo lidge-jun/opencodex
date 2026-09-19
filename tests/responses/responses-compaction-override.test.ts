@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { applyManualCompactionOverride } from "../../src/server/responses/manual-compaction";
+import { applyCompactionRoutingOverride } from "../../src/server/responses/compaction-routing";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
 import { decodeCompactionSummary, SUMMARY_PREFIX } from "../../src/responses/compaction";
 import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
-import { warnDegradedManualCompaction } from "../../src/config/load-degrade";
+import { warnDegradedCompactionRouting } from "../../src/config/load-degrade";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } from "../../src/server/responses/combo-session-recall";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
@@ -27,7 +27,7 @@ function config(): OcxConfig {
         baseUrl: "https://gateway.example/v1", apiKey: "fixture-key",
       },
     },
-    manualCompaction: { model: "gateway/cheap", reasoningEffort: "low" },
+    compactionRouting: { model: "gateway/cheap", reasoningEffort: "low" },
   };
 }
 
@@ -46,7 +46,7 @@ function request(value: unknown, trigger?: string, path = "responses"): Request 
   return new Request(`http://localhost/v1/${path}`, {
     method: "POST",
     headers: {
-      "content-type": "application/json", session_id: "manual-compaction-fixture",
+      "content-type": "application/json", session_id: "compaction-routing-fixture",
       ...(trigger ? { "x-codex-turn-metadata": metadata(trigger) } : {}),
     },
     body: JSON.stringify(value),
@@ -85,7 +85,7 @@ describe("manual compaction request selection", () => {
     const headers = new Headers();
     if (location !== "body") headers.set("x-codex-turn-metadata", metadata());
     if (location !== "header") input.client_metadata = { "x-codex-turn-metadata": metadata() };
-    expect(applyManualCompactionOverride(input, headers, config())).toEqual({ sourceModel: "gateway/normal" });
+    expect(applyCompactionRoutingOverride(input, headers, config())).toEqual({ sourceModel: "gateway/normal" });
     expect(input.model).toBe("gateway/cheap");
     expect(input.reasoning).toEqual({ effort: "low", summary: "auto" });
     expect(input.input).toEqual(history);
@@ -99,14 +99,14 @@ describe("manual compaction request selection", () => {
     const input = body();
     const before = structuredClone(input);
     const headers = new Headers(value === undefined ? {} : { "x-codex-turn-metadata": value });
-    expect(applyManualCompactionOverride(input, headers, config())).toBeNull();
+    expect(applyCompactionRoutingOverride(input, headers, config())).toBeNull();
     expect(input).toEqual(before);
   });
 
   test("conflicting metadata cannot override automatic compaction", () => {
     for (const [header, embedded] of [[metadata(), metadata("auto")], [metadata("auto"), metadata()], [metadata(), "{"], ["{", metadata()]]) {
       const input = { ...body(), client_metadata: { "x-codex-turn-metadata": embedded } };
-      expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": header! }), config())).toBeNull();
+      expect(applyCompactionRoutingOverride(input, new Headers({ "x-codex-turn-metadata": header! }), config())).toBeNull();
       expect(input.model).toBe("gateway/normal");
     }
   });
@@ -118,7 +118,7 @@ describe("manual compaction request selection", () => {
       const input = body();
       if (frame) input.client_metadata = { "x-codex-turn-metadata": metadata(frame) };
       const headers = new Headers({ "x-codex-turn-metadata": metadata(handshake) });
-      expect(applyManualCompactionOverride(input, headers, config(), { transport: "websocket" })).toEqual(expected ? { sourceModel: "gateway/normal" } : null);
+      expect(applyCompactionRoutingOverride(input, headers, config(), { transport: "websocket" })).toEqual(expected ? { sourceModel: "gateway/normal" } : null);
       expect(input.model).toBe(expected ? "gateway/cheap" : "gateway/normal");
     }
   });
@@ -126,18 +126,18 @@ describe("manual compaction request selection", () => {
   test("model-only configuration preserves the caller's reasoning", () => {
     const input = body();
     const settings = config();
-    settings.manualCompaction = { model: "gateway/cheap" };
-    expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toEqual({ sourceModel: "gateway/normal" });
+    settings.compactionRouting = { model: "gateway/cheap" };
+    expect(applyCompactionRoutingOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toEqual({ sourceModel: "gateway/normal" });
     expect(input.reasoning).toEqual({ effort: "high", summary: "auto" });
-    expect(settings.manualCompaction).toEqual({ model: "gateway/cheap" });
+    expect(settings.compactionRouting).toEqual({ model: "gateway/cheap" });
   });
 
   test("unset configuration preserves manual compaction", () => {
     const input = body();
     const before = structuredClone(input);
     const settings = config();
-    delete settings.manualCompaction;
-    expect(applyManualCompactionOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBeNull();
+    delete settings.compactionRouting;
+    expect(applyCompactionRoutingOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBeNull();
     expect(input).toEqual(before);
   });
 
@@ -145,10 +145,10 @@ describe("manual compaction request selection", () => {
     const input = body(false);
     const before = structuredClone(input);
     const headers = new Headers({ "x-codex-turn-metadata": metadata() });
-    expect(applyManualCompactionOverride(input, headers, config())).toBeNull();
-    expect(applyManualCompactionOverride(input, headers, config(), { endpoint: "responses" })).toBeNull();
+    expect(applyCompactionRoutingOverride(input, headers, config())).toBeNull();
+    expect(applyCompactionRoutingOverride(input, headers, config(), { endpoint: "responses" })).toBeNull();
     expect(input).toEqual(before);
-    expect(applyManualCompactionOverride(input, headers, config(), { endpoint: "compact" })).toEqual({ sourceModel: "gateway/normal" });
+    expect(applyCompactionRoutingOverride(input, headers, config(), { endpoint: "compact" })).toEqual({ sourceModel: "gateway/normal" });
     expect(input.model).toBe("gateway/cheap");
   });
 });
@@ -159,10 +159,10 @@ describe("manual compaction config", () => {
     expect(validateConfigCandidate(config()).ok).toBe(true);
     for (const value of [null, {}, [], "cheap", { model: " " }, { model: 42 },
       { model: "gateway/cheap", reasoningEffort: "invalid" }, { model: "gateway/cheap", typo: true }]) {
-      const raw = { ...config(), manualCompaction: value };
+      const raw = { ...config(), compactionRouting: value };
       expect(validateConfigCandidate(raw).ok).toBe(false);
       const loaded = configSchema.parse(raw);
-      expect(loaded.manualCompaction).toBeUndefined();
+      expect(loaded.compactionRouting).toBeUndefined();
       expect(loaded.providers).toEqual(config().providers);
     }
   });
@@ -172,14 +172,14 @@ describe("manual compaction config", () => {
     const original = console.warn;
     console.warn = (message: unknown) => { warnings.push(String(message)); };
     try {
-      const invalid = { ...config(), manualCompaction: { model: "gateway/cheap", reasoningEffort: "Low" } };
-      warnDegradedManualCompaction(invalid, configSchema.parse(invalid) as OcxConfig);
+      const invalid = { ...config(), compactionRouting: { model: "gateway/cheap", reasoningEffort: "Low" } };
+      warnDegradedCompactionRouting(invalid, configSchema.parse(invalid) as OcxConfig);
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("manualCompaction is invalid");
-      warnDegradedManualCompaction(config(), configSchema.parse(config()) as OcxConfig);
+      expect(warnings[0]).toContain("compactionRouting is invalid");
+      warnDegradedCompactionRouting(config(), configSchema.parse(config()) as OcxConfig);
       const absent = config();
-      delete absent.manualCompaction;
-      warnDegradedManualCompaction(absent, configSchema.parse(absent) as OcxConfig);
+      delete absent.compactionRouting;
+      warnDegradedCompactionRouting(absent, configSchema.parse(absent) as OcxConfig);
       expect(warnings).toHaveLength(1);
     } finally {
       console.warn = original;
@@ -250,7 +250,7 @@ describe("manual compaction reuses existing handlers", () => {
       adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
-    settings.manualCompaction = { model: "gpt-5.6-luna", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "gpt-5.6-luna", reasoningEffort: "low" };
     const input = body();
     input.model = "gpt-6-astra";
     input.stream = true;
@@ -281,7 +281,7 @@ describe("manual compaction reuses existing handlers", () => {
     settings.providers["openai-apikey"] = {
       adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
     };
-    settings.manualCompaction = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
     const calls: Array<{ url: string; body: Record<string, any> }> = [];
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       calls.push({ url: String(input), body: JSON.parse(String(init?.body)) });
@@ -302,7 +302,7 @@ describe("manual compaction reuses existing handlers", () => {
     settings.providers["openai-apikey"] = {
       adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
     };
-    settings.manualCompaction = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
     const calls: Array<{ url: string; body: Record<string, any> }> = [];
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(init?.body));
@@ -339,7 +339,7 @@ describe("manual compaction reuses existing handlers", () => {
       adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
-    settings.manualCompaction = { model: "gpt-5.6-luna", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "gpt-5.6-luna", reasoningEffort: "low" };
     const seen: Array<string | null> = [];
     globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       seen.push(new Headers(init?.headers).get("authorization"));
@@ -362,7 +362,7 @@ describe("manual compaction reuses existing handlers", () => {
       adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
-    settings.manualCompaction = { model: "gpt-5.6-luna", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "gpt-5.6-luna", reasoningEffort: "low" };
     const calls: Array<{ url: string; body: Record<string, any> }> = [];
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(init?.body));
@@ -409,7 +409,7 @@ describe("manual compaction reuses existing handlers", () => {
     settings.providers["openai-apikey"] = {
       adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", apiKey: "fixture-key",
     };
-    settings.manualCompaction = { model: "openai-apikey/gpt-5.6-luna" };
+    settings.compactionRouting = { model: "openai-apikey/gpt-5.6-luna" };
     const calls: string[] = [];
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(init?.body));
@@ -438,7 +438,7 @@ describe("manual compaction reuses existing handlers", () => {
       normal: { targets: [{ provider: "gateway", model: "normal" }] },
       compact: { strategy: "failover", targets: [{ provider: "gateway", model: "unavailable" }, { provider: "gateway", model: "cheap" }] },
     };
-    settings.manualCompaction = { model: "combo/compact", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "combo/compact", reasoningEffort: "low" };
     const req = request(body(version !== "v1"), "manual");
     const lane = sessionLaneIdFromRequest(req.headers);
     rememberComboForLane(lane, "normal", { provider: "gateway", model: "normal" }, "normal", captureConfigGeneration());
@@ -467,7 +467,7 @@ describe("manual compaction reuses existing handlers", () => {
     };
     settings.combos = { fast: { targets: [{ provider: "gateway", model: "normal" }] } };
     settings.defaultProvider = "openai-apikey";
-    settings.manualCompaction = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "openai-apikey/gpt-5.6-luna", reasoningEffort: "low" };
     const req = request({ ...body(false), model: "normal" }, "manual", "responses/compact");
     const lane = sessionLaneIdFromRequest(req.headers);
     rememberComboForLane(lane, "fast", { provider: "gateway", model: "normal" }, "normal", captureConfigGeneration());
@@ -493,7 +493,7 @@ describe("manual compaction reuses existing handlers", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
     };
     settings.combos = { compact: { targets: [{ provider: "openai", model: "gpt-5.6-luna" }] } };
-    settings.manualCompaction = { model: "combo/compact", reasoningEffort: "low" };
+    settings.compactionRouting = { model: "combo/compact", reasoningEffort: "low" };
     const calls: Array<{ url: string; input: string }> = [];
     globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(init?.body));
@@ -518,5 +518,81 @@ describe("manual compaction reuses existing handlers", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(calls[0]!.input).not.toContain("compaction_trigger");
+  });
+});
+
+describe("compaction routing triggers", () => {
+  test.each([
+    [undefined, "manual", true], [undefined, "auto", false],
+    [["manual"], "manual", true], [["manual"], "auto", false],
+    [["auto"], "auto", true], [["auto"], "manual", false],
+    [["manual", "auto"], "manual", true], [["manual", "auto"], "auto", true],
+  ] as const)("triggers %s and a %s request override: %s", (triggers, trigger, covered) => {
+    const input = body();
+    const settings = config();
+    settings.compactionRouting = { model: "gateway/cheap", ...(triggers ? { triggers: [...triggers] } : {}) };
+    const headers = new Headers({ "x-codex-turn-metadata": metadata(trigger) });
+    expect(applyCompactionRoutingOverride(input, headers, settings)).toEqual(covered ? { sourceModel: "gateway/normal" } : null);
+    expect(input.model).toBe(covered ? "gateway/cheap" : "gateway/normal");
+  });
+
+  test("copies naming different covered triggers are rejected rather than reconciled", () => {
+    const settings = config();
+    settings.compactionRouting = { model: "gateway/cheap", triggers: ["manual", "auto"] };
+    for (const [header, embedded] of [["manual", "auto"], ["auto", "manual"]] as const) {
+      const input = { ...body(), client_metadata: { "x-codex-turn-metadata": metadata(embedded) } };
+      expect(applyCompactionRoutingOverride(input, new Headers({ "x-codex-turn-metadata": metadata(header) }), settings)).toBeNull();
+      expect(input.model).toBe("gateway/normal");
+    }
+  });
+
+  // Each row is wrapped: `test.each` spreads an array row into arguments, so a bare `[]` would
+  // run the case with no value at all.
+  test.each([[[]], [["manual", "manual"]], [["nope"]], [["manual", "nope"]], ["manual"], [{}], [null]])(
+    "a triggers value the schema rejects disables the block instead of widening it: %s", value => {
+      const settings = config();
+      settings.compactionRouting = { model: "gateway/cheap", triggers: value as never };
+      for (const trigger of ["manual", "auto"]) {
+        const input = body();
+        expect(applyCompactionRoutingOverride(input, new Headers({ "x-codex-turn-metadata": metadata(trigger) }), settings)).toBeNull();
+        expect(input.model).toBe("gateway/normal");
+      }
+      const raw = { ...config(), compactionRouting: { model: "gateway/cheap", triggers: value } };
+      expect(validateConfigCandidate(raw).ok).toBe(false);
+      expect(configSchema.parse(raw).compactionRouting).toBeUndefined();
+    });
+
+  test("a named auto trigger is what releases the canonical OpenAI compaction reservation", async () => {
+    const settings = config();
+    // An enabled canonical provider is the condition #2901 left in place: a bare native
+    // compaction model stays reserved for it, and #5012 hit that while its quota was gone.
+    settings.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    settings.compactionRouting = { model: "gateway/cheap", triggers: ["auto"] };
+    const calls: Array<{ url: string; model: unknown }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body));
+      calls.push({ url: String(url), model: input.model });
+      return String(url).startsWith("https://gateway.example")
+        ? Response.json(completion())
+        : Response.json({ error: { message: "The usage limit has been reached.", code: "rate_limit_exceeded" } }, { status: 429 });
+    }) as typeof fetch;
+
+    const routed = await handleResponsesCompact(request({ ...body(false), model: "gpt-5.6-luna" }, "auto"), settings, { model: "", provider: "" });
+    expect(routed.status).toBe(200);
+    await routed.text();
+    expect(calls).not.toHaveLength(0);
+    expect(calls.every(call => call.url.startsWith("https://gateway.example"))).toBe(true);
+    expect(calls[0]!.model).toBe("cheap");
+
+    // Without the opt-in the same request keeps the reservation, which is the behavior every
+    // installation that does not configure this block must still get.
+    calls.length = 0;
+    delete settings.compactionRouting;
+    const reserved = await handleResponsesCompact(request({ ...body(false), model: "gpt-5.6-luna" }, "auto"), settings, { model: "", provider: "" });
+    await reserved.text();
+    expect(calls.some(call => call.url.startsWith("https://gateway.example"))).toBe(false);
   });
 });

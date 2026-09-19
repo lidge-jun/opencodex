@@ -1,12 +1,13 @@
 import type { OcxConfig } from "../../types";
 import { isDeclaredReasoningEffort } from "../../reasoning-effort";
+import { COMPACTION_TRIGGERS } from "../../config/schema/leaf-validators";
 import { routeConcreteModel, type RouteResult } from "../../router";
 import { resolveComboId } from "../../combos/identifiers";
 import { recallComboForLane } from "./combo-session-recall";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 
 /** `sourceModel` is the conversation's own selector before the rewrite. */
-export interface ManualCompactionOverride {
+export interface CompactionRoutingOverride {
   sourceModel: string;
   /** Combo the lane remembers for a bare `sourceModel` (#3891); the conversation resumes there, not on the bare route. */
   sourceCombo?: string;
@@ -20,24 +21,40 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-export interface ManualCompactionOverrideOptions {
+/**
+ * Triggers this override covers. Absent means manual only, which is the narrowest
+ * reading of the setting and leaves automatic compaction exactly as it routes today.
+ * A hand-edited value the schema would have rejected disables the override rather
+ * than widening it, so a malformed edit can never route more than it names.
+ */
+function configuredTriggers(value: unknown): readonly string[] | null {
+  if (value === undefined) return ["manual"];
+  if (!Array.isArray(value) || value.length === 0) return null;
+  if (!value.every(entry => typeof entry === "string" && (COMPACTION_TRIGGERS as readonly string[]).includes(entry))) return null;
+  if (new Set(value).size !== value.length) return null;
+  return value as readonly string[];
+}
+
+export interface CompactionRoutingOverrideOptions {
   /** `responses` requires a `compaction_trigger` input item; the native compact endpoint carries none. */
   endpoint?: "responses" | "compact";
   transport?: "websocket";
 }
 
-export function applyManualCompactionOverride(
+export function applyCompactionRoutingOverride(
   body: unknown,
   headers: Headers,
   config: OcxConfig,
-  options: ManualCompactionOverrideOptions = {},
-): ManualCompactionOverride | null {
-  const override = config.manualCompaction;
+  options: CompactionRoutingOverrideOptions = {},
+): CompactionRoutingOverride | null {
+  const override = config.compactionRouting;
   const raw = record(body);
   if (!raw || typeof raw.model !== "string" || !raw.model.trim()
     || typeof override?.model !== "string" || !override.model.trim()) return null;
   if (override.reasoningEffort !== undefined
     && (typeof override.reasoningEffort !== "string" || !isDeclaredReasoningEffort(override.reasoningEffort))) return null;
+  const triggers = configuredTriggers(override.triggers);
+  if (!triggers) return null;
   if (options.endpoint !== "compact"
     && !(Array.isArray(raw.input) && raw.input.some(item => record(item)?.type === "compaction_trigger"))) return null;
 
@@ -47,15 +64,23 @@ export function applyManualCompactionOverride(
   const client = record(raw.client_metadata);
   if (client && Object.hasOwn(client, "x-codex-turn-metadata")) metadata.push(client["x-codex-turn-metadata"]);
   if (metadata.length === 0) return null;
+  let trigger: string | undefined;
   for (const value of metadata) {
     if (typeof value !== "string") return null;
     try {
       const parsed = record(JSON.parse(value));
-      if (parsed?.request_kind !== "compaction" || record(parsed.compaction)?.trigger !== "manual") return null;
+      if (parsed?.request_kind !== "compaction") return null;
+      const carried = record(parsed.compaction)?.trigger;
+      if (typeof carried !== "string" || !triggers.includes(carried)) return null;
+      // Copies that name different triggers are not agreement, and picking either one would
+      // let a caller widen an override by disagreeing with itself.
+      if (trigger !== undefined && trigger !== carried) return null;
+      trigger = carried;
     } catch {
       return null;
     }
   }
+  if (trigger === undefined) return null;
 
   const sourceModel = raw.model;
   const sourceCombo = recallComboForLane(config, sessionLaneIdFromRequest(headers), sourceModel);
@@ -68,9 +93,9 @@ export function applyManualCompactionOverride(
 }
 
 /** Same provider identity keeps caller auth and may use native compact; its ciphertext replays only there. */
-export function manualCompactionKeepsProviderIdentity(
+export function compactionRoutingKeepsProviderIdentity(
   config: OcxConfig,
-  override: ManualCompactionOverride,
+  override: CompactionRoutingOverride,
   route: RouteResult,
 ): boolean {
   if (route.combo || override.sourceCombo || override.targetCombo || resolveComboId(config, override.sourceModel)) return false;

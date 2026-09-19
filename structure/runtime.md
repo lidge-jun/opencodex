@@ -474,4 +474,4 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Manual Codex compaction uses a request-local model override when configured; the
-[Responses compaction contract](transports/responses.md#manual-compaction-overrides) owns its trigger and replay boundaries.
+[Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.

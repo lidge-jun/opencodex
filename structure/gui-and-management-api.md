@@ -720,8 +720,8 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
-`manualCompaction` is a persisted configuration setting. Its model and optional effort follow the
-[Responses trigger contract](transports/responses.md#manual-compaction-overrides). Dashboard Overview
+`compactionRouting` is a persisted configuration setting. Its model and optional effort follow the
+[Responses trigger contract](transports/responses.md#compaction-routing-overrides). Dashboard Overview
 provides model and effort selectors with an explicit Save action, a standing note that the selected
 model's provider receives the entire conversation, and a warning naming that provider once a model
 is chosen; for a combo selector the warning lists the combo's target providers from `GET /api/combos`

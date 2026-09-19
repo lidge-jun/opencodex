@@ -219,4 +219,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
 
-A [manual compaction override](../transports/responses.md#manual-compaction-overrides) selects its target before adapter resolution and uses the existing registry factory.
+A [compaction routing override](../transports/responses.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.

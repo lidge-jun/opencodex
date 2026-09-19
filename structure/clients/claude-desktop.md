@@ -191,4 +191,4 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
-The [manual compaction override](../transports/responses.md#manual-compaction-overrides) is scoped to Codex Responses metadata and original Responses ingress; Claude Messages replay retains its own routing.
+The [compaction routing override](../transports/responses.md#compaction-routing-overrides) is scoped to Codex Responses metadata and original Responses ingress; Claude Messages replay retains its own routing.

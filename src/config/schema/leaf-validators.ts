@@ -44,9 +44,19 @@ export function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
-export const manualCompactionSchema = z.object({
+/**
+ * Codex labels every compaction turn with one of these in `compaction.trigger`
+ * (`CompactionTrigger` in codex-rs: manual `/compact` versus automatic compaction).
+ * The override selects which of them it applies to; omission means manual only.
+ */
+export const COMPACTION_TRIGGERS = ["manual", "auto"] as const;
+
+export const compactionRoutingSchema = z.object({
   model: z.string().trim().min(1),
   reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
+  triggers: z.array(z.enum(COMPACTION_TRIGGERS)).nonempty()
+    .refine(values => new Set(values).size === values.length, "triggers must not repeat a value")
+    .optional(),
 }).strict();
 
 /**

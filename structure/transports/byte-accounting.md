@@ -168,4 +168,4 @@ Schema size still determines traversal work and the cost of copying a changed br
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
-The [manual compaction override](responses.md#manual-compaction-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.
+The [compaction routing override](responses.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.

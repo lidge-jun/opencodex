@@ -616,9 +616,11 @@ export interface OcxConfig {
   subagentEffortCap?: string;
   /** Global model effort overrides, after provider model/wide pins; none means omission. */
   modelPinnedEfforts?: Record<string, string>;
-  manualCompaction?: {
+  compactionRouting?: {
     model: string;
     reasoningEffort?: string;
+    /** Compaction triggers this override covers; omission means `["manual"]`. */
+    triggers?: ("manual" | "auto")[];
   };
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids

@@ -880,29 +880,33 @@ describe("manual compaction settings", () => {
     const config = baseConfig();
     config.effortCap = "high";
     const originalProviders = structuredClone(config.providers);
-    expect((await (await getSettings(config))!.json()).manualCompaction).toBeNull();
+    expect((await (await getSettings(config))!.json()).compactionRouting).toBeNull();
     const setting = { model: "gateway/cheap", reasoningEffort: "low" };
-    const response = await putSettings(config, { manualCompaction: setting });
+    const response = await putSettings(config, { compactionRouting: setting });
     expect(response?.status).toBe(200);
-    expect((await response!.json()).manualCompaction).toEqual(setting);
-    expect(loadConfig().manualCompaction).toEqual(setting);
-    expect((await (await getSettings(config))!.json()).manualCompaction).toEqual(setting);
-    await putSettings(config, { manualCompaction: { model: "gateway/cheap" } });
-    expect(loadConfig().manualCompaction).toEqual({ model: "gateway/cheap" });
-    await putSettings(config, { manualCompaction: null });
-    expect(config.manualCompaction).toBeUndefined();
-    expect(loadConfig().manualCompaction).toBeUndefined();
+    expect((await response!.json()).compactionRouting).toEqual(setting);
+    expect(loadConfig().compactionRouting).toEqual(setting);
+    expect((await (await getSettings(config))!.json()).compactionRouting).toEqual(setting);
+    await putSettings(config, { compactionRouting: { model: "gateway/cheap" } });
+    expect(loadConfig().compactionRouting).toEqual({ model: "gateway/cheap" });
+    const automatic = { model: "gateway/cheap", triggers: ["manual", "auto"] };
+    expect((await putSettings(config, { compactionRouting: automatic }))?.status).toBe(200);
+    expect(loadConfig().compactionRouting).toEqual(automatic);
+    await putSettings(config, { compactionRouting: null });
+    expect(config.compactionRouting).toBeUndefined();
+    expect(loadConfig().compactionRouting).toBeUndefined();
     expect(config.effortCap).toBe("high");
     expect(config.providers).toEqual(originalProviders);
-    expect((await (await getSettings(config))!.json()).manualCompaction).toBeNull();
+    expect((await (await getSettings(config))!.json()).compactionRouting).toBeNull();
   });
 
   test("rejects malformed settings before any mutation", async () => {
     const config = baseConfig();
-    config.manualCompaction = { model: "gateway/cheap", reasoningEffort: "low" };
+    config.compactionRouting = { model: "gateway/cheap", reasoningEffort: "low" };
     const before = structuredClone(config);
-    for (const value of [false, [], {}, { model: " " }, { model: 2 }, { model: "m", reasoningEffort: "invalid" }, { model: "m", enabled: true }]) {
-      const response = await putSettings(config, { manualCompaction: value, streamMode: "eager-relay" });
+    for (const value of [false, [], {}, { model: " " }, { model: 2 }, { model: "m", reasoningEffort: "invalid" }, { model: "m", enabled: true },
+      { model: "m", triggers: [] }, { model: "m", triggers: ["nope"] }, { model: "m", triggers: ["manual", "manual"] }, { model: "m", triggers: "manual" }]) {
+      const response = await putSettings(config, { compactionRouting: value, streamMode: "eager-relay" });
       expect(response?.status).toBe(400);
       expect(config).toEqual(before);
     }
@@ -911,13 +915,13 @@ describe("manual compaction settings", () => {
   test("failed persistence restores the override and its deletion intent", async () => {
     const { projectConfigRebaseProvenance } = await import("../../src/config/rebase-provenance");
     const config = baseConfig();
-    config.manualCompaction = { model: "gateway/cheap", reasoningEffort: "low" };
+    config.compactionRouting = { model: "gateway/cheap", reasoningEffort: "low" };
     const before = projectConfigRebaseProvenance(config);
     const deps = { saveConfigPreservingClaudeCode() { throw new Error("fixture save failure"); } };
     for (const value of [null, { model: "gateway/other" }]) {
-      await expect(putSettings(config, { manualCompaction: value }, deps)).rejects.toThrow("fixture save failure");
+      await expect(putSettings(config, { compactionRouting: value }, deps)).rejects.toThrow("fixture save failure");
       expect(projectConfigRebaseProvenance(config)).toEqual(before);
-      expect(config.manualCompaction).toEqual({ model: "gateway/cheap", reasoningEffort: "low" });
+      expect(config.compactionRouting).toEqual({ model: "gateway/cheap", reasoningEffort: "low" });
     }
   });
 });

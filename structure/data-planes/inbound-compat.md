@@ -351,4 +351,4 @@ Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
-The [manual compaction override](../transports/responses.md#manual-compaction-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.
+The [compaction routing override](../transports/responses.md#compaction-routing-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.

@@ -189,5 +189,5 @@ Shared startup provider-id migration preserves the account binding between confi
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 Routed Grok compaction uses the existing adapter and summary contract after a same-provider
-[manual compaction model override](../transports/responses.md#manual-compaction-overrides); a
+[compaction routing model override](../transports/responses.md#compaction-routing-overrides); a
 cross-provider override runs the portable summarizer on the selected provider instead.
