@@ -71,6 +71,8 @@ function deleteCachedProvider(provider: string): number {
   cache.delete(provider);
   cacheBytes = Math.max(0, cacheBytes - entry.sizeBytes);
   if (oldestCachedProvider === provider) recomputeOldestCachedProvider();
+  // A removal changes this provider's content as surely as a publication does.
+  bumpProviderCacheRevision(provider);
   return entry.sizeBytes;
 }
 
@@ -178,6 +180,34 @@ export function isModelCacheGenerationCurrent(provider: string, generation: stri
 }
 
 /**
+ * How many times this provider's cached content has actually changed.
+ *
+ * Deliberately separate from the generation. A generation revokes an in-flight discovery's right
+ * to publish, so it advances on an authority clear and must not be repurposed: moving it on a
+ * successful publication would cancel writes that are still legitimate. This counts accepted
+ * publications and removals instead, which is what a reader holding a derived roster needs to
+ * know, and it advances on exactly the event a generation does not: a discovery that succeeded
+ * and changed the rows.
+ *
+ * Reading is passive. An unseen provider reads as `0` rather than seeding an entry, so observing
+ * one cannot alter what a later capture or publication sees.
+ */
+const providerCacheRevisions = new Map<string, number>();
+let globalContentRevision = 0;
+
+function bumpProviderCacheRevision(provider: string): void {
+  providerCacheRevisions.set(provider, (providerCacheRevisions.get(provider) ?? 0) + 1);
+}
+
+export function observeModelCacheRevision(provider: string): string {
+  // The global term covers a clear that empties the map wholesale, which per-provider counters
+  // cannot express: without it, wiping every entry and republishing identical-looking rows would
+  // read as unchanged. It also survives pruning, so a retired provider cannot come back with a
+  // counter that matches a roster built before it left.
+  return `${globalContentRevision}:${providerCacheRevisions.get(provider) ?? 0}`;
+}
+
+/**
  * Store a live result unless the cache was cleared while that asynchronous discovery was running.
  * The optional generation keeps existing direct cache writers unchanged while discovery callers can
  * prevent a previous OAuth account from repopulating the current account's cache.
@@ -200,6 +230,8 @@ export function setCached(
     oldestCachedAt = now;
   }
   enforceAppOwnedMemoryBudget();
+  // Published and accepted, so anything derived from this provider's rows is now out of date.
+  bumpProviderCacheRevision(provider);
   return true;
 }
 
@@ -220,6 +252,11 @@ export function clearModelCache(
   } else {
     if (revokesInFlightDiscovery) globalCacheGeneration += 1;
     cache.clear();
+    // A wholesale clear changes every provider's content at once, and clearing the map means no
+    // per-provider counter can record it. Advancing the global term retires every derived roster
+    // and lets the per-provider entries be dropped without an ABA on the way back.
+    globalContentRevision += 1;
+    providerCacheRevisions.clear();
     cacheBytes = 0;
     oldestCachedProvider = undefined;
     oldestCachedAt = null;
@@ -237,6 +274,7 @@ export function reconcileModelCacheProviders(
   const removedProviders = new Set<string>();
   const trackedProviders = new Set([
     ...providerCacheGenerations.keys(),
+    ...providerCacheRevisions.keys(),
     ...failureAt.keys(),
     ...discoveryStatus.keys(),
     ...liveModelCounts.keys(),
@@ -247,6 +285,10 @@ export function reconcileModelCacheProviders(
     if (validProviders.has(provider)) continue;
     if (!revokedRemovedProviderAuthority) {
       globalCacheGeneration += 1;
+      // Advanced BEFORE any revision entry is dropped, so a provider that comes back cannot
+      // present the counter a roster was built against. Without this the delete below is an ABA:
+      // the entry returns at zero and an old stamp matches again.
+      globalContentRevision += 1;
       revokedRemovedProviderAuthority = true;
     }
     providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
@@ -255,6 +297,11 @@ export function reconcileModelCacheProviders(
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
+    // AFTER the cache deletion, which bumps this provider's revision and would otherwise recreate
+    // the entry we just removed. Dropped rather than left behind: a provider the configuration no
+    // longer has must not keep an entry alive for the life of the process merely because nothing
+    // cleared the whole cache. The global epoch advanced above, so the removal is not an ABA.
+    providerCacheRevisions.delete(provider);
     removedProviders.add(provider);
   }
   lastReconciledGeneration = generation;

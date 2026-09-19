@@ -1,6 +1,6 @@
 import { loadConfig } from "../../src/config";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -13,6 +13,7 @@ import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { loadExportModels, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
 
 let root: string;
 let home: string;
@@ -57,6 +58,26 @@ afterEach(() => {
 });
 
 function path(id: number): string { return join(home, ".aside", "u", String(id), "models.json"); }
+
+/** Whole-tree content, so an appended journal row or replaced snapshot cannot hide. */
+function treeWitness(dir: string): string {
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir, { recursive: true })
+    .map(entry => String(entry))
+    .sort()
+    .map(entry => {
+      const full = join(dir, entry);
+      if (!existsSync(full) || statSync(full).isDirectory()) return `${entry}/`;
+      return `${entry}:${readFileSync(full, "utf8")}`;
+    })
+    .join("\u0000");
+}
+
+/** A preview only answers from a roster an authoritative load already finished. */
+async function seedRoster(): Promise<void> {
+  resetExportSnapshotForTests();
+  await loadExportModels(config, []);
+}
 function document(id: number) { return JSON.parse(readFileSync(path(id), "utf8")); }
 async function api(pathname: string, method = "GET", body?: unknown) {
   return rawApi(pathname, method, body === undefined ? undefined : JSON.stringify(body));
@@ -194,6 +215,127 @@ test("profile history and Undo cannot recreate an undone enable on the next sync
   await api("/api/selected-models", "PUT", { provider: "fixture", models: ["one"] });
   expect(document(2).providers.opencodex).toBeUndefined();
   expect(document(0).providers.opencodex).toBeUndefined();
+});
+
+test("profile zero can be planned; it is a real profile, not an absent one", async () => {
+  await seedRoster();
+  const response = await api("/api/client-integrations/aside/profiles/0/preview", "POST", { operation: "apply" });
+  expect(response.status).toBe(200);
+  const plan = await response.json() as { canApply: boolean; profileId?: number; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+  expect(plan.profileId).toBe(0);
+  // A plan names places, never the profile's location.
+  expect(JSON.stringify(plan)).not.toContain(home);
+});
+
+test("a previewed profile change commits once and then reports itself stale", async () => {
+  await seedRoster();
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "apply" });
+  expect(preview.status).toBe(200);
+  const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+  expect(plan.canApply).toBe(true);
+
+  const commit = await api("/api/client-integrations/aside/profiles/1", "PUT", {
+    enabled: true, operation: "apply", planFingerprint: plan.fingerprint,
+  });
+  expect(commit.status).toBe(200);
+  expect(document(1).providers.opencodex).toBeDefined();
+  const committed = readFileSync(path(1), "utf8");
+
+  // Replaying the same confirmation describes a profile that is no longer in that state. Without
+  // a real comparison this would apply a second time.
+  const replay = await api("/api/client-integrations/aside/profiles/1", "PUT", {
+    enabled: true, operation: "apply", planFingerprint: plan.fingerprint,
+  });
+  expect(replay.status).toBe(409);
+  expect((await replay.json() as { code: string }).code).toBe("integration_preview_stale");
+  expect(readFileSync(path(1), "utf8")).toBe(committed);
+  // The refusal must not touch a sibling profile either.
+  expect(document(2).providers.opencodex).toBeUndefined();
+});
+
+test("a stale profile confirmation is refused before the preference is written", async () => {
+  await seedRoster();
+  const preview = await api("/api/client-integrations/aside/profiles/2/preview", "POST", { operation: "apply" });
+  const plan = await preview.json() as { fingerprint: string };
+  const before = readFileSync(path(2), "utf8");
+  const homeBefore = treeWitness(join(home, ".aside"));
+  const storeBefore = treeWitness(join(root, "store"));
+
+  const response = await api("/api/client-integrations/aside/profiles/2", "PUT", {
+    enabled: true, operation: "apply", planFingerprint: `${plan.fingerprint}-not-current`,
+  });
+  expect(response.status).toBe(409);
+  expect((await response.json() as { code: string }).code).toBe("integration_preview_stale");
+  expect(readFileSync(path(2), "utf8")).toBe(before);
+  // Ownership records, snapshots and journal rows live in the store, and an Aside import writes
+  // history before any writer runs, so the target file alone would not see either of them.
+  expect(treeWitness(join(home, ".aside"))).toBe(homeBefore);
+  expect(treeWitness(join(root, "store"))).toBe(storeBefore);
+  // Aside persists its preference before any writer runs, so a check that fired later would have
+  // saved this already.
+  expect(saved).toBeUndefined();
+});
+
+test("a bound undo follows the copy resolution actually chose", async () => {
+  await seedRoster();
+  const original = readFileSync(path(1), "utf8");
+  const applied = await api("/api/client-integrations/aside/profiles/1", "PUT", { enabled: true });
+  expect(applied.status).toBe(200);
+  expect(document(1).providers.opencodex).toBeDefined();
+
+  const profileStore = join(root, "store", "aside-profiles", "1");
+  const rows = readFileSync(join(profileStore, "journal.jsonl"), "utf8");
+  const opId = JSON.parse(rows.trim().split("\n")[0] ?? "{}").opId as string;
+  expect(typeof opId).toBe("string");
+
+  /*
+   * The same operation can live in more than one store with different retention. Resolution
+   * prefers the copy whose snapshot still exists, so putting a stored copy in the root store and
+   * expiring the profile's own forces it to choose the alternate. If a preview and the mutation
+   * resolved independently they could pick different copies, and the confirmation would then
+   * describe an operation other than the one that runs.
+   */
+  writeFileSync(join(root, "store", "journal.jsonl"), rows);
+  const snapshotName = join("snapshots", "aside", opId);
+  mkdirSync(join(root, "store", "snapshots", "aside"), { recursive: true });
+  writeFileSync(join(root, "store", snapshotName), readFileSync(join(profileStore, snapshotName), "utf8"));
+  rmSync(join(profileStore, snapshotName));
+
+  const siblingBefore = treeWitness(join(root, "store", "aside-profiles", "2"));
+  const sibling2Before = readFileSync(path(2), "utf8");
+  const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "restore", opId });
+  expect(preview.status).toBe(200);
+  const plan = await preview.json() as { canApply: boolean; fingerprint: string; profileId?: number };
+  expect(plan.canApply).toBe(true);
+  expect(plan.profileId).toBe(1);
+
+  const undo = await api("/api/client-integrations/aside/profiles/1/restore", "POST", {
+    opId, operation: "restore", planFingerprint: plan.fingerprint,
+  });
+  expect(undo.status).toBe(200);
+  const result = await undo.json() as { ok: boolean; changed: boolean; clientId: string; profileId: number; opId: string };
+  expect(result).toMatchObject({ ok: true, changed: true, clientId: "aside", profileId: 1 });
+  expect(typeof result.opId).toBe("string");
+
+  // Restored from the copy that was chosen, byte for byte.
+  expect(readFileSync(path(1), "utf8")).toBe(original);
+
+  // The undo is journalled in the profile's own store as a restore row, rather than inferred from
+  // a substring of two files concatenated together.
+  const profileRows = readFileSync(join(profileStore, "journal.jsonl"), "utf8")
+    .trim().split("\n").map(line => JSON.parse(line) as { kind: string; opId: string });
+  expect(profileRows.filter(row => row.kind === "restore")).toEqual([
+    expect.objectContaining({ kind: "restore", opId: result.opId }),
+  ]);
+  expect(profileRows.some(row => row.opId === opId)).toBe(true);
+
+  // The copy resolution chose is not rewritten, and the sibling profile is untouched in both its
+  // document and its store.
+  expect(readFileSync(join(root, "store", "journal.jsonl"), "utf8")).toBe(rows);
+  expect(readFileSync(join(root, "store", snapshotName), "utf8")).toBe(original);
+  expect(readFileSync(path(2), "utf8")).toBe(sibling2Before);
+  expect(treeWitness(join(root, "store", "aside-profiles", "2"))).toBe(siblingBefore);
 });
 
 test.each(["../0", "01", "-1", "9007199254740992"])("rejects invalid profile %s before file mutation", async id => {

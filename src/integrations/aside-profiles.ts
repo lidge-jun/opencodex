@@ -2,6 +2,8 @@ import type { AsideProfile } from "../clients/aside-profiles";
 import { asideHomeDir } from "../clients/config-export";
 import { join } from "node:path";
 import type { OwnedIntegrationRefreshOutcome } from "./owned-refresh";
+import type { JournalEntry } from "./journal";
+import type { IntegrationStateStore } from "./store";
 import { readIntegrationState, type IntegrationState, type IntegrationStatus } from "./state";
 import {
   applyIntegrationCoordinated, disableIntegrationCoordinated,
@@ -12,9 +14,51 @@ import {
   asideRootStore, createAsideProfileContext, persistAsidePolicy, runAsideProfileAction, selectAsideProfiles,
   type AsideProfileContext, type AsideProfilesInput, type AsideProfileWriteOutcome,
 } from "./aside-profile-context";
+import { AsideProfileError as AsideProfileErrorClass } from "./aside-profile-context";
+import {
+  previewIntegration,
+  type IntegrationMutationPlan,
+  type IntegrationPlanOperation,
+} from "./mutation-plan";
 
 export { AsideProfileError } from "./aside-profile-context";
 export type { AsideProfilesInput, AsideProfileWriteOutcome } from "./aside-profile-context";
+
+/**
+ * Plan one profile's change without performing it.
+ *
+ * A profile is the unit here because a fingerprint can only honestly describe one independently
+ * changing file. The scope this builds is the same scope the mutation will use — that profile's
+ * store, IO and resolved path pair — so the plan describes the thing that would actually happen
+ * rather than an approximation of it.
+ *
+ * The roster comes from whatever the caller injected, so a preview inherits the caller's no-gather
+ * guarantee instead of reaching for a second source of models.
+ */
+export async function previewAsideProfile(
+  input: AsideProfilesInput,
+  request: {
+    profileId: number;
+    operation: IntegrationPlanOperation;
+    opId?: string;
+    confirmDrift?: boolean;
+    /** The row and store the route already selected; re-resolving could pick a different copy. */
+    resolved?: { entry: JournalEntry; store: IntegrationStateStore };
+  },
+): Promise<IntegrationMutationPlan> {
+  const ctx = createAsideProfileContext(input);
+  const profile = selectAsideProfiles(ctx, request.profileId)[0];
+  if (!profile) throw new AsideProfileErrorClass("aside_profile_not_found", 404, "That Aside profile is not available");
+  const scope = asideProfileScope(ctx, profile);
+  const bound = await asideWriteInput(ctx, scope);
+  return previewIntegration(bound, {
+    operation: request.operation,
+    profileId: request.profileId,
+    ...(request.opId === undefined ? {} : { opId: request.opId }),
+    ...(request.confirmDrift === undefined ? {} : { confirmDrift: request.confirmDrift }),
+    ...(request.resolved === undefined ? {} : { resolved: request.resolved }),
+  });
+}
 
 export interface AsideProfileState extends IntegrationStatus {
   profileId: number;
@@ -104,12 +148,32 @@ export async function getAsideProfileState(input: AsideProfilesInput, id: number
 export function mutateAsideProfiles(
   input: AsideProfilesInput,
   change: { enabled: boolean; profileId?: number; overwriteConflict?: boolean },
+  options?: { revalidate?: () => Promise<AsideProfileWriteOutcome | null> },
 ): Promise<AsideProfileMutationResult> {
   return runAsideProfileAction<AsideProfileMutationResult>(input, change.profileId, `${change.enabled ? "enable" : "disable"}:${Boolean(change.overwriteConflict)}`, async (ctx, profiles) => {
     const refused = new Map<number, AsideProfileWriteOutcome>();
     for (const profile of profiles) {
       try { asideProfileScope(ctx, profile); }
       catch (error) { refused.set(profile.id, asideProfileFailure(profile.id, error)); }
+    }
+    /*
+     * A confirmation is checked HERE, not under the writer lock.
+     *
+     * The await below persists the user's Aside preference before any writer runs, so a check
+     * that waited for the lock would fire after the thing it was meant to prevent. Profile and
+     * path selection is frozen by this point, which is everything the check needs.
+     */
+    const stale = await options?.revalidate?.();
+    if (stale) {
+      return {
+        ok: false,
+        clientId: "aside",
+        changed: false,
+        state: "conflict",
+        message: "that confirmation no longer describes this profile",
+        results: [stale],
+        result: stale,
+      };
     }
     // This await precedes model loading, writer preflight, snapshots and all client writes.
     await persistAsidePolicy(ctx, change);

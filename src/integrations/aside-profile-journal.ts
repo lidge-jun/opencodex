@@ -167,10 +167,20 @@ function importOperation(row: AsideOperation, scope: AsideProfileScope): void {
 
 export function restoreAsideProfile(
   input: AsideProfilesInput,
-  request: { opId: string; profileId?: number; confirmDrift?: boolean },
+  request: {
+    opId: string;
+    profileId?: number;
+    confirmDrift?: boolean;
+    /**
+     * The row a caller already selected. Aside can hold more than one valid copy, so resolving
+     * again here could act on a different one than the plan the operator confirmed described.
+     */
+    selectedOperation?: AsideOperation;
+  },
+  options?: { revalidate?: () => Promise<AsideProfileWriteOutcome | null> },
 ): Promise<AsideProfileWriteOutcome> {
   return runAsideProfileAction<AsideProfileWriteOutcome>(input, request.profileId, `restore:${request.opId}:${Boolean(request.confirmDrift)}`, async ctx => {
-    const row = requiredOperation(ctx, request.opId, request.profileId);
+    const row = request.selectedOperation ?? requiredOperation(ctx, request.opId, request.profileId);
     const profile = selectAsideProfiles(ctx, row.profileId)[0]!;
     const scope = asideProfileScope(ctx, profile);
     assertAsideSnapshotEntry(row.entry);
@@ -188,6 +198,14 @@ export function restoreAsideProfile(
       return { clientId: "aside", profileId: profile.id, ok: false, reason: "drift_requires_confirm", state: "conflict", message: "This profile changed after that operation; confirm to replace it" };
     }
     const restoredText = snapshot.kind === "stored" ? snapshot.text : null;
+    /*
+     * Checked before the preference write and before importOperation, which captures a snapshot
+     * and appends a journal row. Both happen ahead of the coordinated restore, so a confirmation
+     * checked under the writer lock would already have rewritten the user's preference and their
+     * history by the time it was consulted.
+     */
+    const stale = await options?.revalidate?.();
+    if (stale) return stale;
     await persistAsidePolicy(ctx, { profileId: profile.id, enabled: snapshotWasOwned(row.entry, restoredText, bound) });
     try {
       scope.assertBoundary();
