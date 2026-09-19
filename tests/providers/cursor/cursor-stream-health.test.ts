@@ -197,6 +197,66 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
     });
   }, 15_000);
 
+  test("the silence deadline wins when it is the earlier of the two", async () => {
+    // The case above proves a genuine stall fails the turn on real timers; it cannot prove WHICH
+    // deadline did it, because a longer one arriving later still produces the same message inside
+    // the case timeout. That distinction is the `min(silence, progress)` rule, and dropping it
+    // would relax production silence detection from 30s to 90s while every real-timer case stayed
+    // green. Virtual time pins it: the turn must fail exactly at S, with nothing left armed.
+    const virtualSilenceMs = 1_000;
+    const virtualHeartbeatOnlyMs = 10 * virtualSilenceMs;
+    const timing = manualStreamHealthClock();
+    const connected = Promise.withResolvers<http2.ServerHttp2Stream>();
+    let armedBeforeDeadline: number | undefined;
+    let armedAtDeadline: number | undefined;
+    let failure: Error | undefined;
+    await withH2Server(stream => {
+      stream.on("error", () => {});
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      connected.resolve(stream);
+    }, async baseUrl => {
+      const transport = createLiveCursorTransport({
+        provider: { adapter: "cursor", baseUrl, apiKey: "test-token" },
+        translatorBudget: createTestTranslatorBudget(),
+        firstFrameTimeoutMs: watchdogMs(15_000),
+        streamSilenceFailMs: virtualSilenceMs,
+        streamHeartbeatOnlyFailMs: virtualHeartbeatOnlyMs,
+        streamHealthClock: timing.clock,
+      });
+      const iterator = transport.run(runRequest())[Symbol.asyncIterator]();
+      try {
+        const opened = iterator.next();
+        const server = await connected.promise;
+        server.write(Buffer.from(textDeltaFrame("hi")));
+        let first = await opened;
+        while (!first.done && first.value.type !== "text") first = await iterator.next();
+        if (first.done) throw new Error("stream ended before the first text arrived");
+        // then: silence. One frame stamped both clocks, so S is strictly the earlier deadline.
+        timing.advanceTo(virtualSilenceMs - 1);
+        armedBeforeDeadline = timing.armed();
+        timing.advanceTo(virtualSilenceMs);
+        armedAtDeadline = timing.armed();
+        // Cross the progress deadline too, so a watchdog that ignored S reports itself instead of
+        // leaving this case to hang to its own timeout.
+        timing.advanceTo(virtualHeartbeatOnlyMs + 1);
+        for (;;) {
+          const result = await iterator.next();
+          if (result.done) break;
+        }
+      } catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        await transport.close?.();
+      }
+    });
+    expect(failure).toBeDefined();
+    expect(failure!.message).toContain("no inbound frames");
+    expect(failure!.message).not.toContain("heartbeat-only");
+    // Armed one tick before S and gone at S: the deadline was S, not the progress budget.
+    expect(armedBeforeDeadline).toBe(1);
+    expect(armedAtDeadline).toBe(0);
+  }, caseTimeoutMs);
+
   test("liveness-only traffic keeps the silence clock fresh and still fails at the heartbeat-only threshold", async () => {
     // Which clock expires is the contract. Stating it against real timers also states that a real
     // interval outran a real deadline: the case had to keep liveness frames arriving with no gap
@@ -289,6 +349,28 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
     expect(armedAfterLiveness).toEqual([1, 1]);
     expect(messages.some(message => message.type === "heartbeat")).toBe(true);
   }, caseTimeoutMs);
+
+  test("the progress clock fires on real timers when the silence budget is out of reach", async () => {
+    // The firing half needs no seam. With a silence budget two orders of magnitude beyond the
+    // progress budget, the only deadline in reach is the progress one, so load can make this case
+    // later but never wrong — and the production default clock (Date.now plus the global timers)
+    // stays on the heartbeat-only path. What this pins is that the progress budget alone can fail a
+    // turn through that clock, and that the reported branch is selected by which budget was crossed
+    // rather than by whether liveness frames were seen. What it cannot state is stated under the
+    // injected clock above: that the deadline is the minimum of both clocks, and that liveness
+    // frames refresh the silence clock. Both of those are "a deadline did not expire" claims.
+    await withH2Server(stream => {
+      stream.on("error", () => {});
+      stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
+      stream.write(Buffer.from(textDeltaFrame("hi")));
+      // then: silence — never end the stream
+    }, async baseUrl => {
+      const { failure } = await drain(baseUrl, { streamSilenceFailMs: 60_000, streamHeartbeatOnlyFailMs: 600 });
+      expect(failure).toBeDefined();
+      expect(failure!.message).toContain("heartbeat-only");
+      expect(failure!.message).not.toContain("no inbound frames");
+    });
+  }, 15_000);
 
   test("meaningful frames keep resetting both clocks; turnEnded finishes cleanly", async () => {
     // Virtual budgets: nothing here is scaled for CI, because no real interval has to beat them.

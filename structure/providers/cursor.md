@@ -240,7 +240,13 @@ The seam exists because the re-arming half of the contract cannot be stated agai
 timers without also asserting that the machine keeps up: showing that a deadline did NOT expire
 means keeping a synthetic server ahead of the silence budget for several multiples of it, which
 is what failed in the unsharded macOS lane while the watchdog was correct. Scaling the budget
-lengthens the window rather than shrinking the exposure. The firing half needs no seam and is
-still covered on real timers in `tests/providers/cursor/cursor-stream-health.test.ts`: silence
-after the first frame, heartbeat-only traffic reaching the progress threshold, and `turnEnded`
-cancelling the watchdog while the server holds the stream open.
+lengthens the window rather than shrinking the exposure. Every claim of that shape therefore lives
+under the seam in `tests/providers/cursor/cursor-stream-health.test.ts`: that meaningful frames
+re-arm both clocks, that liveness-only frames refresh the silence clock while the progress clock
+still expires, and that the silence deadline is the one that fires when it is the earlier of the
+two. That last one is load-bearing: a watchdog that dropped the `min()` and read only the progress
+deadline would relax silence detection from 30s to 90s while every real-timer case stayed green,
+because a later deadline still produces the same message. The firing half needs no seam and stays
+on real timers in the same file: silence after the first frame, the progress budget alone failing a
+turn when the silence budget is out of reach, and `turnEnded` cancelling the watchdog while the
+server holds the stream open.
