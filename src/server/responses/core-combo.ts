@@ -464,6 +464,7 @@ export async function executeComboResponses(
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
+      ...(logCtx.requestStartedAt !== undefined ? { requestStartedAt: logCtx.requestStartedAt } : {}),
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };

@@ -18,6 +18,7 @@ import {
   getRequestLogEntries,
   hydrateRequestLogsFromDisk,
   noteAttemptSend,
+  noteStreamTimelineEvent,
   recordAdapterReasoning,
   recordFirstOutput,
   requestLogEntryFromPersistedUsage,
@@ -29,18 +30,22 @@ import {
 } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
 import { bridgeToResponsesSSE } from "../../src/bridge";
+import { createSseInspector } from "../../src/server/relay";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../src/types";
 import {
   appendUsageEntry,
   normalizeUsageEntryForTest,
   readUsageEntries,
   resetUsageReadCacheForTests,
+  usageLogPath,
   type PersistedUsageEntry,
 } from "../../src/usage/log";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -541,6 +546,131 @@ describe("request log metadata", () => {
       resetUsageReadCacheForTests();
       removeTreeWithRetry(home);
     }
+  });
+
+  test("the direct addRequestLog ingress normalizes nested attempt diagnostics", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-diagnostic-ingress-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      addRequestLog({
+        requestId: "ocx-diagnostic-direct",
+        timestamp: Date.now(),
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        status: 502,
+        durationMs: 10,
+        usageStatus: "unreported",
+        transportPhase: "password=super-secret-pw" as never,
+        terminalSource: "api-key=supersecret12345" as never,
+        attempts: [{
+          ordinal: 1,
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          adapter: "anthropic",
+          status: 502,
+          durationMs: 10,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "unreported",
+          transportPhase: "password=super-secret-pw" as never,
+          terminalSource: "api-key=supersecret12345" as never,
+        }],
+      });
+
+      const inMemory = getRequestLogEntries()[0]?.attempts?.[0];
+      const inMemoryEntry = getRequestLogEntries()[0];
+      expect(inMemoryEntry?.transportPhase).toBeUndefined();
+      expect(inMemoryEntry?.terminalSource).toBeUndefined();
+      expect(inMemory?.transportPhase).toBeUndefined();
+      expect(inMemory?.terminalSource).toBeUndefined();
+      const inMemoryJson = JSON.stringify(inMemoryEntry);
+      expect(inMemoryJson).not.toContain("super-secret-pw");
+      expect(inMemoryJson).not.toContain("supersecret12345");
+      const persistedRaw = readFileSync(usageLogPath(), "utf8");
+      expect(persistedRaw).not.toContain("super-secret-pw");
+      expect(persistedRaw).not.toContain("supersecret12345");
+      const persisted = JSON.parse(persistedRaw.trim()) as PersistedUsageEntry;
+      expect(persisted.transportPhase).toBeUndefined();
+      expect(persisted.terminalSource).toBeUndefined();
+      expect(persisted.attempts?.[0]?.transportPhase).toBeUndefined();
+      expect(persisted.attempts?.[0]?.terminalSource).toBeUndefined();
+    } finally {
+      clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("inspection seeds request-relative timeline origin before a retry attempt", async () => {
+    const { consumeForInspection } = await import("../../src/server/relay");
+    const requestStart = Date.now() - 50;
+    const attemptStart = requestStart + 10;
+    const attempt = {
+      ordinal: 2,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      adapter: "anthropic",
+      status: 200,
+      durationMs: 1,
+      sendCount: 1,
+      recoveryKinds: ["transient-5xx" as const],
+      usageStatus: "unreported" as const,
+    };
+    const logCtx: RequestLogContext = {
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      activeAttempt: attempt,
+      activeAttemptStartedAt: attemptStart,
+    };
+    const entries: RequestLogEntry[] = [];
+    const payload = JSON.stringify({
+      type: "response.completed",
+      response: { status: "completed", output: [] },
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`));
+        controller.close();
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(
+        body,
+        (terminalStatus, httpStatusOverride) => {
+          addFinalRequestLog(
+            "ocx-retry-origin",
+            requestStart,
+            logCtx,
+            httpStatusOverride ?? 200,
+            { terminalStatus },
+            entry => {
+              entries.push(entry);
+              resolve();
+            },
+          );
+        },
+        undefined,
+        undefined,
+        logCtx,
+        undefined,
+        undefined,
+        undefined,
+        { requestStartedAt: requestStart },
+      );
+    });
+
+    expect(logCtx.requestStartedAt).toBe(requestStart);
+    expect(logCtx.streamTimeline?.upstreamFirstByteMs).toBeGreaterThanOrEqual(0);
+    expect(logCtx.activeAttempt?.streamTimeline?.upstreamFirstByteMs).toBeGreaterThanOrEqual(0);
+    expect(logCtx.streamTimeline?.upstreamFirstByteMs)
+      .toBeGreaterThanOrEqual(logCtx.activeAttempt?.streamTimeline?.upstreamFirstByteMs ?? 0);
+    expect(entries).toHaveLength(1);
   });
 
   test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
@@ -1816,6 +1946,79 @@ describe("request log metadata", () => {
     expect(entries[0].upstreamError).toContain("adapter_eof");
     expect(entries[0].upstreamError).toContain("ended unexpectedly");
   });
+
+  test("bridge-to-request-log translator overflow persists relay failure attribution", async () => {
+    const entries: RequestLogEntry[] = [];
+    const budget = createTranslatorBudget({ maxTurnBytes: 1_024 });
+    async function* events(): AsyncGenerator<AdapterEvent> {
+      yield { type: "tool_call_start", id: "call_1", name: "exec_command" };
+      yield { type: "tool_call_delta", arguments: "x".repeat(2_048) };
+      yield { type: "tool_call_end" };
+      yield { type: "done" };
+    }
+    const sse = bridgeToResponsesSSE(events(), "test-model", undefined, undefined, undefined, undefined, 2_000, {
+      translatorBudget: budget,
+    });
+    const logCtx: RequestLogContext = {
+      model: "anthropic/claude-sonnet-4",
+      provider: "anthropic",
+    };
+    const response = responseWithDeferredRequestLog(
+      new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-bridge-overflow",
+      Date.now(),
+      logCtx,
+      entry => entries.push(entry),
+      "relay",
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      status: 502,
+      failureSide: "relay",
+      failureStage: "relay_transform",
+      terminalSource: "relay",
+      transportPhase: "terminal_sse",
+    });
+  });
+
+  test("upstreamFirstSemanticOutputMs is gated by semantic payload, not pre-populated context", () => {
+    const logCtx: RequestLogContext = {
+      model: "openai/gpt-5.6-sol",
+      provider: "openai",
+      requestStartedAt: 1_000,
+      firstOutputMs: 50,
+    };
+    const inspector = createSseInspector({ logCtx });
+    const nonSemanticEvent = new TextEncoder().encode(
+      `data: ${JSON.stringify({ type: "response.created", response: { id: "resp_1" } })}\n\n`
+    );
+    inspector.feed(nonSemanticEvent);
+    expect(logCtx.streamTimeline?.upstreamFirstByteMs).toBeDefined();
+    expect(logCtx.streamTimeline?.upstreamFirstSemanticOutputMs).toBeUndefined();
+
+    const semanticEvent = new TextEncoder().encode(
+      `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "hello" })}\n\n`
+    );
+    inspector.feed(semanticEvent);
+    expect(logCtx.streamTimeline?.upstreamFirstSemanticOutputMs).toBeDefined();
+  });
+
+  test("upstreamFirstSemanticOutputMs records when onFirstOutput is absent but semantic delta arrives", () => {
+    const logCtx: RequestLogContext = {
+      model: "openai/gpt-5.6-sol",
+      provider: "openai",
+      requestStartedAt: 1_000,
+    };
+    const inspector = createSseInspector({ logCtx });
+    const semanticEvent = new TextEncoder().encode(
+      `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "hello" })}\n\n`
+    );
+    inspector.feed(semanticEvent);
+    expect(logCtx.streamTimeline?.upstreamFirstSemanticOutputMs).toBeDefined();
+  });
 });
 
 describe("request log restart hydrate", () => {
@@ -2071,5 +2274,56 @@ describe("request log snapshot cursor", () => {
     const stale = decodeRequestLogCursor(encode({ ...payload, h: "0".repeat(64) }));
     expect(stale).not.toBeNull();
     expect(selectRequestLogPoll(rows, query, stale, epoch)).toMatchObject({ logs: rows, reset: true });
+  });
+});
+
+describe("stream timeline modularization regressions", () => {
+  test("restart projection preserves safe relay diagnostics and drops credential-shaped values", () => {
+    const persisted: PersistedUsageEntry = {
+      requestId: "ocx-timeline-rebase", timestamp: 1, provider: "mock", model: "m",
+      status: 502, durationMs: 20, usageStatus: "unreported",
+      transportPhase: "x".repeat(90), terminalSource: "relay",
+      failureSide: "relay", failureStage: "relay_transform",
+      streamTimeline: { upstreamFirstByteMs: 3 },
+    };
+    const row = requestLogEntryFromPersistedUsage(normalizeUsageEntryForTest(persisted));
+    expect(row).toMatchObject({
+      transportPhase: "x".repeat(64), terminalSource: "relay",
+      failureSide: "relay", failureStage: "relay_transform",
+      streamTimeline: { upstreamFirstByteMs: 3 },
+    });
+    const unsafe = requestLogEntryFromPersistedUsage({
+      ...persisted, transportPhase: "password=super-secret-pw",
+      terminalSource: "api-key=supersecret12345",
+    });
+    expect(unsafe.transportPhase).toBeUndefined();
+    expect(unsafe.terminalSource).toBeUndefined();
+  });
+
+  test("a zero request origin is retained for later timeline events", () => {
+    const context: RequestLogContext = { model: "m", provider: "mock" };
+    noteStreamTimelineEvent(context, "upstreamFirstByteMs", 0, 25);
+    noteStreamTimelineEvent(context, "upstreamFirstSemanticOutputMs", undefined, 40);
+    expect(context.requestStartedAt).toBe(0);
+    expect(context.streamTimeline).toEqual({ upstreamFirstByteMs: 25, upstreamFirstSemanticOutputMs: 40 });
+  });
+
+  for (const [owner, expectedContexts] of [
+    ["serve-options.ts", 10],
+    ["websocket-handler.ts", 1],
+  ] as const) {
+    test(owner + " seeds every ingress log context", () => {
+      const source = readFileSync(repoPath("src/server/index", owner), "utf8");
+      const contexts = [...source.matchAll(/const logCtx: RequestLogContext = \{([\s\S]*?)\};/g)];
+      expect(contexts).toHaveLength(expectedContexts);
+      for (const context of contexts) expect(context[1]).toContain("requestStartedAt: start");
+    });
+  }
+
+  test("combo and passthrough owners retain the parent timeline origin", () => {
+    const combo = readFileSync(repoPath("src/server/responses/core-combo.ts"), "utf8");
+    const delivery = readFileSync(repoPath("src/server/responses/passthrough-delivery.ts"), "utf8");
+    expect(combo).toContain("requestStartedAt: logCtx.requestStartedAt");
+    expect(delivery).toContain("requestStartedAt: logCtx.requestStartedAt");
   });
 });

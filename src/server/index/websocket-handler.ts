@@ -280,7 +280,7 @@ export function createWebsocketHandler(ctx: ServeOptionsContext) {
           // narrow rather than assume: an unattributed frame is preferable to a
           // fabricated attribution.
           const wsAdmission = ws.data.admission;
-          const logCtx: RequestLogContext = {
+          const logCtx: RequestLogContext = { requestStartedAt: start,
             model: "unknown",
             provider: "unknown",
             ...(wsAdmission ? admissionFields(wsAdmission) : {}),
