@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { COALESCE_MAX_CHUNK_LENGTH, createAdapterEventQueue, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents } from "../../src/adapters/run-turn-queue";
+import { COALESCE_MAX_CHUNK_LENGTH, createAdapterEventQueue, DEFAULT_MAX_BACKLOG_CODE_UNITS, PREFLIGHT_HEARTBEAT_RETAIN_LIMIT, preflightAdapterEvents } from "../../src/adapters/run-turn-queue";
 import type { AdapterEvent } from "../../src/types";
 
 const text = (value: string): AdapterEvent => ({ type: "text_delta", text: value });
@@ -111,6 +111,56 @@ describe("run-turn adapter event queue", () => {
     expect(backlogExceeded).toBe(0);
     expect(collected).toHaveLength(1);
     expect(collected[0]).toEqual(thinking(Array.from({ length: 5_000 }, (_, i) => String(i % 10)).join("")));
+  });
+
+  test("coalesced deltas cannot exceed the aggregate string backlog budget", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      maxBacklogCodeUnits: 4,
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    queue.push(text("ab"));
+    queue.push(text("cd"));
+    queue.push(text("e"));
+
+    expect(backlogExceeded).toBe(1);
+    expect(await queue.collect()).toEqual([
+      text("abcd"),
+      { type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" },
+    ]);
+  });
+
+  test("an oversized individual event is rejected before it is retained", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+
+    queue.push(text("x".repeat(DEFAULT_MAX_BACKLOG_CODE_UNITS + 1)));
+
+    expect(backlogExceeded).toBe(1);
+    expect(await queue.collect()).toEqual([
+      { type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" },
+    ]);
+  });
+
+  test("consuming buffered events releases aggregate string budget", async () => {
+    let backlogExceeded = 0;
+    const queue = createAdapterEventQueue({
+      maxBacklogCodeUnits: 4,
+      onBacklogExceeded: () => { backlogExceeded += 1; },
+    });
+    const iterator = queue.stream()[Symbol.asyncIterator]();
+
+    queue.push(text("abcd"));
+    expect(await iterator.next()).toEqual({ done: false, value: text("abcd") });
+    queue.push(thinking("wxyz"));
+    queue.close();
+
+    expect(await iterator.next()).toEqual({ done: false, value: thinking("wxyz") });
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
+    expect(backlogExceeded).toBe(0);
   });
 
   test("coalescing splits past the combined-length threshold and preserves concatenation", async () => {

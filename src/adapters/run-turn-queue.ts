@@ -6,10 +6,29 @@ export const PREFLIGHT_HEARTBEAT_RETAIN_LIMIT = 16;
 
 /**
  * Coalescing threshold for adjacent text/thinking deltas buffered with no
- * waiting reader (UTF-16 code units). This is a merge-size ceiling, not a
- * byte-memory cap: a single oversized incoming event stays one item.
+ * waiting reader (UTF-16 code units). The aggregate backlog budget below is
+ * enforced separately, including for a single oversized incoming event.
  */
 export const COALESCE_MAX_CHUNK_LENGTH = 64 * 1024;
+/** Maximum retained string payload across one queue, measured as UTF-16 code units. */
+export const DEFAULT_MAX_BACKLOG_CODE_UNITS = 1024 * 1024;
+
+function retainedStringCodeUnits(value: unknown, seen = new Set<object>()): number {
+  if (typeof value === "string") return value.length;
+  if (!value || typeof value !== "object" || seen.has(value)) return 0;
+  seen.add(value);
+  let total = 0;
+  for (const nested of Object.values(value)) total += retainedStringCodeUnits(nested, seen);
+  return total;
+}
+
+function retainedEventStringCodeUnits(event: AdapterEvent): number {
+  let total = 0;
+  for (const [key, value] of Object.entries(event)) {
+    if (key !== "type") total += retainedStringCodeUnits(value);
+  }
+  return total;
+}
 
 export interface AdapterEventQueue {
   /**
@@ -73,11 +92,14 @@ export async function preflightAdapterEvents(
 
 export function createAdapterEventQueue(opts?: {
   maxBacklog?: number;
+  maxBacklogCodeUnits?: number;
   onBacklogExceeded?: () => void;
 }): AdapterEventQueue {
   const queued: AdapterEvent[] = [];
   const readers: QueueReader[] = [];
   const maxBacklog = opts?.maxBacklog ?? 1_024;
+  const maxBacklogCodeUnits = opts?.maxBacklogCodeUnits ?? DEFAULT_MAX_BACKLOG_CODE_UNITS;
+  let backlogCodeUnits = 0;
   let closed = false;
 
   // Merge an incoming delta into the buffered tail when no reader is waiting.
@@ -124,6 +146,14 @@ export function createAdapterEventQueue(opts?: {
       reader({ done: false, value: event });
       return false;
     }
+    const eventCodeUnits = retainedEventStringCodeUnits(event);
+    if (eventCodeUnits > maxBacklogCodeUnits - backlogCodeUnits) {
+      opts?.onBacklogExceeded?.();
+      queued.push({ type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" });
+      close();
+      return false;
+    }
+    backlogCodeUnits += eventCodeUnits;
     if (coalesceIntoTail(event)) return true;
     if (queued.length >= maxBacklog) {
       opts?.onBacklogExceeded?.();
@@ -147,6 +177,7 @@ export function createAdapterEventQueue(opts?: {
     while (true) {
       const next = queued.shift();
       if (next) {
+        backlogCodeUnits -= retainedEventStringCodeUnits(next);
         yield next;
         continue;
       }
