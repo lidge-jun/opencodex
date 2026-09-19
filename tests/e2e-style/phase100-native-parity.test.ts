@@ -18,6 +18,7 @@ function nativeTemplate(): Record<string, unknown> {
     multi_agent_version: "v2",
     use_responses_lite: true,
     supports_websockets: true,
+    supports_experimental_context: true,
     web_search_tool_type: "text_and_image",
     supports_search_tool: true,
     supported_reasoning_levels: [
@@ -88,6 +89,7 @@ describe("Phase 100 Codex-native parity smoke", () => {
     expect(routed).not.toHaveProperty("model_messages");
     expect(routed).not.toHaveProperty("use_responses_lite");
     expect(routed).not.toHaveProperty("supports_websockets");
+    expect(routed).not.toHaveProperty("supports_experimental_context");
 
     const parsed = parseRequest({
       model: "opencode-go/deepseek-v4-flash",

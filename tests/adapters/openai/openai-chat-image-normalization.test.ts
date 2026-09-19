@@ -14,6 +14,7 @@ import {
 } from "../../../src/adapters/anthropic-image-normalize";
 import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
+import { phaseTimer } from "../../helpers/phase-timing";
 
 // Issue #4112 follow-up: chat-completions providers such as GitHub Copilot reject a body
 // over roughly 5.2MB with a bare 413 and no diagnostic content. Nothing downstream of the
@@ -40,8 +41,30 @@ async function realPngB64(width: number, height: number): Promise<string> {
  * A flat-colour PNG compresses to almost nothing, so budget behaviour needs incompressible
  * pixels. Deterministic noise is written as an uncompressed BMP and converted, which keeps
  * the fixture in-repo and the encoded size realistic.
+ *
+ * Built once per size and shared, for #4997. Seven cases in this file ask for the same 1000x1000
+ * noise PNG, and producing one is a million-iteration fill followed by a PNG encode of pixels that
+ * are incompressible by construction. For every one of those cases that is preparation: none
+ * asserts anything about how the fixture was produced, only about what the normalizer does to it.
+ * Two of them overran the lane's 60s ceiling in the unsharded control while passing in the shards
+ * that ran the same file, and this build sat inside the window that was being measured.
+ *
+ * Sharing is safe because nothing writes to the result. The normalizer mutates freshly built wire
+ * objects rather than the base64 itself, and the one case that needs a truncated copy uses slice,
+ * which allocates. Per-case isolation is enforced by resetNormalizeStateForTests, not by fixture
+ * identity. The promise rather than the string is cached so two callers cannot both start a build.
  */
-async function noisyPngB64(width: number, height: number): Promise<string> {
+const noisyPngCache = new Map<string, Promise<string>>();
+function noisyPngB64(width: number, height: number): Promise<string> {
+  const key = width + "x" + height;
+  const cached = noisyPngCache.get(key);
+  if (cached !== undefined) return cached;
+  const built = buildNoisyPngB64(width, height);
+  noisyPngCache.set(key, built);
+  return built;
+}
+
+async function buildNoisyPngB64(width: number, height: number): Promise<string> {
   const rowSize = width * 3 + ((4 - ((width * 3) % 4)) % 4);
   const pixelBytes = rowSize * height;
   const bmp = Buffer.alloc(54 + pixelBytes);
@@ -233,30 +256,37 @@ describe("openai-chat inline image normalization", () => {
   });
 
   test("an image this wire cannot drop keeps counting toward the budget", async () => {
+    // Instrumented for #4997: this case and imageTierBias below both overran the lane's 60s
+    // ceiling in the unsharded control while passing in every shard that ran the same file. The
+    // probe is the normalizer's own encode counter, so a tick can tell a contended-but-advancing
+    // ladder walk apart from one that has stopped doing work.
+    const timing = phaseTimer("openai-chat non-droppable", () => getNormalizeStatsForTests().encodeCalls);
     // The drop callback here is a no-op, so an undecodable image stays on the wire. The
     // shared core normally stops counting a dropped target, which is only correct when
     // the bytes actually leave. If those bytes stopped counting, the demotion loop would
     // stop early and still ship an oversized body — the exact failure this file exists
     // to prevent.
-    const big = await noisyPngB64(1000, 1000);
-    // Truncated PNG: sniffs as an image, so it reaches the ladder, but cannot decode.
-    const corrupt = big.slice(0, 3_000_000);
-    const messages = [{
-      role: "user",
-      content: [
-        { type: "image_url", image_url: { url: dataUrl(corrupt) } },
-        ...Array.from({ length: 3 }, () => ({ type: "image_url", image_url: { url: dataUrl(big) } })),
-      ],
-    }];
+    const prepared = await timing.phase("prepare", async () => {
+      const big = await noisyPngB64(1000, 1000);
+      // Truncated PNG: sniffs as an image, so it reaches the ladder, but cannot decode.
+      const corrupt = big.slice(0, 3_000_000);
+      return { corrupt, messages: [{
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: dataUrl(corrupt) } },
+          ...Array.from({ length: 3 }, () => ({ type: "image_url", image_url: { url: dataUrl(big) } })),
+        ],
+      }] };
+    });
 
     resetNormalizeStateForTests();
-    await normalizeOpenAIChatImages(messages);
+    await timing.phase("execute", () => normalizeOpenAIChatImages(prepared.messages));
 
-    const parts = imageParts(messages as ChatMsg[]);
+    const parts = imageParts(prepared.messages as ChatMsg[]);
     const total = parts.reduce((sum, p) => sum + (p.image_url?.url.split(",")[1]?.length ?? 0), 0);
     expect(parts).toHaveLength(4);
     // The undecodable image is retained, unchanged.
-    expect(parts[0]?.image_url?.url).toBe(dataUrl(corrupt));
+    expect(parts[0]?.image_url?.url).toBe(dataUrl(prepared.corrupt));
     // And the turn as a whole still lands under budget.
     expect(total).toBeLessThanOrEqual(OPENAI_CHAT_IMAGE_BASE64_BUDGET);
   });
@@ -330,12 +360,12 @@ describe("openai-chat inline image normalization", () => {
   });
 
   test("imageTierBias from incoming meta reaches the normalizer", async () => {
-    const big = await noisyPngB64(1000, 1000);
+    const timing = phaseTimer("openai-chat imageTierBias", () => getNormalizeStatsForTests().encodeCalls);
+    const big = await timing.phase("prepare", () => noisyPngB64(1000, 1000));
     const urls = Array.from({ length: 4 }, () => dataUrl(big));
     const adapter = createOpenAIChatAdapter(provider);
 
     const build = async (imageTierBias?: number) => {
-      resetNormalizeStateForTests();
       const built = adapter.buildRequest(parsedWith([imageMessage(urls)]), {
         headers: new Headers(),
         translatorBudget: createTestTranslatorBudget(),
@@ -346,7 +376,15 @@ describe("openai-chat inline image normalization", () => {
         .reduce((sum, part) => sum + (part.image_url?.url.length ?? 0), 0);
     };
 
-    expect(await build(3)).toBeLessThan(await build());
+    // Two cold walks of the ladder over four megapixel images: this is the contract, and the
+    // `execute` figure is what a disposition has to be argued against.
+    // The reset stays outside the measured segment: it zeroes the encode counter the ticks read,
+    // and a probe that drops to zero mid-phase reports movement that did not happen.
+    resetNormalizeStateForTests();
+    const biased = await timing.phase("execute-biased", () => build(3));
+    resetNormalizeStateForTests();
+    const unbiased = await timing.phase("execute-default", () => build());
+    expect(biased).toBeLessThan(unbiased);
   });
 
 });

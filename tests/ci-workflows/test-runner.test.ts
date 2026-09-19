@@ -26,7 +26,10 @@ import {
   selectChangedComparisonRef,
   SERIAL_FULL_SUITE_FILES,
 } from "../../scripts/test";
-import { repoPath, repoRoot } from "../helpers/repo-root";
+import {
+  NESTED_LIVE_LOCK_RECEIPT_KEY,
+} from "../helpers/nested-test-run-lock-controller";
+import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
@@ -1059,53 +1062,76 @@ describe("bun test user lock", () => {
     expect(resolveCalls).toBe(0);
   });
 
-  test.if(process.platform === "win32" && process.env[TEST_RUN_NO_QUEUE_ENV] !== "1")(
-    "nested Windows Bun tests inherit the acquired live lock and refuse an incomplete capability",
+  // Windows-only, and deliberately no longer gated on the no-queue opt-out. The hosted
+  // batch leg sets OCX_TEST_NO_QUEUE=1 for its own six-file processes, which skipped this
+  // case on the only platform it covers (#4991). The controller below holds a lock in its
+  // own right rather than borrowing the lane's, so the regression now runs either way.
+  //
+  // Two deadlines, not one. The controller is told to finish 10s before the hard kill so
+  // it always reaches its own teardown — releasing the lock and confirming its children
+  // were reaped — instead of being terminated inside a spawn with the lock still held.
+  // The spawnSync timeout stays the backstop for a controller that ignores its deadline.
+  //
+  // The nominal per-child timeout is declared here rather than inside the helper, so the
+  // deadline that bounds four cold Bun starts stays with the case that owns them and
+  // tests/ci-workflows/cold-spawn-warmup.test.ts keeps seeing this file. The controller
+  // narrows it to whatever its own deadline still allows.
+  test.if(process.platform === "win32")(
+    "a nested Windows Bun test inherits the live lock its controller holds and refuses an incomplete capability",
     () => {
-      const root = mkdtempSync(join(tmpdir(), "opencodex-nested-test-"));
+      const root = mkdtempSync(join(tmpdir(), "opencodex-nested-lock-"));
+      const controllerBudgetMs = SPAWN_BUDGET_MS - 10_000;
+      const childSpawn = { timeout: INTERNAL_DEADLINE_MS };
+      const environmentBefore = JSON.stringify({
+        noQueue: process.env[TEST_RUN_NO_QUEUE_ENV],
+        runId: process.env[TEST_RUN_ID_ENV],
+        lockPath: process.env[TEST_RUN_LOCK_PATH_ENV],
+        // Presence only. The token is never rendered, here or by the controller.
+        hasToken: process.env[TEST_RUN_LOCK_TOKEN_ENV] !== undefined,
+      });
       try {
-        const lockPath = process.env[TEST_RUN_LOCK_PATH_ENV];
-        expect(Boolean(lockPath && process.env[TEST_RUN_LOCK_TOKEN_ENV] && process.env[TEST_RUN_ID_ENV])).toBe(true);
-        const ownerBefore = readFileSync(join(lockPath!, "owner.json"), "utf8");
-        const fixture = join(root, "nested.test.ts");
-        writeFileSync(fixture, `
-          import { test } from "bun:test";
-          import { readFileSync, existsSync } from "node:fs";
-          import { join } from "node:path";
-          test("nested lock receipt", () => {
-            const path = process.env.OCX_TEST_RUN_LOCK_PATH;
-            const owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8"));
-            console.log(JSON.stringify({ nestedLockReceipt: {
-              samePath: path === ${JSON.stringify(lockPath)},
-              sameRun: owner.runId === ${JSON.stringify(process.env[TEST_RUN_ID_ENV])},
-              sameToken: owner.token === process.env.OCX_TEST_RUN_LOCK_TOKEN,
-              member: existsSync(join(path, "members", process.pid + "-" + owner.token)),
-              preloadRan: process.env.OCX_TEST_PRELOAD_PID === String(process.pid),
-              guardArmed: process.env.OCX_TEST_HOME_GUARD === "1",
-            } }));
-          });
-        `);
-        const args = ["test", "--preload", repoPath("tests/preload.ts"), fixture];
-        const child = spawnSync(process.execPath, args, {
-          cwd: root, env: { ...process.env }, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS,
+        // Only the controller's copy loses the opt-out, and its cwd stays outside the
+        // repository so Bun loads no bunfig preload into the lock holder itself.
+        const controllerEnv = { ...process.env };
+        delete controllerEnv[TEST_RUN_NO_QUEUE_ENV];
+        const controller = spawnSync(
+          process.execPath,
+          [
+            helperPath("nested-test-run-lock-controller.ts"),
+            root,
+            String(Date.now() + controllerBudgetMs),
+            JSON.stringify(childSpawn),
+          ],
+          { cwd: root, env: controllerEnv, encoding: "utf8", timeout: SPAWN_BUDGET_MS },
+        );
+        const prefix = '{"' + NESTED_LIVE_LOCK_RECEIPT_KEY + '":';
+        const line = (controller.stdout ?? "").split("\n").find(entry => entry.startsWith(prefix));
+        const payload = line
+          ? JSON.parse(line) as { nestedLiveLockReceipt: Record<string, boolean>; diagnostics: string[] }
+          : null;
+        // Booleans and redacted controller notes only; raw child output never surfaces here.
+        expect(payload?.diagnostics ?? ["the controller printed no receipt"]).toEqual([]);
+        expect(payload?.nestedLiveLockReceipt).toEqual({
+          lockHeld: true,
+          healthyChildExited: true,
+          healthyReceiptComplete: true,
+          missingTokenRefused: true,
+          wrongTokenRefused: true,
+          wrongPathRefused: true,
+          foreignOwnerTimedOut: true,
+          foreignOwnerUntouched: true,
+          ownerContentUnchanged: true,
+          childrenReaped: true,
+          releasedOnlyOwnLock: true,
+          receiptRedacted: true,
         });
-        // Keep process diagnostics bounded and never render the owner token or child output.
-        expect(child.status).toBe(0);
-        const marker = child.stdout.split("\n").find(line => line.startsWith('{"nestedLockReceipt":'));
-        expect(marker ? JSON.parse(marker).nestedLockReceipt : null).toEqual({
-          samePath: true, sameRun: true, sameToken: true, member: true, preloadRan: true, guardArmed: true,
-        });
-        expect(readFileSync(join(lockPath!, "owner.json"), "utf8") === ownerBefore).toBe(true);
-
-        const incomplete = { ...process.env };
-        delete incomplete[TEST_RUN_LOCK_TOKEN_ENV];
-        const refused = spawnSync(process.execPath, args, {
-          cwd: root, env: incomplete, encoding: "utf8", timeout: INTERNAL_DEADLINE_MS,
-        });
-        expect(refused.status).toBe(1);
-        expect(refused.stderr.includes("capability is incomplete")).toBe(true);
-        expect(refused.stdout.includes('{"nestedLockReceipt":')).toBe(false);
-        expect(readFileSync(join(lockPath!, "owner.json"), "utf8") === ownerBefore).toBe(true);
+        expect(controller.status).toBe(0);
+        expect(JSON.stringify({
+          noQueue: process.env[TEST_RUN_NO_QUEUE_ENV],
+          runId: process.env[TEST_RUN_ID_ENV],
+          lockPath: process.env[TEST_RUN_LOCK_PATH_ENV],
+          hasToken: process.env[TEST_RUN_LOCK_TOKEN_ENV] !== undefined,
+        })).toBe(environmentBefore);
       } finally {
         removeTreeWithRetry(root);
       }

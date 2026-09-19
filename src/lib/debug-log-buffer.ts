@@ -9,7 +9,12 @@ export interface DebugLogEntry {
 
 const MAX_LINES = 2_000;
 const MAX_DEBUG_SUBSCRIBERS = 64;
-const MAX_DEBUG_LINE_BYTES = 16 * 1024;
+/**
+ * Per-line retention cap. Exported because a producer of a long structured line has to budget
+ * BELOW it: this buffer truncates at a byte boundary, so a JSON line cut here stops being
+ * parseable while its retained prefix still reads as complete.
+ */
+export const MAX_DEBUG_LINE_BYTES = 16 * 1024;
 const buffer: DebugLogEntry[] = [];
 interface DebugSubscriberRegistration { lease: AdmissionLease }
 const listeners = new Map<(entry: DebugLogEntry) => void, DebugSubscriberRegistration>();
