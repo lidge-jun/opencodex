@@ -156,11 +156,16 @@ async function scrapeServer(server: ReturnType<typeof startServer>): Promise<str
   return response.text();
 }
 
-async function sendResponsesRequest(server: ReturnType<typeof startServer>, stream = false): Promise<Response> {
+async function sendResponsesRequest(
+  server: ReturnType<typeof startServer>,
+  stream = false,
+  signal?: AbortSignal,
+): Promise<Response> {
   return fetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/metrics-model", input: "hello", stream }),
+    signal,
   });
 }
 
@@ -540,6 +545,52 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(0);
       expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="failed"}')).toBe(1);
+    } finally {
+      await stopMetricsServer(server);
+    }
+  });
+
+  test("a client abort during buffered JSON read is counted as aborted before rethrow", async () => {
+    let signalReadStarted: (() => void) | undefined;
+    let signalUpstreamCancel: (() => void) | undefined;
+    const readStarted = new Promise<void>(resolve => { signalReadStarted = resolve; });
+    const upstreamCancelled = new Promise<void>(resolve => { signalUpstreamCancel = resolve; });
+    installUpstream(originalFetch, () => new Response(new ReadableStream<Uint8Array>({
+      pull() {
+        signalReadStarted?.();
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        signalUpstreamCancel?.();
+      },
+    }), { headers: { "content-type": "application/json" } }));
+    saveConfig(runtimeConfig("openai-responses"));
+    const server = startMetricsServer();
+    const clientAbort = new AbortController();
+    try {
+      const request = sendResponsesRequest(server, false, clientAbort.signal);
+      const requestRejected = expect(request).rejects.toThrow();
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("upstream buffer read did not start")), 5_000);
+        void readStarted.then(() => {
+          clearTimeout(timeout);
+          resolve();
+        }, reject);
+      });
+      clientAbort.abort(new DOMException("client cancelled metrics request", "AbortError"));
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("upstream buffered body was not cancelled")), 5_000);
+        void upstreamCancelled.then(() => {
+          clearTimeout(timeout);
+          resolve();
+        }, reject);
+      });
+      await requestRejected;
+      const metrics = await scrapeServer(server);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="aborted"}')).toBe(1);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="failed"}')).toBe(0);
+      expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
+      expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="aborted"}')).toBe(1);
     } finally {
       await stopMetricsServer(server);
     }

@@ -1388,7 +1388,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             // A bounded upstream body can fail before handleResponses returns a client response.
             // Finalize before rethrow so accounting observes the physical send while the caller
             // retains the existing reset/rejection instead of receiving a synthesized response.
-            finalizeNativePassthroughLog(502, { closeReason: "non_stream" });
+            finalizeNativePassthroughLog(
+              req.signal.aborted ? 499 : 502,
+              { closeReason: req.signal.aborted ? "client_cancel" : "non_stream" },
+            );
             throw error;
           }
           return withRequestLogId(
