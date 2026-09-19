@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -60,6 +61,11 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
 
+// A case that calls a handler directly never takes the writer lease startServer takes, so its
+// dispatch is refused. Never file-wide: most cases here start a real server that takes it too.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-chat-completions-");
@@ -69,6 +75,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   resetProviderRequestPacingForTest();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -367,6 +375,7 @@ async function driveChatFallbackServiceTier(
       },
     },
   } as OcxConfig;
+  takeSpendHome();
   const response = await handleChatCompletions(
     new Request("http://localhost/v1/chat/completions", {
       method: "POST",
@@ -973,8 +982,10 @@ test("chat-native consumes pacing before the response-header timeout starts", as
     }),
   });
 
+  takeSpendHome();
   const first = await handleChatCompletions(request(), config, {} as Parameters<typeof handleChatCompletions>[2]);
   expect(first.status).toBe(200);
+  takeSpendHome();
   const secondPending = handleChatCompletions(request(), config, {} as Parameters<typeof handleChatCompletions>[2]);
   await Bun.sleep(5);
   expect(starts).toBe(1);
@@ -1004,6 +1015,7 @@ test("chat-native stays outside the Responses empty-completion retry guard", asy
   } as Partial<OcxProviderConfig> & { fetch: typeof globalThis.fetch });
   config.emptyCompletionRetry = true;
 
+  takeSpendHome();
   const response = await handleChatCompletions(
     new Request("http://localhost/v1/chat/completions", {
       method: "POST",
@@ -1632,6 +1644,7 @@ test("chat-native client cancellation cancels the upstream stream and logs 499",
       body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
     });
     const logCtx = {} as Parameters<typeof handleChatCompletions>[2];
+    takeSpendHome();
     const response = await handleChatCompletions(
       request,
       mockConfig("https://provider.example/v1"),
@@ -1683,6 +1696,7 @@ test("chat-native request abort releases its active-turn lease and logs 499", as
       body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
       signal: clientAbort.signal,
     });
+    takeSpendHome();
     const response = await handleChatCompletions(
       request,
       mockConfig("https://provider.example/v1"),
@@ -1722,6 +1736,7 @@ test("chat-native cancelled non-streaming SSE returns 499 instead of partial suc
       readStarted();
     },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const result = handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", signal: clientAbort.signal,
     headers: { "content-type": "application/json" },
@@ -1755,6 +1770,7 @@ test("chat-native SSE enforces configured stall timeout despite non-progress fra
     cancel() { cancels += 1; clearInterval(timer); },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
   try {
+    takeSpendHome();
     const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
       method: "POST", signal: clientAbort.signal,
       headers: { "content-type": "application/json" },
@@ -1854,6 +1870,7 @@ test("chat-native valid terminal retains precedence over a late non-streaming ab
     },
     cancel() { clientAbort.abort("late cancellation after terminal"); },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", signal: clientAbort.signal, headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
@@ -1872,6 +1889,7 @@ test("chat-native non-streaming SSE reports a typed stall failure instead of par
     },
     cancel() { cancels += 1; },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
@@ -1918,6 +1936,7 @@ test("chat-native non-streaming SSE collects CRLF multiline and split UTF-8 fram
       controller.close();
     },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
@@ -1942,6 +1961,7 @@ test("chat-native direct streaming without an admission lease does not record a 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
     });
+    takeSpendHome();
     const response = await handleChatCompletions(
       request,
       mockConfig("https://provider.example/v1"),

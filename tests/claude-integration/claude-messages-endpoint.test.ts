@@ -31,6 +31,7 @@ import { estimateTokens } from "../../src/lib/token-estimate";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import {
@@ -1110,6 +1111,9 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   const invokeMessages = async (): Promise<number> => {
     const turnAdmissionLease = tryAdmitTurn();
     if (!turnAdmissionLease) throw new Error("test turn admission unavailable");
+    // Held for exactly this dispatch, beside the turn lease it already takes. File-wide would be
+    // wrong: most cases in this file start a real server, and that server takes the same lease.
+    const releaseSpendHome = acquireOwnedSpendHome();
     const start = Date.now();
     try {
       const response = await handleClaudeMessages(
@@ -1129,6 +1133,7 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
       await response.text();
       return response.status;
     } finally {
+      releaseSpendHome();
       turnAdmissionLease.release();
     }
   };

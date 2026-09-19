@@ -21,6 +21,7 @@ import { startServer } from "../../../src/server";
 import type { RequestLogContext } from "../../../src/server/request-log";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../../helpers/test-budget";
 
 setDefaultTimeout(SERVER_BUDGET_MS);
@@ -206,6 +207,9 @@ describe("Cursor effort variant rows", () => {
 
   test("Responses effort rows route the base model and pass through the existing cap", async () => {
     const upstream = mockChatUpstream();
+    // Case-local, never file-wide: this file also starts a real server elsewhere, and that
+    // server takes the same lease. A lease held across those cases would refuse their startup.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const config = ingressConfig(`${upstream.server.url.toString().replace(/\/$/u, "")}/v1`);
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
@@ -224,12 +228,14 @@ describe("Cursor effort variant rows", () => {
         reasoning_effort: "high",
       });
     } finally {
+      releaseSpendHome();
       upstream.server.stop(true);
     }
   });
 
   test("Chat effort rows use Responses normalization instead of the native-chat shortcut", async () => {
     const upstream = mockChatUpstream();
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const config = ingressConfig(`${upstream.server.url.toString().replace(/\/$/u, "")}/v1`);
       const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
@@ -248,12 +254,14 @@ describe("Cursor effort variant rows", () => {
         reasoning_effort: "high",
       });
     } finally {
+      releaseSpendHome();
       upstream.server.stop(true);
     }
   });
 
   test("Messages effort rows resolve after route directives and before native passthrough", async () => {
     const upstream = mockChatUpstream();
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const config = ingressConfig(`${upstream.server.url.toString().replace(/\/$/u, "")}/v1`);
       const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
@@ -278,6 +286,7 @@ describe("Cursor effort variant rows", () => {
         reasoning_effort: "high",
       });
     } finally {
+      releaseSpendHome();
       upstream.server.stop(true);
     }
   });
@@ -285,6 +294,7 @@ describe("Cursor effort variant rows", () => {
   test("mixed-case aliases ending in an effort stay on their configured provider", async () => {
     const intended = mockChatUpstream();
     const fallback = mockChatUpstream();
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const config: OcxConfig = {
         port: 0,
@@ -352,6 +362,7 @@ describe("Cursor effort variant rows", () => {
       expect(intended.captured.every(body => body.model === "private-model")).toBe(true);
       expect(fallback.captured).toHaveLength(0);
     } finally {
+      releaseSpendHome();
       intended.server.stop(true);
       fallback.server.stop(true);
     }

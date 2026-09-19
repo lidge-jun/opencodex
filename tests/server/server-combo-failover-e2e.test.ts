@@ -38,6 +38,8 @@ import { startServer } from "../../src/server";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess } from "../helpers/combo-failover-upstream";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { heldResponse } from "../helpers/held-response";
 import {
   clearResponseStateForTests,
@@ -142,6 +144,12 @@ let originalFetch: typeof fetch;
 let originalNow: () => number;
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
+// A case that calls a handler directly never takes the writer lease startServer takes, so its
+// dispatch is refused. Taken at the dispatch helpers rather than file-wide: the cases that do
+// start a real server already own it, and this only ever adds a reference on the same home.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalNow = Date.now;
@@ -167,6 +175,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   let responseStatePending = true;
   try {
     for (const server of servers.splice(0)) await server.stop(true);
@@ -204,60 +214,6 @@ function baseUrl(server: ReturnType<typeof Bun.serve>): string {
   return `${server.url.toString().replace(/\/$/, "")}/v1`;
 }
 
-function chatSuccess(text: string, model = "model"): Response {
-  return Response.json({
-    id: `chatcmpl-${model}`,
-    object: "chat.completion",
-    model,
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
-  });
-}
-
-function chatStream(text: string): Response {
-  const frames = [
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } })}\n\n`,
-    "data: [DONE]\n\n",
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function chatTruncatedZeroOutputStream(): Response {
-  const frames = [
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: null }] })}\n\n`,
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function chatErrorStream(message: string, prefix?: string): Response {
-  const frames = [
-    ...(prefix
-      ? [`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: prefix }, finish_reason: null }] })}\n\n`]
-      : []),
-    `data: ${JSON.stringify({ error: { type: "server_error", code: "upstream_server_error", message } })}\n\n`,
-    "data: [DONE]\n\n",
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function responsesSuccess(text: string, model = "responses-model"): Record<string, unknown> {
-  return {
-    id: `resp-${model}`,
-    object: "response",
-    status: "completed",
-    model,
-    output: [{
-      id: "msg_backup",
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text, annotations: [] }],
-    }],
-    usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
-  };
-}
-
 function comboConfig(
   providers: OcxConfig["providers"],
   targets = Object.keys(providers).map((name, index) => ({ provider: name, model: `m${index + 1}` })),
@@ -277,6 +233,7 @@ async function post(
   options: HandleOptions = {},
   headers: Record<string, string> = {},
 ): Promise<Response> {
+  takeSpendHome();
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
@@ -294,6 +251,7 @@ async function postLogged(
 ): Promise<Response> {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
+  takeSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
@@ -317,6 +275,7 @@ async function postModelLogged(
 ): Promise<Response> {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
+  takeSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
@@ -2064,6 +2023,7 @@ describe("server combo failover 030 activation matrix", () => {
         : authKind === "org-only-jwt" ? "org-foreign" : "acct-scoped-sidecar",
     };
     const response = authKind === "chat-valid"
+      takeSpendHome();
       ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify({ model: "combo/free", messages: [{ role: "user", content: "search" }], stream: true, tools: [{ type: "web_search" }] }),
@@ -3383,6 +3343,7 @@ describe("server combo failover 030 activation matrix", () => {
     let cancels = 0;
     const parent: RequestLogContext = { model: "", provider: "" };
     const snapshots: RequestLogContext[] = [];
+    takeSpendHome();
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", session_id: "hop-recall" },
       body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
@@ -3426,6 +3387,7 @@ describe("server combo failover 030 activation matrix", () => {
     const finalized = deferred();
     const observed: Array<{ status: number; log: RequestLogContext }> = [];
     try {
+      takeSpendHome();
       const response = await within(handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
@@ -3688,6 +3650,7 @@ describe("cursor conversation continuity across store:false chains", () => {
   }
 
   async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
+    takeSpendHome();
     return handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3784,6 +3747,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
+    takeSpendHome();
     const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
@@ -3814,6 +3778,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
+    takeSpendHome();
     const postDesktopTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
@@ -3844,6 +3809,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
+    takeSpendHome();
     const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
@@ -3883,6 +3849,7 @@ describe("combo compact failover", () => {
   async function postCompactLogged(config: OcxConfig): Promise<Response> {
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const start = Date.now();
+    takeSpendHome();
     const response = await handleResponsesCompact(compactRequest({
       model: "combo/free",
       stream: false,
