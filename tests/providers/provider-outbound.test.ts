@@ -649,6 +649,7 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(http, { ALL_PROXY: "http://p:7" }))
       .toBe(process.platform === "win32" ? null : "http://p:7");
     expect(effectiveProxyFor(http, { ALL_PROXY: "ftp://p:8" })).toBeNull();
+    expect(effectiveProxyFor(http, { ALL_PROXY: "http://" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
     expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
   });
