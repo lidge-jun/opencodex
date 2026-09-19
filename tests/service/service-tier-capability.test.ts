@@ -26,6 +26,11 @@ import {
 import { candidateCapabilityEvidence } from "../../src/routing/capability";
 import { resolveProductionBehaviorValues } from "../../src/routing/compatibility/behavior";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+// Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 describe("registry capability reaches saved configs without overriding them", () => {
   test("the registry holds the defaults; the seed stays free of them so explicit config stays distinguishable", () => {
@@ -389,7 +394,12 @@ describe("routing evidence uses the final model adapter", () => {
 
 describe("the gate fires on the live handleResponses path", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the lease before later teardown can replace the preload sandbox home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   function captureBody(): { bodies: Record<string, unknown>[] } {
     const bodies: Record<string, unknown>[] = [];
@@ -409,6 +419,7 @@ describe("the gate fires on the live handleResponses path", () => {
   ): Promise<Record<string, unknown>> {
     const { bodies } = captureBody();
     const config = { providers: { [providerName]: provider }, ...(fastMode === undefined ? {} : { fastMode }) } as unknown as OcxConfig;
+    takeSpendHome();
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -458,6 +469,7 @@ describe("the gate fires on the live handleResponses path", () => {
   test("DeepSeek clears a stripped caller tier from request logging", async () => {
     const { bodies } = captureBody();
     const logCtx: RequestLogContext = { model: "", provider: "" };
+    takeSpendHome();
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

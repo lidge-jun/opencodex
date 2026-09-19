@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * Dispatch-priority regression test for the image bridge (PR #424).
@@ -41,9 +42,13 @@ let mockWsPlan: unknown = undefined;
 
 let handleResponses: typeof import("../../src/server/responses")["handleResponses"];
 let releaseSpendHome: (() => void) | undefined;
+// Retained so teardown can remove it. Nothing created this directory before the lease did:
+// taking ownership mkdirs the state directory, so the suite now owns its removal too.
+let ownedHome = "";
 
 beforeAll(async () => {
-  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  ownedHome = join(tmpdir(), "ocx-test-" + randomUUID());
+  process.env.OPENCODEX_HOME = ownedHome;
   // Take the writer lease after this suite installs its home so direct handler dispatch can open the spend journal.
   releaseSpendHome = acquireOwnedSpendHome();
 
@@ -116,9 +121,12 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  // Release before restoring the home to prevent the old directory from retaining a live ledger lease.
+  // Release, then remove, then restore. An open lease inside a directory being deleted fails
+  // the removal on Windows and leaves an unlinked live database on POSIX, and the removal has
+  // to happen while OPENCODEX_HOME still names the directory being removed.
   releaseSpendHome?.();
   releaseSpendHome = undefined;
+  if (ownedHome) removeTreeWithRetry(ownedHome);
   if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = PREV_HOME;
   mock.restore();

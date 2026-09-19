@@ -6,10 +6,17 @@ import * as adapterResolveModule from "../../src/server/adapter-resolve";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+// Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -45,6 +52,7 @@ async function driveResponses(args: {
     ...(args.callerTier === undefined ? {} : { service_tier: args.callerTier }),
   };
 
+  takeSpendHome();
   await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
@@ -355,6 +363,7 @@ describe("FastWire characterization: rawBody observation point", () => {
         }),
       });
 
+      takeSpendHome();
       await handleResponses(request, config, { model: "", provider: "" }, {});
       expect(outboundBody?.service_tier).toBe("priority");
       expect(adapterRawBody?.service_tier).toBe("flex");

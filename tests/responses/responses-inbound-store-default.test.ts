@@ -18,6 +18,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 function providerConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
@@ -36,7 +37,13 @@ function providerConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
 
 describe("/v1/responses defaults store:false only for the canonical forward Codex backend", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  let releaseSpendHome: (() => void) | undefined;
+  afterEach(() => {
+    // Release first so a failed dispatch cannot leak writer ownership into the next case.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   function captureUpstream(): { urls: string[]; bodies: string[] } {
     const urls: string[] = [];
@@ -61,6 +68,8 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
     store: unknown,
   ): Promise<{ url: string; body: Record<string, unknown> | null }> {
     const { urls, bodies } = captureUpstream();
+    // Direct dispatch needs the writer lease to prevent spend-ledger ownership failures.
+    releaseSpendHome = acquireOwnedSpendHome();
     await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
