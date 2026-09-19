@@ -68,6 +68,70 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "skill",
+    aliases: ["skills"],
+    usage: "ocx skill <command> [options]",
+    summary: "Universal Agent Skill Control Plane (Pao-hubPro × SkillsGate).",
+    details: [
+      "Manage agent skills across local agents (Codex, Claude Code, OpenCode) and remote nodes.",
+      "Supports discover, import, static scanning, policy evaluation, approvals, dry-run deployment, verification, drift detection, and rollback.",
+    ],
+  },
+  {
+    name: "skills",
+    aliases: [],
+    usage: "ocx skills <command> [options]",
+    summary: "Alias of ocx skill.",
+  },
+  {
+    name: "security",
+    aliases: ["sec"],
+    usage: "ocx security <command> [options]",
+    summary: "Authorized Security Agent Control Plane (Pao-hubPro × Agentic Bug Hunter).",
+    details: [
+      "Authorization-first recon and validation against a frozen scope snapshot.",
+      "Target-facing work is deny-by-default. R3 is blocked. Imported packages are inventoried, never executed.",
+    ],
+  },
+  {
+    name: "sec",
+    aliases: [],
+    usage: "ocx sec <command> [options]",
+    summary: "Alias of ocx security.",
+  },
+  {
+    name: "credentials",
+    aliases: ["creds"],
+    usage: "ocx credentials <command> [options]",
+    summary: "Provider Access Control Plane (Pao-hubPro × Grok-Register).",
+    details: [
+      "Manage API keys, OAuth sessions, health, leases, and policy-governed provider access.",
+      "Secrets are encrypted at rest and never returned by list/detail. Health checks in this phase are fixture/in-process.",
+    ],
+  },
+  {
+    name: "creds",
+    aliases: [],
+    usage: "ocx creds <command> [options]",
+    summary: "Alias of ocx credentials.",
+  },
+  {
+    name: "social",
+    aliases: ["openpost"],
+    usage: "ocx social <command> [options]",
+    summary: "Social Publishing Control Plane (Pao-hubPro × OpenPost).",
+    details: [
+      "Cross-platform publication orchestration, rendition planning, approval gates, durable scheduling, and analytics.",
+      "Integrates with external OpenPost service without exposing provider OAuth secrets to agents.",
+    ],
+  },
+  {
+    name: "openpost",
+    aliases: [],
+    usage: "ocx openpost <command> [options]",
+    summary: "Alias of ocx social.",
+  },
+  {
     name: "service",
     usage: "ocx service [install|repair|restart|start|stop|status|uninstall|remove]",
     summary: "Run as a background service.",

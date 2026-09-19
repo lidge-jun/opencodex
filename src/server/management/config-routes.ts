@@ -264,8 +264,46 @@ function publicVisionSidecarSettings(
   };
 }
 
+
+function pathInControlPlaneNamespace(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function ownsSkillNamespace(pathname: string): boolean {
+  return pathInControlPlaneNamespace(pathname, "/api/skills") || pathname.startsWith("/api/skill-");
+}
+
+function ownsSecurityNamespace(pathname: string): boolean {
+  return pathInControlPlaneNamespace(pathname, "/api/security");
+}
+
+function ownsCredentialNamespace(pathname: string): boolean {
+  return pathInControlPlaneNamespace(pathname, "/api/credentials");
+}
+
+function ownsSocialNamespace(pathname: string): boolean {
+  return pathInControlPlaneNamespace(pathname, "/api/social");
+}
+
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const pathname = url.pathname;
+  if (ownsSkillNamespace(pathname)) {
+    const { handleSkillRoutes } = await import("./skill-routes");
+    return handleSkillRoutes(ctx);
+  }
+  if (ownsSecurityNamespace(pathname)) {
+    const { handleSecurityRoutes } = await import("./security-routes");
+    return handleSecurityRoutes(ctx);
+  }
+  if (ownsCredentialNamespace(pathname)) {
+    const { handleCredentialRoutes } = await import("./credential-routes");
+    return handleCredentialRoutes(ctx);
+  }
+  if (ownsSocialNamespace(pathname)) {
+    const { handleSocialRoutes } = await import("./social-routes");
+    return handleSocialRoutes(ctx);
+  }
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(withProviderCatalogCapabilityDTO(safeConfigDTO(config), config));
