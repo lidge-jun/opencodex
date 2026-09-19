@@ -16,9 +16,11 @@
  * construction failure. There are no body bytes to wait for either, so a transport that streams
  * one of these holds the caller until the peer closes a connection it is entitled to keep alive.
  *
- * 101 and 103 are also null-body statuses, but neither reaches a final-response decision here:
- * an upgrade is refused before this point and informational heads are consumed while looking for
- * the final one. The three below are the ones these transports can actually have to answer for.
+ * 101 and 103 are null-body statuses too, but neither is a final Response status these helpers
+ * support. 103 and every other informational head is consumed while looking for the final one,
+ * and 101 hands the connection to a protocol neither helper speaks, which is outside what they
+ * construct a Response for at all. The three below are the statuses these transports actually
+ * have to answer for.
  *
  * https://fetch.spec.whatwg.org/#null-body-status
  */
