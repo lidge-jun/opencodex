@@ -57,6 +57,7 @@ let putResponse: () => Response;
 let codexRoutingResponse: () => Response;
 let codexDesiredEnabled = true;
 let deleteResponse: () => Response;
+let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null) => Response | Promise<Response>;
 /**
  * The overview also reads Codex routing, API keys, Claude Code, Claude Desktop
  * and the Grok fence. Default answers keep every existing test's card grid
@@ -125,6 +126,13 @@ beforeEach(() => {
   codexRoutingResponse = () => json({ routingInjected: false, status: "native", recommendedCommand: null });
   codexDesiredEnabled = true;
   deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
+  previewResponse = body => {
+    const clientId = body.clientId ?? "hermes";
+    return json(previewPlan((body.operation as "apply" | "overwrite" | "disable") ?? "apply", {
+      clientId,
+      ...(clientId === "pi" ? { fingerprint: `p1:${"5".repeat(32)}` } : {}),
+    }));
+  };
   failExtraSources = false;
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -137,12 +145,8 @@ beforeEach(() => {
     });
     if (url.endsWith("/api/client-integrations/restore/preview")) return json(previewPlan("restore"));
     if (url.endsWith("/api/client-integrations/preview")) {
-      const body = init?.body ? JSON.parse(String(init.body)) : {};
-      const clientId = body.clientId ?? "hermes";
-      return json(previewPlan(body.operation ?? "apply", {
-        clientId,
-        ...(clientId === "pi" ? { fingerprint: `p1:${"5".repeat(32)}` } : {}),
-      }));
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+      return previewResponse(body, init?.signal);
     }
     if (url.includes("/journal") && method === "DELETE") return deleteResponse();
     if (url.includes("/journal")) return json({ operations: journalRows });
@@ -358,6 +362,48 @@ test("an absent integration applies", async () => {
   await act(async () => { toggleSwitch().click(); });
   await confirmDialog("Apply");
   expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: true, operation: "apply", planFingerprint: previewPlan("apply").fingerprint });
+});
+
+test("a hostile preview fails closed without leaking payload data into the page", async () => {
+  const canary = "private-preview-canary-9f31";
+  stateResponse = () => json(status({ state: "absent" }));
+  previewResponse = body => json({
+    ...previewPlan("apply", { clientId: body.clientId ?? "hermes" }),
+    rawValue: canary,
+    message: canary,
+  });
+  await mountClient();
+  await act(async () => { toggleSwitch().click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+
+  expect(container.textContent).toContain("The change plan could not be loaded. Nothing was changed.");
+  expect(container.textContent).not.toContain(canary);
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
+});
+
+test("closing a loading preview aborts it and fences a late response", async () => {
+  stateResponse = () => json(status({ state: "absent" }));
+  let previewSignal: AbortSignal | null | undefined;
+  let resolvePreview: ((response: Response) => void) | undefined;
+  previewResponse = (_body, signal) => {
+    previewSignal = signal;
+    return new Promise<Response>(resolve => { resolvePreview = resolve; });
+  };
+  await mountClient();
+  await act(async () => { toggleSwitch().click(); });
+  const dialog = container.querySelector("dialog[open]")!;
+  const close = Array.from(dialog.querySelectorAll("button")).find(button => button.textContent?.trim() === "Close") as HTMLButtonElement;
+  expect(close.disabled).toBe(false);
+  await act(async () => { close.click(); });
+  expect(previewSignal?.aborted).toBe(true);
+  expect(container.querySelector("dialog[open]")).toBeNull();
+
+  await act(async () => {
+    resolvePreview!(json(previewPlan("apply")));
+    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
+  });
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  expect(container.textContent).not.toContain("Server change plan");
 });
 
 test("conflict locks the switch instead of guessing", async () => {

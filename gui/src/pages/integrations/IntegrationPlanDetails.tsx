@@ -30,8 +30,19 @@ const FOREIGN_EDIT_KEYS: Record<IntegrationPlanForeignEdit, TKey> = {
   drift: "integrations.plan.foreign.drift",
 };
 
+const REFUSAL_KEYS: Partial<Record<string, TKey>> = {
+  not_installed: "integrations.plan.refusal.notInstalled",
+  conflict: "integrations.plan.refusal.conflict",
+  unsafe: "integrations.plan.refusal.unsafe",
+  non_loopback: "integrations.plan.refusal.nonLoopback",
+  drift_requires_confirm: "integrations.plan.refusal.driftRequiresConfirm",
+  snapshot_expired: "integrations.plan.refusal.snapshotExpired",
+  write_failed: "integrations.plan.refusal.writeFailed",
+};
+
 function Plan({ plan }: { plan: IntegrationMutationPlan }) {
   const t = useT();
+  const refusalKey = plan.refusalReason ? REFUSAL_KEYS[plan.refusalReason] : undefined;
   return (
     <div className="integration-plan-details">
       <p className="integration-plan-operation">
@@ -41,7 +52,7 @@ function Plan({ plan }: { plan: IntegrationMutationPlan }) {
       {!plan.willChange && plan.canApply && (
         <p>{t(plan.operation === "disable" ? "integrations.plan.noop.disabled" : "integrations.plan.noop.applied")}</p>
       )}
-      {!plan.canApply && <p>{t("integrations.plan.refused")}</p>}
+      {!plan.canApply && <p>{t(refusalKey ?? "integrations.plan.refused")}</p>}
       {plan.changes.length > 0 && (
         <ul className="integration-plan-changes">
           {plan.changes.map(change => (

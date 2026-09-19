@@ -55,6 +55,9 @@ export default function ConsequenceDialog({
     ? staleOverride.plan
     : plan;
   const stale = staleOverride?.sourceFingerprint === (plan?.fingerprint ?? null);
+  const dismiss = useCallback(() => {
+    if (!pending) onClose();
+  }, [onClose, pending]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -69,8 +72,8 @@ export default function ConsequenceDialog({
 
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
-    if (!pending && !planLoading) onClose();
-  }, [onClose, pending, planLoading]);
+    dismiss();
+  }, [dismiss]);
 
   const confirm = useCallback(async () => {
     if (pending) return;
@@ -103,6 +106,7 @@ export default function ConsequenceDialog({
       ref={dialogRef}
       className="modal-overlay"
       aria-labelledby={titleId}
+      aria-busy={pending}
       onCancel={handleCancel}
     >
       <button
@@ -110,18 +114,19 @@ export default function ConsequenceDialog({
         className="modal-backdrop-dismiss"
         aria-label={t("common.close")}
         tabIndex={-1}
-        onClick={() => { if (!pending && !planLoading) onClose(); }}
+        onClick={dismiss}
       />
       <div className="modal-card integration-consequence-dialog" role="document">
         <div className="modal-head">
           <h3 id={titleId}>{t(copy.titleKey, copy.vars)}</h3>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} disabled={pending || planLoading}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={dismiss} disabled={pending}>
             {t("common.close")}
           </button>
         </div>
         <div className="integration-consequence-body">{slots}</div>
         <div role="status" aria-live="polite" aria-atomic="true">
           {planLoading && <p>{t("integrations.preview.loading")}</p>}
+          {pending && <p>{t("integrations.mutation.pending")}</p>}
           {stale && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
           {planFailure && <Notice tone="err">{planFailure}</Notice>}
         </div>

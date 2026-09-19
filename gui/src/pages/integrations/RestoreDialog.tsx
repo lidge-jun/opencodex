@@ -52,6 +52,8 @@ export default function RestoreDialog({
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const restoreFallbackRef = useRef<HTMLElement | null>(null);
   const restoredRef = useRef(false);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewGenerationRef = useRef(0);
   const [boundPlan, setBoundPlan] = useState<BoundRestorePlan | null>(null);
   const [previewPending, setPreviewPending] = useState(true);
   const [stale, setStale] = useState(false);
@@ -60,6 +62,13 @@ export default function RestoreDialog({
   const scopedProfileId = row.clientId === "aside" ? profileId ?? row.profileId : undefined;
   const plan = boundPlan?.plan ?? null;
   const drift = plan?.foreignEdit === "drift";
+  const dismiss = useCallback(() => {
+    if (pending) return;
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    onClose();
+  }, [onClose, pending]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -107,6 +116,10 @@ export default function RestoreDialog({
 
   useEffect(() => {
     const controller = new AbortController();
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = controller;
     const load = async () => {
       setPreviewPending(true);
       setFailure(null);
@@ -117,9 +130,10 @@ export default function RestoreDialog({
           confirmDrift = true;
           next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
         }
+        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
         setBoundPlan({ plan: next, confirmDrift });
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
         if (isIntegrationPreviewUnavailable(error)) {
           onReconcile?.();
           onClose();
@@ -127,17 +141,23 @@ export default function RestoreDialog({
         }
         setFailure(t("integrations.preview.failed"));
       } finally {
-        if (!controller.signal.aborted) setPreviewPending(false);
+        if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+          previewAbortRef.current = null;
+          setPreviewPending(false);
+        }
       }
     };
     void load();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (previewAbortRef.current === controller) previewAbortRef.current = null;
+    };
   }, [apiBase, onClose, onReconcile, row.opId, scopedProfileId, t]);
 
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
-    if (!pending && !previewPending) onClose();
-  }, [onClose, pending, previewPending]);
+    dismiss();
+  }, [dismiss]);
 
   const submit = async () => {
     if (pending || previewPending || !boundPlan || !boundPlan.plan.canApply) return;
@@ -161,24 +181,38 @@ export default function RestoreDialog({
       if (error instanceof IntegrationApiError && error.stalePlan) {
         let fresh = error.stalePlan;
         let freshConfirmDrift = attemptedConfirmDrift;
+        setPending(false);
         try {
           if (fresh.refusalReason === "drift_requires_confirm") {
+            const controller = new AbortController();
+            const generation = previewGenerationRef.current + 1;
+            previewGenerationRef.current = generation;
+            previewAbortRef.current?.abort();
+            previewAbortRef.current = controller;
+            setPreviewPending(true);
             freshConfirmDrift = true;
-            fresh = await previewIntegrationRestore(apiBase, row.opId, freshConfirmDrift, undefined, scopedProfileId);
+            try {
+              fresh = await previewIntegrationRestore(apiBase, row.opId, freshConfirmDrift, controller.signal, scopedProfileId);
+            } finally {
+              if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+                previewAbortRef.current = null;
+                setPreviewPending(false);
+              }
+            }
+            if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
           }
         } catch (previewError) {
+          if (previewError instanceof Error && previewError.name === "AbortError") return;
           if (isIntegrationPreviewUnavailable(previewError)) {
             onReconcile?.();
             onClose();
             return;
           }
           setFailure(t("integrations.preview.failed"));
-          setPending(false);
           return;
         }
         setBoundPlan({ plan: fresh, confirmDrift: freshConfirmDrift });
         setStale(true);
-        setPending(false);
         return;
       }
       // Shared formatter so a residual write — compensation itself failed, the
@@ -193,6 +227,7 @@ export default function RestoreDialog({
       ref={dialogRef}
       className="modal-overlay"
       aria-labelledby="integration-restore-title"
+      aria-busy={pending}
       onCancel={handleCancel}
     >
       <button
@@ -200,7 +235,7 @@ export default function RestoreDialog({
         className="modal-backdrop-dismiss"
         aria-label={t("common.close")}
         tabIndex={-1}
-        onClick={() => { if (!pending && !previewPending) onClose(); }}
+        onClick={dismiss}
       />
       <div className="modal-card integration-restore-dialog" role="document">
         <div className="modal-head">
@@ -213,12 +248,13 @@ export default function RestoreDialog({
         </div>
         <div role="status" aria-live="polite" aria-atomic="true">
           {previewPending && <p>{t("integrations.preview.loading")}</p>}
+          {pending && <p>{t("integrations.mutation.pending")}</p>}
           {stale && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
         </div>
         <IntegrationPlanDetails plan={plan} />
         {failure && <Notice tone="err">{failure}</Notice>}
         <div className="modal-actions">
-          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={pending || previewPending}>
+          <button type="button" className="btn btn-ghost" onClick={dismiss} disabled={pending}>
             {t("common.cancel")}
           </button>
           <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={pending || previewPending || !plan?.canApply || Boolean(failure)}>

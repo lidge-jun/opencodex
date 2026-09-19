@@ -232,6 +232,10 @@ export default function IntegrationsOverview({
     failure: string | null;
   } | null>(null);
   const [bulkPlans, setBulkPlans] = useState<{ plans: LabeledIntegrationPlan[]; loading: boolean; failure: string | null } | null>(null);
+  const cardPreviewAbortRef = useRef<AbortController | null>(null);
+  const cardPreviewGenerationRef = useRef(0);
+  const bulkPreviewAbortRef = useRef<AbortController | null>(null);
+  const bulkPreviewGenerationRef = useRef(0);
   const restoreFocusRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -241,6 +245,13 @@ export default function IntegrationsOverview({
     restoreFocusRef.current = null;
     if (trigger.isConnected) trigger.focus();
   }, [pendingToggle]);
+
+  useEffect(() => () => {
+    cardPreviewGenerationRef.current += 1;
+    bulkPreviewGenerationRef.current += 1;
+    cardPreviewAbortRef.current?.abort();
+    bulkPreviewAbortRef.current?.abort();
+  }, []);
 
   const fetchStates = useCallback(
     async (signal: AbortSignal) => (await loadIntegrationStates(apiBase, signal)).clients,
@@ -409,15 +420,24 @@ export default function IntegrationsOverview({
    */
   const requestDisableAll = async () => {
     if (bulkPending || bulkPlans || appliedClients.length === 0) return;
+    const controller = new AbortController();
+    const generation = bulkPreviewGenerationRef.current + 1;
+    bulkPreviewGenerationRef.current = generation;
+    bulkPreviewAbortRef.current?.abort();
+    bulkPreviewAbortRef.current = controller;
     setBulkPlans({ plans: [], loading: true, failure: null });
     try {
       const plans = await Promise.all(appliedClients.map(async client => {
-        const plan = await previewIntegrationMutation(apiBase, client.clientId, "disable");
+        const plan = await previewIntegrationMutation(apiBase, client.clientId, "disable", controller.signal);
         const row = rows.find(candidate => candidate.status?.clientId === client.clientId);
         return { clientId: client.clientId, label: row ? t(row.labelKey) : client.clientId, plan };
       }));
+      if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
+      bulkPreviewAbortRef.current = null;
       setBulkPlans({ plans, loading: false, failure: null });
     } catch (error) {
+      if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
+      bulkPreviewAbortRef.current = null;
       if (isIntegrationPreviewUnavailable(error)) {
         setBulkPlans(null);
         refresh();
@@ -425,6 +445,13 @@ export default function IntegrationsOverview({
       }
       setBulkPlans({ plans: [], loading: false, failure: t("integrations.preview.failed") });
     }
+  };
+
+  const closeBulkPlans = () => {
+    bulkPreviewGenerationRef.current += 1;
+    bulkPreviewAbortRef.current?.abort();
+    bulkPreviewAbortRef.current = null;
+    setBulkPlans(null);
   };
 
   const disableAll = async (plans: readonly LabeledIntegrationPlan[]) => {
@@ -559,11 +586,20 @@ export default function IntegrationsOverview({
 
   const requestFilePlan = async (row: OverviewRow, operation: Exclude<IntegrationPlanOperation, "restore">) => {
     if (!row.status || plannedCard) return;
+    const controller = new AbortController();
+    const generation = cardPreviewGenerationRef.current + 1;
+    cardPreviewGenerationRef.current = generation;
+    cardPreviewAbortRef.current?.abort();
+    cardPreviewAbortRef.current = controller;
     setPlannedCard({ row, operation, plan: null, loading: true, failure: null });
     try {
-      const plan = await previewIntegrationMutation(apiBase, row.status.clientId, operation);
+      const plan = await previewIntegrationMutation(apiBase, row.status.clientId, operation, controller.signal);
+      if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
+      cardPreviewAbortRef.current = null;
       setPlannedCard({ row, operation, plan, loading: false, failure: null });
     } catch (error) {
+      if (controller.signal.aborted || generation !== cardPreviewGenerationRef.current) return;
+      cardPreviewAbortRef.current = null;
       if (isIntegrationPreviewUnavailable(error)) {
         setPlannedCard(null);
         refresh();
@@ -571,6 +607,13 @@ export default function IntegrationsOverview({
       }
       setPlannedCard({ row, operation, plan: null, loading: false, failure: t("integrations.preview.failed") });
     }
+  };
+
+  const closePlannedCard = () => {
+    cardPreviewGenerationRef.current += 1;
+    cardPreviewAbortRef.current?.abort();
+    cardPreviewAbortRef.current = null;
+    setPlannedCard(null);
   };
 
   const requestToggle = (row: OverviewRow, next: boolean) => {
@@ -809,7 +852,7 @@ export default function IntegrationsOverview({
           plan={plannedCard.plan}
           planLoading={plannedCard.loading}
           planFailure={plannedCard.failure}
-          onClose={() => setPlannedCard(null)}
+          onClose={closePlannedCard}
           onConfirm={async plan => {
             if (!plan) return;
             await toggleCard(plannedCard.row, plan.operation !== "disable", plan);
@@ -823,7 +866,7 @@ export default function IntegrationsOverview({
           plans={bulkPlans.plans}
           planLoading={bulkPlans.loading}
           planFailure={bulkPlans.failure}
-          onClose={() => setBulkPlans(null)}
+          onClose={closeBulkPlans}
           onConfirm={async () => { await disableAll(bulkPlans.plans); }}
         />
       )}

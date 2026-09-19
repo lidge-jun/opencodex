@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
@@ -45,6 +45,12 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
     loading: boolean;
     failure: string | null;
   } | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewGenerationRef = useRef(0);
+  useEffect(() => () => {
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+  }, []);
   const fetchProfiles = useCallback((signal: AbortSignal) => loadAsideProfiles(apiBase, signal), [apiBase]);
   const resource = useDataSurface(`aside-profiles:${apiBase}`, [apiBase], fetchProfiles, {
     enabled: active,
@@ -100,11 +106,20 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
   };
   const requestProfileMutation = async (profile: AsideProfileStatus, enabled: boolean) => {
     if (pendingRef.current || planned) return;
+    const controller = new AbortController();
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = controller;
     setPlanned({ profile, enabled, plan: null, loading: true, failure: null });
     try {
-      const plan = await previewIntegrationMutation(apiBase, "aside", enabled ? "apply" : "disable", undefined, profile.profileId);
+      const plan = await previewIntegrationMutation(apiBase, "aside", enabled ? "apply" : "disable", controller.signal, profile.profileId);
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      previewAbortRef.current = null;
       setPlanned({ profile, enabled, plan, loading: false, failure: null });
     } catch (error) {
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      previewAbortRef.current = null;
       if (isIntegrationPreviewUnavailable(error)) {
         setPlanned(null);
         resource.refresh();
@@ -112,6 +127,12 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
       }
       setPlanned({ profile, enabled, plan: null, loading: false, failure: t("integrations.preview.failed") });
     }
+  };
+  const closePlanned = () => {
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    setPlanned(null);
   };
   const sync = async () => {
     if (pendingRef.current) return;
@@ -214,7 +235,7 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
           plan={planned.plan}
           planLoading={planned.loading}
           planFailure={planned.failure}
-          onClose={() => setPlanned(null)}
+          onClose={closePlanned}
           onConfirm={async plan => {
             if (!plan) return;
             await mutate(planned.enabled, planned.profile.profileId, plan);

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { useT, type TKey } from "../../i18n/shared";
@@ -129,6 +129,13 @@ export default function FileIntegrationPage({
     loading: boolean;
     failure: string | null;
   } | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewGenerationRef = useRef(0);
+
+  useEffect(() => () => {
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+  }, []);
 
   const fetchState = useCallback(
     (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal, profileId),
@@ -172,11 +179,20 @@ export default function FileIntegrationPage({
 
   const requestMutation = async (operation: Exclude<IntegrationPlanOperation, "restore">) => {
     if (!status || pending || plannedMutation) return;
+    const controller = new AbortController();
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = controller;
     setPlannedMutation({ operation, plan: null, loading: true, failure: null });
     try {
-      const plan = await previewIntegrationMutation(apiBase, client, operation, undefined, profileId);
+      const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId);
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      previewAbortRef.current = null;
       setPlannedMutation({ operation, plan, loading: false, failure: null });
     } catch (error) {
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      previewAbortRef.current = null;
       if (isIntegrationPreviewUnavailable(error)) {
         setPlannedMutation(null);
         refresh();
@@ -184,6 +200,13 @@ export default function FileIntegrationPage({
       }
       setPlannedMutation({ operation, plan: null, loading: false, failure: t("integrations.preview.failed") });
     }
+  };
+
+  const closePlannedMutation = () => {
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    setPlannedMutation(null);
   };
 
   const mutate = async (plan: IntegrationMutationPlan) => {
@@ -389,7 +412,7 @@ export default function FileIntegrationPage({
           plan={plannedMutation.plan}
           planLoading={plannedMutation.loading}
           planFailure={plannedMutation.failure}
-          onClose={() => setPlannedMutation(null)}
+          onClose={closePlannedMutation}
           onConfirm={async plan => { if (plan) await mutate(plan); }}
         />
       )}

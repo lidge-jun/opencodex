@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import ConsequenceDialog from "../src/pages/integrations/ConsequenceDialog";
@@ -125,6 +125,27 @@ test("preview loading and failure keep confirmation disabled", async () => {
   expect(confirm.disabled).toBe(true);
 });
 
+test("a pending mutation marks and announces the busy dialog", async () => {
+  let finish: (() => void) | undefined;
+  await act(async () => {
+    root?.render(
+      <LanguageProvider>
+        <ConsequenceDialog
+          copy={copy}
+          plan={plan("p1:44444444444444444444444444444444")}
+          onClose={() => {}}
+          onConfirm={() => new Promise<void>(resolve => { finish = resolve; })}
+        />
+      </LanguageProvider>,
+    );
+  });
+  const confirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Apply") as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+  expect(container.querySelector("dialog")?.getAttribute("aria-busy")).toBe("true");
+  expect(container.textContent).toContain("Applying the confirmed change");
+  await act(async () => { finish?.(); });
+});
+
 test("keyboard cancel closes an idle dialog and restores its trigger", async () => {
   const trigger = windowValue.document.createElement("button") as unknown as HTMLButtonElement;
   windowValue.document.body.insertBefore(trigger as unknown as Node, container as unknown as Node);
@@ -220,4 +241,49 @@ test("restore retains confirmDrift when stale drift becomes non-drift", async ()
     operation: "restore",
     planFingerprint: `p1:${"8".repeat(32)}`,
   });
+});
+
+test("restore preview can be cancelled and aborts a late read", async () => {
+  let previewSignal: AbortSignal | null | undefined;
+  let resolvePreview: ((response: Response) => void) | undefined;
+  const mockFetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    previewSignal = init?.signal;
+    return new Promise<Response>(resolve => { resolvePreview = resolve; });
+  }) as typeof fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: mockFetch });
+  Object.defineProperty(windowValue, "fetch", { configurable: true, value: mockFetch });
+  let closed = 0;
+  function Harness() {
+    const [open, setOpen] = useState(true);
+    return open ? (
+      <RestoreDialog
+        apiBase=""
+        row={{
+          opId: "op-cancel-preview", clientId: "hermes", kind: "apply",
+          at: "2026-09-20T00:00:00.000Z", configPath: "/tmp/hermes.yaml",
+          snapshot: "stored", undoable: true, deletable: false,
+        }}
+        onClose={() => { closed += 1; setOpen(false); }}
+        onRestored={() => {}}
+      />
+    ) : null;
+  }
+  await act(async () => { root?.render(<LanguageProvider><Harness /></LanguageProvider>); });
+  const cancel = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Cancel") as HTMLButtonElement;
+  expect(cancel.disabled).toBe(false);
+  await act(async () => { cancel.click(); });
+  expect(closed).toBe(1);
+  expect(previewSignal?.aborted).toBe(true);
+  expect(container.querySelector("dialog")).toBeNull();
+
+  await act(async () => {
+    resolvePreview!(Response.json({
+      ...plan(`p1:${"9".repeat(32)}`),
+      operation: "restore",
+      state: "current",
+    }));
+    await new Promise<void>(resolve => windowValue.setTimeout(resolve, 0));
+  });
+  expect(container.querySelector("dialog")).toBeNull();
+  expect(container.textContent).not.toContain("Server change plan");
 });
