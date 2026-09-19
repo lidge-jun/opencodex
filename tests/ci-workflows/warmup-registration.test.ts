@@ -219,11 +219,12 @@ describe("warm-up judge: what it refuses, and says why", () => {
   });
 
   test("a suite that is not a plain describe statement does not make its hooks run", () => {
-    // describe.skip registers a suite that never runs, and a describe behind a false condition is
-    // never called at all. Both leave a correctly written beforeAll inside a suite that is not
-    // there, which is a registration in shape only.
-    const skipped = judge(BUN_TEST, HELPER,
-      'describe.skip("subject", () => {',
+    // A suite reached through a member - describe.each here, and describe.skip or describe.only by
+    // the same path - is a callee this judge cannot claim runs, and a describe behind a false
+    // condition is never called at all. Both leave a correctly written beforeAll inside a suite
+    // that is not there, which is a registration in shape only.
+    const member = judge(BUN_TEST, HELPER,
+      'describe.each([1, 2])("subject %s", () => {',
       "  beforeAll(async () => {",
       "    await warmModuleGraph(options);",
       "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
@@ -234,7 +235,7 @@ describe("warm-up judge: what it refuses, and says why", () => {
       "    await warmModuleGraph(options);",
       "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
       "});");
-    expect([skipped, guardedSuite].map(warmupIsRegistered)).toEqual([false, false]);
+    expect([member, guardedSuite].map(warmupIsRegistered)).toEqual([false, false]);
     expect(warmupRegistrationComplaints(guardedSuite).join(" ")).toContain("plain statement");
   });
 
