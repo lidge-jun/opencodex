@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
 import type { OcxProviderConfig } from "../types";
+import { resolveProviderApiKey } from "./api-key-resolve";
 
 const FILENAME = "reasoning-metadata-cache.json";
 const SUPPORT_FILENAME = "reasoning-support-cache.json";
@@ -164,10 +165,20 @@ function modelLadderValue(
  * Bind learned capability to the credential that supplied the evidence. A digest keeps the
  * credential itself out of the persisted cache while remaining stable across restarts and key
  * selection. Providers without key-auth identity may use metadata, but cannot teach the cache.
+ *
+ * The hash input is the resolved wire credential, not the configured expression: the catalog
+ * path carries the raw config string in apiKey (a keychain:/env reference stays unresolved
+ * there), while the request path carries the resolved secret in apiKey and the configured
+ * expression in _apiKeyAttempt.reference. Resolving the configured expression on both sides
+ * hashes the same secret the upstream sees, so a refusal learned at request time also clamps
+ * the catalog ladder for keychain/env users -- and a rotation behind a stable reference
+ * starts clean instead of inheriting the previous credential's refusals.
  */
 function credentialIdentity(provider: OcxProviderConfig): string | undefined {
-  if (typeof provider.apiKey !== "string" || provider.apiKey.length === 0) return undefined;
-  return createHash("sha256").update(provider.apiKey).digest("hex");
+  const configured = provider._apiKeyAttempt?.reference ?? provider.apiKey;
+  const resolved = resolveProviderApiKey(configured);
+  if (typeof resolved !== "string" || resolved.length === 0) return undefined;
+  return createHash("sha256").update(resolved).digest("hex");
 }
 
 /** JSON encoding avoids delimiter ambiguity in provider, model, and effort identifiers. */
