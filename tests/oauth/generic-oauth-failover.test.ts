@@ -609,6 +609,16 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
     expect(preferredInitialAccount(cfg, "xai")).toBe(sorted[1]!);
   });
 
+  test("fill-first treats a zero threshold as disabling proactive switching", async () => {
+    const ids = await seed(2);
+    const active = [...ids].sort((left, right) => left.localeCompare(right))[0]!;
+    await setActiveAccount("xai", active);
+    const cfg = kernelConfig("fill-first", { autoSwitchThreshold: 0 });
+
+    setCachedProviderAccountQuotaForTests("xai", active, { weeklyPercent: 100, updatedAt: Date.now() });
+    expect(preferredInitialAccount(cfg, "xai")).toBeNull();
+  });
+
   test("fill-first advances through the sorted roster, not the eligible subset", async () => {
     const ids = await seed(3);
     const sorted = [...ids].sort((left, right) => left.localeCompare(right));

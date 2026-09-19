@@ -115,11 +115,16 @@ Google Antigravity 账户和提供方的配额查询（包括模型列表回退�
 ### Google 工具架构损失诊断
 
 Google 工具声明会按所选端点类别进行编译。通过 `ocx debug provider on`、仪表盘 Logs 开关或
-`OCX_DEBUG=1` 启用提供方调试后，兼容性转换中的架构损失会输出一条
+`OCX_DEBUG=1` 启用提供方调试后，在省略策略或使用 `compatible` 的路径上，兼容性转换中的架构损失会输出一条
 `[ocx:google:google-tool-schema-loss]` 记录（可用 `ocx debug provider logs -f` 持续查看），
-其中仅包含报告版本、端点类别、`lossy` 指示器、带有上限计数的固定损失类别和截断标志，
-绝不包含工具名、属性名、路径、值或架构文本。此诊断只观察现有的兼容转换，不会拒绝请求。
-原生输出架构不属于此诊断范围。请参阅[调试命令参考](/zh-cn/reference/cli/agents/)。
+其中仅包含报告版本、端点类别、`lossy` 指示器、有上限的不确定比较计数、带有上限计数的固定损失类别和截断标志，
+绝不包含工具名、属性名、路径、值或架构文本。省略策略或使用 `compatible` 时只观察转换。
+在 `reject-lossy` 下，如果初始编译有损或有界比较结果不确定，则会在发送前拒绝；被拒绝的
+请求不会另行输出损失记录。在 `reject-lossy` 下，会移除约束的
+Vertex 或 Cloud Code Assist 修复会输出同样不含内容的 `google-tool-schema-repair` 记录，并在不发送
+修改请求的情况下返回原始 400；省略策略或使用 `compatible` 时，会像以前一样重放修复后的请求。
+直连 AI Studio 不执行该修复。原生输出架构不属于这两条策略路径。
+请参阅[调试命令参考](/zh-cn/reference/cli/agents/)。
 
 
 Nous refresh 发生终止性失败后，请运行 `ocx login nous` 重新认证。

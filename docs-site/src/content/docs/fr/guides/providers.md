@@ -135,13 +135,19 @@ Les vérifications de quota Google Antigravity utilisent des points de terminais
 
 Les déclarations d’outils Google sont compilées selon la classe du point de terminaison sélectionné.
 Lorsque le débogage du fournisseur est activé — avec `ocx debug provider on`, le bouton Logs du
-tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion de compatibilité émet un enregistrement
+tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion de compatibilité sur le
+chemin où la politique est absente ou vaut `compatible` émet un enregistrement
 `[ocx:google:google-tool-schema-loss]` (à suivre avec `ocx debug provider logs -f`) ne contenant que
-la version du rapport, la classe du point de terminaison, un indicateur `lossy`, des catégories de
-perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
-propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Ce diagnostic
-observe la conversion compatible existante sans rejeter la requête. Les schémas de sortie natifs
-n’entrent pas dans ce diagnostic. Consultez la
+la version du rapport, la classe du point de terminaison, un indicateur `lossy`, un compteur borné de
+comparaisons indéterminées, des catégories de perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
+propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
+absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. Sous `reject-lossy`,
+une compilation initialement avec perte ou dont la comparaison bornée est indéterminée est refusée
+avant l’envoi ; aucun enregistrement de perte distinct n’est émis pour la requête refusée. Sous `reject-lossy`, une
+réparation Vertex ou Cloud Code Assist qui supprimerait des contraintes émet un enregistrement
+`google-tool-schema-repair` également sans contenu et renvoie le 400 d’origine sans nouvel envoi ;
+avec une politique absente ou `compatible`, la requête réparée est rejouée comme auparavant. AI Studio direct ne tente jamais cette réparation. Les schémas
+de sortie natifs restent hors de ces deux chemins. Consultez la
 [référence des commandes de débogage](/fr/reference/cli/agents/).
 
 

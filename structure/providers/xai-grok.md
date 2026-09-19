@@ -63,6 +63,9 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   force-refresh once (singleflight, generation-checked) and replay OAuth-backed xAI requests
   exactly once with a re-resolved transport; API-key/BYOK paths are excluded
   (`src/server/responses/core.ts`).
+- **Generic pool threshold:** xAI's generic OAuth fill-first selector in
+  `src/oauth/generic-account-failover.ts` treats a non-positive threshold as disabling proactive
+  usage-based account changes; reactive recovery remains independent.
 - **Header parity:** per-attempt `x-grok-req-id` (fresh UUID inside the transport fetch
   wrapper), stable session/conv affinity headers, always-set User-Agent, and a single
   compatibility profile const for the Grok client version (`src/providers/xai-transport.ts`);

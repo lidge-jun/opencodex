@@ -153,6 +153,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `escapeBuiltinToolNames?` | `boolean` | Экранировать built-in tool name'ы для Anthropic-compatible gateway'ев и восстанавливать их в возвращаемых call'ах. |
 | `anthropicEofTolerance?` | `boolean` | Позволяет Anthropic-совместимому шлюзу завершить поток до `message_stop`, только если получен видимый текст или полный JSON-объект аргументов инструмента. По умолчанию выключено. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Режим транспорта/аутентификации Google. По умолчанию `ai-studio`. |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Только Google. Отсутствие поля или `compatible` сохраняет совместимую схему и существующее недиректное восстановление после 400. `reject-lossy` отклоняет начальную потерю или неопределённый результат ограниченного сравнения до отправки и блокирует восстановление Vertex или Cloud Code Assist, которое сняло бы ограничения. Прямой AI Studio такое восстановление не выполняет. |
 | `project?` | `string` | Идентификатор проекта Vertex или Antigravity Cloud Code Assist. |
 | `location?` | `string` | Локация Vertex; fallback через окружение — `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Только Cursor: MCP-серверы в режимах stdio или Streamable HTTP. |

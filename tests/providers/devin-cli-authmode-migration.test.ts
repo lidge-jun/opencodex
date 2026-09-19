@@ -12,7 +12,7 @@ describe("devin-cli retired-adapter migration", () => {
   // devin-provider-merge-migration.ts: the `devin-cli` registry entry is gone,
   // so the PROVIDER_REGISTRY lookup that gated the local -> oauth rewrite here
   // could never fire again. What remains is the adapter repair, which must
-  // keep working for custom-named rows that no registry pin protects.
+  // fail closed for custom-named rows that no registry pin protects.
 
   test("rewrites the registry-id row that still names the removed ACP adapter", () => {
     // The ACP adapter is gone, so the saved id is no longer constructible. The
@@ -25,20 +25,21 @@ describe("devin-cli retired-adapter migration", () => {
     expect(p.warnings.join(" ")).toContain("devin-cli -> devin");
   });
 
-  test("converts a custom-named ACP row, which no registry pin protects", () => {
-    // `devin-acp` was the documented escape hatch. Nothing pins a custom name,
-    // so after the removal this row is the one that would throw
-    // `Unknown adapter: devin-cli` on every request.
+  test("leaves a custom-named ACP row unchanged pending explicit authentication", () => {
     const config = {
       providers: {
         "devin-acp": { adapter: "devin-cli", baseUrl: "https://cli.devin.ai" },
       },
     } as unknown as Parameters<typeof projectDevinCliAuthMode>[0];
     const p = projectDevinCliAuthMode(config);
-    expect(p.changed).toBe(true);
-    expect(p.config.providers!["devin-acp"]!.adapter).toBe("devin");
-    expect(p.config.providers!["devin-acp"]!.baseUrl).toBe("https://server.codeium.com");
-    expect(p.warnings.join(" ")).toContain("devin-acp");
+    expect(p.changed).toBe(false);
+    expect(p.config.providers!["devin-acp"]).toEqual({
+      adapter: "devin-cli",
+      baseUrl: "https://cli.devin.ai",
+    });
+    expect(p.warnings.join(" ")).toContain('left custom provider "devin-acp" unchanged');
+    expect(p.warnings.join(" ")).toContain("not migrated");
+    expect(p.warnings.join(" ")).toContain("configure Devin authentication explicitly");
   });
 
   test("leaves a non-ACP baseUrl alone while still retiring the adapter", () => {

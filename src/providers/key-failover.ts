@@ -12,6 +12,7 @@ import { commitProviderApiKeySelection } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
+import { normalizedBaseUrl } from "./quota/vendor-probes-key";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
@@ -305,11 +306,15 @@ function isOpenCodeGoDestination(
   // Endpoint identity, not adapter identity: the runtime adapter is already overridden
   // per model by the time the recovery loop runs (muse-spark rides `openai-responses`
   // while the preset declares `openai-chat`), so an adapter-strict lookup misses it.
-  const endpoint = raw.trim().replace(/\/+$/, "");
+  // Canonicalize with the shared quota-probe normalizer so host case and explicit
+  // default ports compare equal; userinfo, query, and fragment never match
+  // (follow-up to the review on #5067).
+  const endpoint = normalizedBaseUrl(raw.trim());
+  if (!endpoint) return false;
   const entry = getProviderRegistryEntry("opencode-go");
   if (!entry) return false;
   const candidates = [entry.baseUrl, ...(entry.destinationAliases ?? []).map(alias => alias.baseUrl)];
-  return candidates.some(url => url.trim().replace(/\/+$/, "") === endpoint);
+  return candidates.some(url => normalizedBaseUrl(url.trim()) === endpoint);
 }
 
 /**

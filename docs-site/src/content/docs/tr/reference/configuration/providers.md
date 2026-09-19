@@ -154,6 +154,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic uyumlu ağ geçitleri için yerleşik araç adlarından kaçış yapın ve döndürülen çağrılarda bunları geri yükleyin. |
 | `anthropicEofTolerance?` | `boolean` | Yalnızca görünür metin veya eksiksiz bir JSON nesnesi araç girdisi alındığında, Anthropic uyumlu bir ağ geçidinin `message_stop` öncesinde biten bir akışı tamamlamasına izin verin. Varsayılan olarak kapalıdır. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google aktarım/kimlik doğrulama modu. Varsayılan `ai-studio`. |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Yalnızca Google. Alanın atlanması veya `compatible`, uyumlu şemayı ve mevcut doğrudan olmayan 400 onarımını korur. `reject-lossy`, ilk kaybı veya sonucu belirsiz sınırlı bir karşılaştırmayı gönderimden önce reddeder ve kısıtları açacak Vertex ya da Cloud Code Assist onarımını engeller. Doğrudan AI Studio bu onarımı yapmaz. |
 | `project?` | `string` | Vertex veya Antigravity Cloud Code Assist proje kimliği. |
 | `location?` | `string` | Vertex konumu; ortam geri dönüşü `GOOGLE_CLOUD_LOCATION`'dır. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Yalnızca Cursor: stdio veya Akışlanabilir HTTP MCP sunucuları. |

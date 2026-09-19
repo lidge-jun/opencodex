@@ -31,6 +31,10 @@ lists its required source/registry paths and preview/apply flags.
 
 ## Public docs
 
+The provider configuration reference and provider guide own the public Google tool-schema policy:
+the persisted values/default, initial refusal, non-direct repair withholding, direct no-repair
+behavior, and content-free diagnostics. English and all translated copies change together.
+
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
 served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, and Japanese under `/ja`. `docs-site/astro.config.mjs` is the locale source of truth.
 

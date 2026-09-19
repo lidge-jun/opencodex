@@ -56,6 +56,7 @@ const MERGED_SCHEMA_KEYS = [
 type SanitizeResult = Schema | typeof BUDGET_EXHAUSTED;
 
 export type GoogleToolSchemaEndpointClass = "ai-studio" | "vertex" | "cloud-code-assist";
+export type GoogleToolSchemaPolicy = "compatible" | "reject-lossy";
 
 export interface GoogleToolSchemaProfile {
   endpointClass: GoogleToolSchemaEndpointClass;
@@ -80,6 +81,7 @@ export type GoogleToolSchemaLossCategory =
   | "dereference-limit-widened"
   | "depth-limit-widened"
   | "node-budget-widened"
+  | "repair-opened-schema"
   | "unsupported-constraint-dropped"
   | "invalid-schema-widened";
 

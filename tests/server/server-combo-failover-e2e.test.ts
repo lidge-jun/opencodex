@@ -1,4 +1,5 @@
 import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
+import { registerComboToolRoutingCases } from "../helpers/combo-tool-routing-cases";
 import { comboProviderFactory } from "../helpers/combo-provider";
 import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
 import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
@@ -4109,6 +4110,8 @@ describe("optional-control rejection failover regression", () => {
       expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
     });
   }
+
+  registerComboToolRoutingCases({ serve, baseUrl, provider, comboConfig, post });
 });
 
 describe("image-capability rejection failover regression", () => {

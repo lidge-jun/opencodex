@@ -148,6 +148,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `escapeBuiltinToolNames?` | `boolean` | Échapper aux noms d'outils intégrés pour les passerelles compatibles Anthropic et les restaurer lors des appels renvoyés. |
 | `anthropicEofTolerance?` | `boolean` | Laissez une passerelle compatible Anthropic compléter un flux qui se termine avant `message_stop`, uniquement lorsque du texte visible ou une entrée complète d'outil d'objet JSON a été reçue. Désactivé par défaut. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Mode Google transport/auth. Par défaut `ai-studio`. |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google uniquement. Une valeur absente ou `compatible` conserve le schéma compatible et la réparation 400 existante hors mode direct. `reject-lossy` refuse une perte initiale ou une comparaison bornée indéterminée avant l’envoi et bloque une réparation Vertex ou Cloud Code Assist qui ouvrirait des contraintes. AI Studio direct n’effectue jamais cette réparation. |
 | `project?` | `string` | ID du projet Vertex ou Antigravity Cloud Code Assist. |
 | `location?` | `string` | Région Vertex ; la valeur de repli de l'environnement est `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor uniquement : serveurs MCP sur entrée-sortie standard ou HTTP diffusé en continu. |

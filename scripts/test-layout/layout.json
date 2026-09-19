@@ -1165,6 +1165,7 @@
     "relay-eager.test.ts": "server",
     "release-helper.test.ts": "ci-workflows",
     "release-notes.test.ts": "ci-workflows",
+    "resolved-model-policy.test.ts": "providers",
     "release-version-line.test.ts": "ci-workflows",
     "remote-catalog.test.ts": "clients",
     "remote-workspace-activation.test.ts": "clients",
@@ -1552,6 +1553,7 @@
     "responses-code-mode-patch-compile.test.ts": "responses",
     "gui-codex-usage-score-parity.test.ts": "gui",
     "web-search-sidecar-429.test.ts": "web-search",
+    "management-google-tool-schema-policy.test.ts": "server",
     "codex-shim-destroyed-probe.test.ts": "codex-integration"
   },
   "migrated": [

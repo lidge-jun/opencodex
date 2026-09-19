@@ -1,15 +1,15 @@
 # Campaign status
 
-Status: ACTIVE. Ten of the sixteen original issues are resolved and closed. Remaining: #5112, #5114, #5115, #5117, #5118, #5123. Supplementary sideband recovery #5161 and send-assertion follow-up #5170 are merged. Runtime ownership #5157, strict-policy child #5167 (report parent #5162 merged), and static-policy resolver/consumer stack #5171/#5174 are under exact-head hosted verification and static review. Latest integration recorded here: #5162 at `8a030721b3ffc909ca7d8b05ca0b7c873c1493a1`.
+Status: ACTIVE. Thirteen of the sixteen original issues are resolved and closed. Remaining: #5114, #5117, #5118. Resolver parent #5171 landed at `efb55e71e547ac83563e1d45dd60fb0b646e6cf7`; consumer #5174 remains open after a macOS job timeout, with a diagnostic rerun active at the same head. Metrics #5183 has further regression coverage pending after its latest correction. Preview #5185 remains a draft; server and dashboard work continue in separate existing owner checkouts. No additional issue closure is claimed.
 
 ## Owners
 
 | Lane | State | Issues |
 | --- | --- | --- |
-| Runtime | Active in an isolated worktree | #5109 #5110 #5111 #5113 #5115 #5122 #5123 #5124 |
-| Policy and operator | Active in an isolated worktree | #5112 #5114 #5116 #5117 #5118 #5119 #5120 #5121 |
+| Runtime | Active in an isolated worktree | Remaining: #5118 server, writer, routes, backend tests and documentation |
+| Policy and operator | Active in an isolated worktree | Remaining: #5114, #5117 and #5118 dashboard with its tests |
 
-Private orchestration records retain the actual task handles, model-selection evidence and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
+Private orchestration records retain the actual task handles and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
 
 ## Current evidence
 
@@ -20,8 +20,8 @@ Private orchestration records retain the actual task handles, model-selection ev
 
 ## Issue outcomes
 
-Closed: #5109, #5110, #5111, #5113, #5116, #5119, #5120, #5121, #5122, #5124.
-Open: #5112, #5114, #5115, #5117, #5118, #5123.
+Closed: #5109, #5110, #5111, #5112, #5113, #5115, #5116, #5119, #5120, #5121, #5122, #5123, #5124.
+Open: #5114, #5117, #5118.
 
 The entries below are chronological historical checkpoints. Their earlier open/closed states do not override the current summary or acceptance ledger.
 
@@ -126,3 +126,13 @@ Report parent #5162 merged at `8a030721b3ffc909ca7d8b05ca0b7c873c1493a1` after c
 Runtime owner pushed `9e789c1613b22109dd0398e9619be8902bff9662` for #5157: management ACL failure injection is restricted to the token file, the stream retry fixture uses its narrow relay-platform seam, and the direct combo fixture holds a writer lease and drains its response. Assertions and production ownership rules are unchanged in this delta. Independent review and fresh hosted CI are required. Policy owner is implementing #5117 in its isolated checkout while repairing #5174; #5115 and #5118 remain required scope.
 
 Ownership amendment: #5115 moved to the runtime owner after the policy owner confirmed no implementation writer or commit existed. Independent preparation can proceed on current dev because its known-model hint region is unchanged by #5174; final landing remains after #5171 and #5174, with a fresh integration base, reviewed delta and exact-head hosted CI. The two-owner limit, acceptance criteria and execution restrictions are unchanged.
+
+#5157 integrated and #5123 closed after final acceptance verification. Current progress is11/16, with five remaining original issues. See031_pr_5157.md for exact-head CI and merge evidence.
+
+Second ownership amendment: #5118 transferred to the existing runtime owner after confirmation that no implementation writer, branch or commit existed. Server and dashboard delivery remain required, with the prior private pre-build audit incorporated before implementation. Metrics-to-preview shared-route integration is serialized; preparation can proceed in disjoint files. Dashboard evidence must satisfy the actual file-based screenshot gate using hosted artifacts under the no-local-build restriction. No third implementation owner was created.
+
+#5177 is integrated and #5115 closed after complete acceptance verification. Current progress is12/16; remaining issues are #5112/#5114/#5117/#5118. The independent decode-hint change landed before policy migration after a recorded source-based sequencing amendment.
+
+The current-task heartbeat was updated and read back ACTIVE with the existing twenty-minute cadence. It now reflects twelve closed issues, runtime ownership of #5118, policy ownership of #5112/#5114/#5117, and the remaining publication/visual verification duties. Other task monitors were not modified.
+
+Current verified ledger remains thirteen closed issues and three open (#5114/#5117/#5118). The policy owner now owns only the dashboard child layer of #5118 in addition to #5114/#5117; the runtime owner retains its server, writer, routes, backend tests and documentation. The runtime handoff confirmed no dashboard writer, branch or commit existed. The two-owner limit, manual parent-child delivery and actual screenshot requirement remain unchanged.

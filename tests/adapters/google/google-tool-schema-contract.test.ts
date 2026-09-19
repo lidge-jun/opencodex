@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../../../src/adapters/google";
+import type { AdapterRequest } from "../../../src/adapters/base";
+import {
+  fetchAntigravityWithRetry,
+  fetchDirectGeminiWithRetry,
+  fetchVertexWithRetry,
+} from "../../../src/adapters/google-http";
 import {
   GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT,
   sanitizeGeminiToolParametersWithReport,
   type GoogleToolSchemaEndpointClass,
 } from "../../../src/adapters/google-tool-schema";
-import { compileGoogleWireBody } from "../../../src/adapters/google-wire-compiler";
+import { compileGoogleWireBody, GoogleToolSchemaPolicyError } from "../../../src/adapters/google-wire-compiler";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../../../src/lib/debug-settings";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -144,6 +150,50 @@ function compiledRequest(body: string, endpointClass: GoogleToolSchemaEndpointCl
   return endpointClass === "cloud-code-assist"
     ? parsed.request as Record<string, unknown>
     : parsed;
+}
+
+function repairRequest(enveloped = false): AdapterRequest {
+  const request = {
+    contents: [{ role: "user", parts: [{ text: "REPAIR_PROMPT_CANARY_5112" }] }],
+    tools: [{ functionDeclarations: [
+      {
+        name: "REPAIR_TOOL_ONE_CANARY_5112",
+        parameters: {
+          type: "object",
+          properties: { REPAIR_PROPERTY_ONE_CANARY_5112: { type: "string", enum: ["REPAIR_VALUE_ONE_CANARY_5112"] } },
+        },
+      },
+      {
+        name: "REPAIR_TOOL_TWO_CANARY_5112",
+        parameters: {
+          type: "object",
+          properties: { REPAIR_PROPERTY_TWO_CANARY_5112: { type: "integer", minimum: 1 } },
+        },
+      },
+    ] }],
+  };
+  return {
+    url: "https://google.example.test/generate",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(enveloped ? { request } : request),
+  };
+}
+
+function responseSequence(responses: Response[]): { calls: string[]; executor: typeof fetch } {
+  const calls: string[] = [];
+  let index = 0;
+  const executor = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(typeof init?.body === "string" ? init.body : "");
+    return responses[index++] ?? responses[responses.length - 1]!;
+  }) as typeof fetch;
+  return { calls, executor };
+}
+
+function googleError(message: string): Response {
+  return new Response(JSON.stringify({
+    error: { code: 400, status: "INVALID_ARGUMENT", message },
+  }), { status: 400, headers: { "content-type": "application/json" } });
 }
 
 afterEach(() => {
@@ -663,6 +713,213 @@ describe("Google tool-schema loss report", () => {
         "recursive-ref-widened": 1,
       },
     });
+  });
+
+  test.each(ENDPOINT_CASES)("reject-lossy refuses initial $endpointClass loss before any send", async ({ endpointClass, provider }) => {
+    const adapter = createGoogleAdapter({ ...provider, googleToolSchemaPolicy: "reject-lossy" });
+    let sends = 0;
+    const executor = (async () => {
+      sends++;
+      return new Response("unexpected send");
+    }) as typeof fetch;
+    let caught: unknown;
+    try {
+      const built = await adapter.buildRequest(endpointRequest(true));
+      await adapter.fetchResponse?.(built, { executor });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GoogleToolSchemaPolicyError);
+    const policyError = caught as GoogleToolSchemaPolicyError;
+    expect(policyError.phase).toBe("initial");
+    expect(policyError.endpointClass).toBe(endpointClass);
+    expect(policyError.categories).toEqual({ "enum-value-filtered": 1 });
+    expect(sends).toBe(0);
+    for (const canary of [
+      "ENDPOINT_TOOL_CANARY_5112",
+      "ENDPOINT_PROPERTY_CANARY_5112",
+      "ENDPOINT_VALUE_CANARY_5112",
+      "OUTPUT_SCHEMA_CANARY_5112",
+    ]) {
+      expect(policyError.message).not.toContain(canary);
+    }
+  });
+  test.each(ENDPOINT_CASES)("reject-lossy refuses indeterminate $endpointClass compilation before any send", async ({ endpointClass, provider }) => {
+    const adapter = createGoogleAdapter({ ...provider, googleToolSchemaPolicy: "reject-lossy" });
+    let sends = 0;
+    const executor = (async () => {
+      sends++;
+      return new Response("unexpected send");
+    }) as typeof fetch;
+    let caught: unknown;
+    try {
+      const built = await adapter.buildRequest(endpointRequestUncertain());
+      await adapter.fetchResponse?.(built, { executor });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(GoogleToolSchemaPolicyError);
+    const policyError = caught as GoogleToolSchemaPolicyError;
+    expect(policyError.phase).toBe("initial");
+    expect(policyError.endpointClass).toBe(endpointClass);
+    expect(policyError.indeterminate).toBe(true);
+    expect(policyError.categories).toEqual({});
+    expect(policyError.message).toContain("indeterminate");
+    expect(sends).toBe(0);
+  });
+
+  test.each(ENDPOINT_CASES)("reject-lossy accepts lossless $endpointClass tools and native output schemas", async ({ endpointClass, provider }) => {
+    const built = await createGoogleAdapter({ ...provider, googleToolSchemaPolicy: "reject-lossy" })
+      .buildRequest(endpointRequest(false));
+    const request = compiledRequest(built.body, endpointClass);
+    const generationConfig = request.generationConfig as Record<string, unknown>;
+    expect(generationConfig.responseMimeType).toBe("application/json");
+    expect(generationConfig.responseJsonSchema).toEqual({
+      type: "object",
+      properties: { OUTPUT_SCHEMA_CANARY_5112: { type: "integer", minimum: 1 } },
+    });
+  });
+
+  test.each(ENDPOINT_CASES)("omitted and compatible policy keep $endpointClass request bytes identical", async ({ endpointClass, provider }) => {
+    const omitted = await createGoogleAdapter(provider).buildRequest(endpointRequest(true));
+    const compatible = await createGoogleAdapter({ ...provider, googleToolSchemaPolicy: "compatible" })
+      .buildRequest(endpointRequest(true));
+    expect(stableWireBody(compatible.body, endpointClass)).toBe(stableWireBody(omitted.body, endpointClass));
+  });
+
+  test("reject-lossy withholds indexed Vertex repair and reports only content-free facts", async () => {
+    const rawError = "tools.1.custom.input_schema: JSON schema is invalid REPAIR_ERROR_CANARY_5112";
+    const fixture = responseSequence([googleError(rawError), new Response("unexpected repair")]);
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      setDebugSettings({ debug: true });
+      const response = await fetchVertexWithRetry(repairRequest(), {
+        executor: fixture.executor,
+        timeoutMs: 5_000,
+      }, { toolSchemaPolicy: "reject-lossy" });
+      expect(response.status).toBe(400);
+      const responseText = await response.text();
+      expect(responseText).toContain("Vertex AI invalid request");
+      // The withheld repair returns the ORIGINAL upstream 400 through the pre-existing
+      // normalization (safeGoogleHttpErrorMessage classification + credential/path redaction),
+      // which preserves ordinary upstream detail text. The canary exclusion applies to the NEW
+      // diagnostic record below, not to the preserved original response.
+      expect(responseText).toBe("Vertex AI invalid request: " + rawError);
+      expect(fixture.calls).toHaveLength(1);
+      const lines = getDebugLogEntries().map(entry => entry.line)
+        .filter(line => line.includes("google-tool-schema-repair"));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('"endpointClass":"vertex"');
+      expect(lines[0]).toContain('"repair-opened-schema":1');
+      expect(lines[0]).toContain('"declarationCount":1');
+      expect(lines[0]).toContain('"changedSendAllowed":false');
+      for (const canary of ["REPAIR_", "input_schema", "JSON schema", "CANARY_5112"]) {
+        expect(lines[0]).not.toContain(canary);
+      }
+    } finally {
+      console.error = realError;
+    }
+  });
+
+  test("reject-lossy withholds unindexed Cloud Code Assist repair for every declaration", async () => {
+    const rawError = "function declarations contain an invalid schema REPAIR_ERROR_CANARY_5112";
+    const fixture = responseSequence([
+      googleError(rawError),
+      new Response("unexpected repair"),
+    ]);
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      setDebugSettings({ debug: true });
+      const response = await fetchAntigravityWithRetry(repairRequest(true), {
+        executor: fixture.executor,
+        timeoutMs: 5_000,
+        returnRawErrors: true,
+      }, { toolSchemaPolicy: "reject-lossy" });
+      expect(response.status).toBe(400);
+      // The returned body is the original upstream 400 payload, not a replacement.
+      expect(await response.json()).toEqual({
+        error: { code: 400, status: "INVALID_ARGUMENT", message: rawError },
+      });
+      expect(fixture.calls).toHaveLength(1);
+      const line = getDebugLogEntries().map(entry => entry.line)
+        .find(entry => entry.includes("google-tool-schema-repair"));
+      expect(line).toContain('"endpointClass":"cloud-code-assist"');
+      expect(line).toContain('"repair-opened-schema":2');
+      expect(line).toContain('"declarationCount":2');
+      expect(line).toContain('"changedSendAllowed":false');
+      expect(line).not.toContain("REPAIR_ERROR_CANARY_5112");
+    } finally {
+      console.error = realError;
+    }
+  });
+
+  test.each([
+    ["indexed", "tools.1.custom.input_schema: JSON schema is invalid", 1],
+    ["unindexed", "function declarations contain an invalid schema", 2],
+  ] as const)("compatible mode preserves the %s changed repair send", async (_name, message, count) => {
+    const fixture = responseSequence([googleError(message), new Response("ok", { status: 200 })]);
+    const realError = console.error;
+    console.error = () => {};
+    try {
+      setDebugSettings({ debug: true });
+      const response = await fetchVertexWithRetry(repairRequest(), {
+        executor: fixture.executor,
+        timeoutMs: 5_000,
+      }, { toolSchemaPolicy: "compatible" });
+      expect(response.status).toBe(200);
+      expect(fixture.calls).toHaveLength(2);
+      const repaired = JSON.parse(fixture.calls[1]!) as { tools: Array<{ functionDeclarations: Array<{ parameters: unknown }> }> };
+      const declarations = repaired.tools[0]!.functionDeclarations;
+      expect(declarations.filter(item => JSON.stringify(item.parameters) === '{"type":"object","properties":{}}'))
+        .toHaveLength(count);
+      const line = getDebugLogEntries().map(entry => entry.line)
+        .find(entry => entry.includes("google-tool-schema-repair"));
+      expect(line).toContain(`"repair-opened-schema":${count}`);
+      expect(line).toContain('"changedSendAllowed":true');
+    } finally {
+      console.error = realError;
+    }
+  });
+
+  test("direct mode never repairs or emits a repair diagnostic under reject-lossy", async () => {
+    const rawError = "tools.0.custom.input_schema: JSON schema is invalid";
+    const fixture = responseSequence([
+      googleError(rawError),
+      new Response("unexpected repair"),
+    ]);
+    setDebugSettings({ debug: true });
+    const response = await fetchDirectGeminiWithRetry(repairRequest(), {
+      executor: fixture.executor,
+      timeoutMs: 5_000,
+    }, { toolSchemaPolicy: "reject-lossy", toolSchemaProfile: { endpointClass: "ai-studio" } });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: { code: 400, status: "INVALID_ARGUMENT", message: rawError },
+    });
+    expect(fixture.calls).toHaveLength(1);
+    expect(getDebugLogEntries().some(entry => entry.line.includes("google-tool-schema-repair"))).toBe(false);
+  });
+
+  test("thinking-only repair is policy-independent and carries no tool-schema report", async () => {
+    const request = repairRequest();
+    request.body = JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      generationConfig: { thinkingConfig: { thinkingLevel: "high" }, maxOutputTokens: 100 },
+    });
+    const fixture = responseSequence([
+      googleError("thinking_config.thinking_level is unsupported"),
+      new Response("ok", { status: 200 }),
+    ]);
+    setDebugSettings({ debug: true });
+    const response = await fetchVertexWithRetry(request, {
+      executor: fixture.executor,
+      timeoutMs: 5_000,
+    }, { toolSchemaPolicy: "reject-lossy" });
+    expect(response.status).toBe(200);
+    expect(fixture.calls).toHaveLength(2);
+    expect(getDebugLogEntries().some(entry => entry.line.includes("google-tool-schema-repair"))).toBe(false);
   });
 
   test.each(ENDPOINT_CASES)("derives and consumes the $endpointClass profile at the adapter boundary", async ({ endpointClass, provider }) => {

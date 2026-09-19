@@ -22,6 +22,23 @@ validation-pending. Import alone supplies no entitlement evidence for the model 
 
 ## Shared catalog
 
+Static policy and observed catalog evidence are separate authorities.
+`src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
+hard wire pins, aliases, and explicit false/empty declarations. Discovery responses, generated
+metadata, cache freshness, availability, credentials, account state, quota and health never enter
+that result. A catalog consumer may pass observed context, max-input, or max-output values to the
+resolver's call-local limit projection; the lower observed/static value wins, and an observed value
+may fill an absent static one only inside that call-local projection — the frozen static policy is
+unchanged and never widened — max input never exceeds the resolved context window, and the
+projection mutates neither input. P1a establishes this provider-owned contract
+without changing catalog assembly; consumer migration is a separate layer.
+Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
+diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
+input-modality declarations outrank the registry/config modality map; an empty declaration
+falls through to that map.
+Anthropic numeric point releases inherit the nearest configured family context window before the
+provider-wide fallback. Exact model output limits precede the provider default output limit.
+
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 
 - preserves native OpenAI entries from the live catalog or static fallback, and emits

@@ -234,6 +234,7 @@ function stableGenericRoster(providerName: string): string[] {
  * quota-less provider off its active account on the very first request.
  */
 function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number, requestedModelId?: string | null): boolean {
+  if (threshold <= 0) return false;
   const headroom = accountHeadroomPercent(providerName, accountId, requestedModelId);
   if (headroom === null) return false;
   return 100 - headroom >= threshold;
