@@ -97,21 +97,30 @@ afterEach(async () => {
   // The rest runs even when that wait gives up, and the failure still propagates. A wait that
   // expired is NOT evidence the turn settled: it means this fixture could not prove it, and the
   // case should say so while still handing back the lease and the globals it replaced.
+  let failure: unknown;
+  const note = (error: unknown): void => { failure ??= error; };
   try {
+    // Every client gets its close and its wait even after an earlier one gave up. Stopping at
+    // the first failure left the rest open for the next case to inherit.
     for (const client of clients.splice(0)) {
-      client.close();
-      await waitFor(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
+      try {
+        client.close();
+        await waitFor(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
+      } catch (error) { note(error); }
     }
-  } finally {
-    for (const socket of Socket.all) socket.close();
+    for (const socket of Socket.all) {
+      try { socket.close(); } catch (error) { note(error); }
+    }
     Socket.all = [];
-    runOptionalShutdownHooks();
-    releaseSpendHome?.();
-    releaseSpendHome = undefined;
+    try { runOptionalShutdownHooks(); } catch (error) { note(error); }
+    // The release itself can throw, and it used to take the global restore down with it.
+    try { releaseSpendHome?.(); } catch (error) { note(error); } finally { releaseSpendHome = undefined; }
+  } finally {
     globalThis.WebSocket = realSocket;
     globalThis.fetch = realFetch;
     for (const key of proxyKeys) { delete process.env[key]; if (savedProxy[key] !== undefined) process.env[key] = savedProxy[key]; }
   }
+  if (failure !== undefined) throw failure;
 });
 
 test("configuration is explicit opt-in and malformed values fail closed", () => {
