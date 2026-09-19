@@ -1,6 +1,6 @@
 import { loadConfig } from "../../src/config";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -277,40 +277,50 @@ test("a stale profile confirmation is refused before the preference is written",
   expect(saved).toBeUndefined();
 });
 
-test("a duplicate copy of an operation cannot redirect a bound undo", async () => {
+test("a bound undo follows the copy resolution actually chose", async () => {
   await seedRoster();
+  const original = readFileSync(path(1), "utf8");
   const applied = await api("/api/client-integrations/aside/profiles/1", "PUT", { enabled: true });
   expect(applied.status).toBe(200);
   expect(document(1).providers.opencodex).toBeDefined();
 
-  /*
-   * Aside can legitimately hold the same operation in more than one profile store. Copying the
-   * row into a sibling gives the request two valid rows to resolve, which is the situation where
-   * a preview and the mutation could each pick a different one and the confirmation would then
-   * describe an operation that is not the one running.
-   */
-  const rowsPath = join(root, "store", "aside-profiles", "1", "journal.jsonl");
-  const siblingDir = join(root, "store", "aside-profiles", "2");
-  mkdirSync(siblingDir, { recursive: true });
-  writeFileSync(join(siblingDir, "journal.jsonl"), readFileSync(rowsPath, "utf8"));
-
-  const opId = JSON.parse(readFileSync(rowsPath, "utf8").trim().split("\n")[0] ?? "{}").opId as string;
+  const profileStore = join(root, "store", "aside-profiles", "1");
+  const rows = readFileSync(join(profileStore, "journal.jsonl"), "utf8");
+  const opId = JSON.parse(rows.trim().split("\n")[0] ?? "{}").opId as string;
   expect(typeof opId).toBe("string");
 
+  /*
+   * The same operation can live in more than one store with different retention. Resolution
+   * prefers the copy whose snapshot still exists, so putting a stored copy in the root store and
+   * expiring the profile's own forces it to choose the alternate. If a preview and the mutation
+   * resolved independently they could pick different copies, and the confirmation would then
+   * describe an operation other than the one that runs.
+   */
+  writeFileSync(join(root, "store", "journal.jsonl"), rows);
+  const snapshotName = join("snapshots", "aside", opId);
+  mkdirSync(join(root, "store", "snapshots", "aside"), { recursive: true });
+  writeFileSync(join(root, "store", snapshotName), readFileSync(join(profileStore, snapshotName), "utf8"));
+  rmSync(join(profileStore, snapshotName));
+
+  const siblingBefore = treeWitness(join(root, "store", "aside-profiles", "2"));
   const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "restore", opId });
   expect(preview.status).toBe(200);
   const plan = await preview.json() as { canApply: boolean; fingerprint: string; profileId?: number };
+  expect(plan.canApply).toBe(true);
   expect(plan.profileId).toBe(1);
 
-  const siblingBefore = readFileSync(path(2), "utf8");
   const undo = await api("/api/client-integrations/aside/profiles/1/restore", "POST", {
     opId, operation: "restore", planFingerprint: plan.fingerprint,
   });
   expect(undo.status).toBe(200);
 
-  // The undo acted on the profile that was asked for, and the duplicate did not redirect it.
-  expect(document(1).providers.opencodex).toBeUndefined();
-  expect(readFileSync(path(2), "utf8")).toBe(siblingBefore);
+  // Restored from the copy that was chosen, and the journal records both the undo and the apply.
+  expect(readFileSync(path(1), "utf8")).toBe(original);
+  const finalRows = readFileSync(join(root, "store", "journal.jsonl"), "utf8")
+    + readFileSync(join(profileStore, "journal.jsonl"), "utf8");
+  expect(finalRows).toContain(opId);
+  expect(finalRows).toContain("restore");
+  expect(treeWitness(join(root, "store", "aside-profiles", "2"))).toBe(siblingBefore);
 });
 
 test.each(["../0", "01", "-1", "9007199254740992"])("rejects invalid profile %s before file mutation", async id => {
