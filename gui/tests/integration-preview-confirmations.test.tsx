@@ -231,6 +231,7 @@ test("restore retains confirmDrift when stale drift becomes non-drift", async ()
   expect(requests.filter(request => request.url.endsWith("/restore"))).toHaveLength(1);
   expect(requests.filter(request => request.url.endsWith("/restore"))[0]?.body.confirmDrift).toBe(true);
 
+  await waitFor(() => Array.from(container.querySelectorAll("button")).some(button => button.textContent?.trim() === "Restore" && !button.disabled));
   const cleanConfirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Restore") as HTMLButtonElement;
   await act(async () => { cleanConfirm.click(); });
   await waitFor(() => closed === 1);
