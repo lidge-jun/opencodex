@@ -1040,7 +1040,11 @@ describe("codex-account-store CRUD", () => {
   });
 
   test("a forced refresh rotates a time-valid credential that upstream rejected (#2887)", async () => {
-    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+    const {
+      forceRefreshCodexPoolToken,
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+    } =
       await import("../../src/codex/account-store");
     // Far beyond the refresh skew: getValidCodexToken would return this untouched, which is
     // exactly why a 401 on it was unrecoverable.
@@ -1153,7 +1157,12 @@ describe("codex-account-store CRUD", () => {
    * healthy account marked for reauthentication on behalf of a live request.
    */
   test("cancelling the caller that opened a refresh flight does not cancel a live joiner (#2892)", async () => {
-    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+    const {
+      forceRefreshCodexPoolToken,
+      readCodexAccountRecord,
+      registerCodexRefreshGenerationHandoff,
+      saveCodexAccountCredential,
+    } =
       await import("../../src/codex/account-store");
     saveCodexAccountCredential("cancel-owner", {
       accessToken: "rejected",
@@ -1164,6 +1173,8 @@ describe("codex-account-store CRUD", () => {
     const generation = readCodexAccountRecord("cancel-owner")!.generation;
 
     const originalFetch = globalThis.fetch;
+    const handoffs: Array<[string, number, number]> = [];
+    const unregisterHandoff = registerCodexRefreshGenerationHandoff((...handoff) => handoffs.push(handoff));
     let sawAbort = false;
     let calls = 0;
     let releaseFetch: (() => void) | undefined;
@@ -1203,7 +1214,11 @@ describe("codex-account-store CRUD", () => {
       expect(joined.accessToken).toBe("rotated");
       expect(calls).toBe(1);
       expect(readCodexAccountRecord("cancel-owner")!.credential!.accessToken).toBe("rotated");
+      // Completion is attached to the detached flight, not to either request's wait.
+      // The cancelled owner therefore cannot strand process-local affinities at G.
+      expect(handoffs).toEqual([["cancel-owner", generation, generation + 1]]);
     } finally {
+      unregisterHandoff();
       globalThis.fetch = originalFetch;
     }
   });
