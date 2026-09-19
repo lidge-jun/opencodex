@@ -158,6 +158,74 @@ describe("learned rung refusals", () => {
     expect(effort.configuredReasoningEfforts(highEntitlement, DEEPSEEK_FLASH)).toEqual(["low", "high", "max"]);
   });
 
+  // The catalog path carries the configured expression in apiKey; the request path carries the
+  // resolved secret in apiKey and the configured expression in _apiKeyAttempt.reference. Both
+  // must hash the same wire credential, or a refusal learned at request time never clamps the
+  // advertised ladder for env/keychain users.
+  test("a refusal learned under the resolved request key applies to the catalog's env reference", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "resolved-env-secret";
+    try {
+      const catalogSide = { ...ZEN_GO, apiKey: "${OCX_REASONING_METADATA_TEST_KEY}" } as OcxProviderConfig;
+      const requestSide = {
+        ...ZEN_GO,
+        apiKey: "resolved-env-secret",
+        _apiKeyAttempt: { reference: "${OCX_REASONING_METADATA_TEST_KEY}" },
+      } as OcxProviderConfig;
+      expect(metadata.recordUnsupportedReasoningEffort(requestSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      expect(effort.configuredReasoningEfforts(catalogSide, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    } finally {
+      delete process.env["OCX_REASONING_METADATA_TEST_KEY"];
+    }
+  });
+
+  test("a refusal learned under the catalog's env reference applies to the resolved request key", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    process.env["OCX_REASONING_METADATA_TEST_KEY"] = "resolved-env-secret";
+    try {
+      const catalogSide = { ...ZEN_GO, apiKey: "${OCX_REASONING_METADATA_TEST_KEY}" } as OcxProviderConfig;
+      const requestSide = {
+        ...ZEN_GO,
+        apiKey: "resolved-env-secret",
+        _apiKeyAttempt: { reference: "${OCX_REASONING_METADATA_TEST_KEY}" },
+      } as OcxProviderConfig;
+      expect(metadata.recordUnsupportedReasoningEffort(catalogSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      expect(effort.configuredReasoningEfforts(requestSide, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    } finally {
+      delete process.env["OCX_REASONING_METADATA_TEST_KEY"];
+    }
+  });
+
+  test("a keychain-referenced key scopes refusals to the resolved secret on both paths", async () => {
+    const { effort, metadata } = await load(metadataFile({
+      "opencode-go": { [DEEPSEEK_FLASH]: { reasoning: true, options: [{ type: "effort", values: ["low", "high", "max"] }] } },
+    }));
+    const keyStore = await import("../../src/providers/api-key-resolve");
+    const store = new Map<string, string>();
+    store.set("opencodex.provider-api-key.v1 zen-go", "resolved-keychain-secret");
+    keyStore.setProviderKeychainEntryFactoryForTests((service, account) => ({
+      getPassword: () => store.get(service + " " + account) ?? null,
+      setPassword: (password) => { store.set(service + " " + account, password); },
+      deletePassword: () => store.delete(service + " " + account),
+    }));
+    try {
+      const catalogSide = { ...ZEN_GO, apiKey: "keychain:zen-go" } as OcxProviderConfig;
+      const requestSide = {
+        ...ZEN_GO,
+        apiKey: "resolved-keychain-secret",
+        _apiKeyAttempt: { reference: "keychain:zen-go" },
+      } as OcxProviderConfig;
+      expect(metadata.recordUnsupportedReasoningEffort(requestSide, DEEPSEEK_FLASH, "max")).toBe(true);
+      expect(effort.configuredReasoningEfforts(catalogSide, DEEPSEEK_FLASH)).toEqual(["low", "high"]);
+    } finally {
+      keyStore.setProviderKeychainEntryFactoryForTests(null);
+    }
+  });
+
   test("ignores legacy destination-wide support rows", async () => {
     const legacyRows = { ["opencode-go|" + DEEPSEEK_FLASH + "|max"]: { effort: "max", at: Date.now() } };
     const { effort } = await load({
