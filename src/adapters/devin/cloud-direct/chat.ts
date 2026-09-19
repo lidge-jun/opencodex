@@ -1078,6 +1078,15 @@ export class CloudChatError extends Error {
 }
 
 const TRACE_ID_RE = /\(trace ID: ([0-9a-f]+)\)/i;
+const SAFE_CONNECT_CODES = new Set([
+  'canceled', 'unknown', 'invalid_argument', 'deadline_exceeded', 'not_found', 'already_exists',
+  'permission_denied', 'resource_exhausted', 'failed_precondition', 'aborted', 'out_of_range',
+  'unimplemented', 'internal', 'unavailable', 'data_loss', 'unauthenticated',
+]);
+
+function safeConnectCode(value: unknown): string | undefined {
+  return typeof value === 'string' && SAFE_CONNECT_CODES.has(value) ? value : undefined;
+}
 
 /**
  * A quota refusal Cognition delivers as `permission_denied`.
@@ -1296,7 +1305,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   // Bun + Node ReadableStream readers diverge on the type-level shape
   // (Bun's includes a `readMany` method); both work the same at runtime.
   const reader = resp.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
-  let trailerError: { code?: string; message: string; traceId?: string } | null = null;
+  let trailerError: { code?: string; message: string; opaqueDenial: boolean; traceId?: string } | null = null;
   let sawEos = false;
 
   /**
@@ -1441,14 +1450,19 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
           const text = payload.toString('utf8');
           if (text && text.includes('"error"')) {
             let code: string | undefined;
-            let message = text;
+            let message = '';
             try {
               const j = JSON.parse(text) as { error?: { code?: string; message?: string } };
-              code = j.error?.code;
-              if (j.error?.message) message = j.error.message;
-            } catch { /* keep raw */ }
+              code = safeConnectCode(j.error?.code);
+              if (typeof j.error?.message === 'string') message = j.error.message;
+            } catch { /* malformed trailers still become a content-free error */ }
             const traceMatch = message.match(TRACE_ID_RE);
-            trailerError = { code, message, traceId: traceMatch?.[1] };
+            trailerError = {
+              code,
+              message,
+              opaqueDenial: /an internal error occurred/i.test(message),
+              traceId: traceMatch?.[1],
+            };
           }
           continue;
         }
@@ -1477,16 +1491,16 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // the catalog disagrees with the call, but the catalog can lag (a model
     // that was enabled at fetch time may have been gated between then and
     // now) or be missing (network failure caused a fall-through). When the
-    // raw trailer is this exact shape, swap in a message that names the
+    // trailer is this exact shape, swap in a message that names the
     // model and explains the likely cause rather than re-passing
-    // Cognition's opaque text. The cloud's original message is appended in
-    // parens so users (and bug reports) still have it verbatim.
+    // Cognition's opaque text. Raw trailer messages never leave this
+    // parser: they can reflect the credential carried by the request.
     // Both codes carry this shape. Cognition uses `invalid_argument` for a
     // request it could not accept and `permission_denied` for one it would not,
     // and the message body is the same opaque sentence either way.
     const isOpaqueDenial =
       (trailerError.code === 'permission_denied' || trailerError.code === 'invalid_argument') &&
-      /an internal error occurred/i.test(trailerError.message);
+      trailerError.opaqueDenial;
     if (isOpaqueDenial) {
       const enriched =
         `Cognition denied this request for model "${req.modelUid}" with the opaque ` +
@@ -1518,11 +1532,6 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         `Cognition denied this request (permission_denied). If tool descriptions ` +
         `are present, a blocklisted phrase may have triggered this — see the ` +
         `COGNITION_BLOCKLIST_REWRITES table in cloud-direct/chat.ts. ` +
-        // Keep the cloud's own sentence. Replacing it outright is what made the
-        // two Codex entries in that table expensive to find: the message named
-        // the table but dropped the only text that could have said whether this
-        // was a phrase match at all.
-        `(cloud message: ${trailerError.message}) ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
       throw new CloudChatError(
         enriched,
@@ -1531,8 +1540,12 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
         connectTrailerHttpStatus(trailerError.code, trailerError.message),
       );
     }
+    // Raw trailer messages never leave this parser: they can reflect the
+    // credential carried by the request. The allowlisted code and the hex
+    // trace id are the only upstream-controlled fields that reach the error.
     throw new CloudChatError(
-      trailerError.message,
+      `Cognition chat failed${trailerError.code ? ` (${trailerError.code})` : ''} ` +
+      `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`,
       trailerError.code,
       trailerError.traceId,
       connectTrailerHttpStatus(trailerError.code, trailerError.message),
