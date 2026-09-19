@@ -2158,12 +2158,16 @@ describe("native passthrough terminal finalization", () => {
     const terminals: ResponsesTerminalStatus[] = [];
     mockSseUpstream(sseBody);
 
-    // The eager relay is only reachable on win32 and darwin, and this shard is neither. The
-    // claim is narrowed to the relay decision itself: overwriting process.platform globally
-    // also redirects filesystem, ACL and state-directory identity, and the spend-ledger owner
-    // lowercases its home on win32, which on a case-sensitive filesystem is a different
+    // darwin, not win32, because this pair is about streamMode choosing the path. On win32 a
+    // turn that needs a client rewrite takes the eager relay unconditionally (#864), so the
+    // legacy half could never be legacy there and the marker assertion below would be a lie.
+    // darwin is the platform where the configured mode actually decides.
+    //
+    // The claim is also narrowed to the relay decision itself: overwriting process.platform
+    // globally redirects filesystem, ACL and state-directory identity too, and the spend-ledger
+    // owner lowercases its home on win32, which on a case-sensitive filesystem is a different
     // directory. That made the send unreservable and the turn delivered no terminal at all.
-    setRelayPlatformForTests("win32");
+    setRelayPlatformForTests("darwin");
     try {
       const response = await postSpawn(
         cfg,
