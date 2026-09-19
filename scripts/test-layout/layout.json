@@ -1558,7 +1558,8 @@
     "gui-codex-usage-score-parity.test.ts": "gui",
     "web-search-sidecar-429.test.ts": "web-search",
     "management-google-tool-schema-policy.test.ts": "server",
-    "codex-shim-destroyed-probe.test.ts": "codex-integration"
+    "codex-shim-destroyed-probe.test.ts": "codex-integration",
+    "client-runtime.test.ts": "clients"
   },
   "migrated": [
     "adapters",
