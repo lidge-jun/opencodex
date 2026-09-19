@@ -131,8 +131,8 @@ snapshot, no ownership record, no journal row, no lock, and no maintenance or re
 
 | Route | Purpose | Notable responses |
 | --- | --- | --- |
-| `POST /api/client-integrations/preview` | Plan `apply`, `overwrite` or `disable` for one client; body `{ "clientId": "...", "operation": "..." }` | 400 invalid client or operation; 409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/restore/preview` | Plan an undo; body `{ "opId": "...", "confirmDrift": false }` | 404 unknown operation; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/preview` | Plan `apply`, `overwrite` or `disable` for one client; body `{ "clientId": "...", "operation": "..." }` | 400 invalid client or operation; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Plan an undo; body `{ "opId": "...", "confirmDrift": false }` | 404 unknown operation; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Plan one Aside profile's change, including `restore` with an `opId` | 400 invalid body or unscoped request; 404 unknown profile or operation |
 
 A plan carries `version`, `clientId`, `operation`, `state`, `foreignEdit`, a `changes` list of

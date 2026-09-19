@@ -706,6 +706,16 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       || !(INTEGRATION_CLIENT_IDS as readonly string[]).includes(previewClient)) {
       return invalidClientResponse(ctx);
     }
+    /*
+     * Aside is a set of profiles, not one file, and every mutation it has requires a profile. A
+     * plan built here would describe the legacy single-account location and no bound mutation
+     * would accept it, so an operator could confirm something nothing can carry out. The canonical
+     * per-profile preview answers this question properly, and the mutation routes already refuse
+     * the unscoped spelling the same way.
+     */
+    if (previewClient === "aside") {
+      return jsonResponse({ error: "Use the canonical Aside profile path", code: "invalid_aside_profile_path" }, 400, req, ctx.config);
+    }
     const operation = parsed.operation;
     if (operation !== "apply" && operation !== "overwrite" && operation !== "disable") {
       return jsonResponse({
@@ -747,6 +757,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           code: "integration_operation_not_found",
           opId,
         }, 404, req, ctx.config);
+      }
+      // Same rule, decided after the row is found so an unscoped undo of an Aside operation is
+      // refused for what it is rather than answered as a missing operation.
+      if (operation.clientId === "aside") {
+        return jsonResponse({ error: "Use the canonical Aside profile path", code: "invalid_aside_profile_path" }, 400, req, ctx.config);
       }
       const captured = await buildIntegrationPreviewInput(operation.clientId, ctx, store);
       if (!captured) return previewUnavailableResponse(ctx);

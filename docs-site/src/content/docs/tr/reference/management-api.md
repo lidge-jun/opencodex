@@ -117,8 +117,8 @@ görüntü, sahiplik kaydı, günlük satırı, kilit, bakım ve kurtarma yoktur
 
 | Yöntem ve yol | Amaç | Önemli hatalar |
 | --- | --- | --- |
-| `POST /api/client-integrations/preview` | Tek bir istemci için `apply`, `overwrite` veya `disable` planlar; gövde `{ "clientId": "...", "operation": "..." }` | 400 geçersiz istemci veya işlem; 409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/restore/preview` | Bir geri almayı planlar; gövde `{ "opId": "...", "confirmDrift": false }` | 404 işlem bulunamadı; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/preview` | Tek bir istemci için `apply`, `overwrite` veya `disable` planlar; gövde `{ "clientId": "...", "operation": "..." }` | 400 geçersiz istemci veya işlem; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Bir geri almayı planlar; gövde `{ "opId": "...", "confirmDrift": false }` | 404 işlem bulunamadı; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Tek bir Aside profilinin değişikliğini planlar; `restore` için `opId` gerekir | 400 geçersiz gövde veya profil belirtilmemiş; 404 profil veya işlem bulunamadı |
 
 Plan; `version`, `clientId`, `operation`, `state`, `foreignEdit`, `kind` ve `path` çiftlerinden

@@ -89,8 +89,8 @@ Authorization: Bearer <admin-token>
 
 | メソッドとパス | 目的 | 主なエラー |
 | --- | --- | --- |
-| `POST /api/client-integrations/preview` | クライアント 1 つの `apply`、`overwrite`、`disable` を計画します。本文は `{ "clientId": "...", "operation": "..." }` | 400 不正なクライアントまたは操作、409 `integration_preview_unavailable` |
-| `POST /api/client-integrations/restore/preview` | 取り消しを計画します。本文は `{ "opId": "...", "confirmDrift": false }` | 404 該当操作なし、409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/preview` | クライアント 1 つの `apply`、`overwrite`、`disable` を計画します。本文は `{ "clientId": "...", "operation": "..." }` | 400 不正なクライアントまたは操作、400 `invalid_aside_profile_path`、409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | 取り消しを計画します。本文は `{ "opId": "...", "confirmDrift": false }` | 404 該当操作なし、400 `invalid_aside_profile_path`、409 `integration_preview_unavailable` |
 | `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Aside プロファイル 1 つの変更を計画します。`restore` には `opId` が必要です | 400 不正な本文またはプロファイル未指定、404 該当プロファイルまたは操作なし |
 
 計画には `version`、`clientId`、`operation`、`state`、`foreignEdit`、`kind` と `path` の組からなる

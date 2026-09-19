@@ -1487,3 +1487,55 @@ describe("integration previews are reads", () => {
     expect(storeContents()).toBe(storeBefore);
   });
 });
+
+describe("the generic preview routes are not an unscoped door into Aside", () => {
+  /*
+   * Aside is a set of profiles, not one file. A plan built through the generic routes would
+   * describe the legacy single-account location, and no bound mutation accepts that: the mutation
+   * routes already refuse the unscoped spelling. Answering it here would hand an operator a
+   * confirmation nothing can carry out.
+   */
+  test("planning apply for aside without a profile is refused, and writes nothing", async () => {
+    const homeBefore = storeContentWitness(home);
+    const storeBefore = storeContentWitness(storeRoot);
+
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "aside", operation: "apply" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json() as { code: string }).code).toBe("invalid_aside_profile_path");
+    expect(storeContentWitness(home)).toBe(homeBefore);
+    expect(storeContentWitness(storeRoot)).toBe(storeBefore);
+  });
+
+  test("planning an undo of an aside operation without a profile is refused for what it is", async () => {
+    // The row is found first, so the answer names the unscoped path rather than reporting an
+    // operation that is plainly there as missing.
+    store.appendJournal({
+      opId: "aside-unscoped-op",
+      clientId: "aside",
+      kind: "apply",
+      at: new Date(0).toISOString(),
+      configPath: join(home, ".aside", "u", "1", "models.json"),
+      snapshot: { kind: "none" },
+      resultFingerprint: "0123456789abcdef",
+      resultAbsent: false,
+      priorRecord: null,
+    });
+    const homeBefore = storeContentWitness(home);
+    const storeBefore = storeContentWitness(storeRoot);
+
+    const response = await previewApi("/api/client-integrations/restore/preview", { opId: "aside-unscoped-op" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json() as { code: string }).code).toBe("invalid_aside_profile_path");
+    expect(storeContentWitness(home)).toBe(homeBefore);
+    expect(storeContentWitness(storeRoot)).toBe(storeBefore);
+
+    // Narrow: an operation belonging to any other client still plans here.
+    installHermes();
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+    const ok = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "apply" });
+    expect(ok.status).toBe(200);
+  });
+});
