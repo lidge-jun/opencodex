@@ -14,7 +14,7 @@ import { acquireOwnedSpendHome } from "./owned-spend-home";
 let releaseSpendHome: (() => void) | undefined;
 // Every synthetic client this fixture opens, so teardown can close them before the lease is
 // given back rather than leaving a handler mid-turn against a journal nobody owns.
-const clients: Array<{ close(): void }> = [];
+const clients: Array<ServerWebSocket<WsData>> = [];
 
 export type Frame = Record<string, any>;
 const realSocket = globalThis.WebSocket;
@@ -109,12 +109,17 @@ export function installInjectionFixture() {
     globalThis.fetch = (async () => { fallbackCalls++; throw new Error("network disabled in injection fixture"); }) as typeof fetch;
     clearRequestLogsForTests();
   });
-  afterEach(() => {
-    for (const client of clients.splice(0)) client.close();
+  afterEach(async () => {
+    // handler.close only STARTS the pump cancellation. Waiting for the socket to drop its stream
+    // cancel and its native control is what proves the turn finished accounting; releasing the
+    // lease before that leaves a reader settling against a journal nobody owns.
+    for (const client of clients.splice(0)) {
+      client.close();
+      await waitForInjection(() => client.data.cancel === undefined && client.data.nativeControl === undefined);
+    }
     for (const socket of InjectionSocket.all) socket.close();
     InjectionSocket.all = []; runOptionalShutdownHooks();
-    // Released only after the clients, the upstream sockets and the shutdown hooks: each can
-    // still settle a turn that accounts against the journal this lease owns.
+    // Released only once those have all settled.
     releaseSpendHome?.();
     releaseSpendHome = undefined;
     globalThis.WebSocket = realSocket; globalThis.fetch = realFetch;

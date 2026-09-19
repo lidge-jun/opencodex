@@ -149,6 +149,11 @@ const servers: Array<ReturnType<typeof Bun.serve>> = [];
 // start a real server already own it, and this only ever adds a reference on the same home.
 let releaseSpendHome: (() => void) | undefined;
 const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+// Every turn these helpers hand back. A row that asserts only on a status leaves a
+// transformed body unread, and cancelling those before the listeners stop is what keeps a
+// reader from settling against the journal after its lease is gone.
+const pendingTurns: Response[] = [];
+function trackTurn(response: Response): Response { pendingTurns.push(response); return response; }
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
@@ -177,6 +182,11 @@ beforeEach(() => {
 afterEach(async () => {
   let responseStatePending = true;
   try {
+    // Rows that assert only on a status leave a transformed body unread. Cancelling those first
+    // means no reader is still attached when the listeners stop and the lease is given back.
+    for (const turn of pendingTurns.splice(0)) {
+      if (!turn.bodyUsed && turn.body && !turn.body.locked) await turn.body.cancel().catch(() => {});
+    }
     for (const server of servers.splice(0)) await server.stop(true);
     await flushResponseState();
     responseStatePending = responseStatePersistPendingForTests();
@@ -236,11 +246,11 @@ async function post(
   headers: Record<string, string> = {},
 ): Promise<Response> {
   takeSpendHome();
-  return handleResponses(new Request("http://localhost/v1/responses", {
+  return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
-  }), config, { model: "", provider: "" }, options);
+  }), config, { model: "", provider: "" }, options));
 }
 
 let loggedRequestSequence = 0;
@@ -254,11 +264,11 @@ async function postLogged(
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
   takeSpendHome();
-  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+  const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
-  }), config, logCtx, options);
+  }), config, logCtx, options));
   loggedRequestSequence += 1;
   return responseWithDeferredRequestLog(
     response,
@@ -278,11 +288,11 @@ async function postModelLogged(
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
   takeSpendHome();
-  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+  const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model, input: "hello", stream: false, ...raw }),
-  }), config, logCtx, options);
+  }), config, logCtx, options));
   loggedRequestSequence += 1;
   return responseWithDeferredRequestLog(
     response,
@@ -3346,7 +3356,7 @@ describe("server combo failover 030 activation matrix", () => {
     const parent: RequestLogContext = { model: "", provider: "" };
     const snapshots: RequestLogContext[] = [];
     takeSpendHome();
-    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", session_id: "hop-recall" },
       body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
     }), config, parent, {
@@ -3357,7 +3367,7 @@ describe("server combo failover 030 activation matrix", () => {
         finalized.resolve();
       },
       onNativePassthroughCancel: () => { cancels += 1; },
-    });
+    }));
     expect(response.status).toBe(200);
     await response.text();
     await within(finalized.promise);
@@ -3653,11 +3663,11 @@ describe("cursor conversation continuity across store:false chains", () => {
 
   async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
     takeSpendHome();
-    return handleResponses(new Request("http://localhost/v1/responses", {
+    return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ stream: false, store: false, ...raw }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
   }
 
   function cursorConfig(): OcxConfig {
@@ -3750,7 +3760,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
     takeSpendHome();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    const postThreadTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3763,7 +3773,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         store: false,
         prompt_cache_key: "shared-cache-key",
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postThreadTurn("start")).status).toBe(200);
     expect((await postThreadTurn([
@@ -3781,7 +3791,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
     takeSpendHome();
-    const postDesktopTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    const postDesktopTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3794,7 +3804,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         stream: false,
         store: false,
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postDesktopTurn("start")).status).toBe(200);
     expect((await postDesktopTurn([
@@ -3812,7 +3822,7 @@ describe("cursor conversation continuity across store:false chains", () => {
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
     takeSpendHome();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    const postThreadTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3825,7 +3835,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         store: false,
         prompt_cache_key: "shared-cache-key",
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postThreadTurn("hello")).status).toBe(200);
     expect((await postThreadTurn([
@@ -3852,11 +3862,11 @@ describe("combo compact failover", () => {
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const start = Date.now();
     takeSpendHome();
-    const response = await handleResponsesCompact(compactRequest({
+    const response = trackTurn(await handleResponsesCompact(compactRequest({
       model: "combo/free",
       stream: false,
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] }],
-    }), config, logCtx);
+    }), config, logCtx));
     loggedRequestSequence += 1;
     return responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx);
   }
