@@ -1,13 +1,13 @@
 # Campaign status
 
-Status: ACTIVE. Thirteen of the sixteen original issues are resolved and closed. Remaining: #5114, #5117, #5118. Resolver parent #5171 landed at `efb55e71e547ac83563e1d45dd60fb0b646e6cf7`; consumer #5174 remains open after a macOS job timeout, with a diagnostic rerun active at the same head. Metrics #5183 has further regression coverage pending after its latest correction. Preview #5185 remains a draft; server and dashboard work continue in separate existing owner checkouts. No additional issue closure is claimed.
+Status: ACTIVE. Fourteen original issues are resolved and closed; #5114 and #5118 remain open. Metrics #5183 landed at fec3add6ce after exact-head run35464220426 passed all applicable jobs and source/security/public review completed; #5117 closure was verified. Consumer #5174 passed at3a5ce7d793; the one-line documentation correction e5d5462450 awaits new-head run35467320406. Server #5185 at36cdb56954 passed scoped source review. A subsequent bounded correction and regression remain pending before final hosted verification and parent cascade. Dashboard #5197 has eleven directly inspected hosted-artifact fixture captures with receipts; final parent cascade and full verification remain required. Cumulative dev run35467094926 is queued at fec3add6ce. See per-PR records for historical corrections and evidence limits.
 
 ## Owners
 
 | Lane | State | Issues |
 | --- | --- | --- |
 | Runtime | Active in an isolated worktree | Remaining: #5118 server, writer, routes, backend tests and documentation |
-| Policy and operator | Active in an isolated worktree | Remaining: #5114, #5117 and #5118 dashboard with its tests |
+| Policy and operator | Active in an isolated worktree | Remaining: #5114 and #5118 dashboard with its tests |
 
 Private orchestration records retain the actual task handles and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
 
@@ -20,8 +20,8 @@ Private orchestration records retain the actual task handles and wake cursors. T
 
 ## Issue outcomes
 
-Closed: #5109, #5110, #5111, #5112, #5113, #5115, #5116, #5119, #5120, #5121, #5122, #5123, #5124.
-Open: #5114, #5117, #5118.
+Closed: #5109, #5110, #5111, #5112, #5113, #5115, #5116, #5117, #5119, #5120, #5121, #5122, #5123, #5124.
+Open: #5114, #5118.
 
 The entries below are chronological historical checkpoints. Their earlier open/closed states do not override the current summary or acceptance ledger.
 
