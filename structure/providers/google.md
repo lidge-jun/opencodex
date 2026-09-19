@@ -107,8 +107,10 @@ and existing repair replay. `reject-lossy` refuses an initially lossy compilatio
 `buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
 resolved policy into their 400 compatibility repair: indexed repair reports one opened declaration,
 unindexed repair reports every declaration it would open, and strict policy returns the original
-400 without a changed repair send. The `google-tool-schema-repair` diagnostic contains only endpoint
-class, fixed category counts, declaration count, truncation, and whether that send was allowed.
+400 without a changed repair send. The `google-tool-schema-repair` diagnostic inherits the complete
+bounded report shape — version, endpoint class, `lossy`, truncation flag, and saturating fixed
+category counts — and adds only the `repair` phase, the declaration count, and whether the changed
+send was allowed.
 AI Studio direct mode continues to disable 400 repair entirely. Output schemas remain outside both
 initial and repair policy.
 
