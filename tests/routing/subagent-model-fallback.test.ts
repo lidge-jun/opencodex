@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1335,6 +1335,18 @@ test("the native-main drain sentinel covers the flagships without widening to gp
       "with_fallback",
     ]);
     expect(readCodexAgentModelFallback("empty_fallback", dir)).toEqual([]);
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback tolerates a malformed agents path", () => {
+    const dir = codexHomeFixture();
+    rmSync(join(dir, "agents"), { recursive: true });
+    writeFileSync(join(dir, "agents"), "not a directory", "utf8");
+    let scanError: unknown;
+
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir, cause => {
+      scanError = cause;
+    })).toEqual([]);
+    expect(scanError).toBeInstanceOf(Error);
   });
 
   test("scanCodexAgentRolesWithTomlModelFallback recognizes quoted model_fallback keys", () => {

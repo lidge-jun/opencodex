@@ -1505,8 +1505,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   // cannot break a legitimately green pipeline.
 
   console.log("\nCodex agent role files");
-  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(resolveCodexHomeDirImpl());
-  if (tomlFallbackRoles.length === 0) {
+  let roleScanError: unknown;
+  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(
+    resolveCodexHomeDirImpl(),
+    cause => {
+      roleScanError = cause;
+    },
+  );
+  if (roleScanError) {
+    console.log(`  [WARN] unable to scan $CODEX_HOME/agents/*.toml: ${String(roleScanError)}`);
+  } else if (tomlFallbackRoles.length === 0) {
     console.log("  ok     no per-role model_fallback fields in $CODEX_HOME/agents/*.toml");
   } else {
     console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
