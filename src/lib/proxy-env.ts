@@ -87,6 +87,21 @@ export function outboundProxyConfigured(
 }
 
 /**
+ * The value when `raw` is a proxy URL Bun fetch can actually use, else null.
+ * Bun rejects unparseable values and non-http(s) schemes (UnsupportedProxyProtocol),
+ * so admitting them as "the proxy that applies" would only downgrade DNS pinning.
+ */
+function usableHttpProxyUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const scheme = new URL(raw).protocol;
+    return scheme === "http:" || scheme === "https:" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The proxy URL selected by configured outbound fetch for `url`, or null when none applies.
  *
  * Bun selects by scheme: `HTTPS_PROXY` for `https:` targets, `HTTP_PROXY` for `http:`.
@@ -110,16 +125,11 @@ export function effectiveProxyFor(
   // The installed SOCKS wrapper takes this route before Bun sees scheme proxies.
   const socksProxy = socks5ProxyFromEnv(env);
   if (socksProxy) return socksProxy;
-  const value = env[key]?.trim() || env[key.toLowerCase()]?.trim();
+  const value = usableHttpProxyUrl(env[key]?.trim() || env[key.toLowerCase()]?.trim());
   if (value) return value;
   if (url.protocol === "http:" && process.platform !== "win32") {
-    const allProxy = env.ALL_PROXY?.trim() || env.all_proxy?.trim();
-    if (allProxy) {
-      try {
-        const scheme = new URL(allProxy).protocol;
-        if (scheme === "http:" || scheme === "https:") return allProxy;
-      } catch { /* not a usable proxy URL */ }
-    }
+    const allProxy = usableHttpProxyUrl(env.ALL_PROXY?.trim() || env.all_proxy?.trim());
+    if (allProxy) return allProxy;
   }
   return null;
 }

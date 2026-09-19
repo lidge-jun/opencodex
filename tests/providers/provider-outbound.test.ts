@@ -650,6 +650,12 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
       .toBe(process.platform === "win32" ? null : "http://p:7");
     expect(effectiveProxyFor(http, { ALL_PROXY: "ftp://p:8" })).toBeNull();
     expect(effectiveProxyFor(http, { ALL_PROXY: "http://" })).toBeNull();
+    // A malformed or non-http(s) scheme-matched variable is not a proxy Bun fetch
+    // can use either: it must not count as "the proxy that applies".
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "http://" })).toBeNull();
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "not a url" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "http://" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "socks5://p:9" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
     expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
   });
