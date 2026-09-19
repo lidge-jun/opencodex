@@ -674,10 +674,13 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
-      const entries: Array<[string, unknown]> = [];
+      const serializedEntries: string[] = [];
       let total = 0;
       // Newest-first so the most recent chains survive both legacy snapshot caps.
-      for (const [id, state] of [...states].reverse()) {
+      // Walk backwards by index without duplicating or reversing the map entries array.
+      const stateList = Array.from(states);
+      for (let i = stateList.length - 1; i >= 0; i--) {
+        const [id, state] = stateList[i];
         let persistable: unknown;
         if (state.kind === "resident") {
           const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
@@ -689,14 +692,15 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
         const persistEntry: [string, unknown] = [id, persistable];
         // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
         // past both snapshot caps at up to 2x the intended size.
-        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
+        const serialized = JSON.stringify(persistEntry);
+        const size = Buffer.byteLength(serialized, "utf8");
         if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
         if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
         total += size;
-        entries.push(persistEntry);
+        serializedEntries.push(serialized);
       }
-      entries.reverse();
-      const payload = JSON.stringify({ version: 2, states: entries });
+      serializedEntries.reverse();
+      const payload = '{"version":2,"states":[' + serializedEntries.join(",") + ']}';
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
       // A mutation does not always change what gets persisted: entries past the

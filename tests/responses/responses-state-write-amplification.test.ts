@@ -235,4 +235,21 @@ describe("responses-state snapshot write amplification (#2460)", () => {
     expect(parsed.version).toBe(2);
     expect(parsed.states.map(([id]) => id)).toContain("resp_amp_roundtrip");
   });
+test("writeBoundedSnapshot serializes entries with version 2 and preserves parse integrity", async () => {
+    remember("resp_amp_order_1", "entry1");
+    remember("resp_amp_order_2", "entry2");
+    await flushResponseState();
+
+    const raw = await Bun.file(snapshot).text();
+    expect(raw.startsWith('{"version":2,"states":[')).toBe(true);
+    expect(raw.endsWith("]}"));
+    const parsed = JSON.parse(raw) as {
+      version: number;
+      states: [string, Record<string, unknown>][];
+    };
+    expect(parsed.version).toBe(2);
+    const ids = parsed.states.map(([id]) => id);
+    expect(ids).toContain("resp_amp_order_1");
+    expect(ids).toContain("resp_amp_order_2");
+  });
 });
