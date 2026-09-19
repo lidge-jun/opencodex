@@ -379,6 +379,21 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
   const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   let openCodexHome = "";
   let isolatedCodexHome: IsolatedCodexHome | null = null;
+  const liveServers = new Set<ReturnType<typeof startServer>>();
+
+  const startMetricsServer = (): ReturnType<typeof startServer> => {
+    const server = startServer(0);
+    liveServers.add(server);
+    return server;
+  };
+
+  const stopMetricsServer = async (server: ReturnType<typeof startServer>): Promise<void> => {
+    try {
+      await server.stop(true);
+    } finally {
+      liveServers.delete(server);
+    }
+  };
 
   beforeEach(() => {
     openCodexHome = mkdtempSync(join(tmpdir(), "ocx-metrics-export-"));
@@ -389,17 +404,25 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
     globalThis.WebSocket = originalWebSocket;
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    globalThis.WebSocket = originalWebSocket;
-    if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousOpenCodexHome;
-    if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-    else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
-    isolatedCodexHome?.restore();
-    isolatedCodexHome = null;
-    if (openCodexHome) removeTreeWithRetry(openCodexHome);
-    openCodexHome = "";
+  afterEach(async () => {
+    // The server owns the spend-ledger lease until every listener and active body settles.
+    // Release it before changing/removing OPENCODEX_HOME so the next fixture acquires honestly.
+    const stops = await Promise.allSettled([...liveServers].map(stopMetricsServer));
+    try {
+      globalThis.fetch = originalFetch;
+      globalThis.WebSocket = originalWebSocket;
+      if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+      if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+      else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
+      isolatedCodexHome?.restore();
+      isolatedCodexHome = null;
+      if (openCodexHome) removeTreeWithRetry(openCodexHome);
+      openCodexHome = "";
+    } finally {
+      const failure = stops.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
+    }
   });
 
   test("HTTP retry flow records one logical request and both physical sends", async () => {
@@ -412,7 +435,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
         usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
       }));
     saveConfig(runtimeConfig("openai-chat"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       const response = await sendChatRequest(server);
       expect(response.status).toBe(200);
@@ -423,7 +446,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="chat"}')).toBe(2);
       expect(sampleValue(metrics, 'opencodex_recoveries_total{protocol="chat",recovery="transient"}')).toBe(1);
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
@@ -433,7 +456,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       output: "socket output",
     }), { headers: { "content-type": "text/event-stream" } }));
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       await runWebSocketTurn(server);
       const metrics = await scrapeServer(server);
@@ -441,7 +464,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
@@ -456,7 +479,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       },
     }));
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       const response = await sendResponsesRequest(server);
       expect(response.status).toBe(200);
@@ -465,7 +488,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="failed"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(0);
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
@@ -480,7 +503,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       },
     }));
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       const response = await sendResponsesRequest(server);
       expect(response.status).toBe(200);
@@ -489,20 +512,27 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="incomplete"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(0);
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
   test("buffered read errors stay failed even after terminal-looking partial bytes", async () => {
     const bytes = new TextEncoder().encode(completedResponseJson("partial"));
-    installUpstream(originalFetch, () => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(bytes);
-        controller.error(new Error("fixture read failure"));
-      },
-    }), { headers: { "content-type": "application/json" } }));
+    installUpstream(originalFetch, () => {
+      let delivered = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!delivered) {
+            delivered = true;
+            controller.enqueue(bytes);
+            return;
+          }
+          controller.error(new Error("fixture read failure"));
+        },
+      }), { headers: { "content-type": "application/json" } });
+    });
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       const response = await sendResponsesRequest(server);
       await response.text().catch(() => "");
@@ -510,7 +540,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="failed"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="responses",result="completed"}')).toBe(0);
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
@@ -527,7 +557,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       }), { headers: { "content-type": "text/event-stream" } });
     });
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       const incomplete = await sendResponsesRequest(server, true);
       await incomplete.text();
@@ -539,7 +569,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="incomplete"}')).toBe(1);
       expect(sampleValue(metrics, 'opencodex_ttft_missing_total{protocol="responses",result="aborted"}')).toBe(1);
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
@@ -554,7 +584,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
         });
     });
     saveConfig(runtimeConfig("openai-responses"));
-    const server = startServer(0);
+    const server = startMetricsServer();
     const realNow = Date.now;
     try {
       const buffered = await sendResponsesRequest(server);
@@ -569,13 +599,13 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_ttft_seconds_bucket{protocol="responses",result="completed",le="0.05"}')).toBe(1);
     } finally {
       Date.now = realNow;
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 
   test("disabled live server exposes no metrics owner and returns authenticated 404", async () => {
     saveConfig(runtimeConfig("openai-responses", false));
-    const server = startServer(0);
+    const server = startMetricsServer();
     try {
       const response = await fetch(new URL("/api/metrics", server.url), {
         headers: { "x-opencodex-api-key": ADMIN_TOKEN },
@@ -583,7 +613,7 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(response.status).toBe(404);
       expect((await response.json() as { error: { code: string } }).error.code).toBe("not_found");
     } finally {
-      await server.stop(true);
+      await stopMetricsServer(server);
     }
   });
 });
