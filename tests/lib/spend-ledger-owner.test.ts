@@ -221,6 +221,46 @@ describe("in-process references and privacy", () => {
     expect(existsSync(join(root, "state-b", SPEND_LEDGER_OWNER_FILENAME))).toBe(true);
   });
 
+  test("a retained ledger stays refused after the same home is owned again", () => {
+    // The dangerous case is not a different directory, it is the same one owned again. The
+    // retained handle carries totals from before the gap, and another writer may have appended
+    // to the journal while nobody held the lock.
+    const first = acquireSpendLedgerOwner();
+    const retained = sharedSpendLedger();
+    first.release();
+
+    const second = acquireSpendLedgerOwner();
+    leases.push(second);
+    let failure: unknown;
+    try { retained.snapshot("root", "r1"); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_NOT_HELD");
+
+    let mutation: unknown;
+    try {
+      retained.reserve({ sendId: "s1", targets: [{ scope: "root", scopeId: "r1" }], tokens: 1 });
+    } catch (error) { mutation = error; }
+    expect(mutation).toBeInstanceOf(SpendLedgerOwnerError);
+
+    // A handle taken under the new ownership works and sees the journal as it is now.
+    expect(() => sharedSpendLedger().snapshot("root", "r1")).not.toThrow();
+  });
+
+  test("a dangling journal symlink is refused rather than followed", () => {
+    const lease = acquireSpendLedgerOwner();
+    leases.push(lease);
+    const journal = join(home, SPEND_LEDGER_JOURNAL_FILENAME);
+    const target = join(root, "elsewhere.jsonl");
+    symlinkSync(target, journal);
+
+    let failure: unknown;
+    try { sharedSpendLedger().reserve({ sendId: "s1", targets: [{ scope: "root", scopeId: "r1" }], tokens: 1 }); }
+    catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+    // The point of the case: the link's target must not have been created by following it.
+    expect(existsSync(target)).toBe(false);
+  });
+
   test("a retained shared ledger refuses mutation after its final lease releases", async () => {
     const lease = acquireSpendLedgerOwner();
     const retained = sharedSpendLedger();

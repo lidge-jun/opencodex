@@ -37,6 +37,15 @@ interface ActiveOwner {
 
 let activeOwner: ActiveOwner | null = null;
 let boundLedgerHome: string | null = null;
+/**
+ * Identity of the current ownership, not just of the home it covers.
+ *
+ * A home name alone cannot tell "still the lease I was built under" from "the same directory,
+ * owned again since". A ledger that only checked the home therefore came back to life across a
+ * release and a reacquire, writing totals it had accumulated before another writer owned the
+ * journal. Every acquisition that actually takes the lock mints a new value.
+ */
+let ownerGeneration = 0;
 const releaseHooks: Array<() => void> = [];
 
 /**
@@ -180,6 +189,7 @@ export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedger
   }
 
   activeOwner = { home: prepared.home, database, references: 1 };
+  ownerGeneration += 1;
   return leaseFor(activeOwner);
 }
 
@@ -209,6 +219,27 @@ function leaseFor(owner: ActiveOwner): SpendLedgerOwnerLease {
       }
     },
   });
+}
+
+/** The ownership a ledger was built under, to be handed back on every later use. */
+export function currentSpendLedgerOwnerGeneration(): number {
+  return ownerGeneration;
+}
+
+/**
+ * Refuse a handle built under an ownership that has since ended.
+ *
+ * The state directory may be the same one; what matters is that the lock was dropped and taken
+ * again in between, because another process could have written the journal while it was free.
+ */
+export function assertSpendLedgerOwnerGeneration(generation: number, configDir = getConfigDir()): void {
+  assertSpendLedgerOwnerHeld(configDir);
+  if (generation !== ownerGeneration) {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_NOT_HELD",
+      "Spend-ledger ownership is required before the shared ledger can be used.",
+    );
+  }
 }
 
 /** The singleton journal may be touched only while its matching state directory is owned. */

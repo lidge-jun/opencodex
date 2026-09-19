@@ -1063,8 +1063,15 @@ The shared journal has one live writer per state directory. `startServer` acquir
 records, and `configureSharedSpendLedger` asserts it before changing a live singleton. This applies
 identically with and without configured ceilings: observe-only still appends, settles and compacts.
 Two servers in one process and one directory share a reference-counted lease; that process cannot
-switch the process-wide singleton to another directory. A separate process may use a separate
-directory. SQLite crash release permits the next owner without stale-PID or TTL reclamation.
+hold two directories at once. Sequential ownership is allowed and concurrent ownership is not:
+releasing the final reference discards the singleton, so a later directory replays its own
+journal instead of inheriting figures. A ledger records the ownership it was built under and
+proves that exact identity on every accounting read and change, so a handle kept across a release
+and a reacquire of the same directory is refused rather than resuming over writes another owner
+may have made. File-backed journal and salt writers are owner-bound at construction, and a
+directory entry that is a link -- including one whose target does not exist -- is refused instead
+of followed. A separate process may use a separate directory. SQLite crash release permits the
+next owner without stale-PID or TTL reclamation.
 
 The journal survives an ordinary process restart once its writes reached the filesystem. It does
 not claim host power-loss durability: the append path does not fsync each record, so power loss can

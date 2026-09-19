@@ -165,7 +165,10 @@ pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still me
 Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
 for its resolved OpenCodex state directory before loading configuration or binding a listener.
 References share one lease only inside one process and one directory; a different directory in
-that process is refused because the shared ledger is process-wide. A second process on the same
+that process is refused while the lease is held, because the shared ledger is process-wide. The
+refusal is about two directories owned at once, not forever: releasing the final reference
+discards the singleton with its binding, so the same process may then own a different directory
+and build a ledger by replaying that directory's own journal. A second process on the same
 directory is refused even for observe-only spend configuration, while a separate directory is
 independent. Ordinary stop releases the final reference after listener teardown, and every thrown
 startup path releases its reference. SQLite and the OS release a crashed owner; no PID, timestamp,

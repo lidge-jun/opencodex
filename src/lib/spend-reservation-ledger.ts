@@ -53,7 +53,7 @@
  *    that are re-applied to an EXISTING file rather than trusted from its creation.
  */
 
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
@@ -65,7 +65,7 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
-import { assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
+import { assertSpendLedgerOwnerGeneration, assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, currentSpendLedgerOwnerGeneration, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
 
 // The singleton belongs to the state directory it was built for. Releasing ownership hands that
 // directory to whoever comes next, so the in-memory copy goes with it and the next construction
@@ -396,6 +396,22 @@ function hardenLedgerFile(path: string, options: { readonly force?: boolean } = 
   } catch { /* best-effort: a non-owner cannot chmod */ }
 }
 
+/**
+ * Does a directory entry exist here, whatever it points at?
+ *
+ * `existsSync` follows the link, so a symlink whose target is absent reads as "no file" and an
+ * append then creates that target somewhere else entirely. The entry itself is what decides
+ * whether the safety check runs.
+ */
+function ledgerEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function assertSafeLedgerFile(path: string): void {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
@@ -409,7 +425,7 @@ function assertSafeLedgerFile(path: string): void {
 
 export function createFileSpendJournal(
   path: string,
-  options: { readonly assertMutation?: () => void } = {},
+  options: { readonly assertMutation: () => void },
 ): SpendJournal {
   const ensureDir = (): string => {
     const dir = dirname(path);
@@ -420,7 +436,7 @@ export function createFileSpendJournal(
   };
   return {
     read(): string[] {
-      if (!existsSync(path)) return [];
+      if (!ledgerEntryExists(path)) return [];
       assertSafeLedgerFile(path);
       // Replay is once per process and is the moment a journal inherited from an older build
       // or a restored backup first passes through here.
@@ -428,20 +444,20 @@ export function createFileSpendJournal(
       return readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
     },
     append(line: string): void {
-      options.assertMutation?.();
+      options.assertMutation();
       ensureDir();
-      const created = !existsSync(path);
+      const created = !ledgerEntryExists(path);
       if (!created) assertSafeLedgerFile(path);
       appendFileSync(path, line + "\n", { encoding: "utf8", mode: 0o600 });
       assertSafeLedgerFile(path);
       hardenLedgerFile(path, { force: created });
     },
     rewrite(lines: string[]): void {
-      options.assertMutation?.();
+      options.assertMutation();
       ensureDir();
       // Same directory, so the rename is atomic on the same filesystem: a crash mid-compaction
       // leaves either the old journal or the new one, never a half-written ledger.
-      if (existsSync(path)) assertSafeLedgerFile(path);
+      if (ledgerEntryExists(path)) assertSafeLedgerFile(path);
       const temp = `${path}.compact-${process.pid}-${randomBytes(6).toString("hex")}`;
       writeFileSync(temp, lines.map((line) => line + "\n").join(""), {
         encoding: "utf8",
@@ -466,9 +482,9 @@ export function createFileSpendJournal(
  */
 export function loadOrCreateSpendLedgerSalt(
   path: string,
-  options: { readonly assertMutation?: () => void } = {},
+  options: { readonly assertMutation: () => void },
 ): string {
-  if (existsSync(path)) {
+  if (ledgerEntryExists(path)) {
     assertSafeLedgerFile(path);
     hardenLedgerFile(path, { force: true });
     const existing = readFileSync(path, "utf8").trim();
@@ -479,7 +495,7 @@ export function loadOrCreateSpendLedgerSalt(
     );
   }
   const dir = dirname(path);
-  options.assertMutation?.();
+  options.assertMutation();
   assertNotRealHomeUnderTest(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const salt = randomBytes(32).toString("hex");
@@ -570,8 +586,12 @@ export function createSpendReservationLedger(options: {
    * no file anyone could correlate.
    */
   readonly salt?: string;
-  /** Shared production ledgers assert their live state-directory lease before mutation. */
-  readonly assertMutationOwner?: () => void;
+  /**
+   * Shared production ledgers prove their exact ownership before reading or changing
+   * accounting. Identity, not just the directory name: a handle kept across a release and a
+   * reacquire describes a journal another writer may have changed in between.
+   */
+  readonly assertOwnedAccounting?: () => void;
 } = {}): SpendReservationLedger {
   // Mutable because the ceilings are operator configuration, and configuration is reloadable.
   // The three bounds below are read through functions for the same reason: a value captured
@@ -581,7 +601,7 @@ export function createSpendReservationLedger(options: {
   const journal = options.journal;
   const now = options.now ?? (() => Date.now());
   const salt = options.salt ?? "";
-  const assertMutationOwner = options.assertMutationOwner;
+  const assertOwnedAccounting = options.assertOwnedAccounting;
   const maxTrackedScopes = (): number => policy.maxTrackedScopes ?? DEFAULT_MAX_TRACKED_SCOPES;
   const maxTrackedSends = (): number => policy.maxTrackedSends ?? DEFAULT_MAX_TRACKED_SENDS;
   const compactAfterRecords = (): number => policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
@@ -896,7 +916,7 @@ export function createSpendReservationLedger(options: {
     get policy() { return policy; },
 
     reserve(request: SpendReservationRequest): SpendReservationDecision {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
@@ -951,7 +971,7 @@ export function createSpendReservationLedger(options: {
     },
 
     markDispatched(sendId: string): boolean {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || reservation.status !== "open") return false;
@@ -962,7 +982,7 @@ export function createSpendReservationLedger(options: {
     },
 
     abandon(sendId: string): boolean {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       // Only an UNDISPATCHED reservation may be released for free. Once bytes have left for
@@ -975,7 +995,7 @@ export function createSpendReservationLedger(options: {
     },
 
     settle(sendId: string, usage: SpendUsage): boolean {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
@@ -987,7 +1007,7 @@ export function createSpendReservationLedger(options: {
     },
 
     markLost(sendId: string): boolean {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
@@ -1002,6 +1022,9 @@ export function createSpendReservationLedger(options: {
     },
 
     snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined {
+      // Reading accounting from a handle whose ownership has ended is as wrong as writing it:
+      // the figures describe a journal this process no longer owns.
+      assertOwnedAccounting?.();
       const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
       if (!state) return undefined;
       return {
@@ -1013,12 +1036,13 @@ export function createSpendReservationLedger(options: {
     },
 
     exhausted(scope: SpendScope, scopeId: string): boolean {
+      assertOwnedAccounting?.();
       const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
       return state !== undefined && isExhausted(scope, state);
     },
 
     prune(at: number = now()): void {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       // Removal requires BOTH inactive and not exhausted inside the window. An
       // exhausted-but-idle scope that was dropped would be recreated fresh under the
       // same id -- the exact laundering the ceiling exists to stop.
@@ -1027,7 +1051,7 @@ export function createSpendReservationLedger(options: {
     },
 
     reconfigure(next: SpendReservationPolicy): void {
-      assertMutationOwner?.();
+      assertOwnedAccounting?.();
       policy = next;
     },
   };
@@ -1098,7 +1122,9 @@ export function configureSharedSpendLedger(policy: SpendReservationPolicy): void
 /**
  * Process-wide ledger backed by the journal under OPENCODEX_HOME. Created lazily so
  * importing the module -- or running a request path that never reserves -- touches no
- * disk.
+ * disk. One directory at a time, not one directory for the life of the process: the singleton
+ * is discarded when its ownership ends, so a later directory replays its own journal rather
+ * than inheriting figures from the previous one.
  */
 export function sharedSpendLedger(): SpendReservationLedger {
   assertSpendLedgerOwnerHeld();
@@ -1107,16 +1133,20 @@ export function sharedSpendLedger(): SpendReservationLedger {
     const home = getConfigDir();
     const journalPath = join(home, SPEND_LEDGER_JOURNAL_FILENAME);
     const saltPath = join(home, SPEND_LEDGER_SALT_FILENAME);
-    const assertMutationOwner = (): void => {
-      assertSpendLedgerOwnerHeld(home);
-      if (existsSync(journalPath)) assertSafeLedgerFile(journalPath);
-      if (existsSync(saltPath)) assertSafeLedgerFile(saltPath);
+    // Captured once, checked on every later use. The home says which directory; this says
+    // which ownership of it, so a handle kept across a release and a reacquire is refused
+    // rather than resuming with totals from before another writer held the journal.
+    const generation = currentSpendLedgerOwnerGeneration();
+    const assertOwnedAccounting = (): void => {
+      assertSpendLedgerOwnerGeneration(generation, home);
+      if (ledgerEntryExists(journalPath)) assertSafeLedgerFile(journalPath);
+      if (ledgerEntryExists(saltPath)) assertSafeLedgerFile(saltPath);
     };
     sharedLedger = createSpendReservationLedger({
-      journal: createFileSpendJournal(journalPath, { assertMutation: assertMutationOwner }),
-      salt: loadOrCreateSpendLedgerSalt(saltPath, { assertMutation: assertMutationOwner }),
+      journal: createFileSpendJournal(journalPath, { assertMutation: assertOwnedAccounting }),
+      salt: loadOrCreateSpendLedgerSalt(saltPath, { assertMutation: assertOwnedAccounting }),
       policy: sharedPolicy,
-      assertMutationOwner,
+      assertOwnedAccounting,
     });
   }
   return sharedLedger;
