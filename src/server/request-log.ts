@@ -74,6 +74,8 @@ export interface RequestLogContext {
   provider: string;
   /** Optional process-lifetime aggregate sink, injected by the server composition owner. */
   requestMetricsRecorder?: RequestMetricsRecorder;
+  /** Bounded terminal enum observed while inspecting a buffered response body. */
+  observedTerminalStatus?: ResponsesTerminalStatus;
   /**
    * Identity of the ONE logical request this context serves (#4546). Set from the execution
    * budget minted at ingress; a retry leg, a repair refetch and a combo child share it.
@@ -769,6 +771,22 @@ export function catalogModelSupportsServiceTier(modelId: string, serviceTier: st
 
 export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown): void {
   if (!payload || typeof payload !== "object") return;
+  if (logCtx.observedTerminalStatus === undefined) {
+    const eventType = (payload as { type?: unknown }).type;
+    const response = (payload as { response?: unknown }).response;
+    const responseStatus = response && typeof response === "object"
+      ? (response as { status?: unknown }).status
+      : (payload as { status?: unknown }).status;
+    if (eventType === "response.completed") {
+      logCtx.observedTerminalStatus = "completed";
+    } else if (eventType === "response.failed") {
+      logCtx.observedTerminalStatus = "failed";
+    } else if (eventType === "response.incomplete") {
+      logCtx.observedTerminalStatus = "incomplete";
+    } else if (responseStatus === "completed" || responseStatus === "failed" || responseStatus === "incomplete") {
+      logCtx.observedTerminalStatus = responseStatus;
+    }
+  }
   const source = "response" in payload && typeof (payload as { response?: unknown }).response === "object"
     ? (payload as { response?: unknown }).response
     : payload;
