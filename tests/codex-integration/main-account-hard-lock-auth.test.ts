@@ -35,6 +35,7 @@ import { setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -106,6 +107,8 @@ function addAlternative(cfg: OcxConfig): void {
   });
 }
 
+let releaseSpendHome: (() => void) | undefined;
+
 beforeEach(() => {
   tokenExpiry = Math.floor(Date.now() / 1000) + 86_400;
   previousHome = process.env.OPENCODEX_HOME;
@@ -122,9 +125,16 @@ beforeEach(() => {
   clearAccountNeedsReauth("hard-lock-pool");
   mainAccount.setMainAccountPlan(null);
   writeMain();
+  // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+  // last because the lease binds the home in effect at the moment it is taken.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(() => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   mock.restore();
   clearAccountQuota();
   clearThreadAccountMap();
