@@ -652,6 +652,16 @@ Native passthrough SSE has TWO shapes, selected per request in
 Both client readers also retain a bounded, redacted message from a bare upstream
 `error` event. If EOF arrives without a real Responses terminal, they synthesize
 one `response.failed` with that message instead of replacing it with `adapter_eof`.
+That synthesized terminal also carries the upstream's own verdict. Codex classifies
+a `response.failed` by `error.code` alone and retries every code outside its fatal
+set, so a refusal stamped `upstream_server_error` reached the client as a retryable
+disconnect and drove a reconnect loop (#5176). The readers now read a refusal code
+and the message from the same candidate precedence, taking the first code present so
+a refusal nested below a transient one cannot overrule it, and fall back to
+recognized refusal copy only when the event carried no code at all. A refusal code
+with no message still produces a terminal, and a read that fails after a refusal was
+captured reports the refusal rather than a generic reset. Request-log accounting is
+unchanged: a row that ends on a refusal still records the transport-level status.
 The delivering reader owns this evidence; an asynchronous tee inspection branch
 cannot reliably supply it before EOF. Inspection independently applies the same
 bare-error rule when EOF arrives, so account health records failure instead of
