@@ -21,6 +21,30 @@ export const MAX_STREAM_LINE_BYTES = 8 * 1024 * 1024;
 export const MAX_STREAM_TOTAL_BYTES = 64 * 1024 * 1024;
 /** Hard ceiling on projected conversation history text (characters) to prevent runaway memory. */
 export const MAX_PROJECTED_HISTORY_CHARS = 200_000;
+/**
+ * Chars-per-token ratio for deriving the projected-history ceiling from the model context
+ * window. Sits between the English/code (~4 chars per token) and CJK (~1.5) extremes: the
+ * ceiling is a runaway-memory bound and a coarse guard against cutting history the window can
+ * hold, not a token accounting - the caller-side compaction line stays the token authority.
+ */
+const PROJECTED_HISTORY_CHARS_PER_TOKEN = 3;
+/** Absolute ceiling on a window-derived history cap, so runaway metadata cannot unbound stdin. */
+const MAX_PROJECTED_HISTORY_DERIVED_CHARS = 4_000_000;
+
+/**
+ * Projected-history character ceiling for a turn, derived from the declared model context
+ * window. A missing or non-finite window keeps the legacy flat cap, and the derivation never
+ * lowers the cap below it: small windows change nothing, while large windows scale (a 1M-token
+ * model keeps 3M characters) until the hard ceiling. The flat 200k cap predates window
+ * metadata and cut long replays to roughly 50k-130k tokens of content regardless of the model.
+ */
+export function projectedHistoryCharLimit(contextWindowTokens: number | undefined): number {
+  if (typeof contextWindowTokens !== "number" || !Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return MAX_PROJECTED_HISTORY_CHARS;
+  }
+  const derived = contextWindowTokens * PROJECTED_HISTORY_CHARS_PER_TOKEN;
+  return Math.min(Math.max(derived, MAX_PROJECTED_HISTORY_CHARS), MAX_PROJECTED_HISTORY_DERIVED_CHARS);
+}
 
 export class CodingAgentStreamLimitError extends Error {
   constructor(message: string) {
@@ -395,7 +419,7 @@ export function buildSystemPrompt(parsed: OcxParsedRequest): string | undefined 
  * prior conversation turns are structured as bounded context text with tool results as text,
  * clearly demarcated from the current user request. Codex retains tool control; vendor tools are never invoked.
  */
-export function buildConversationInput(parsed: OcxParsedRequest): string[] {
+export function buildConversationInput(parsed: OcxParsedRequest, options: { maxHistoryChars?: number } = {}): string[] {
   const nonDev = parsed.context.messages.filter(m => m.role !== "developer");
   if (nonDev.length === 0) {
     return [JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "" }] } })];
@@ -475,10 +499,11 @@ export function buildConversationInput(parsed: OcxParsedRequest): string[] {
 
   const imageBlocks: WireContentPart[] = [...historyImageBlocks, ...currentImageBlocks];
 
+  const maxHistoryChars = options.maxHistoryChars ?? MAX_PROJECTED_HISTORY_CHARS;
   let historyText = historyMessages.map(formatMessageForHistory).filter(Boolean).join("\n\n");
-  if (historyText.length > MAX_PROJECTED_HISTORY_CHARS) {
+  if (historyText.length > maxHistoryChars) {
     historyText = `[Earlier conversation history truncated for length...]\n\n` +
-      historyText.slice(historyText.length - MAX_PROJECTED_HISTORY_CHARS);
+      historyText.slice(historyText.length - maxHistoryChars);
   }
 
   const combinedText = `Prior conversation context:\n\n${historyText}\n\nCurrent user request:\n\n${currentRequestText}`;
