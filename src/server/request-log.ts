@@ -296,6 +296,7 @@ export interface RequestLogEntry {
 }
 
 const requestLog: RequestLogEntry[] = [];
+const requestLogObserversForTests = new Set<(entry: RequestLogEntry) => void>();
 const MAX_LOG_SIZE = 2000;
 const requestLogEntryBytes = new WeakMap<RequestLogEntry, number>();
 let requestLogBytes = 0;
@@ -496,6 +497,9 @@ export function addRequestLog(entry: RequestLogEntry) {
   else if (retained !== entry) delete retained.claudeCompatibility;
   entry = retained;
   retainRequestLogEntry(entry);
+  for (const observer of requestLogObserversForTests) {
+    try { observer(entry); } catch { /* test observation must never fail request logging */ }
+  }
   try {
     // Failure diagnostics survive the 200-entry ring buffer by riding the persisted
     // usage entry (devlog/_plan/260716_claudecode_hardening/030). Success rows stay
@@ -569,6 +573,12 @@ export function addRequestLog(entry: RequestLogEntry) {
   } catch {
     /* request logging must never fail a user request */
   }
+}
+
+/** Test-only finalized-row observation without polling the management projection. */
+export function observeRequestLogsForTests(observer: (entry: RequestLogEntry) => void): () => void {
+  requestLogObserversForTests.add(observer);
+  return () => { requestLogObserversForTests.delete(observer); };
 }
 
 export function nextRequestLogId(_timestamp = Date.now()): string {
@@ -1841,4 +1851,5 @@ export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
   requestLogBytes = 0;
   requestLogsHydratedFromDisk = false;
+  requestLogObserversForTests.clear();
 }
