@@ -437,6 +437,7 @@
   "context-history-ownership.test.ts": "server",
   "context-history.test.ts": "server",
   "context-window-seed-repair.test.ts": "providers",
+  "vision-classification-seed-repair.test.ts": "providers",
   "continuation-dedup.test.ts": "responses",
   "core-lab-boundary.test.ts": "lab",
   "cost-cap-unknown-evidence.test.ts": "usage",

@@ -66,7 +66,37 @@ operator-supplied User-Agent authoritative.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
-remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
+remain sidecar-backed by default.
+
+OpenCode Go's `deepseek-v4.1-flash` joined them on 2026-09-19: probed against
+`https://opencode.ai/zen/go/v1/chat/completions` with this proxy's headers, the route accepts an
+`image_url` part and the model reads it, so it left `noVisionModels` and gained a positive
+`modelInputModalities` declaration. Its sibling `deepseek-v4-flash` on the same gateway still
+answers HTTP 400 "Model only supports text input" and stays sidecar-backed. The Zen tiers
+(`opencode-zen`, `opencode-free`) were not measurable (HTTP 402) and keep their existing
+classification — an unverified tier is not evidence.
+
+Because `enrichProviderFromRegistry` fills `noVisionModels` all-or-nothing and fills
+`modelInputModalities` per-key beneath the saved value, both halves of a stale classification are
+frozen into any config saved while it was current. `src/providers/stale-vision-classification-migration.ts`
+repairs exactly those two saved values and runs inside the shared startup repair pass in
+`src/providers/model-rename-startup.ts`. Correcting the registry alone fixes new installs only.
+
+It covers both states that reach a running process, because the sidecar predicate reads
+`noVisionModels` before `modelInputModalities`: the full stale pair (modalities still the stale
+declaration and the id listed, both rewritten) and the half-repaired row (modalities already
+corrected but the id still listed, where removing the name is what stops the image from being
+stripped). The paired modality declaration is the guard in both cases, which is why a name listed
+without one is left alone — that row is either a half-finished repair or a deliberate operator
+entry, and the projection does not guess which. The row must also still be the registry's own:
+identity resolves through `providerMatchesRegistryTransport`, the rule `enrichProviderFromRegistry`
+applies before it writes registry metadata, plus the entry's adapter. `opencode-go` is a pinned
+key preset without `preserveCustomDestination`, so its id alone claims a row — exactly as it does
+for enrichment — and an entry that opts into destination preservation narrows the projection with
+it. `modelCapabilities` is never written: it is the
+axis that outranks every source here, so it is where a deliberate text-only override belongs
+(`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
+restart cannot take back.
 
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
