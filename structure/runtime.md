@@ -162,6 +162,15 @@ is reported as such rather than called foreign, because an identity probe cannot
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
 pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
 
+Every `startServer` invocation acquires the `src/lib/spend-ledger-owner.ts` SQLite writer lease
+for its resolved OpenCodex state directory before loading configuration or binding a listener.
+References share one lease only inside one process and one directory; a different directory in
+that process is refused because the shared ledger is process-wide. A second process on the same
+directory is refused even for observe-only spend configuration, while a separate directory is
+independent. Ordinary stop releases the final reference after listener teardown, and every thrown
+startup path releases its reference. SQLite and the OS release a crashed owner; no PID, timestamp,
+TTL or lock-file deletion participates in recovery.
+
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 

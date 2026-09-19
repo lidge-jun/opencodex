@@ -945,9 +945,9 @@ export type StartOwnerDecision = "refuse" | "service-stay-out" | "sibling";
  *
  * The #3106 guard exists so a bare `start` cannot shadow a healthy configured-port
  * proxy with an ephemeral-port copy. An interactive `--port X` naming a DIFFERENT
- * port than the live proxy's is an explicit sibling request, not that shadow — and
- * refusing it also broke every spawned-launcher test on a machine running a real
- * proxy, because the probe reaches the machine-global port across sandbox homes.
+ * port than the live proxy's is an explicit sibling request, not that shadow. The
+ * state-directory spend-ledger lease makes the final same-home refusal; keeping this
+ * decision allows isolated homes on one machine to remain independent.
  * The service wrapper always passes the configured port and keeps its exact
  * stay-out-of-the-way semantics: it never takes the sibling path.
  */

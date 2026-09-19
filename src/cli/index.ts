@@ -78,6 +78,7 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
+import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
 import { redactUrlForLog } from "../lib/redact";
 import { dispatchCommand, decideBusyPreferredPort, decideStartWithLiveOwner } from "./dispatch";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
@@ -418,8 +419,8 @@ async function handleStart(options: { block?: boolean } = {}) {
     // to bake the service (observed: a probe on 10198 left the service pinned there).
     siblingStart = true;
     console.warn(
-      `Proxy already running on port ${owner.live.port}; starting a second instance on requested port ${requestedPort}. `
-      + `The new instance takes over this home's pid/runtime records and Codex config while it runs.`,
+      `Proxy already running on port ${owner.live.port}; requested a second instance on port ${requestedPort}. `
+      + `Startup continues only for an independent OPENCODEX_HOME; one state directory has one spend-ledger writer.`,
     );
   }
 
@@ -463,6 +464,10 @@ async function handleStart(options: { block?: boolean } = {}) {
       scheduleCatalogPrewarm();
       break;
     } catch (err) {
+      if (err instanceof SpendLedgerOwnerError) {
+        console.error(`❌ ${err.message}`);
+        process.exit(1);
+      }
       if (err instanceof AuxiliaryListenerBindError || !isAddrInUse(err) || attempt >= 2) throw err;
       if (requestedPort !== undefined) {
         console.log(`⚠️  Port ${port} was taken while starting; waiting to retry the same port...`);

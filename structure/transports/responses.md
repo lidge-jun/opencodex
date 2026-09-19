@@ -1057,6 +1057,20 @@ default, so a shipped ceiling would start refusing real traffic on the first upg
 it, against a number nobody chose. Absent, empty and all-scopes-absent sections are the same
 thing -- observe only.
 
+The shared journal has one live writer per state directory. `startServer` acquires the
+`src/lib/spend-ledger-owner.ts` SQLite lease before configuration and before any listener binds;
+`sharedSpendLedger` asserts that lease before construction because replay can append `lost`
+records, and `configureSharedSpendLedger` asserts it before changing a live singleton. This applies
+identically with and without configured ceilings: observe-only still appends, settles and compacts.
+Two servers in one process and one directory share a reference-counted lease; that process cannot
+switch the process-wide singleton to another directory. A separate process may use a separate
+directory. SQLite crash release permits the next owner without stale-PID or TTL reclamation.
+
+The journal survives an ordinary process restart once its writes reached the filesystem. It does
+not claim host power-loss durability: the append path does not fsync each record, so power loss can
+drop recently acknowledged filesystem writes. A torn final line remains the only replay corruption
+that may be discarded quietly.
+
 Applying a policy to a ledger that already exists reconfigures it rather than rebuilding it.
 Every figure already accounted survives, so raising, lowering or clearing a ceiling changes what
 is refused from here on and never what was spent. A rebuild would replay the journal into a

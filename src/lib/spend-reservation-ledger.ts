@@ -24,11 +24,10 @@
  * released. Minting a new root id mints no new budget because the identity and pool scopes
  * still hold the spend.
  *
- * SUPPORTED TOPOLOGY: this guarantees a single proxy process against its own journal. The
- * file is append-friendly, but nothing here serializes two live processes writing it, so a
- * second proxy sharing the same OPENCODEX_HOME is explicitly outside the guarantee -- that
- * needs a shared store with cross-process atomicity and is declared out of scope rather
- * than implied.
+ * SUPPORTED TOPOLOGY: one live writer owns one OPENCODEX_HOME journal. Every server and
+ * direct shared-ledger caller must hold the state-directory SQLite lease before replay,
+ * append or compaction. Independent homes remain independent; multi-host shared storage
+ * still needs a distributed transaction boundary and is outside this local lease.
  *
  * Five properties this file owes its callers. Each one was absent in the first draft, and a
  * budget that can be bypassed is worse than no budget because it looks like protection:
@@ -66,6 +65,7 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
+import { assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, resetSpendLedgerOwnerBindingForTest, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
 
 export const SPEND_LEDGER_JOURNAL_FILENAME = "spend-ledger.jsonl";
 /**
@@ -1036,6 +1036,8 @@ export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined): SpendR
  * configures no ceiling must not open a journal merely because the server started.
  */
 export function configureSharedSpendLedger(policy: SpendReservationPolicy): void {
+  assertSpendLedgerOwnerHeld();
+  if (sharedLedger) bindSpendLedgerOwnerHome();
   sharedPolicy = policy;
   sharedLedger?.reconfigure(policy);
 }
@@ -1046,6 +1048,8 @@ export function configureSharedSpendLedger(policy: SpendReservationPolicy): void
  * disk.
  */
 export function sharedSpendLedger(): SpendReservationLedger {
+  assertSpendLedgerOwnerHeld();
+  bindSpendLedgerOwnerHome();
   if (!sharedLedger) {
     const home = getConfigDir();
     sharedLedger = createSpendReservationLedger({
@@ -1057,8 +1061,32 @@ export function sharedSpendLedger(): SpendReservationLedger {
   return sharedLedger;
 }
 
+const MAX_DIAGNOSTIC_ERROR_COUNT = 1_000_000;
+
+/** Scalar-only and side-effect-free: reading diagnostics never constructs or replays. */
+export function spendLedgerDiagnosticsSnapshot(): {
+  readonly ownership: "held" | "unheld";
+  readonly initialized: boolean;
+  readonly configured: boolean;
+  readonly degraded: boolean;
+  readonly persistFailures: number;
+  readonly corruptRecords: number;
+} {
+  const ledger = sharedLedger;
+  const bounded = (value: number): number => Math.min(MAX_DIAGNOSTIC_ERROR_COUNT, Math.max(0, value));
+  return {
+    ...spendLedgerOwnerSnapshot(),
+    initialized: ledger !== undefined,
+    configured: spendCeilingsConfigured(sharedPolicy),
+    degraded: ledger?.degraded ?? false,
+    persistFailures: bounded(ledger?.persistFailures ?? 0),
+    corruptRecords: bounded(ledger?.corruptRecords ?? 0),
+  };
+}
+
 /** Test seam. Production never discards the ledger: that would reset a spent budget. */
 export function resetSharedSpendLedgerForTest(): void {
   sharedLedger = undefined;
   sharedPolicy = DEFAULT_SPEND_RESERVATION_POLICY;
+  resetSpendLedgerOwnerBindingForTest();
 }

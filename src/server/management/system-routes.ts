@@ -39,6 +39,7 @@ import {
 } from "../../lib/codex-restart-contract";
 import { jsonResponse } from "../auth-cors";
 import { getInspectionCounters } from "../relay";
+import { spendLedgerDiagnosticsSnapshot } from "../../lib/spend-reservation-ledger";
 import type {
   performCodexRestart,
   readCodexAppServerState,
@@ -60,6 +61,7 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       version,
       uptime: process.uptime(),
       pid: process.pid,
+      spendLedger: spendLedgerDiagnosticsSnapshot(),
     });
   }
   if (url.pathname === "/api/system/memory" && req.method === "GET") {

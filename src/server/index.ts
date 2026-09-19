@@ -116,7 +116,6 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
-import { configureSharedSpendLedger, spendPolicyFromConfig } from "../lib/spend-reservation-ledger";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
@@ -205,8 +204,15 @@ import {
 import { detectInstall } from "../update/index";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { inspectStartupOwnership, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
+import { acquireSpendLedgerServerLifecycle, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
+  const spendLedgerLifecycle = acquireSpendLedgerServerLifecycle(getConfigDir());
+  try { return startServerWithSpendLedgerOwner(port, deps, spendLedgerLifecycle); }
+  catch (error) { spendLedgerLifecycle.releaseAfterFailedStart(); throw error; }
+}
+
+function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartServerDeps, spendLedgerLifecycle: SpendLedgerServerLifecycle): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
@@ -299,12 +305,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   registerAppOwnedMemorySweepFallback();
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
-  // Operator token ceilings (#4546). Applied before the listener binds: the shared ledger is
-  // built on the first reservation, and a request arriving before this ran would build it with
-  // no policy and enforce nothing. An absent `spend` section resolves to the unconfigured
-  // default, which refuses nothing and opens no journal -- so on an install that never wrote
-  // the key this line changes no behaviour at all.
-  configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+  // Observe-only mode still journals physical sends, so every server owns before configuring.
+  spendLedgerLifecycle.configure(config.spend);
   registerCodexCooldownRecoveryProbeWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
@@ -703,7 +705,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       get remoteWorkspaceStopping() { return remoteWorkspaceStopping; },
     });
 
-    server = Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost });
+    server = spendLedgerLifecycle.track(Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost }));
 
     // Both binds are one startup transaction (#1102). If the loopback bind fails after the
     // public one succeeded, leaving the public listener up would strand it: the CLI's port
@@ -711,11 +713,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     // accumulating listeners. Roll back and rethrow the original error instead.
     if (loopbackListenerPort !== null) {
       try {
-        loopbackServer = Bun.serve<WsData>({
+        loopbackServer = spendLedgerLifecycle.track(Bun.serve<WsData>({
           ...serveOptions,
           port: loopbackListenerPort,
           hostname: "127.0.0.1",
-        });
+        }));
       } catch (error) {
         try {
           // startServer is synchronous, so this rollback cannot await. Bun begins closing the
@@ -731,11 +733,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }
     if (managementIngressPort !== null) {
       try {
-        managementIngressServer = Bun.serve<WsData>({
+        managementIngressServer = spendLedgerLifecycle.track(Bun.serve<WsData>({
           ...serveOptions,
           port: managementIngressPort,
           hostname: "127.0.0.1",
-        });
+        }));
       } catch (error) {
         // Preserve the management bind failure while synchronously initiating rollback of every
         // listener already opened in this startup transaction. startServer must not become async.
@@ -792,7 +794,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             // removes the dir right after stop() settles would hit EPERM/EBUSY on Windows
             // otherwise. Runs even when an earlier release rejected — that rejection still
             // propagates, but not before the child is drained.
-            await flushConfigDirHardening(startupConfigDir);
+            try { spendLedgerLifecycle.release(); }
+            finally { await flushConfigDirHardening(startupConfigDir); }
           }
         },
       );
