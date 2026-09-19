@@ -203,16 +203,22 @@ describe("in-process references and privacy", () => {
     expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_HOME_CONFLICT");
   });
 
-  test("a constructed singleton keeps its home after the final lease releases", () => {
+  test("releasing the final lease frees the process to own a different state directory", () => {
+    // The refusal above is about two homes owned at once. Once ownership is gone the singleton
+    // has no directory to belong to, so it is discarded with the lease: the next home builds its
+    // own ledger by replaying its own journal. Keeping the old binding instead would strand a
+    // process that legitimately serves one home and then another.
     const first = acquireSpendLedgerOwner();
-    leases.push(first);
     sharedSpendLedger();
     first.release();
+    expect(spendLedgerDiagnosticsSnapshot()).toMatchObject({ ownership: "unheld", initialized: false });
+
     process.env.OPENCODEX_HOME = join(root, "state-b");
-    let failure: unknown;
-    try { acquireSpendLedgerOwner(); } catch (error) { failure = error; }
-    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
-    expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_HOME_CONFLICT");
+    const second = acquireSpendLedgerOwner();
+    leases.push(second);
+    sharedSpendLedger();
+    expect(spendLedgerDiagnosticsSnapshot()).toMatchObject({ ownership: "held", initialized: true });
+    expect(existsSync(join(root, "state-b", SPEND_LEDGER_OWNER_FILENAME))).toBe(true);
   });
 
   test("a retained shared ledger refuses mutation after its final lease releases", async () => {

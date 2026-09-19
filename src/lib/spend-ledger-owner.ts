@@ -37,6 +37,19 @@ interface ActiveOwner {
 
 let activeOwner: ActiveOwner | null = null;
 let boundLedgerHome: string | null = null;
+const releaseHooks: Array<() => void> = [];
+
+/**
+ * Run when the last lease on a state directory goes away.
+ *
+ * The ledger singleton is bound to the home it was built for, so it has to go when ownership
+ * does; otherwise a process that starts a second server against a different state directory
+ * either writes the old home's journal or is refused for a conflict it no longer has. The
+ * journal on disk is the durable record and construction replays it, so nothing is lost.
+ */
+export function onSpendLedgerOwnerReleased(hook: () => void): void {
+  releaseHooks.push(hook);
+}
 
 function errorCode(error: unknown): unknown {
   return error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -180,6 +193,10 @@ function leaseFor(owner: ActiveOwner): SpendLedgerOwnerLease {
       owner.references -= 1;
       if (owner.references > 0) return;
       activeOwner = null;
+      boundLedgerHome = null;
+      for (const hook of releaseHooks) {
+        try { hook(); } catch { /* a discard hook must not mask a release failure */ }
+      }
       let failure: unknown;
       try { owner.database.exec("ROLLBACK"); } catch (error) { failure = error; }
       try { owner.database.close(); } catch (error) { failure ??= error; }

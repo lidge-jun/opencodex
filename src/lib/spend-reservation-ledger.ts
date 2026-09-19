@@ -65,7 +65,12 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
-import { assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
+import { assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
+
+// The singleton belongs to the state directory it was built for. Releasing ownership hands that
+// directory to whoever comes next, so the in-memory copy goes with it and the next construction
+// replays the journal.
+onSpendLedgerOwnerReleased(() => { sharedLedger = undefined; });
 
 export const SPEND_LEDGER_JOURNAL_FILENAME = "spend-ledger.jsonl";
 /**
