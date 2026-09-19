@@ -612,6 +612,25 @@ export function registerCodexRefreshGenerationHandoff(handoff: CodexRefreshGener
   return () => set.delete(handoff);
 }
 
+/**
+ * Invoke every registered handoff for one committed `fromGeneration` to `toGeneration` move.
+ *
+ * Each listener runs independently and a throw is contained: by the time handoffs run the
+ * rotated credential is already persisted, so a failing listener must not reject the shared
+ * refresh promise (surviving waiters would see a refresh failure that never happened), must
+ * not starve the remaining listeners, and must not block plan reconciliation. The warning
+ * carries no account id or token material — the same scrub refresh error messages get.
+ */
+function dispatchRefreshGenerationHandoffs(accountId: string, fromGeneration: number, toGeneration: number): void {
+  for (const handoff of refreshHandoffs()) {
+    try {
+      handoff(accountId, fromGeneration, toGeneration);
+    } catch (error) {
+      console.warn("[codex-auth] a refresh generation handoff listener failed", error);
+    }
+  }
+}
+
 type CodexRefreshResult = CodexTokenResult & {
   credential?: CodexAccountCredentials;
   /**
@@ -1398,8 +1417,12 @@ async function resolveCodexToken(
     // still commits G+1; advance process-local affinities before any waiter observes
     // the result (and even when there are no surviving waiters).
     if (result.selfRefreshed) {
-      for (const handoff of refreshHandoffs()) {
-        handoff(id, result.generation - 1, result.generation);
+      dispatchRefreshGenerationHandoffs(id, result.generation - 1, result.generation);
+      // A propagated alias committed at its OWN generation, so its affinities sit at
+      // alias.generation - 1: without this handoff they fail the exact-generation
+      // liveness check on the very next request that reads them.
+      for (const alias of result.propagatedAliases ?? []) {
+        dispatchRefreshGenerationHandoffs(alias.id, alias.generation - 1, alias.generation);
       }
     }
     await notePlanFromRefreshedAccessToken(id, result.accessToken, result.generation);
