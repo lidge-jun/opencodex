@@ -2281,6 +2281,31 @@ describe("version-manager shim destruction (#2412)", () => {
       expect(result.message).toContain("backup");
     });
   });
+
+  test("a destroyed shim diagnostic does not open a non-file launcher", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ home, wrappers, backups }) => {
+      rmSync(wrappers[0]);
+      expect(spawnSync("mkfifo", [wrappers[0]]).status).toBe(0);
+      rmSync(backups[0]);
+      const shimModule = join(import.meta.dir, "..", "..", "src", "codex", "shim.ts");
+      const script = `
+        const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});
+        console.log(JSON.stringify(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} })));
+      `;
+
+      const child = spawnSync(process.execPath, ["-e", script], {
+        cwd: join(import.meta.dir, "..", ".."),
+        env: { ...process.env, OPENCODEX_HOME: home },
+        encoding: "utf8",
+        timeout: 1_000,
+      });
+
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(JSON.parse(child.stdout)).toMatchObject({ status: "ineligible" });
+    });
+  });
 });
 
 describe("Codex shim read-only backing inspection", () => {
