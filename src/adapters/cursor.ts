@@ -254,6 +254,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             coveredMessageCount,
             prefixDigest: cursorCoveredPrefixDigest(_parsed, coveredMessageCount),
             systemDigest: cursorInstructionDigest(_parsed),
+            toolSuspended: toolSuspendedCommit,
           });
           if (!checkpointRef) return;
           if (previousRef && previousRef !== checkpointRef) invalidateCursorCheckpoint(previousRef);
