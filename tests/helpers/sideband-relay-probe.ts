@@ -142,3 +142,28 @@ export function redirectSidebandWebSocket(port: number): {
   } as typeof WebSocket;
   return { OriginalWebSocket, restore: () => { globalThis.WebSocket = OriginalWebSocket; } };
 }
+
+/**
+ * Open a sideband client against the proxy under test, with the headers the relay must forward.
+ *
+ * Beside `expectSidebandUpgrade` deliberately: that function asserts these exact values on the
+ * peer's side, so the request and the assertion about it cannot drift apart in separate files.
+ * The constructor is passed in because it has to be the one that was NOT redirected.
+ */
+export function openSidebandClient(
+  WebSocketCtor: typeof WebSocket,
+  serverUrl: string | URL,
+  path: string,
+  token: string,
+): WebSocket {
+  const wsUrl = new URL(path, serverUrl);
+  wsUrl.protocol = "ws:";
+  return new WebSocketCtor(wsUrl.toString(), {
+    headers: {
+      authorization: `Bearer ${token}`,
+      "chatgpt-account-id": "acct-123",
+      "openai-alpha": "quicksilver=v2",
+      "x-session-id": "rts_side",
+    },
+  } as unknown as string[]);
+}

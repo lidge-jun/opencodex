@@ -34,7 +34,7 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { phaseTimer } from "../helpers/phase-timing";
-import { expectSidebandUpgrade, redirectSidebandWebSocket, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
+import { expectSidebandUpgrade, openSidebandClient, redirectSidebandWebSocket, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -623,31 +623,25 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
     const { OriginalWebSocket, restore } = redirectSidebandWebSocket(upstream.port);
     restoreWebSocket = restore;
     const server = live = startServer(0);
-    const wsUrl = new URL(`/v1/live/rtc_sideband`, server.url);
-    wsUrl.protocol = "ws:";
-    const client = new OriginalWebSocket(wsUrl.toString(), {
-      headers: {
-        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
-        "chatgpt-account-id": "acct-123",
-        "openai-alpha": "quicksilver=v2",
-        "x-session-id": "rts_side",
-      },
-    } as unknown as string[]);
-
-    // Each leg is its own segment and the timer's ticks read the peer's event count, so a
-    // segment that reaches no further milestone is visible as such. That is weaker than proof
-    // of a stall: a tick without movement says no milestone was reached, not that nothing moved.
-    const phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
+    const client = openSidebandClient(OriginalWebSocket, server.url, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+    // The try opens here, one statement after the client exists, so the timer and the phase
+    // recorder are both created inside the block that closes them.
+    let phase: ReturnType<typeof phaseTimer> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      // Each leg is its own segment and the timer's ticks read the peer's event count, so a
+      // segment that reaches no further milestone is visible as such. That is weaker than proof
+      // of a stall: a tick without movement says no milestone was reached, not that nothing moved.
+      phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
+      const leg = phase;
       await new Promise<void>((resolve, reject) => {
         const fail = (reason: string): void => reject(new Error(`${reason}; peer: ${probe.summary()}`));
         timer = setTimeout(() => fail("sideband timeout"), 15_000);
         let stage: "echo-roundtrip" | "await-ceiling-echo" | "done" = "echo-roundtrip";
-        phase.split("upgrade");
+        leg.split("upgrade");
         client.addEventListener("open", () => {
           probe.noteClient("open");
-          phase.split("echo-roundtrip");
+          leg.split("echo-roundtrip");
           client.send("ping-sideband");
         });
         client.addEventListener("close", event => {
@@ -663,15 +657,15 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
             probe.noteClient("message");
             if (stage === "echo-roundtrip") {
               expect(String(event.data)).toBe("echo:ping-sideband");
-              phase.split("allocate-ceiling-frame");
+              leg.split("allocate-ceiling-frame");
               const frame = Buffer.alloc(MAX_WS_FRAME_BYTES);
               // The send is synchronous, so allocating the frame, handing it to the socket and
               // waiting for the acknowledgement are three separate costs. Timing them as one
               // segment reported allocation time as wait time.
-              phase.split("send-ceiling-frame");
+              leg.split("send-ceiling-frame");
               client.send(frame);
               stage = "await-ceiling-echo";
-              phase.split("await-ceiling-echo");
+              leg.split("await-ceiling-echo");
               return;
             }
             expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
@@ -687,14 +681,19 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
     } finally {
       // The case owns both: leaving them for the runner to collect is a resource leak whatever
       // it did or did not contribute to any particular deadline.
-      phase.end();
+      phase?.end();
       clearTimeout(timer);
       client.close();
     }
   } finally {
     restoreWebSocket?.();
-    if (live) await live.stop(true);
-    await upstream.stop(true);
+    // Nested so the peer is stopped even when stopping the proxy throws: one failed shutdown
+    // must not leave the other listener running for every case after this one.
+    try {
+      if (live) await live.stop(true);
+    } finally {
+      await upstream.stop(true);
+    }
   }
 }, { timeout: 20_000 });
 
