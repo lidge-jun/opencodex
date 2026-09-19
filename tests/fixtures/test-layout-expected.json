@@ -1053,6 +1053,7 @@
   "responses-inbound-store-default.test.ts": "responses",
   "responses-item-id-repair.test.ts": "responses",
   "responses-json-events.test.ts": "responses",
+  "responses-legacy-dotted-tool-name-repair.test.ts": "responses",
   "responses-muse-tool-name-alias.test.ts": "responses",
   "responses-native-main-refresh.test.ts": "responses",
   "responses-opaque-blob-recovery.test.ts": "responses",
