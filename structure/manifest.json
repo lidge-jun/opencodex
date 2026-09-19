@@ -49,6 +49,7 @@
       "title": "Overview",
       "scope": "Product boundary, local state ownership, and the non-negotiable invariants index.",
       "documents": [
+        "app/",
         "gui/",
         "src/companion/",
         "scripts/",
@@ -332,6 +333,7 @@
         "src/lib/",
         "src/server/",
         "src/usage/",
+        "src/usage/timeline.ts",
         "src/vision/"
       ]
     },

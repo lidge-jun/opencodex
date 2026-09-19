@@ -99,6 +99,18 @@ değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığ�
 429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde kullanılmasını istediğiniz
 bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim sırası verin.
 
+### macOS menü çubuğu uygulaması
+
+Panoyu açmadan proxy durumunu, kullanımı ve sağlayıcı kotalarını gösteren yerel yardımcı uygulama.
+Kaynak kodu [`app/`](../app) konumundadır (Swift + AppKit, üçüncü taraf bağımlılığı yoktur).
+[Sürümler sayfasından](https://github.com/lidge-jun/opencodex/releases) indirin veya
+`bun run build:macos` ile yerel olarak derleyin.
+
+Uygulama noter tasdikli olmadığından ve ad hoc imzalandığından ilk açılışta sağ tıklayıp Aç'ı seçin.
+Ayrıntılar için [macOS menü çubuğu uygulaması kılavuzuna](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/) bakın.
+
+Uygulama ayrıca proxy durumunu, bugünkü kullanımı ve kotaları gösteren macOS 14+ widget'ını içerir.
+
 ### Sponsorlar
 
 Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilmesi sponsorlar sayesinde.

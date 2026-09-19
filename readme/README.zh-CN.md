@@ -97,6 +97,17 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 401/403 与 429 恢复，仍可能重新绑定。给账户设定选择顺序，以便其中某个账户 ——
 通常是你的 Codex Desktop 登录 —— 只在其他账户耗尽后才被选中。
 
+### macOS 菜单栏应用
+
+无需打开仪表板即可查看代理状态、用量和提供商配额的原生伴侣应用。源代码位于
+[`app/`](../app)（Swift + AppKit，无第三方依赖）。请从[发布页面](https://github.com/lidge-jun/opencodex/releases)
+下载，或使用 `bun run build:macos` 在本地构建。
+
+应用采用未公证的临时签名，首次启动时请右键点击并选择“打开”。详情请参阅
+[macOS 菜单栏应用指南](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)。
+
+应用还包含适用于 macOS 14 及更高版本的小组件，可显示代理状态、今日用量和配额。
+
 ### 赞助商
 
 赞助商支撑 opencodex 跟上每一次上游协议变更。有兴趣？

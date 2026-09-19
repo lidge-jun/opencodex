@@ -238,9 +238,9 @@ iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/OpenCodex.icns"
 # ships and the docs must carry the right-click-Open path rather than pretend
 # otherwise.
 #
-# The widget reads the host snapshot through its bundle container fallback path.
-# App Groups are intentionally not used because ad-hoc signatures fail the team-ID
-# requirement on this machine.
+# The widget reads the host snapshot through its own bundle container fallback path.
+# App Groups require a team-ID-prefixed group and a Developer ID / team-signed extension;
+# ad-hoc signatures cannot satisfy that requirement, so the widget uses its own container.
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
   codesign --force --options runtime --timestamp \
     --entitlements "$package_dir/Widget.entitlements" \

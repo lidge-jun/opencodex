@@ -67,8 +67,17 @@ test("the aggregate gate expects the job instead of ignoring it", () => {
   // job missing from `expected_for` reads as `undeclared`, not as skipped.
   const gate = workflow.jobs?.ci;
   expect(Array.isArray(gate?.needs) ? gate?.needs : []).toContain("structure-gate");
+  expect(Array.isArray(gate?.needs) ? gate?.needs : []).toContain("macos-app");
   const script = (gate?.steps ?? []).map(step => step.run ?? "").join("\n");
   expect(script).toContain("structure-gate) echo \"$structure\" ;;");
-  expect(script).toContain("GATED_JOBS=\"$GATED_JOBS structure-gate\"");
+  expect(script).toContain("GATED_JOBS=\"$GATED_JOBS structure-gate macos-app\"");
+  expect(script).toContain("|macos-app)");
   expect(script).toContain("CHANGES_STRUCTURE");
+});
+
+test("app changes select the macOS app job", () => {
+  expect(filters.ci).toContain("app/**");
+  const macosApp = workflow.jobs?.["macos-app"];
+  expect(macosApp?.if).toContain("needs.changes.outputs.ci == 'true'");
+  expect(Array.isArray(macosApp?.needs) ? macosApp?.needs : []).toContain("changes");
 });
