@@ -829,6 +829,8 @@ describe("google-antigravity per-account quota (#1082)", () => {
   test.each([
     [new PinnedHttpError("connect_timeout", "private-error"), "timeout"],
     [new PinnedHttpError("output_byte_limit", "private-error"), "response_unusable"],
+    [new PinnedHttpError("unsupported_content_encoding", "private-error"), "response_unusable"],
+    [new PinnedHttpError("content_decode_failed", "private-error"), "response_unusable"],
     [new DOMException("private-error", "TimeoutError"), "timeout"],
     [new Error("private-error"), "transport_error"],
   ] as const)("typed fallback failure maps to %s", async (error, failure) => {

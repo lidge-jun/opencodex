@@ -109,8 +109,12 @@ export function createResponsesSendBudget(
   const noteAdapterPhysicalSend = (
     inputTokens: number | undefined,
     send: { ordinal: number; recovery?: AttemptRecoveryKind },
+    options: { readonly includeFirst?: boolean } = {},
   ): void => {
-    if (send.ordinal <= 1) return;
+    // Ordinal 1 is skipped because the caller normally records it before dispatch. An adapter
+    // that reports every send asks for it to be counted here instead, so that the first send is
+    // logged where it actually happens rather than before admission could still refuse it.
+    if (send.ordinal <= 1 && options.includeFirst !== true) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
   /**

@@ -41,7 +41,6 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
-  previousResponseScopeMismatch,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
@@ -243,10 +242,13 @@ export async function prepareResponsesRequest(
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
     body = expandPreviousResponseInput(body, inboundClientThreadId);
-    if (previousResponseScopeMismatch(body)) {
-      console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+    const replayFailure = previousResponseReplayFailure(body);
+    if (replayFailure?.reason === "scope_mismatch") {
+      // Bounded and content-free: no task scope and nothing about the retained entry.
+      console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
     }
-    if (previousResponseReplayFailure(body)) {
+    // Local replay failures require full client replay.
+    if (replayFailure) {
       return formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -925,7 +927,7 @@ export async function prepareResponsesRequest(
     return formatErrorResponse(
       400,
       "previous_response_not_found",
-      "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
 
@@ -951,7 +953,7 @@ export async function prepareResponsesRequest(
       return formatErrorResponse(
         400,
         "previous_response_not_found",
-        "Routed continuation requires unavailable local history; resend the full conversation without previous_response_id.",
+        "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       );
     }
   }

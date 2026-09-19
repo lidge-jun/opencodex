@@ -146,7 +146,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
 | `chatCompletionsPath?` | `string` | Relative resource path for `openai-chat` requests, the mirror of `responsesPath` and subject to the same shape rules. Needed when one upstream serves Chat Completions and Responses under different prefixes: a per-model wire override changes the adapter and leaves `baseUrl` alone, so without this an opted-in Chat request would be sent to the Responses base. Z.AI is the shipped example. |
 | `allowEncryptedV2AgentTasks?` | `boolean` | Disabled by default. Trust a direct key-auth `openai-responses` provider to consume or relay opaque encrypted V2 sub-agent tasks unchanged. Eligible routes skip `agentTaskRecovery`; all other routes keep the existing recovery or fail-closed behavior. OpenCodex does not decrypt, translate, or recover tasks sent through this opt-in. |
-| `upstreamWebsocket?` | `boolean` | Opt-in upstream Responses WebSocket transport for `openai-responses` requests (default false). When the upstream supports the Responses WebSocket protocol, streaming POST requests to the configured Responses path (default `/v1/responses`) are dialed as WSS over an HTTPS base URL and re-encoded to SSE for the usual pipeline. Forward providers use `{baseUrl}/responses`; key-auth providers use `responsesPath`, or the legacy `/v1/responses` fallback. This mirrors the canonical ChatGPT backend optimization for OpenAI-compatible gateways (for example sub2api) whose WebSocket ingress is measurably faster than its SSE queue. Plain HTTP remains on SSE; non-Responses paths and `openai-chat` requests stay on HTTP. |
+| `upstreamWebsocket?` | `boolean` | Opt-in upstream Responses WebSocket transport for `openai-responses` requests (default false). Honored only for the first-party `https://api.openai.com/v1` upstream; custom-provider endpoints always use bounded HTTP/SSE because Bun cannot enforce an inbound WebSocket message limit before allocating the complete message. The canonical ChatGPT transport is unaffected. Plain HTTP remains on SSE; non-Responses paths and `openai-chat` requests stay on HTTP. |
 | `supportsServiceTier?` | `boolean` | Tri-state canonical Fast capability fallback. `true` publishes Fast in the catalog, satisfies service-tier routing requirements, contributes a supported fingerprint, and lets fast mode inject the provider's canonical wire value on a compatible final adapter. `false` strips the field and never injects, and exact model declarations cannot reopen it. Absent leaves the provider unclassified: fast mode does not inject or normalize a canonical caller value, and caller values obey the final wire's forwarding permission (`chatServiceTier` on Chat; passthrough on Responses). The registry classifies canonical OpenAI (`true`), DeepSeek, and Volcengine Ark (`false`); set it explicitly only for custom gateways that genuinely support tiers. |
 | `modelSupportsServiceTier?` | `Record<string, boolean>` | Exact upstream model capability overrides. Exact `true` enables canonical Fast for that model; exact `false` narrows provider defaults. An explicit provider-level `supportsServiceTier: false` remains fail-closed and cannot be reopened. Exact `true` does not authorize foreign caller-tier forwarding on Chat. Undeclared models fall back to provider-wide behavior. Management `PATCH /api/providers` merges entries and accepts `null` to clear one. |
 | `chatServiceTier?` | `boolean` | Provider-wide Chat-wire opt-in for forwarding caller `service_tier` values. On a classified route it governs foreign values such as `flex`, not proxy-owned canonical Fast after capability validation; on an unclassified route it governs every caller value because no Fast capability has been validated. Exact model capability does not authorize foreign forwarding. Responses routes retain their capability-based caller forwarding behavior. |
@@ -516,9 +516,14 @@ outbound proxy, opencodex resolves the hostname once and connects only to that v
 HTTPS retains the original Host, SNI, and certificate verification; provider config cannot disable
 certificate checks.
 
-When `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` applies, these operations keep Bun's native fetch.
-URL and literal-address checks still run, but the proxy chooses the final route, DNS answer, and peer,
-so opencodex cannot pin or verify that peer. This is an explicit security limitation.
+These operations use the [server's configured outbound fetch](/reference/configuration/server/).
+A server SOCKS5 proxy — set with
+`config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when
+`NO_PROXY` does not exempt the target. Scheme-specific `HTTP_PROXY` and
+`HTTPS_PROXY` retain Bun's native HTTP(S) handling, while a non-SOCKS `ALL_PROXY` is not a native
+HTTP fetch route. URL and literal-address checks still run, but a selected proxy chooses the final
+route, DNS answer, and peer, so opencodex cannot pin or verify that peer. This is an explicit
+security limitation.
 
 Private/local destinations require `allowPrivateNetwork: true` and, when an outbound proxy is active,
 a matching `NO_PROXY` entry. Loopback is added automatically; list each LAN host explicitly because
@@ -532,8 +537,9 @@ Two fake-IP DNS accommodations exist for Clash / Surge / Mihomo users, and both 
 *answers* only — a literal address in the URL is still rejected. The IANA benchmark range
 `198.18.0.0/15` (and its IPv4-mapped IPv6 spellings) is accepted whenever an outbound proxy applies
 to the host. Mihomo's default IPv6 fake-IP range `fdfe:dcba:9876::/48` is accepted on a stricter
-gate: the proxy variable that matches the URL scheme (`HTTPS_PROXY` for `https:`, `HTTP_PROXY` for
-`http:`; `ALL_PROXY` does not count) must be set, the host must not match `NO_PROXY`, and the
+gate: the proxy variable that matches the URL scheme (`HTTPS_PROXY` for
+`https:`, `HTTP_PROXY` for `http:`) or a SOCKS5 `ALL_PROXY` must be set (a non-SOCKS `ALL_PROXY` does
+not count), the host must not match `NO_PROXY`, and the
 request is then bound to that proxy explicitly. Any other ULA, an adjacent prefix, or a fake-IP answer
 mixed with a real private answer still requires `allowPrivateNetwork: true`. Provider save-time
 validation never applies the IPv6 accommodation.

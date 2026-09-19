@@ -15,6 +15,8 @@ import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
  * job is to know which optional subsystems exist. It is covered by a behavioral assertion
  * instead (see below).
  *
+ * Invariant binding: INV-LAB-01 (structure/overview.md#non-negotiable-invariants).
+ *
  * Design and rationale: devlog/_fin/260814_lab_core_decoupling/
  */
 const PROTECTED = [

@@ -879,6 +879,47 @@ describe("doctor version skew projection", () => {
       removeTreeWithRetry(home);
     }
   }, STORE_BUDGET_MS);
+
+  test("a malformed CODEX_HOME/agents path warns instead of aborting the report", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-doctor-agents-"));
+    const codexHome = join(home, "codex");
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousExitCode = process.exitCode;
+    const restore: Array<() => void> = [];
+    try {
+      mkdirSync(codexHome, { recursive: true });
+      process.env.OPENCODEX_HOME = home;
+      process.env.CODEX_HOME = codexHome;
+      writeFileSync(join(home, "config.json"), JSON.stringify({ ...getDefaultConfig(), port: 9, codexAutoStart: false }));
+      // A regular file where the role scan expects a readable directory.
+      writeFileSync(join(codexHome, "agents"), "not a directory");
+      const logged: string[] = [];
+      const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => { logged.push(args.map(String).join(" ")); });
+      restore.push(() => log.mockRestore());
+      // Other doctor sections probe upstream health; this diagnostic fixture must stay offline.
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+      restore.push(() => fetch.mockRestore());
+      const live = spyOn(proxyLiveness, "findLiveProxy").mockResolvedValue({
+        pid: null, port: 9, hostname: "127.0.0.1", source: "config",
+      });
+      restore.push(() => live.mockRestore());
+      await runDoctor([]);
+      const output = logged.join("\n");
+      expect(output).toContain("[WARN] unable to scan $CODEX_HOME/agents/*.toml:");
+      expect(output).not.toContain("no per-role model_fallback fields");
+      // The dependent derived-role scan shares the listing; a missing guard would warn twice.
+      expect(output.match(/\[WARN\] unable to scan \$CODEX_HOME\/agents\/\*\.toml:/g) ?? []).toHaveLength(1);
+    } finally {
+      for (const cleanup of restore.reverse()) cleanup();
+      process.exitCode = previousExitCode;
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      removeTreeWithRetry(home);
+    }
+  }, STORE_BUDGET_MS);
 });
 
 describe("doctor reclaim wiring (end to end)", () => {

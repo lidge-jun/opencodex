@@ -45,6 +45,31 @@ describe("rateLimitRetryPolicyFor", () => {
     });
   });
 
+  test("falls back to a patient policy for the OpenCode Go destination without the knob", () => {
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      adapter: "openai-chat",
+    } as OcxProviderConfig)).toEqual({
+      enabled: true,
+      attempts: 6,
+      intervalMs: 10_000,
+      maxIntervalMs: 60_000,
+      respectRetryAfter: true,
+    });
+    // Explicit opt-out still wins on the Go destination.
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      adapter: "openai-chat",
+      retryOn429: { enabled: false },
+    } as OcxProviderConfig)).toBeNull();
+    // Explicit values normalize against the generic defaults, not the Go fallback.
+    expect(rateLimitRetryPolicyFor({
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      adapter: "openai-chat",
+      retryOn429: { attempts: 2 },
+    } as OcxProviderConfig)).toMatchObject({ attempts: 2, intervalMs: 5_000 });
+  });
+
   test("honors explicit values", () => {
     expect(rateLimitRetryPolicyFor({
       retryOn429: { attempts: 10, intervalMs: 1_000, maxIntervalMs: 5_000, respectRetryAfter: false },
@@ -116,6 +141,43 @@ describe("retry loop client-abort handling", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+  });
+
+  test("opencode-go fallback replays burst 429s on the same key, then surfaces 429", async () => {
+    let sends = 0;
+    globalThis.fetch = (async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("opencode.ai/zen/go")) {
+        sends += 1;
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "0" },
+        });
+      }
+      return originalFetch(input as never, undefined as never);
+    }) as typeof fetch;
+
+    const config = {
+      port: 0,
+      defaultProvider: "opencode-go",
+      providers: {
+        "opencode-go": {
+          adapter: "openai-chat",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          authMode: "key",
+          apiKey: "key-alpha-000111222333",
+        },
+      },
+    } as OcxConfig;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "opencode-go/muse-spark-1.3-contributor", input: "hello", stream: false }),
+    }), config, { model: "opencode-go/muse-spark-1.3-contributor", provider: "opencode-go" }, {});
+
+    expect(sends).toBe(3);
+    expect(response.status).toBe(429);
   });
 
   test("abort during the wait interrupts the sleep, cancels the 429 body, and returns 499 without replaying", async () => {

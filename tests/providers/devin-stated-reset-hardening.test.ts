@@ -74,14 +74,20 @@ describe("Devin cumulative stated-reset allowance", () => {
   test("cancellation at the sleep-completion boundary prevents replay", async () => {
     const controller = new AbortController();
     let calls = 0;
-    const stream = async function* (): AsyncGenerator<CloudChatEvent> {
+    let inferenceSends = 0;
+    const stream = async function* (req: CloudChatRequest): AsyncGenerator<CloudChatEvent> {
       calls += 1;
+      await req.executor!("https://example.invalid/GetChatMessage");
       throw cap("reset in 1 second");
     };
     await expect(drain(streamChatEventsWithResetRetry({ ...request, signal: controller.signal }, {
       stream, sleep: async () => { controller.abort(); },
+      execution: {
+        executor: (async () => { inferenceSends += 1; return new Response(); }) as typeof fetch,
+      },
     }))).rejects.toHaveProperty("name", "AbortError");
     expect(calls).toBe(1);
+    expect(inferenceSends).toBe(1);
   });
 
   test.each([
@@ -91,13 +97,21 @@ describe("Devin cumulative stated-reset allowance", () => {
     { kind: "reasoning_signature", signature: "sig" },
   ] as CloudChatEvent[])("never retries after an event: %j", async event => {
     let calls = 0;
-    const stream = async function* (): AsyncGenerator<CloudChatEvent> {
+    let inferenceSends = 0;
+    const stream = async function* (req: CloudChatRequest): AsyncGenerator<CloudChatEvent> {
       calls += 1;
+      await req.executor!("https://example.invalid/GetChatMessage");
       yield event;
       throw cap("reset in 1 second");
     };
-    await expect(drain(streamChatEventsWithResetRetry(request, { stream }))).rejects.toThrow("reset in 1 second");
+    await expect(drain(streamChatEventsWithResetRetry(request, {
+      stream,
+      execution: {
+        executor: (async () => { inferenceSends += 1; return new Response(); }) as typeof fetch,
+      },
+    }))).rejects.toThrow("reset in 1 second");
     expect(calls).toBe(1);
+    expect(inferenceSends).toBe(1);
   });
 
   test("explicit zero disables waiting; overlarge overrides stay bounded", () => {

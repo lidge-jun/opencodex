@@ -64,6 +64,12 @@ maintaining a second implementation. Empty byte results across the relay and
 `src/server/sse-frame-buffer.ts` reuse one immutable zero-length view; non-empty frame ownership,
 frame limits, cancellation, terminal detection, and wire bytes are unchanged.
 
+`src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
+their charge/release lifecycle while it asks the pure progressive decoder in
+`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
+charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
+second retention owner or change terminal, failure, incomplete, or disposal release behavior.
+
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
 Serialized request and buffered-response observations use byte counts without measurement arrays.

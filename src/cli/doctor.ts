@@ -1505,8 +1505,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   // cannot break a legitimately green pipeline.
 
   console.log("\nCodex agent role files");
-  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(resolveCodexHomeDirImpl());
-  if (tomlFallbackRoles.length === 0) {
+  let roleScanError: unknown;
+  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(
+    resolveCodexHomeDirImpl(),
+    cause => {
+      roleScanError = cause;
+    },
+  );
+  if (roleScanError) {
+    console.log(`  [WARN] unable to scan $CODEX_HOME/agents/*.toml: ${String(roleScanError)}`);
+  } else if (tomlFallbackRoles.length === 0) {
     console.log("  ok     no per-role model_fallback fields in $CODEX_HOME/agents/*.toml");
   } else {
     console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
@@ -1514,13 +1522,24 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   }
   // opencodex does not write these files; the Codex desktop external-agent import does, and it
   // drops the model pin on the way in. Observe-only: doctor never repairs or removes them.
-  const unpinnedDerivedRoles = scanOpencodexDerivedCodexAgentRolesWithoutModelPin(resolveCodexHomeDirImpl());
-  if (unpinnedDerivedRoles.length === 0) {
-    console.log("  ok     every opencodex-derived role file in $CODEX_HOME/agents/*.toml pins a model");
-  } else {
-    console.log(`  [WARN] ${unpinnedDerivedRoles.length} opencodex-derived role file${unpinnedDerivedRoles.length === 1 ? "" : "s"} without a \`model\` pin: ${unpinnedDerivedRoles.map(role => `${role}.toml`).join(", ")}`);
-    console.log("        Codex runs these roles on the parent model, so a spawn records one role and another model. The `ocx-route` directive in the file cannot pin them: it is honoured only on the Claude Code `/v1/messages` path and is inert on `/v1/responses`.");
-    console.log("        Add `model = \"<id>\"` to each file, or remove them. They usually come from the Codex desktop external-agent import of ~/.claude/agents/ocx-*.md; set `[desktop] external-agent-import-sync-item-types` with `SUBAGENTS = false` to stop it recreating them.");
+  // Both role scans share the same directory listing, so a failure above already reported the
+  // cause; skip the second scan rather than warn twice or print a false "ok".
+  if (!roleScanError) {
+    const unpinnedDerivedRoles = scanOpencodexDerivedCodexAgentRolesWithoutModelPin(
+      resolveCodexHomeDirImpl(),
+      cause => {
+        roleScanError = cause;
+      },
+    );
+    if (roleScanError) {
+      console.log(`  [WARN] unable to scan $CODEX_HOME/agents/*.toml: ${String(roleScanError)}`);
+    } else if (unpinnedDerivedRoles.length === 0) {
+      console.log("  ok     every opencodex-derived role file in $CODEX_HOME/agents/*.toml pins a model");
+    } else {
+      console.log(`  [WARN] ${unpinnedDerivedRoles.length} opencodex-derived role file${unpinnedDerivedRoles.length === 1 ? "" : "s"} without a \`model\` pin: ${unpinnedDerivedRoles.map(role => `${role}.toml`).join(", ")}`);
+      console.log("        Codex runs these roles on the parent model, so a spawn records one role and another model. The `ocx-route` directive in the file cannot pin them: it is honoured only on the Claude Code `/v1/messages` path and is inert on `/v1/responses`.");
+      console.log("        Add `model = \"<id>\"` to each file, or remove them. They usually come from the Codex desktop external-agent import of ~/.claude/agents/ocx-*.md; set `[desktop] external-agent-import-sync-item-types` with `SUBAGENTS = false` to stop it recreating them.");
+    }
   }
 
   const dual = collectWslDualInstall();

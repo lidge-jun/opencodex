@@ -159,6 +159,8 @@ once the server observes the client disconnect (Bun propagates it asynchronously
 cancelled with 499 before any replay; because the propagation is async, a replay may precede
 the cancel if the interval elapses first (bounded by the same `attempts` budget).
 
+OpenCode Go (`https://opencode.ai/zen/go/v1`, serving subscription traffic such as Muse Spark) ships a patient same-target fallback when no explicit `retryOn429` is configured: same-key wait-and-replay with a 10s interval and a 60s cap, `Retry-After` honored. Replays draw from the shared per-request send budget, so a burst typically absorbs a couple of paced sends before the 429 surfaces — without this, a single-key pool surfaced the first 429 immediately and the client’s own retry budget aborted the goal (`exceeded retry limit, last status: 429`). An explicit `retryOn429` — including `enabled: false` — always overrides the fallback; every other provider without the knob keeps fail-fast behavior.
+
 Provider-level `requestPacing` is the proactive companion to `retryOn429`. It reserves outbound
 request-start slots before transport work begins, so a known RPM ceiling does not have to fail once
 before the proxy reacts. One provider-wide lane enforces the aggregate ceiling. Exact model lanes

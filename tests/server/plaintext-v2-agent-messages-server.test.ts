@@ -540,7 +540,8 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     const secondBody = await second.text();
     expect({ status: second.status, body: secondBody, sends: sentBodies.length }).toEqual({
       status: 400,
-      body: expect.stringContaining("continuation state is unavailable or expired"),
+      // One message for every local replay failure, so which one occurred is not readable here.
+      body: expect.stringContaining("Continuation state is unavailable or corrupt"),
       sends: 1,
     });
   });
