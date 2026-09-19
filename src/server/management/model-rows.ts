@@ -79,7 +79,12 @@ export function effectiveManagementDisplayName(
  */
 export async function listManagementModelRows(
   config: OcxConfig,
-  options: { entitlementWaitMs?: number; models?: readonly CatalogModel[] } = {},
+  options: {
+    entitlementWaitMs?: number;
+    models?: readonly CatalogModel[];
+    /** Filled with each provider's content revision as of the moment its rows were chosen. */
+    providerContentRevisions?: Map<string, string>;
+  } = {},
 ): Promise<ManagementModelRow[]> {
   /*
    * A supplied roster skips the gather, and that is the point rather than an optimization.
@@ -91,7 +96,7 @@ export async function listManagementModelRows(
    */
   const models = options.models === undefined
     ? (await Promise.all([
-      fetchAllModels(config),
+      fetchAllModels(config, options.providerContentRevisions),
       ensureCodexEntitlementFreshness(config, {
         waitMs: options.entitlementWaitMs ?? 3_000,
       }),
@@ -252,7 +257,14 @@ export async function loadExportModels(
   config: OcxConfig,
   models?: readonly CatalogModel[],
 ): Promise<ExportModel[]> {
-  const rows = await listManagementModelRows(config, models === undefined ? {} : { models });
+  // The gather stamps each provider as it chooses its rows, so the roster and the revisions that
+  // vouch for it come from the same moment. Sampling afterwards would let a concurrent flight's
+  // publication be recorded against rows it never produced.
+  const gathered = new Map<string, string>();
+  const rows = await listManagementModelRows(
+    config,
+    models === undefined ? { providerContentRevisions: gathered } : { models },
+  );
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
   const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), config));
@@ -271,7 +283,9 @@ export async function loadExportModels(
   }
   lastExportSnapshot = {
     key: configKey,
-    cacheStamp: modelCacheStamp(config),
+    // Prefer the revisions the gather stamped; fall back to observing only when the roster was
+    // supplied and no gather happened, where there is nothing tighter to use.
+    cacheStamp: gathered.size > 0 ? stampFrom(config, gathered) : modelCacheStamp(config),
     generation: ++exportSnapshotGeneration,
     models: Object.freeze(structuredClone(exported)),
   };
@@ -308,6 +322,20 @@ function modelCacheStamp(config: OcxConfig): string {
   return Object.keys(config.providers ?? {})
     .sort()
     .map(provider => `${provider}=${observeModelCacheRevision(provider)}`)
+    .join(",");
+}
+
+/**
+ * The same stamp shape, built from revisions the gather recorded rather than from observation.
+ *
+ * A provider the gather did not report falls back to observation so the stamp stays total; that
+ * happens for a provider configured after the rows were chosen, and it retires the snapshot on
+ * the next read rather than pretending the roster covered it.
+ */
+function stampFrom(config: OcxConfig, gathered: ReadonlyMap<string, string>): string {
+  return Object.keys(config.providers ?? {})
+    .sort()
+    .map(provider => `${provider}=${gathered.get(provider) ?? observeModelCacheRevision(provider)}`)
     .join(",");
 }
 
