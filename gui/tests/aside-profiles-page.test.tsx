@@ -309,8 +309,17 @@ test("details keep state, journal and restore scoped to the selected profile, th
   expect(container.textContent).toContain("/tmp/aside-fixture/u/2/models.json");
   expect(container.textContent).not.toContain("/tmp/aside-fixture/u/0/models.json");
   await click("Undo");
-  await waitFor(() => Boolean(container.querySelector("dialog[open]")));
-  await click("Restore", container.querySelector("dialog[open]")!);
+  await waitFor(() => {
+    const dialog = container.querySelector("dialog[open]");
+    const restore = dialog ? findButton("Restore", dialog) : undefined;
+    return Boolean(restore && !restore.disabled);
+  });
+  const readyDialog = container.querySelector("dialog[open]")!;
+  await click("Restore", readyDialog);
+  const restorePosts = requests.filter(request => request.path === `${profilesPath}/2/restore` && request.method === "POST");
+  expect(restorePosts).toEqual([{ path: `${profilesPath}/2/restore`, method: "POST",
+    body: { opId: "aside-profile-2-op", confirmDrift: false, operation: "restore",
+      planFingerprint: `p1:${"2".padStart(32, "0")}` } }]);
   await waitFor(() => !container.querySelector("dialog[open]"));
   expect(writes()).toEqual([{ path: `${profilesPath}/2/restore`, method: "POST",
     body: { opId: "aside-profile-2-op", confirmDrift: false, operation: "restore",
