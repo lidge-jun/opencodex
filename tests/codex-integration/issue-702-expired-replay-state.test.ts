@@ -815,6 +815,65 @@ describe("Issue #702 expired forward replay state", () => {
     expect(unusable.upstreamRequests).toHaveLength(1);
   });
 
+  test("a WebSocket client whose task scope changed is refused and recovers by replaying in full", async () => {
+    // The existing WebSocket coverage exercises expired and missing state. A scope mismatch is
+    // the third way local replay becomes unusable, and it has to reach the client as the same
+    // frame so Codex reconnects with its full input instead of terminating the task.
+    const upstreamRequests: Record<string, unknown>[] = [];
+    const upstream = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        upstreamRequests.push(await request.json() as Record<string, unknown>);
+        return new Response(completedSse("resp_scope_ws", "replayed"), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    let server: ReturnType<typeof startServer> | null = null;
+    let socket: WebSocket | null = null;
+    try {
+      rememberResponseState(
+        { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
+        { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
+        undefined,
+        { force: true, clientThreadId: "task-a" },
+      );
+      saveConfig({
+        port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "routed-test",
+        providers: {
+          "routed-test": {
+            adapter: "openai-responses", baseUrl: upstream.url.toString(), allowPrivateNetwork: true,
+            authMode: "key", apiKey: "synthetic-key", defaultModel: "test-model", statelessResponses: true,
+          },
+        },
+      } as OcxConfig);
+      server = startServer(0);
+      socket = await openResponseSocket(server.url, { "x-codex-parent-thread-id": "task-b" });
+      const refused = await sendSocketTurn(socket, {
+        model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
+        input: [inputMessage(CURRENT_USER_SENTINEL)], store: false,
+      });
+      expect(refused).toMatchObject({
+        type: "error", status: 400,
+        error: { type: "invalid_request_error", code: "previous_response_not_found" },
+      });
+      expect(upstreamRequests).toHaveLength(0);
+
+      const recovered = await sendSocketTurn(socket, {
+        model: "routed-test/test-model",
+        input: [inputMessage(HISTORICAL_USER_SENTINEL), inputMessage(CURRENT_USER_SENTINEL)],
+        store: false,
+      });
+      expect(recovered.type).toBe("response.completed");
+      expect(upstreamRequests).toHaveLength(1);
+      expect(upstreamRequests[0]!.previous_response_id).toBeUndefined();
+    } finally {
+      socket?.close();
+      await server?.stop(true);
+      await upstream.stop(true);
+    }
+  });
+
   test("forward mode still sends an ordinary request without previous_response_id", async () => {
     const scenario = await runForwardScenario("ordinary");
 
