@@ -25,6 +25,8 @@ export function resolveWireProtocolOverride(
   inbound: InboundWire = "responses",
   staticPolicy?: ResolvedModelPolicy,
 ): OcxProviderConfig {
+  // RouteResult policy is recaptured for the original inbound protocol whenever routing selects
+  // or replaces a destination, so every downstream rebuild consumes the same adapter authority.
   if (staticPolicy) {
     return staticPolicy.model.adapter !== providerConfig.adapter
       ? { ...providerConfig, adapter: staticPolicy.model.adapter }

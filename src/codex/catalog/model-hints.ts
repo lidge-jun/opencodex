@@ -299,7 +299,9 @@ export function applyProviderConfigHints(
   const supportsReasoningSummaries = staticPolicy.model.supportsReasoningSummaries;
   const supportsVerbosity = staticPolicy.model.supportsVerbosity;
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
-  const supportsServiceTier = staticPolicy.model.supportsServiceTier ?? serviceTierSupportFromPolicy(fastPolicy);
+  // Frozen gather providers retain the captured Fast authority. That late/captured eligibility
+  // owns catalog publication, including an explicit provider-level false.
+  const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
     supportsServiceTier: _staleServiceTier,
     fastTierDescription: _staleFastTierDescription,

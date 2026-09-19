@@ -55,6 +55,7 @@ import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../re
 import { requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
 import type { RouteResult } from "../../router";
 import {
+  captureRouteStaticPolicy,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -398,16 +399,26 @@ export async function prepareResponsesRequest(
 
   let route: RouteResult;
   let credentialDomainWasRewritten = false;
+  const captureInboundRoutePolicy = (candidate: RouteResult): RouteResult => {
+    candidate.staticPolicy = captureRouteStaticPolicy(
+      candidate.providerName,
+      candidate.modelId,
+      candidate.provider,
+      candidate.staticPolicy.effectiveAlias,
+      inboundWire,
+    );
+    return candidate;
+  };
   try {
     // A `compaction_trigger` turn may name a bare native model the operator has
     // no canonical OpenAI route for (#2901). Only the initial compaction route
     // may fall back to the configured default provider; combo attempts and the
     // later fallback/recovery re-routes keep the ordinary reservation.
-    const resolveRoute = (modelId: string) => options.comboAttempt
+    const resolveRoute = (modelId: string) => captureInboundRoutePolicy(options.comboAttempt
       ? routeConcreteModel(config, modelId)
       : parsed._compactionRequest === true
         ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
-        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody)));
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
     if (_sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
@@ -635,7 +646,9 @@ export async function prepareResponsesRequest(
 
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
-        route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+        route = captureInboundRoutePolicy(
+          routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+        );
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
@@ -833,7 +846,9 @@ export async function prepareResponsesRequest(
 
           if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
             try {
-              route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+              route = captureInboundRoutePolicy(
+                routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+              );
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
