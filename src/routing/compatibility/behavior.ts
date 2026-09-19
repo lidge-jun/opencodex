@@ -209,6 +209,9 @@ export function resolveProductionBehaviorValues(
     }),
     "reasoning.replayMode": behaviorRow("provider_config", {
       preserveResponses: effective.preserveResponsesReasoningContent === true,
+      // Dropping replayed reasoning items changes the continuation body, so two routes that
+      // disagree about it are not the same compatibility subject and must not share evidence.
+      dropResponses: effective.dropResponsesReasoningItems === true,
       preserveContent: includesModel(effective.preserveReasoningContentModels, modelId),
       placeholder: includesModel(effective.requiresReasoningPlaceholderModels, modelId),
     }),

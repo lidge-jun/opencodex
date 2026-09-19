@@ -6,6 +6,7 @@ import { enrichProviderFromCatalog, KEY_LOGIN_PROVIDERS } from "../../src/oauth/
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { safeConfigDTO } from "../../src/server/auth-cors";
+import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { routeModel } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
 import { buildProviderPostBody } from "../../gui/src/provider-payload";
@@ -211,8 +212,12 @@ describe("Volcengine Ark providers", () => {
   // The preset default moves to Responses for NEW rows only. An install that already saved the
   // Chat row keeps it: `volcengine-coding-plan` is a `preserveCustomDestination` key entry, so
   // `providerMatchesRegistryTransport` refuses the adapter mismatch and `routedProviderConfig`
-  // returns the configured row untouched. Nothing rewrites that row at startup, which is the
-  // whole reason this change carries no config migration.
+  // returns the configured row untouched.
+  //
+  // This pins the routing outcome, which is what a user observes. It is not a guard against a
+  // startup migration being reintroduced — that guarantee is the absence of a migration module,
+  // and the startup composition in src/server/index.ts is not reachable from a test that must
+  // not touch persisted config.
   test("leaves an already-saved Coding Plan Chat row on Chat", () => {
     const config: OcxConfig = {
       port: 10100,
@@ -237,6 +242,51 @@ describe("Volcengine Ark providers", () => {
       options: {},
     });
     expect(request.url).toBe("https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions");
+  });
+
+  // The replay-drop flag belongs to the destination, not to the provider-wide wire. A saved Chat
+  // row that opts ONE model into Responses reaches the Responses adapter without ever matching
+  // the registry transport, so a fill that only ran on the matched path would leave exactly this
+  // continuation forwarding the reasoning item Ark answers 400 to.
+  test("carries the replay-drop flag onto a saved Chat row that opts one model into Responses", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "volcengine-coding-plan",
+      providers: {
+        "volcengine-coding-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+          authMode: "key",
+          apiKey: "test-key",
+          modelAdapters: { "glm-5.3": "openai-responses" },
+        },
+      },
+    };
+    const route = routeModel(config, "volcengine-coding-plan/glm-5.3");
+    expect(route.provider.adapter).toBe("openai-chat");
+    expect(route.provider.dropResponsesReasoningItems).toBe(true);
+
+    const resolved = resolveWireProtocolOverride("volcengine-coding-plan", route.modelId, route.provider, "responses");
+    expect(resolved.adapter).toBe("openai-responses");
+
+    const request = createResponsesPassthroughAdapter(resolved).buildRequest({
+      modelId: route.modelId,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: route.modelId,
+        input: [
+          { type: "reasoning", id: "rs_1", content: [{ type: "reasoning_text", text: "private" }] },
+          { type: "function_call", call_id: "call_1", name: "echo", arguments: "{\"value\":\"ok\"}" },
+          { type: "function_call_output", call_id: "call_1", output: "ok" },
+        ],
+        stream: true,
+      },
+    }, { headers: new Headers() });
+
+    const body = JSON.parse(request.body) as { input: Array<Record<string, unknown>> };
+    expect(body.input.map(item => item.type)).toEqual(["function_call", "function_call_output"]);
   });
 
   test.each([

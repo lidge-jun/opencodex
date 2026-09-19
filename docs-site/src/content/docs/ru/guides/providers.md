@@ -291,7 +291,7 @@ Zen может отвечать общими 429 без заголовков `Re
 Большинство использует адаптер `openai-chat` с bearer-ключом; немногие провайдеры, предоставляющие
 только Anthropic-совместимую конечную точку (например, **Xiaomi MiMo**), используют адаптер
 `anthropic` (`x-api-key`).
-Volcengine Agent Plan использует нативную конечную точку Responses через адаптер `openai-responses`.
+Volcengine Coding Plan и Agent Plan используют нативные конечные точки Responses через адаптер `openai-responses`. В проверенных продолжениях с вызовом инструментов на Ark Coding Plan повторная отправка элемента `reasoning`, возвращённого предыдущим ходом, даёт `400 InvalidParameter`, поэтому пресет Coding Plan удаляет такие элементы перед пересылкой входа продолжения. Состояние reasoning того хода при этом теряется; отключается через `dropResponsesReasoningItems: false`. Уже сохранённая конфигурация Coding Plan с `openai-chat` не переписывается и остаётся на Chat: чтобы перейти, вручную смените `adapter` на `openai-responses` и `responsesPath` на `/responses` либо удалите и заново добавьте пресет.
 
 > **Три маршрута тарификации Volcengine:** `volcengine` — Ark API с оплатой по факту,
 > `volcengine-coding-plan` расходует квоту Coding Plan, а `volcengine-agent-plan` — квоту Agent

@@ -34,7 +34,8 @@ export type StaticProviderPolicyField =
   | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "statelessResponses"
   | "requiresAdjacentResponsesToolResults" | "requiresPairedResponsesToolResults" | "annotateEmptyToolOutputs"
   | "fastWire" | "supportsServiceTier" | "modelSupportsServiceTier" | "supportsOpenAiWebSearchToolFields"
-  | "supportsResponsesCustomTools" | "preserveResponsesReasoningContent" | "modelSupportsReasoningSummaries"
+  | "supportsResponsesCustomTools" | "preserveResponsesReasoningContent" | "dropResponsesReasoningItems"
+  | "modelSupportsReasoningSummaries"
   | "supportsVerbosity" | "modelSupportsVerbosity" | "responsesItemIdRepair" | "autoToolChoiceOnlyModels"
   | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels"
   | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "showThinkingSummary"
@@ -175,7 +176,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "requiresAdjacentResponsesToolResults", "requiresPairedResponsesToolResults",
     "annotateEmptyToolOutputs", "fastWire", "supportsServiceTier",
     "supportsOpenAiWebSearchToolFields", "supportsResponsesCustomTools",
-    "preserveResponsesReasoningContent", "supportsVerbosity", "responsesItemIdRepair",
+    "preserveResponsesReasoningContent", "dropResponsesReasoningItems",
+    "supportsVerbosity", "responsesItemIdRepair",
     "showThinkingSummary", "escapeBuiltinToolNames", "googleMode", "project", "location",
   ] as const) putScalar(key, entry?.[key] as StaticProviderPolicyShape[typeof key] | undefined);
   const legacyClinePassLadder = entry !== undefined && input.providerName === "cline-pass"

@@ -85,6 +85,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   fastTierDescription: NONE,
   modelServiceTierCapabilityBaseUrlGuard: NONE,
   preserveResponsesReasoningContent: NONE,
+  dropResponsesReasoningItems: NONE,
   modelSupportsReasoningSummaries: RECORD_KEYS,
   modelSupportsVerbosity: RECORD_KEYS,
   supportsVerbosity: NONE,
