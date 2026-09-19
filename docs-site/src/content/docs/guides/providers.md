@@ -559,8 +559,14 @@ stays as documentation of the restriction. Upstream terms:
 
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
-Volcengine Agent Plan uses its native Responses endpoint through `openai-responses`.
-The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Responses endpoint and
+Volcengine Coding Plan and Agent Plan use their native Responses endpoints through `openai-responses`.
+During validated Ark Coding Plan tool continuations, replaying the returned Responses `reasoning` item
+answered `400 InvalidParameter`, so the Coding Plan preset drops replayed reasoning items before
+forwarding continuation input; that is lossy, and `dropResponsesReasoningItems: false` turns it off.
+An install that already saved the Coding Plan provider on `openai-chat` keeps that wire — nothing
+rewrites a stored row — so switching is a deliberate edit: set `adapter` to `openai-responses` and
+`responsesPath` to `/responses`, or delete and re-add the preset. Explicit per-model `openai-chat`
+overrides remain available either way. The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Responses endpoint and
 keeps upstream SSE streaming enabled. If that model finishes every output item but omits the final
 Responses event, opencodex applies a five-second model-scoped grace repair; malformed or partial
 streams close as incomplete rather than being reported as successful.

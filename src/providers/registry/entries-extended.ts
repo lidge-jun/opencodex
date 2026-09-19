@@ -746,9 +746,22 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     id: "volcengine-coding-plan",
     label: "Volcengine Ark Coding Plan",
     baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
-    adapter: "openai-chat",
+    responsesPath: "/responses",
+    adapter: "openai-responses",
     authKind: "key",
+    supportsServiceTier: false,
     preserveCustomDestination: true,
+    // A row already saved on Chat keeps Chat. This is a `preserveCustomDestination` key entry,
+    // so `providerMatchesRegistryTransport` refuses the adapter mismatch and the request path
+    // returns the stored row untouched; the alias below still hands it this entry's metadata.
+    // Deliberately no startup config migration: the Z.AI one (`zai-responses-migration.ts`) is
+    // safe only because it rewrites rows the router already canonicalizes, and it gates on
+    // `providerMatchesRegistryTransport` to guarantee that. A Chat row here is NOT canonicalized,
+    // so migrating it would change a wire the operator is actually using, and a marker added
+    // now cannot tell the old default apart from a deliberate pre-upgrade Chat choice.
+    destinationAliases: [{ baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", adapter: "openai-chat" }],
+    // Validated Ark Coding Plan continuations reject replayed reasoning items.
+    dropResponsesReasoningItems: true,
     dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
     defaultModel: "ark-code-latest",
     models: VOLCENGINE_CODING_PLAN_MODELS,

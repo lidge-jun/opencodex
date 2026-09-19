@@ -357,6 +357,12 @@ export interface OcxProviderConfig {
    */
   preserveResponsesReasoningContent?: boolean;
   /**
+   * Drop replayed Responses `reasoning` items from input history before forwarding.
+   * Some OpenAI-compatible Responses upstreams accept tool-call replay but reject
+   * reasoning output items when they are sent back on a continuation.
+   */
+  dropResponsesReasoningItems?: boolean;
+  /**
    * Explicit opt-in for a relay that genuinely fronts OpenAI and can decode native
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
    */

@@ -412,6 +412,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
       : {}),
+    ...(provider.dropResponsesReasoningItems === undefined && registryEntry.dropResponsesReasoningItems !== undefined
+      ? { dropResponsesReasoningItems: registryEntry.dropResponsesReasoningItems }
+      : {}),
     // The request path resolves through routedProviderConfig() and never calls
     // enrichProviderFromRegistry(), so a saved provider row written before the
     // registry learned this flag must be backfilled here or route.provider never

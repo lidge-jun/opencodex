@@ -1519,6 +1519,7 @@
     "yaml-fragment-source.test.ts": "config",
     "z-fulfill.test.ts": "images",
     "z-handler-activation.test.ts": "images",
+    "zai-reasoning-replay.test.ts": "providers",
     "zcode-client.test.ts": "providers",
     "zhipu-bigmodel-provider.test.ts": "providers",
     "zhipu-bigmodel-responses-quota.test.ts": "providers",
