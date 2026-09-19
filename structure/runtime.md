@@ -1,5 +1,18 @@
 # Runtime
 
+## Resolved static model policy
+
+`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
+route spreads retain that object, and every initial, retry, continuation, sidecar, and late
+credential adapter rebuild consumes its recorded wire adapter instead of rereading mutable registry
+authority. Credential, account, quota, health, cooldown, and observed transport evidence remain
+late and cannot widen a captured static limit.
+
+Virtual models are the sole model-identity transition: the ordinary and compact paths preserve the
+selected public id in diagnostics, rewrite `route.modelId` to the upstream wire id, and atomically
+replace `route.staticPolicy` before adapter or capability decisions continue. Model aliases are
+resolved before the route result is built, so their policy is already keyed by the native wire id.
+
 Routed Meta Muse requests use the registry-owned [Muse effort and header contract](providers-and-adapters.md); `max` reaches the provider through the existing reasoning mapper.
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.

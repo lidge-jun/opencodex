@@ -100,8 +100,9 @@ import type {
   CatalogSourceEvidence,
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
-import { applyRegistryCapabilitySeedFill, modelCapabilities, modelInputModalities } from "./model-hints";
+import { modelCapabilities, modelInputModalities } from "./model-hints";
 import { configuredComboTargetModelsByProvider } from "./combo-member";
+import { resolveModelPolicy } from "../../providers/resolved-model-policy";
 
 /** Concurrent gatherRoutedModels callers with the same catalog identity share one live discovery.
  *  Keyed by gatherFlightKey so a different config cannot join or evict the wrong flight. */
@@ -344,8 +345,23 @@ export function captureProviderGather(
 ): CapturedProviderGather {
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
-  applyRegistryCapabilitySeedFill(name, enriched);
   const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
+  const registryEntry = registryTransportMatch ? getProviderRegistryEntry(name) : undefined;
+  const staticProvider = resolveModelPolicy({
+    providerName: name,
+    modelId: enriched.defaultModel ?? "__catalog_capture__",
+    provider: enriched,
+    registryEntry,
+    transportMatchedRegistry: registryTransportMatch,
+    ...(enriched.authMode ? { effectiveAuth: { authMode: enriched.authMode } } : {}),
+  }).provider;
+  for (const key of [
+    "modelContextWindows", "modelInputModalities", "modelMaxInputTokens", "modelMaxOutputTokens",
+    "modelReasoningEfforts", "modelDefaultReasoningEfforts", "modelSupportsReasoningSummaries",
+    "modelSupportsVerbosity", "modelSupportsServiceTier",
+  ] as const) {
+    if (staticProvider[key] !== undefined) enriched[key] = detachedClone(staticProvider[key]) as never;
+  }
   const provider = recursivelyFreeze(enriched);
   const fastPolicyAuthority = captureFastPolicyAuthority(
     name,

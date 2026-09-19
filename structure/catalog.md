@@ -32,6 +32,10 @@ may fill an absent static one only inside that call-local projection — the fro
 unchanged and never widened — max input never exceeds the resolved context window, and the
 projection mutates neither input. P1a establishes this provider-owned contract
 without changing catalog assembly; consumer migration is a separate layer.
+unknown, and the projection mutates neither input. Gather admission freezes an enriched provider
+snapshot before discovery; per-model hint projection resolves from that snapshot, so no post-admission
+registry read can change a running gather flight.
+
 Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
 diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
 input-modality declarations outrank the registry/config modality map; an empty declaration

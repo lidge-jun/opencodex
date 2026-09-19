@@ -920,6 +920,7 @@ export async function prepareResponsesRequest(
       route.modelId,
       route.provider,
       inboundWire,
+      route.staticPolicy,
     );
     if (wireProvider.adapter === "openai-responses" && !isCanonicalOpenAiForwardProvider(wireProvider)) {
       const repaired = stripAgentMessageCiphertextInPlace((body as { input?: unknown } | undefined)?.input);
@@ -948,7 +949,7 @@ export async function prepareResponsesRequest(
   }
 
   if (hasUnexpandedPreviousResponse) {
-    const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+    const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy);
     // Can the DESTINATION see the history this process failed to restore? Only the native
     // Responses passthrough can: it forwards previous_response_id to a backend that stored the
     // chain. Every translated wire rebuilds the conversation from this request's input alone —
