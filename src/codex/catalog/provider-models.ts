@@ -372,7 +372,11 @@ export async function fetchProviderModelsWithAuth(
       ...(cursorFetch ? { fetch: cursorFetch } : {}),
     });
     if (liveResult.ok) {
-      const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
+      const available = filterCursorConfiguredModelsByLiveDiscovery(
+        configured,
+        liveResult.models,
+        liveResult.maxModeModels ?? [],
+      );
       const result = available.length > 0 ? available : configured;
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
