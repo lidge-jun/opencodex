@@ -811,6 +811,21 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: "qwen3.8-max",
     models: ALIBABA_TOKEN_PLAN_MODELS,
     liveModels: false,
+    // Alibaba documents an OpenAI-compatible Responses API on this same /compatible-mode/v1 base
+    // and ships an official Codex integration guide on wire_api = "responses" (#5097). The
+    // gateway serves the same models over both wires, and qwen3.8-flash, qwen3.7-plus and
+    // glm-5.3 carry live end-to-end evidence there (custom tools, reasoning replay, streaming,
+    // multi-turn continuation).
+    //
+    // That is deliberately NOT expressed as a modelWireDefaults pin. Pinning would move every
+    // existing Codex user of those models onto a different upstream with no config change, and
+    // one delta is unresolved: preserveReasoningContentModels below is read by the CHAT adapter,
+    // while the Responses serializer reads preserveResponsesReasoningContent, which this entry
+    // does not set. On the Responses wire those models would replay with blanked reasoning
+    // content -- less state than they carry today. Z.AI and DeepSeek set both flags together for
+    // exactly this reason. Until that flag is justified against this gateway, Responses stays a
+    // documented per-model modelAdapters opt-in;
+    // tests/providers/alibaba-token-plan-responses-optin.test.ts holds both halves.
     note: "Token Plan Personal Edition · China (Beijing)",
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
