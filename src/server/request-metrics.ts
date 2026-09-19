@@ -78,7 +78,8 @@ function classifyResult(fact: RequestMetricFinalFact): RequestMetricsResult {
     || fact.closeReason === "body_stall"
     || fact.closeReason === "body_overflow") return "incomplete";
   if (fact.terminalStatus === "completed") return "completed";
-  if (fact.terminalStatus === undefined && fact.status >= 200 && fact.status < 400) return "completed";
+  if (fact.terminalStatus === undefined
+    && (fact.status === 101 || (fact.status >= 200 && fact.status < 400))) return "completed";
   return "failed";
 }
 

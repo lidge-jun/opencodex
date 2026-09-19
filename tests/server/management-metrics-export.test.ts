@@ -291,6 +291,16 @@ describe("request metrics aggregation", () => {
     expect(sampleValue(output, 'opencodex_ttft_missing_total{protocol="responses",result="failed"}')).toBe(0);
   });
 
+  test("terminal precedence keeps failed and incomplete 101 facts out of completed", () => {
+    const metrics = createRequestMetricsOwner(123);
+    metrics.recordFinalRequest({ status: 101, durationMs: 1, terminalStatus: "failed" });
+    metrics.recordFinalRequest({ status: 101, durationMs: 1, terminalStatus: "incomplete" });
+    const output = metrics.snapshot();
+    expect(sampleValue(output, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(1);
+    expect(sampleValue(output, 'opencodex_logical_requests_total{protocol="unknown",result="incomplete"}')).toBe(1);
+    expect(sampleValue(output, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(0);
+  });
+
   test("incomplete, aborted, and missing TTFT denominators remain distinct", () => {
     const metrics = createRequestMetricsOwner(123);
     metrics.recordFinalRequest({ protocol: "chat", status: 502, durationMs: 100, terminalStatus: "incomplete" });
@@ -430,8 +440,10 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
   let isolatedCodexHome: IsolatedCodexHome | null = null;
   const liveServers = new Set<ReturnType<typeof startServer>>();
 
-  const startMetricsServer = (): ReturnType<typeof startServer> => {
-    const server = startServer(0);
+  const startMetricsServer = (
+    deps?: Parameters<typeof startServer>[1],
+  ): ReturnType<typeof startServer> => {
+    const server = startServer(0, deps);
     liveServers.add(server);
     return server;
   };
@@ -536,6 +548,46 @@ describe("metrics through live HTTP and WebSocket server flows", () => {
       expect(sampleValue(metrics, 'opencodex_physical_sends_total{protocol="responses"}')).toBe(1);
     } finally {
       await stopMetricsServer(server);
+    }
+  });
+
+  test("successful live sideband upgrade records HTTP 101 as completed", async () => {
+    const upstream = Bun.serve({
+      port: 0,
+      fetch(req, server) {
+        if (req.headers.get("upgrade")?.toLowerCase() === "websocket"
+          && server.upgrade(req, { data: {} })) return undefined;
+        return new Response("upgrade required", { status: 426 });
+      },
+      websocket: { message() {} },
+    });
+    saveConfig(runtimeConfig("openai-responses"));
+    const upstreamUrl = new URL("/upstream", upstream.url);
+    upstreamUrl.protocol = "ws:";
+    const server = startMetricsServer({
+      liveSidebandWebSocketFactory: () => new WebSocket(upstreamUrl),
+    });
+    const finalized = nextFinalRequestLog(entry => entry.status === 101);
+    const url = new URL("/v1/realtime?model=fixture%2Fmetrics-model", server.url);
+    url.protocol = "ws:";
+    const socket = new WebSocket(url);
+    try {
+      await awaitBounded(new Promise<void>((resolve, reject) => {
+        socket.addEventListener("open", () => resolve(), { once: true });
+        socket.addEventListener("error", () => reject(new Error("live sideband upgrade failed")), { once: true });
+      }), "live sideband client did not open");
+      const observedRow = await awaitObservation(finalized.promise);
+      expect(observedRow).not.toBe(OBSERVATION_TIMEOUT);
+      if (observedRow === OBSERVATION_TIMEOUT) throw new Error("101 upgrade finalization was not observed");
+      expect(observedRow.status).toBe(101);
+      const metrics = await scrapeServer(server);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="completed"}')).toBe(1);
+      expect(sampleValue(metrics, 'opencodex_logical_requests_total{protocol="unknown",result="failed"}')).toBe(0);
+    } finally {
+      socket.close();
+      finalized.dispose();
+      await stopMetricsServer(server);
+      await upstream.stop(true);
     }
   });
 
