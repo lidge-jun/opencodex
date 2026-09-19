@@ -169,11 +169,12 @@ describe("provider registry parity", () => {
     ]);
   });
 
-  test("the shipped meta-muse entry exposes its map-only model ids", () => {
+  test("a shipped entry's ids are recovered from its classified maps, not its models list", () => {
     const metaMuse = PROVIDER_REGISTRY.find(entry => entry.id === "meta-muse")!;
-    // Compared against the seed the entry is built from rather than a copied literal, so adding
-    // a Muse model does not fail this case for the wrong reason. What it proves is that these
-    // ids are recovered from the classified maps: the helper never reads the models list.
+    // meta-muse declares these ids in BOTH its models list and its context-window, modality and
+    // effort maps. The helper never reads models, so recovering them here is evidence the maps
+    // were read. Compared against the seed the entry is built from rather than a copied literal,
+    // so adding a Muse model does not fail this case for the wrong reason.
     expect(registryModelIdKeys(metaMuse)).toEqual([...META_MUSE_MODELS]);
   });
 

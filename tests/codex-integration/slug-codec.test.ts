@@ -20,6 +20,7 @@ import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../../src
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import { getModelMetadata } from "../../src/generated/model-metadata";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { registryModelIdKeys } from "../../src/providers/registry/model-ids";
 import type { RawEntry } from "../../src/codex/catalog";
 import type { OcxConfig } from "../../src/types";
 
@@ -188,15 +189,26 @@ describe("routeModel decode (proxy layer)", () => {
     expect(routeModel(config, "nvidia/moonshotai/kimi-k2.6").modelId).toBe("moonshotai/kimi-k2.6");
   });
 
-  test("every newly classified direct registry map independently seeds selector decoding", () => {
+  test("every classified direct registry map independently seeds selector decoding", () => {
+    // All fifteen, not only the ones the old hand-written list omitted. The eight it did carry
+    // are now reached through the same classification as the rest, so they belong in the public
+    // route-level table too rather than resting on helper-level parity alone.
     const cases = [
       ["modelWireDefaults", "openai-chat"],
       ["modelResponsesUpstreamStreaming", false],
       ["modelResponsesTerminalRepair", { graceMs: 25 }],
+      ["modelSupportsServiceTier", true],
       ["modelSupportsReasoningSummaries", false],
+      ["modelSupportsVerbosity", true],
+      ["modelContextWindows", 100_000],
       ["modelDisplayNames", "Synthetic display name"],
-      ["modelMaxInputTokens", 100_000],
+      ["modelInputModalities", ["text"]],
+      ["modelMaxOutputTokens", 8_000],
+      ["modelReasoningEfforts", ["low"]],
+      ["modelDefaultReasoningEfforts", "low"],
+      ["modelReasoningEffortMap", { low: "low" }],
       ["virtualModels", { wireModelId: "wire-target", reasoningMode: "pro" }],
+      ["modelMaxInputTokens", 100_000],
     ] as const;
     const nativeIds = new Map<string, string>();
     const fields = Object.fromEntries(cases.map(([field, value], index) => {
@@ -221,6 +233,18 @@ describe("routeModel decode (proxy layer)", () => {
     }, config => {
       expect(routeModel(config, `${fixtureId}/${encodeRoutedModelId(nativeId)}`).modelId).toBe(nativeId);
     });
+  });
+
+  test("the collected ids are frozen and the registry entry is left untouched", () => {
+    // The helper documents a frozen result and promises not to mutate registry data. A caller
+    // that could push into the returned array, or a helper that sorted the entry's own maps in
+    // place, would be editing shared process-wide registry state from a decode path.
+    const metaMuse = PROVIDER_REGISTRY.find(entry => entry.id === "meta-muse")!;
+    const before = JSON.stringify(metaMuse);
+    const ids = registryModelIdKeys(metaMuse);
+    expect(Object.isFrozen(ids)).toBe(true);
+    expect(() => (ids as string[]).push("vendor/injected")).toThrow();
+    expect(JSON.stringify(metaMuse)).toBe(before);
   });
 
   test("decode hints preserve unknown pass-through and ambiguous-selector rejection", () => {
