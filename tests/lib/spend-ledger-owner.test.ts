@@ -268,18 +268,40 @@ describe("in-process references and privacy", () => {
   });
 
   test("storage this module did not mint is not accepted as proof", () => {
-    // The defect this closes: a required guard the caller supplies can be a guard that does
-    // nothing, so a look-alike object must be refused on identity rather than on shape.
+    // Three ways to try: a bare look-alike, and - the one a marker on the object cannot stop -
+    // a spread of a real token with the path redirected and the guard replaced. Identity is the
+    // only thing a copy cannot reproduce.
     const lease = acquireSpendLedgerOwner();
     leases.push(lease);
-    const forged = {
-      path: join(home, SPEND_LEDGER_JOURNAL_FILENAME),
-      assert(): void { /* a caller-supplied guard proves nothing */ },
-    } as unknown as Parameters<typeof createOwnedFileSpendJournal>[0];
+    const elsewhere = join(root, "elsewhere.jsonl");
+    const minted = mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME);
+    const forgeries = [
+      {} as unknown as typeof minted,
+      { path: elsewhere, assert(): void { /* proves nothing */ } } as unknown as typeof minted,
+      { ...minted, path: elsewhere, assert(): void { /* proves nothing */ } } as unknown as typeof minted,
+    ];
 
-    expect(() => createOwnedFileSpendJournal(forged)).toThrow(SpendLedgerOwnerError);
-    expect(() => loadOrCreateSpendLedgerSalt(forged)).toThrow(SpendLedgerOwnerError);
-    expect(existsSync(join(home, SPEND_LEDGER_JOURNAL_FILENAME))).toBe(false);
+    for (const forged of forgeries) {
+      expect(() => createOwnedFileSpendJournal(forged)).toThrow(SpendLedgerOwnerError);
+      expect(() => loadOrCreateSpendLedgerSalt(forged)).toThrow(SpendLedgerOwnerError);
+    }
+    expect(existsSync(elsewhere)).toBe(false);
+
+    // A token this module did mint keeps working, so the refusal is about identity and not
+    // about refusing everything.
+    expect(() => createOwnedFileSpendJournal(minted)).not.toThrow();
+  });
+
+  test("a minted token stops working once its ownership ends", () => {
+    const first = acquireSpendLedgerOwner();
+    const minted = mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME);
+    const journal = createOwnedFileSpendJournal(minted);
+    first.release();
+
+    const second = acquireSpendLedgerOwner();
+    leases.push(second);
+    expect(() => journal.append("{}")).toThrow(SpendLedgerOwnerError);
+    expect(() => journal.read()).toThrow(SpendLedgerOwnerError);
   });
 
   test("minting refuses a name that is not a plain file in the owned directory", () => {

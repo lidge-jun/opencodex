@@ -226,22 +226,32 @@ export function currentSpendLedgerOwnerGeneration(): number {
   return ownerGeneration;
 }
 
-const STORAGE_BRAND: unique symbol = Symbol("spend-ledger-storage");
-
 /**
  * Permission to touch one file under the owned state directory, for as long as this exact
  * ownership lasts.
  *
  * A callback supplied by the caller cannot be this proof: the caller can pass one that does
- * nothing, which is how a "required guard" still allowed an unowned write. Only this module
- * mints one, it derives the path from the directory actually owned rather than accepting a
- * path to trust, and the brand means a structurally similar object is not accepted in its place.
+ * nothing, which is how a "required guard" still allowed an unowned write. A marker carried ON
+ * the object is not proof either, because an object spread copies it: `{ ...minted, path:
+ * elsewhere, assert() {} }` would look minted while pointing somewhere else. So the token
+ * carries nothing. The path and the ownership it was minted under live in a table only this
+ * module can read, keyed by the token's identity, and a copy is simply not that key.
  */
 export interface SpendLedgerStorage {
-  readonly [STORAGE_BRAND]: true;
-  readonly path: string;
-  /** Throws unless the ownership this was minted under is still the current one. */
-  assert(): void;
+  readonly __spendLedgerStorage: unique symbol;
+}
+
+const mintedStorage = new WeakMap<object, { readonly path: string; readonly generation: number; readonly home: string }>();
+
+function trustedStorage(storage: SpendLedgerStorage): { readonly path: string; readonly generation: number; readonly home: string } {
+  const entry = typeof storage === "object" && storage !== null ? mintedStorage.get(storage) : undefined;
+  if (!entry) {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_NOT_HELD",
+      "Spend-ledger ownership is required before the shared ledger can be used.",
+    );
+  }
+  return entry;
 }
 
 /**
@@ -267,24 +277,27 @@ export function mintSpendLedgerStorage(fileName: string): SpendLedgerStorage {
   }
   const generation = ownerGeneration;
   const home = owner.home;
-  return Object.freeze({
-    [STORAGE_BRAND]: true as const,
-    path: join(home, fileName),
-    assert(): void {
-      assertSpendLedgerOwnerGeneration(generation, home);
-    },
-  });
+  // The token is deliberately empty: everything trustworthy about it is held here, under its
+  // identity, where a spread cannot reach.
+  const token = Object.freeze({}) as unknown as SpendLedgerStorage;
+  mintedStorage.set(token, { path: join(home, fileName), generation, home });
+  return token;
 }
 
-/** Reject anything that did not come from {@link mintSpendLedgerStorage}. */
-export function assertMintedStorage(storage: SpendLedgerStorage): void {
-  if (storage?.[STORAGE_BRAND] !== true) {
-    throw new SpendLedgerOwnerError(
-      "SPEND_LEDGER_OWNER_NOT_HELD",
-      "Spend-ledger ownership is required before the shared ledger can be used.",
-    );
-  }
-  storage.assert();
+/** The file this token stands for, as this module recorded it at mint time. */
+export function spendLedgerStoragePath(storage: SpendLedgerStorage): string {
+  return trustedStorage(storage).path;
+}
+
+/**
+ * Refuse unless this exact token was minted here and its ownership is still current.
+ *
+ * Both halves matter: identity rules out a copy or a look-alike, and the generation rules out a
+ * token minted before the lock was dropped and taken again.
+ */
+export function assertStorageOwned(storage: SpendLedgerStorage): void {
+  const entry = trustedStorage(storage);
+  assertSpendLedgerOwnerGeneration(entry.generation, entry.home);
 }
 
 /**

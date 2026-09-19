@@ -65,7 +65,7 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
-import { assertMintedStorage, assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, mintSpendLedgerStorage, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot, type SpendLedgerStorage } from "./spend-ledger-owner";
+import { assertSpendLedgerOwnerHeld, assertStorageOwned, bindSpendLedgerOwnerHome, mintSpendLedgerStorage, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot, spendLedgerStoragePath, type SpendLedgerStorage } from "./spend-ledger-owner";
 
 // The singleton belongs to the state directory it was built for. Releasing ownership hands that
 // directory to whoever comes next, so the in-memory copy goes with it and the next construction
@@ -428,8 +428,8 @@ function assertSafeLedgerFile(path: string): void {
  * proves that ownership, so there is no entrypoint here that writes a caller-chosen path.
  */
 export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJournal {
-  assertMintedStorage(storage);
-  const path = storage.path;
+  assertStorageOwned(storage);
+  const path = spendLedgerStoragePath(storage);
   const ensureDir = (): string => {
     const dir = dirname(path);
     // The guard runs before any mutation so a rejected write leaves nothing behind.
@@ -439,7 +439,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
   };
   return {
     read(): string[] {
-      storage.assert();
+      assertStorageOwned(storage);
       if (!ledgerEntryExists(path)) return [];
       assertSafeLedgerFile(path);
       // Replay is once per process and is the moment a journal inherited from an older build
@@ -448,7 +448,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
       return readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
     },
     append(line: string): void {
-      storage.assert();
+      assertStorageOwned(storage);
       ensureDir();
       const created = !ledgerEntryExists(path);
       if (!created) assertSafeLedgerFile(path);
@@ -457,7 +457,7 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
       hardenLedgerFile(path, { force: created });
     },
     rewrite(lines: string[]): void {
-      storage.assert();
+      assertStorageOwned(storage);
       ensureDir();
       // Same directory, so the rename is atomic on the same filesystem: a crash mid-compaction
       // leaves either the old journal or the new one, never a half-written ledger.
@@ -485,8 +485,8 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
  * per-process value.
  */
 export function loadOrCreateSpendLedgerSalt(storage: SpendLedgerStorage): string {
-  assertMintedStorage(storage);
-  const path = storage.path;
+  assertStorageOwned(storage);
+  const path = spendLedgerStoragePath(storage);
   if (ledgerEntryExists(path)) {
     assertSafeLedgerFile(path);
     hardenLedgerFile(path, { force: true });
@@ -498,7 +498,7 @@ export function loadOrCreateSpendLedgerSalt(storage: SpendLedgerStorage): string
     );
   }
   const dir = dirname(path);
-  storage.assert();
+  assertStorageOwned(storage);
   assertNotRealHomeUnderTest(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const salt = randomBytes(32).toString("hex");
@@ -1140,10 +1140,12 @@ export function sharedSpendLedger(): SpendReservationLedger {
     // ownership they were minted under. Nothing here chooses a path or supplies its own guard.
     const journalStorage = mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME);
     const saltStorage = mintSpendLedgerStorage(SPEND_LEDGER_SALT_FILENAME);
+    const journalPath = spendLedgerStoragePath(journalStorage);
+    const saltPath = spendLedgerStoragePath(saltStorage);
     const assertOwnedAccounting = (): void => {
-      journalStorage.assert();
-      if (ledgerEntryExists(journalStorage.path)) assertSafeLedgerFile(journalStorage.path);
-      if (ledgerEntryExists(saltStorage.path)) assertSafeLedgerFile(saltStorage.path);
+      assertStorageOwned(journalStorage);
+      if (ledgerEntryExists(journalPath)) assertSafeLedgerFile(journalPath);
+      if (ledgerEntryExists(saltPath)) assertSafeLedgerFile(saltPath);
     };
     sharedLedger = createSpendReservationLedger({
       journal: createOwnedFileSpendJournal(journalStorage),
