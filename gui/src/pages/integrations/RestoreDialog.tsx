@@ -114,45 +114,47 @@ export default function RestoreDialog({
     };
   }, []);
 
-  useEffect(() => {
+  const loadPreview = useCallback(async () => {
     const controller = new AbortController();
     const generation = previewGenerationRef.current + 1;
     previewGenerationRef.current = generation;
     previewAbortRef.current?.abort();
     previewAbortRef.current = controller;
-    const load = async () => {
-      setPreviewPending(true);
-      setFailure(null);
-      try {
-        let confirmDrift = false;
-        let next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
-        if (next.refusalReason === "drift_requires_confirm") {
-          confirmDrift = true;
-          next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
-        }
-        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
-        setBoundPlan({ plan: next, confirmDrift });
-      } catch (error) {
-        if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
-        if (isIntegrationPreviewUnavailable(error)) {
-          onReconcile?.();
-          onClose();
-          return;
-        }
-        setFailure(t("integrations.preview.failed"));
-      } finally {
-        if (!controller.signal.aborted && generation === previewGenerationRef.current) {
-          previewAbortRef.current = null;
-          setPreviewPending(false);
-        }
+    setPreviewPending(true);
+    setFailure(null);
+    try {
+      let confirmDrift = false;
+      let next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
+      if (next.refusalReason === "drift_requires_confirm") {
+        confirmDrift = true;
+        next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
       }
-    };
-    void load();
-    return () => {
-      controller.abort();
-      if (previewAbortRef.current === controller) previewAbortRef.current = null;
-    };
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      setBoundPlan({ plan: next, confirmDrift });
+    } catch (error) {
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      if (isIntegrationPreviewUnavailable(error)) {
+        onReconcile?.();
+        onClose();
+        return;
+      }
+      setFailure(t("integrations.preview.failed"));
+    } finally {
+      if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+        previewAbortRef.current = null;
+        setPreviewPending(false);
+      }
+    }
   }, [apiBase, onClose, onReconcile, row.opId, scopedProfileId, t]);
+
+  useEffect(() => {
+    void loadPreview();
+    return () => {
+      previewGenerationRef.current += 1;
+      previewAbortRef.current?.abort();
+      previewAbortRef.current = null;
+    };
+  }, [loadPreview]);
 
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
