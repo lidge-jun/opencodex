@@ -1288,6 +1288,7 @@
   "vision-anthropic.test.ts": "vision",
   "vision-backend-union.test.ts": "vision",
   "vision-cache.test.ts": "vision",
+  "vision-custom-row-precedence.test.ts": "vision",
   "vision-eligibility.test.ts": "vision",
   "vision-fail-closed.test.ts": "vision",
   "vision-reasoning-contract.test.ts": "vision",

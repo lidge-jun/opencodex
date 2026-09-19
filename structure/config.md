@@ -479,6 +479,22 @@ Display-name validation retains prototype-shaped model IDs as data; reviewer-tar
 
 The text-only consumer reads exact inputModalities declarations before legacy hints. CLI add/edit `--text-only` targets one model and preserves sibling declarations; `src/vision/eligibility.ts` routes declared text-only models into existing image-description or explicit-omission handling. Positive routed image declarations override stale candidate metadata, while native catalog authority retains its existing legacy policy.
 
+An explicit custom row is the operator's own definition of one routed model, so its
+`customModels[].inputModalities` outranks the provider-level vision hints
+(`noVisionModels`, `modelInputModalities`) for that exact `provider`/`modelId` identity.
+`modelCapabilities` keeps the top slot as the dedicated capability axis, including for the
+`ocx provider edit --text-only` write. The catalog overlay in
+`src/codex/catalog/routed-gather.ts` copies that declaration onto the advertised row directly,
+and the request-path predicates in `src/vision/eligibility.ts` and `src/vision/plan.ts` read the
+same field through `customRowInputModalities`, so an advertised row and the dispatch decision can
+no longer disagree about one model. A custom row that declares no modalities stays silent rather
+than becoming a text-only claim.
+
+Every consumer that answers "can this model take an image" applies one rule to the declaration:
+image is absent from the list. A row declaring only `audio` or `video` therefore counts as
+image-incapable in both `requiresVisionPreprocessing` and `modelAcceptsImageInput`, rather than
+being treated as a text model by one and an image target by the other.
+
 ## Catalog auto-refresh
 
 `catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
