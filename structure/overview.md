@@ -108,6 +108,10 @@ still cover the rule, which is a judgement only review makes.
 - **INV-AUTH-01** — The management plane (`/api/*`) and the data plane (`/v1/*`) never share an
   admission credential.
   Enforced by `tests/server/server-management-auth.test.ts`.
+- **INV-LAB-01** — The protected core entrypoints cannot reach optional Lab runtime imports,
+  directly or transitively, and gated Lab activation stays synchronous until `startServer`
+  returns; see [`compatibility-lab.md`](adapters/compatibility-lab.md).
+  Enforced by `tests/lab/core-lab-boundary.test.ts`.
 - **INV-RESTORE-01** — `ocx restore` restores native Codex from the pristine catalog with
   retired bare/account-qualified native rows omitted from the output; the original backup stays
   unchanged. The service-stop and uninstall paths of the same promise are covered

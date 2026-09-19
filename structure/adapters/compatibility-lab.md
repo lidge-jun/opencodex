@@ -1,5 +1,17 @@
 # Compatibility Lab
 
+## Core isolation and synchronous activation
+
+The protected core request-path files cannot import Lab runtime code, directly or
+transitively; the exact protected set is owned by the `PROTECTED` list in
+`tests/lab/core-lab-boundary.test.ts`, which walks the runtime import graph and prints the
+offending chain on failure. `src/server/index.ts` is deliberately exempt as the composition
+root: Lab activation stays behind `labActivationRequired`, and the window from `Bun.serve`
+through the `startServer` return contains no suspension, so a policy route can never be
+evaluated before its evidence provider is registered and the subagent fallback chain keeps the
+operator-configured model. This contract is [INV-LAB-01](../overview.md#non-negotiable-invariants),
+bound to the same guard test.
+
 ## CL-03 live-route execution boundary
 
 CL-03 live-route evidence is generated only for an exact `RouteSubjectV1` and remains separate from protocol-conformance and task-effectiveness evidence.
