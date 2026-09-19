@@ -200,14 +200,17 @@ describe("pinned direct content coding", () => {
   });
 
   test("a corrupt coded body fails with a named decode error rather than a bare stream failure", async () => {
-    const { server: target } = codedTarget("gzip", new TextEncoder().encode("this is not gzip at all"));
+    const { server: target, connection } = codedTarget("gzip", new TextEncoder().encode("this is not gzip at all"));
     const port = await listen(target);
     try {
       const response = await pinnedGet(port, "/corrupt");
       const error = await response.text().catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PinnedHttpError);
       expect(error).toMatchObject({ code: "content_decode_failed" });
+      // The response ends early here, so the connection is this path's to close.
+      expect(await awaitDestroyed(connection())).toBe(true);
     } finally {
+      connection()?.destroy();
       await close(target);
     }
   });
@@ -282,25 +285,31 @@ describe("pinned direct content coding", () => {
     const limit = coded.byteLength - 1;
     expect(coded.byteLength).toBeGreaterThan(limit);
     expect(tiny.byteLength).toBeLessThanOrEqual(limit);
-    const { server: target } = codedTarget("gzip", coded);
+    const { server: target, connection } = codedTarget("gzip", coded);
     const port = await listen(target);
     try {
       const response = await pinnedGet(port, "/inverted", { maxBytes: limit });
       const error = await response.text().catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(PinnedHttpError);
       expect(error).toMatchObject({ code: "output_byte_limit" });
+      expect(await awaitDestroyed(connection())).toBe(true);
     } finally {
+      connection()?.destroy();
       await close(target);
     }
   });
 
-  test("a decoded response releases its connection once the body is consumed", async () => {
+  test("a decoded response that completes leaves its connection intact", async () => {
+    // A body that ended has nothing left to tear down, and destroying it would take a
+    // connection the agent is entitled to reuse. Cleanup is owed by the paths that end a
+    // response early, which the decode-failure, ceiling and cancellation cases above assert.
+    // The identity path behaves the same way, so decoding must not diverge from it here.
     const { server: target, connection } = codedTarget("gzip", gzipSync(Buffer.from('{"ok":true}', "utf8")));
     const port = await listen(target);
     try {
-      const response = await pinnedGet(port, "/release");
+      const response = await pinnedGet(port, "/complete");
       expect(await response.json()).toEqual({ ok: true });
-      expect(await awaitDestroyed(connection())).toBe(true);
+      expect(connection()?.destroyed).toBe(false);
     } finally {
       connection()?.destroy();
       await close(target);

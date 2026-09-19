@@ -43,6 +43,11 @@ export type PinnedHttpGetOptions = PinnedHttpRequestOptions;
  * a small compressed response expand past a ceiling the caller set precisely so it would not
  * have to hold an unbounded body in memory.
  *
+ * A completed body is not torn down here. The response already ended, so there is nothing to
+ * release, and destroying it would take a connection the agent is entitled to reuse. That
+ * matches the identity path, which also only closes. Teardown belongs to the paths that end a
+ * response early: a decode failure, an exceeded ceiling, and a caller that cancels.
+ *
  * Only a decoder failure is renamed. A mid-body reset, a stalled response and an exceeded
  * socket-byte ceiling all reach this pipeline as "the stream failed", and calling any of them a
  * decode failure would tell the caller the peer sent unreadable bytes when the truth is that the
@@ -93,7 +98,6 @@ function decodedBody(
         const next = await reader.read();
         if (next.done) {
           controller.close();
-          release();
           return;
         }
         decoded += next.value.byteLength;
