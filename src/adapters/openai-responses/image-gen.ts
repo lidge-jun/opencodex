@@ -101,14 +101,17 @@ export function preferConfiguredHostedTools(
   }
 
   let input = body.input;
-  const strippedAdditionalToolsIndices = new Set<number>();
+  // Indices arrive in increasing order, so the first stripped container is already
+  // the minimum — tracking it directly avoids spreading an attacker-sized Set into
+  // Math.min's argument list.
+  let firstStrippedAdditionalToolsIndex: number | undefined;
   if (Array.isArray(body.input)) {
     let nestedChanged = false;
     const mappedInput = body.input.map((item, index) => {
       if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
       const nestedTools = stripGroup(item.tools);
       if (nestedTools === item.tools) return item;
-      strippedAdditionalToolsIndices.add(index);
+      firstStrippedAdditionalToolsIndex ??= index;
       nestedChanged = true;
       return { ...item, tools: nestedTools };
     });
@@ -127,17 +130,16 @@ export function preferConfiguredHostedTools(
     || (Array.isArray(input) && input.some(item => isPlainObject(item)
       && item.type === "additional_tools"
       && hasHostedImageGenTool(item.tools)));
-  if ((strippedTopLevelImageGenTool || strippedAdditionalToolsIndices.size > 0) && !hasHostedImageGenDeclaration) {
+  if ((strippedTopLevelImageGenTool || firstStrippedAdditionalToolsIndex !== undefined) && !hasHostedImageGenDeclaration) {
     if (strippedTopLevelImageGenTool && Array.isArray(tools)) {
       tools = [...tools, { type: HOSTED_IMAGE_GENERATION_TOOL }];
-    } else if (strippedAdditionalToolsIndices.size > 0 && Array.isArray(input)) {
+    } else if (firstStrippedAdditionalToolsIndex !== undefined && Array.isArray(input)) {
       // Restore into the FIRST stripped container only. Tool declarations are
       // request-scoped, not container-scoped — the containers are separate carriers for
       // one tool set, so a single hosted declaration covers the request. An earlier
       // revision restored into every stripped container and put `image_generation` on
       // the wire twice; review caught it.
-      const firstStripped = Math.min(...strippedAdditionalToolsIndices);
-      input = input.map((item, index) => index === firstStripped
+      input = input.map((item, index) => index === firstStrippedAdditionalToolsIndex
         && isPlainObject(item)
         && Array.isArray(item.tools)
         ? { ...item, tools: [...item.tools, { type: HOSTED_IMAGE_GENERATION_TOOL }] }
