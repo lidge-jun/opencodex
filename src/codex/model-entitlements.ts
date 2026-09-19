@@ -440,6 +440,12 @@ export interface CodexModelEntitlementResolveOptions {
   readonly excludeAccountIds?: ReadonlySet<string>;
   /** Ensure-only fence; ordinary request resolvers retain their established flight identity. */
   readonly credentialMutationEpoch?: number;
+  /**
+   * Internal plumbing from `withNativeMainCredentialAdmission`: releases the
+   * native-main lifecycle lease once the credential phase settles, before any
+   * upstream roster fetch, so a profile drain never waits on network work.
+   */
+  readonly releaseNativeMainCredentialLease?: () => void;
 }
 
 export interface CodexEntitlementFreshnessOptions extends Pick<
@@ -584,21 +590,31 @@ function currentCredentialIdentity(accountId: string): string | undefined {
 
 async function accountCredentialSnapshot(
   accountId: string,
-  options: Pick<CodexModelEntitlementResolveOptions, "nativeMainRefreshDependencies" | "signal"> = {},
+  options: Pick<
+    CodexModelEntitlementResolveOptions,
+    "nativeMainRefreshDependencies" | "releaseNativeMainCredentialLease" | "signal"
+  > = {},
 ): Promise<CodexModelEntitlementCredentialSnapshot | null> {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    const token = await getValidMainAccountToken({
-      signal: options.signal,
-      ...(options.nativeMainRefreshDependencies ?? {}),
-    });
-    return token
-      ? {
-        accountId,
-        accessToken: token.accessToken,
-        chatgptAccountId: token.chatgptAccountId,
-        credentialIdentity: `main:${token.chatgptAccountId}`,
-      }
-      : null;
+    try {
+      const token = await getValidMainAccountToken({
+        signal: options.signal,
+        ...(options.nativeMainRefreshDependencies ?? {}),
+      });
+      return token
+        ? {
+          accountId,
+          accessToken: token.accessToken,
+          chatgptAccountId: token.chatgptAccountId,
+          credentialIdentity: `main:${token.chatgptAccountId}`,
+        }
+        : null;
+    } finally {
+      // The lifecycle lease fences only this credential read; releasing here —
+      // on success and on a credential-ownership failure alike — keeps a
+      // profile drain from waiting on the roster fetches that follow.
+      options.releaseNativeMainCredentialLease?.();
+    }
   }
   try {
     const token = await getValidCodexToken(accountId);
@@ -914,7 +930,10 @@ async function refreshCodexEntitlementWorkset(
   mutationEpoch: number,
   options: CodexEntitlementFreshnessOptions,
 ): Promise<void> {
-  const run = async (excludedAccountIds: ReadonlySet<string>): Promise<void> => {
+  const run = async (
+    excludedAccountIds: ReadonlySet<string>,
+    releaseMainLease?: () => void,
+  ): Promise<void> => {
     // An excluded main is filtered before the snapshot phase, not just before the
     // roster fetch: it never produces an absence observation, so a denied
     // admission cannot memoize a credential read that never happened.
@@ -923,13 +942,19 @@ async function refreshCodexEntitlementWorkset(
       : workset.filter(accountId => !excludedAccountIds.has(accountId));
     const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
     const observations = await Promise.all(admittedWorkset.map(async accountId => {
-      const credential = await credentialSnapshot(accountId, options);
+      const credential = await credentialSnapshot(accountId, {
+        ...options,
+        releaseNativeMainCredentialLease: releaseMainLease,
+      });
       return {
         accountId,
         credential,
         absenceObservedAt: options.now ?? Date.now(),
       };
     }));
+    // The lease fences only the credential phase; release before roster fetches
+    // so a profile drain never waits on upstream network work.
+    releaseMainLease?.();
     const credentials = observations.flatMap(observation => observation.credential
       ? [observation.credential]
       : []);
@@ -1124,6 +1149,10 @@ export async function resolveCodexModelEntitlements(
     ? [...options.credentials].filter(credential => !options.excludeAccountIds?.has(credential.accountId))
     : (await Promise.all(allowedAccountIds.map(accountId => credentialSnapshot(accountId, options))))
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
+  // The credential phase is the only part the native-main lease fences. The
+  // real snapshot releases it as soon as the main token settles; this boundary
+  // release keeps the guarantee when a seam snapshot never invokes it.
+  options.releaseNativeMainCredentialLease?.();
   const results = await Promise.all(credentials.map(async credential => ({
     credential,
     result: await modelsForCredential(

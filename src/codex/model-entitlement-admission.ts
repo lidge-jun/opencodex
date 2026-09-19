@@ -31,7 +31,10 @@ function excludeNativeMain(
  *
  * Pool discovery remains available when startup recovery or a profile drain
  * owns the physical credential. When main is admitted, the process-local lease
- * and cross-process shared claim cover its complete read/possible refresh.
+ * covers only the credential snapshot: getValidMainAccountToken holds the
+ * cross-process exclusive claim just for the auth.json refresh write, and the
+ * lease is released before the upstream entitlement request so a profile drain
+ * never waits on a network fetch.
  */
 export async function resolveAdmittedCodexModelEntitlements(
   config: Pick<OcxConfig, "codexAccounts">,
@@ -45,9 +48,11 @@ export async function resolveAdmittedCodexModelEntitlements(
     return resolve(config, options);
   }
   return withNativeMainCredentialAdmission(
-    excludedAccountIds => resolve(
+    (excludedAccountIds, releaseMainLease) => resolve(
       config,
-      excludedAccountIds.size === 0 ? options : excludeNativeMain(options),
+      excludedAccountIds.size === 0
+        ? { ...options, releaseNativeMainCredentialLease: releaseMainLease }
+        : excludeNativeMain(options),
     ),
     { acquireNativeMain: deps.acquireNativeMain },
   );

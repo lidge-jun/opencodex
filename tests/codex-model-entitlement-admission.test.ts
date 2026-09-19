@@ -77,11 +77,56 @@ describe("Codex model entitlement admission", () => {
     expect(exclusions).toEqual([true]);
   });
 
+  test("releases the lifecycle lease before the Pool-only retry", async () => {
+    let released = false;
+    const releasedAtRetry: boolean[] = [];
+    let calls = 0;
+
+    await resolveAdmittedCodexModelEntitlements({ codexAccounts: [] }, {}, {
+      acquireNativeMain: () => ({ release: () => {
+        released = true;
+      } }),
+      resolve: async (_config, options) => {
+        calls += 1;
+        if (calls === 1) {
+          throw new NativeProfileError("NATIVE_MAIN_CLAIM_BUSY", "busy", 503, true);
+        }
+        releasedAtRetry.push(released);
+        return emptySnapshot;
+      },
+    });
+
+    expect(releasedAtRetry).toEqual([true]);
+  });
+
+  test("lets the credential phase release the lease before upstream work", async () => {
+    const events: string[] = [];
+
+    await resolveAdmittedCodexModelEntitlements({ codexAccounts: [] }, {}, {
+      acquireNativeMain: () => ({ release: () => {
+        events.push("lifecycle-release");
+      } }),
+      resolve: async (_config, options) => {
+        events.push("credential-discovery");
+        options.releaseNativeMainCredentialLease?.();
+        events.push("upstream-request");
+        return emptySnapshot;
+      },
+    });
+
+    expect(events).toEqual([
+      "credential-discovery",
+      "lifecycle-release",
+      "upstream-request",
+    ]);
+  });
+
   test("a foreign credential owner or a failed grant still resolves the Pool", async () => {
     for (const makeError of [
       () => new MainAuthJsonChangedDuringRefreshError(),
       () => new MainAccountTokenRefreshError("reauth"),
       () => new NativeProfileError("NATIVE_MAIN_CLAIM_BUSY", "busy", 503, true),
+      () => new NativeProfileError("NATIVE_MAIN_CLAIM_UNAVAILABLE", "unavailable", 503, true),
     ]) {
       const exclusions: boolean[] = [];
       let calls = 0;
@@ -109,6 +154,22 @@ describe("Codex model entitlement admission", () => {
         throw failure;
       },
     })).rejects.toBe(failure);
+  });
+
+  test("propagates native profile errors that are not claim-ownership failures", async () => {
+    for (const code of ["INTERNAL_ERROR", "VAULT_INVALID", "MAIN_REQUESTS_ACTIVE"] as const) {
+      let calls = 0;
+      const failure = new NativeProfileError(code, "not a credential-ownership failure");
+
+      await expect(resolveAdmittedCodexModelEntitlements({ codexAccounts: [] }, {}, {
+        acquireNativeMain: () => ({ release: () => undefined }),
+        resolve: async () => {
+          calls += 1;
+          throw failure;
+        },
+      })).rejects.toBe(failure);
+      expect(calls).toBe(1);
+    }
   });
 
   test("skips the fences for a caller-supplied roster or an already-excluded main", async () => {
@@ -194,5 +255,32 @@ describe("entitlement freshness admission", () => {
     expect(enteredAt).toBeGreaterThanOrEqual(0);
     expect(mainSnapshotAt).toBeGreaterThan(enteredAt);
     expect(exitedAt).toBeGreaterThan(mainSnapshotAt);
+  });
+
+  test("releases the native-main lease before roster fetches", async () => {
+    const events: string[] = [];
+
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, {
+      clientVersion: "0.146.0",
+      waitMs: 1_000,
+      credentialSnapshot: async accountId => ({
+        accountId,
+        accessToken: "token",
+        chatgptAccountId: "acct",
+        credentialIdentity: `test:${accountId}`,
+      }),
+      fetcher: async () => {
+        events.push("roster-fetch");
+        return new Response(JSON.stringify({ models: ["gpt-5"] }), { status: 200 });
+      },
+      nativeMainCredentialAdmission: async operation => operation(new Set(), () => {
+        events.push("lease-release");
+      }),
+    });
+
+    const releasedAt = events.indexOf("lease-release");
+    const fetchedAt = events.indexOf("roster-fetch");
+    expect(releasedAt).toBeGreaterThanOrEqual(0);
+    expect(fetchedAt).toBeGreaterThan(releasedAt);
   });
 });
