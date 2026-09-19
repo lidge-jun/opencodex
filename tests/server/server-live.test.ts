@@ -33,6 +33,8 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { phaseTimer } from "../helpers/phase-timing";
+import { expectSidebandUpgrade, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -607,27 +609,9 @@ test("call-create and its sideband join bind to the same pool account (openai/co
 }, { timeout: 20_000 });
 
 test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectionally", async () => {
-  const seenPaths: string[] = [];
-  const seenUpgradeHeaders: Headers[] = [];
-  const upstream = Bun.serve({
-    port: 0,
-    fetch(req, server) {
-      const url = new URL(req.url);
-      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-        seenPaths.push(url.pathname);
-        seenUpgradeHeaders.push(req.headers);
-        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
-        return new Response("upgrade failed", { status: 500 });
-      }
-      return new Response("not found", { status: 404 });
-    },
-    websocket: {
-      maxPayloadLength: MAX_WS_FRAME_BYTES,
-      message(ws, message) {
-        ws.send(typeof message === "string" ? `echo:${message}` : `bytes:${message.byteLength}`);
-      },
-    },
-  });
+  // The peer is a helper so it can report what it saw: this case's only symptom on failure is
+  // its own deadline, which names neither the slow leg nor whether the echo was ever sent.
+  const { server: upstream, seenPaths, seenUpgradeHeaders, probe } = sidebandRelayUpstream(MAX_WS_FRAME_BYTES);
 
   saveConfig(forwardConfig());
 
@@ -658,39 +642,54 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
       },
     } as unknown as string[]);
 
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("sideband timeout")), 15_000);
-      let sawPing = false;
-      client.addEventListener("open", () => {
-        client.send("ping-sideband");
-      });
-      client.addEventListener("message", (event) => {
-        try {
-          if (!sawPing) {
-            expect(String(event.data)).toBe("echo:ping-sideband");
-            sawPing = true;
-            client.send(Buffer.alloc(MAX_WS_FRAME_BYTES));
-            return;
+    // Each leg is its own segment, and the timer's ticks read the peer's event count, so a
+    // segment that stops moving is distinguishable from a runner that is merely slow.
+    const phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const fail = (reason: string): void => reject(new Error(`${reason}; peer: ${probe.summary()}`));
+        timer = setTimeout(() => fail("sideband timeout"), 15_000);
+        let sawPing = false;
+        phase.split("upgrade");
+        client.addEventListener("open", () => {
+          probe.noteClient("open");
+          phase.split("echo-roundtrip");
+          client.send("ping-sideband");
+        });
+        client.addEventListener("close", event => {
+          probe.noteClient("close=" + event.code);
+          // An early close is a distinct outcome from a deadline, and it used to read as one.
+          if (!sawPing) fail("sideband closed before the echo");
+        });
+        client.addEventListener("message", (event) => {
+          try {
+            probe.noteClient("message");
+            if (!sawPing) {
+              expect(String(event.data)).toBe("echo:ping-sideband");
+              sawPing = true;
+              phase.split("allocate-ceiling-frame");
+              const frame = Buffer.alloc(MAX_WS_FRAME_BYTES);
+              phase.split("await-ceiling-echo");
+              client.send(frame);
+              return;
+            }
+            expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
+            expectSidebandUpgrade({ seenPaths, seenUpgradeHeaders }, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+            resolve();
+          } catch (err) {
+            reject(err);
           }
-          expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
-          expect(seenPaths).toContain("/v1/live/rtc_sideband");
-          expect(seenUpgradeHeaders).toHaveLength(1);
-          expect(seenUpgradeHeaders[0].get("openai-alpha")).toBe("quicksilver=v2");
-          expect(seenUpgradeHeaders[0].get("x-session-id")).toBe("rts_side");
-          expect(seenUpgradeHeaders[0].get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
-          clearTimeout(timer);
-          resolve();
-        } catch (err) {
-          clearTimeout(timer);
-          reject(err);
-        }
+        });
+        client.addEventListener("error", () => fail("client websocket error"));
       });
-      client.addEventListener("error", () => {
-        clearTimeout(timer);
-        reject(new Error("client websocket error"));
-      });
-    });
-    client.close();
+    } finally {
+      // The case owns both: leaving them for the runner to collect is a resource leak whatever
+      // it did or did not contribute to any particular deadline.
+      phase.end();
+      clearTimeout(timer);
+      client.close();
+    }
   } finally {
     globalThis.WebSocket = RealWebSocket;
     await server.stop(true);
