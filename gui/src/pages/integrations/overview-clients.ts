@@ -150,6 +150,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   dsh: "integrations.tab.dsh",
   mcode: "integrations.tab.mcode",
   zcode: "integrations.tab.zcode",
+  commandcode: "integrations.tab.commandcode",
   prime: "integrations.tab.prime",
   aside: "integrations.tab.aside",
   raycast: "integrations.tab.raycast",
