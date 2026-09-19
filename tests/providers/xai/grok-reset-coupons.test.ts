@@ -11,6 +11,7 @@ import {
 import {
   getGrokRemainingResets,
   decodeGetRemainingResetsResponse,
+  decodeVarint,
   encodeRedeemResetRequest,
   encodeVarint,
   GROK_GET_REMAINING_RESETS_ENDPOINT,
@@ -133,6 +134,15 @@ describe("grok reset coupons", () => {
     expect(tokens[0].tokenId).toBe("token_live_abc123");
     expect(tokens[0].validityStart).toBe(new Date(1726110000 * 1000).toISOString());
     expect(tokens[0].validityEnd).toBe(new Date(1728788400 * 1000).toISOString());
+  });
+
+  it("rejects oversized and truncated protobuf lengths without losing parser progress", () => {
+    const oversizedLength = new Uint8Array([0x52, 0x80, 0x80, 0x80, 0x80, 0x08]);
+    expect(() => decodeGetRemainingResetsResponse(oversizedLength)).toThrow(
+      "Invalid protobuf length-delimited field",
+    );
+
+    expect(() => decodeVarint(new Uint8Array([0x80]), 0)).toThrow("Truncated protobuf varint");
   });
 
   it("asserts auth headers and tokenAuth compatibility header on request", async () => {
