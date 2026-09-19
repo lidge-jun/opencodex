@@ -217,9 +217,10 @@ conversion emits a `[ocx:google:google-tool-schema-loss]` record (tail with `ocx
 carrying only the report version, endpoint class, a `lossy` indicator, a bounded uncertainty count,
 fixed loss categories with bounded counts, and a truncation flag. Tool and property names, paths, values, and schema text are
 never included. With an omitted or `compatible` policy, this diagnostic observes the existing
-conversion without rejecting it. `reject-lossy` rejects initial loss or an indeterminate bounded comparison before dispatch. For Vertex
-and Cloud Code Assist, a repair that would erase constraints emits a similarly content-free
-`google-tool-schema-repair` record and returns the original 400 without a changed send. Direct AI
+conversion without rejecting it. `reject-lossy` rejects initial loss or an indeterminate bounded comparison before dispatch. Under
+`reject-lossy`, a Vertex or Cloud Code Assist repair that would erase constraints emits a similarly
+content-free `google-tool-schema-repair` record and returns the original 400 without a changed send;
+with an omitted or `compatible` policy, the repaired request is replayed as before. Direct AI
 Studio never performs this repair. Native output schemas are outside both policy paths. See the
 [debug command reference](/reference/cli/agents/).
 

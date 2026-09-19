@@ -153,9 +153,10 @@ uyumluluk dönüşümü sırasında şema kaybı bir `[ocx:google:google-tool-sc
 bir `lossy` göstergesini, sınırlı bir belirsiz karşılaştırma sayısını, sınırlı sayımlara sahip sabit kayıp kategorilerini ve kesilme işaretini
 taşır. Araç ve özellik adları, yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Politika
 yoksa veya `compatible` ise dönüşüm reddedilmeden gözlemlenir. `reject-lossy` ilk kaybı veya sonucu belirsiz sınırlı bir karşılaştırmayı gönderimden
-önce reddeder. Vertex ve Cloud Code Assist için kısıtları kaldıracak bir onarım, aynı şekilde içeriksiz
-bir `google-tool-schema-repair` kaydı üretir ve değiştirilmiş gönderim yapmadan özgün 400 yanıtını
-döndürür. Doğrudan AI Studio bu onarımı yapmaz. Yerel çıktı şemaları iki politika yolunun da
+önce reddeder. `reject-lossy` altında, kısıtları kaldıracak bir Vertex veya Cloud Code Assist onarımı
+aynı şekilde içeriksiz bir `google-tool-schema-repair` kaydı üretir ve değiştirilmiş gönderim yapmadan
+özgün 400 yanıtını döndürür; politika yoksa veya `compatible` ise onarılan istek daha önce olduğu gibi
+yeniden gönderilir. Doğrudan AI Studio bu onarımı yapmaz. Yerel çıktı şemaları iki politika yolunun da
 dışındadır. [Hata ayıklama komutu başvurusuna](/tr/reference/cli/agents/) bakın.
 
 

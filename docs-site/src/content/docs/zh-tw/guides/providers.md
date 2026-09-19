@@ -124,9 +124,10 @@ Google 工具宣告會依所選端點類別進行編譯。透過 `ocx debug prov
 `[ocx:google:google-tool-schema-loss]` 記錄（可用 `ocx debug provider logs -f` 持續查看），
 其中只包含報告版本、端點類別、`lossy` 指標、有上限的不確定比較計數、帶有上限計數的固定損失類別與截斷旗標，
 絕不包含工具名稱、屬性名稱、路徑、值或結構描述文字。省略政策或使用 `compatible` 時只觀察
-轉換。`reject-lossy` 會在傳送前拒絕初始損失或結果不確定的有界比較。對 Vertex 與 Cloud Code Assist 而言，會移除
-限制的修復會輸出同樣不含內容的 `google-tool-schema-repair` 記錄，並在不傳送修改請求的情況下
-回傳原始 400。直接 AI Studio 不執行此修復。原生輸出結構描述不屬於這兩條政策路徑。請參閱
+轉換。`reject-lossy` 會在傳送前拒絕初始損失或結果不確定的有界比較。在 `reject-lossy` 下，會移除限制的
+Vertex 或 Cloud Code Assist 修復會輸出同樣不含內容的 `google-tool-schema-repair` 記錄，並在不傳送
+修改請求的情況下回傳原始 400；省略政策或使用 `compatible` 時，會像以前一樣重播修復後的請求。
+直接 AI Studio 不執行此修復。原生輸出結構描述不屬於這兩條政策路徑。請參閱
 [偵錯命令參考](/zh-tw/reference/cli/agents/)。
 
 

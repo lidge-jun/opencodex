@@ -141,9 +141,10 @@ la version du rapport, la classe du point de terminaison, un indicateur `lossy`,
 comparaisons indéterminées, des catégories de perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
 propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
 absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. `reject-lossy` refuse
-la perte initiale ou une comparaison bornée indéterminée avant l’envoi. Pour Vertex et Cloud Code Assist, une réparation qui supprimerait
-des contraintes émet un enregistrement `google-tool-schema-repair` également sans contenu et renvoie
-le 400 d’origine sans nouvel envoi. AI Studio direct ne tente jamais cette réparation. Les schémas
+la perte initiale ou une comparaison bornée indéterminée avant l’envoi. Sous `reject-lossy`, une
+réparation Vertex ou Cloud Code Assist qui supprimerait des contraintes émet un enregistrement
+`google-tool-schema-repair` également sans contenu et renvoie le 400 d’origine sans nouvel envoi ;
+avec une politique absente ou `compatible`, la requête réparée est rejouée comme auparavant. AI Studio direct ne tente jamais cette réparation. Les schémas
 de sortie natifs restent hors de ces deux chemins. Consultez la
 [référence des commandes de débogage](/fr/reference/cli/agents/).
 

@@ -823,8 +823,9 @@ describe("Google tool-schema loss report", () => {
   });
 
   test("reject-lossy withholds unindexed Cloud Code Assist repair for every declaration", async () => {
+    const rawError = "function declarations contain an invalid schema REPAIR_ERROR_CANARY_5112";
     const fixture = responseSequence([
-      googleError("function declarations contain an invalid schema REPAIR_ERROR_CANARY_5112"),
+      googleError(rawError),
       new Response("unexpected repair"),
     ]);
     const realError = console.error;
@@ -837,6 +838,10 @@ describe("Google tool-schema loss report", () => {
         returnRawErrors: true,
       }, { toolSchemaPolicy: "reject-lossy" });
       expect(response.status).toBe(400);
+      // The returned body is the original upstream 400 payload, not a replacement.
+      expect(await response.json()).toEqual({
+        error: { code: 400, status: "INVALID_ARGUMENT", message: rawError },
+      });
       expect(fixture.calls).toHaveLength(1);
       const line = getDebugLogEntries().map(entry => entry.line)
         .find(entry => entry.includes("google-tool-schema-repair"));
@@ -879,8 +884,9 @@ describe("Google tool-schema loss report", () => {
   });
 
   test("direct mode never repairs or emits a repair diagnostic under reject-lossy", async () => {
+    const rawError = "tools.0.custom.input_schema: JSON schema is invalid";
     const fixture = responseSequence([
-      googleError("tools.0.custom.input_schema: JSON schema is invalid"),
+      googleError(rawError),
       new Response("unexpected repair"),
     ]);
     setDebugSettings({ debug: true });
@@ -889,6 +895,9 @@ describe("Google tool-schema loss report", () => {
       timeoutMs: 5_000,
     }, { toolSchemaPolicy: "reject-lossy", toolSchemaProfile: { endpointClass: "ai-studio" } });
     expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: { code: 400, status: "INVALID_ARGUMENT", message: rawError },
+    });
     expect(fixture.calls).toHaveLength(1);
     expect(getDebugLogEntries().some(entry => entry.line.includes("google-tool-schema-repair"))).toBe(false);
   });

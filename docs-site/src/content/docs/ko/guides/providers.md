@@ -127,8 +127,9 @@ Google 도구 선언은 선택된 엔드포인트 클래스에 맞춰 컴파일�
 클래스, `lossy` 표시, 판정 불가능한 비교의 상한 개수, 상한이 있는 개수를 포함한 고정 손실 범주, 잘림 여부만 들어갑니다.
 도구명과 속성명, 경로, 값, 스키마 본문은 포함하지 않습니다. 정책을 생략하거나
 `compatible`이면 변환을 거부하지 않고 관찰합니다. `reject-lossy`는 초기 손실 또는 판정 불가능한 상한 비교를 전송 전에
-거부합니다. Vertex와 Cloud Code Assist에서는 제약을 지우는 복구가 동일하게 내용이 없는
-`google-tool-schema-repair`를 기록하고 변경 전송 없이 원래 400을 반환합니다. 직접 AI Studio는
+거부합니다. `reject-lossy`에서는 제약을 지우는 Vertex 또는 Cloud Code Assist 복구가 동일하게 내용이 없는
+`google-tool-schema-repair`를 기록하고 변경 전송 없이 원래 400을 반환합니다. 정책을 생략하거나
+`compatible`이면 복구된 요청을 이전과 같이 다시 전송합니다. 직접 AI Studio는
 이 복구를 수행하지 않습니다. 네이티브 출력 스키마는 두 정책 경로 모두의 대상이 아닙니다.
 [디버그 명령어 참고 문서](/ko/reference/cli/agents/)도 확인하세요.
 
