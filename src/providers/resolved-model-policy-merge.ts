@@ -88,7 +88,7 @@ export function resolvedBaseUrl(
   provider: Readonly<OcxProviderConfig>,
 ): [string, StaticPolicySource] {
   if (!entry) return [provider.baseUrl, "operator"];
-  const configured = provider.baseUrl.trim();
+  const configured = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
   const configuredIsResolved = configured.length > 0 && !/\{[^}]*\}/.test(configured);
   if (entry.allowBaseUrlOverride && !configuredIsResolved) {
     throw new Error(`Invalid baseUrl for provider "${entry.id}": expected a nonblank URL without unresolved placeholders`);
@@ -100,6 +100,16 @@ export function resolvedBaseUrl(
 
 export function sameStringArray(left: readonly string[] | undefined, right: readonly string[]): boolean {
   return left?.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/** Legacy config-map lookup: exact id, colon family, then case-folded exact id. */
+export function legacyModelValue<T>(record: Readonly<Record<string, T>> | undefined, modelId: string): T | undefined {
+  if (!record) return undefined;
+  if (Object.hasOwn(record, modelId)) return record[modelId];
+  const colon = modelId.indexOf(":");
+  if (colon > 0 && Object.hasOwn(record, modelId.slice(0, colon))) return record[modelId.slice(0, colon)];
+  const folded = modelId.toLowerCase();
+  return Object.entries(record).find(([key]) => key.toLowerCase() === folded)?.[1];
 }
 
 export function anthropicFamilyContextWindow(

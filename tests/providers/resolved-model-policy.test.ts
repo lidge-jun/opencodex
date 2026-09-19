@@ -215,6 +215,42 @@ describe("resolved static model policy parity", () => {
     expect(policy.provenance.model.inputModalities).toBe("registry");
   });
 
+  test("cleared exact capability restores colon-family legacy modalities", () => {
+    const modelId = "ModelA:variant";
+    const configured = provider({
+      modelInputModalities: { ModelA: ["audio"] },
+      modelCapabilities: { [modelId]: { inputModalities: ["text", "image"] } },
+    });
+    const withExactCapability = resolveModelPolicy({
+      providerName: "custom",
+      modelId,
+      provider: configured,
+      transportMatchedRegistry: false,
+      modelCapabilities: configured.modelCapabilities![modelId],
+    });
+    expect(withExactCapability.model.inputModalities).toEqual(["text", "image"]);
+    delete configured.modelCapabilities![modelId];
+    const cleared = resolveModelPolicy({
+      providerName: "custom",
+      modelId,
+      provider: configured,
+      transportMatchedRegistry: false,
+    });
+    expect(cleared.model.inputModalities).toEqual(["audio"]);
+    expect(cleared.provenance.model.inputModalities).toBe("operator");
+  });
+
+  test("colon-family legacy modalities resolve without an exact capability declaration", () => {
+    const policy = resolveModelPolicy({
+      providerName: "custom",
+      modelId: "ModelA:variant",
+      provider: provider({ modelInputModalities: { ModelA: ["audio"] } }),
+      transportMatchedRegistry: false,
+    });
+    expect(policy.model.inputModalities).toEqual(["audio"]);
+    expect(policy.provenance.model.inputModalities).toBe("operator");
+  });
+
   test("captured effective auth admits a usable key override without credential material", () => {
     const entry = PROVIDER_REGISTRY.find(candidate => (
       candidate.authKind === "oauth" && candidate.allowKeyAuthOverride === true
@@ -589,6 +625,31 @@ describe("resolved static model policy parity", () => {
     const fallback = resolveModelPolicy({
       providerName: template.id, modelId: MODEL,
       provider: provider({ baseUrl: "{unresolved}" }), registryEntry: template, transportMatchedRegistry: true,
+    });
+    expect(fallback.provider.baseUrl).toBe(template.baseUrl);
+    expect(fallback.provenance.provider.baseUrl).toBe("registry");
+  });
+
+  test("absent override URL matches current Invalid baseUrl oracle while templates fall back", () => {
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.allowBaseUrlOverride === true)!;
+    const absent = { adapter: entry.adapter, authMode: entry.authKind } as OcxProviderConfig;
+    expect(() => routedProviderConfig(entry.id, absent))
+      .toThrow(`Invalid baseUrl for provider "${entry.id}": expected a nonblank URL without unresolved placeholders`);
+    expect(() => resolveModelPolicy({
+      providerName: entry.id,
+      modelId: entry.defaultModel ?? MODEL,
+      provider: absent,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+    })).toThrow(`Invalid baseUrl for provider "${entry.id}": expected a nonblank URL without unresolved placeholders`);
+    const template = registry({ baseUrl: "https://{region}.invalid/v1", allowBaseUrlOverride: false });
+    const templateAbsent = { adapter: template.adapter, authMode: template.authKind } as OcxProviderConfig;
+    const fallback = resolveModelPolicy({
+      providerName: template.id,
+      modelId: MODEL,
+      provider: templateAbsent,
+      registryEntry: template,
+      transportMatchedRegistry: true,
     });
     expect(fallback.provider.baseUrl).toBe(template.baseUrl);
     expect(fallback.provenance.provider.baseUrl).toBe("registry");

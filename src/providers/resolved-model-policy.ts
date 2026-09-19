@@ -7,6 +7,7 @@ import type { InboundWire, ProviderRegistryEntry, ResponsesTerminalRepairPolicy 
 import {
   anthropicFamilyContextWindow,
   detachedClone,
+  legacyModelValue,
   mapFill,
   nestedMapFill,
   positiveCapMap,
@@ -260,10 +261,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
       (providerPolicy.modelReasoningEffortMap ??= {})[directModel] = {};
     }
   }
-  const foldedModel = input.modelId.toLowerCase();
-  const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined => (
-    record?.[input.modelId] ?? Object.entries(record ?? {}).find(([key]) => key.toLowerCase() === foldedModel)?.[1]
-  );
+  const modelValue = <T>(record: Readonly<Record<string, T>> | undefined): T | undefined =>
+    legacyModelValue(record, input.modelId);
   const modelSource = <T>(operator: Readonly<Record<string, T>> | undefined, registry: Readonly<Record<string, T>> | undefined): StaticPolicySource => modelValue(operator) !== undefined
     ? "operator"
     : modelValue(registry) !== undefined ? "registry" : "unknown";
