@@ -6,6 +6,12 @@ import type { ServeOptionsContext } from "../../src/server/index/serve-options";
 import type { WsData } from "../../src/server/ws-bridge";
 import { clearRequestLogsForTests } from "../../src/server/request-log";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
+import { acquireOwnedSpendHome } from "./owned-spend-home";
+
+// The websocket handler dispatches through the real request path, so it reaches the shared spend
+// journal and needs the writer lease startServer would have taken. Without it the turn is refused
+// and the symptom is the fixture's own wait timing out, which names nothing.
+let releaseSpendHome: (() => void) | undefined;
 
 export type Frame = Record<string, any>;
 const realSocket = globalThis.WebSocket;
@@ -61,6 +67,7 @@ export function injectionClient(fields: Frame = {}, settings = injectionConfig()
   return { ws, sent, send, handler };
 }
 export async function beginInjection(fields: Frame = {}, settings = injectionConfig(), credential = "test") {
+  releaseSpendHome ??= acquireOwnedSpendHome();
   const client = injectionClient(fields, settings, credential);
   await waitForInjection(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = InjectionSocket.all.at(-1)!;
@@ -99,6 +106,8 @@ export function installInjectionFixture() {
     clearRequestLogsForTests();
   });
   afterEach(() => {
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     for (const socket of InjectionSocket.all) socket.close();
     InjectionSocket.all = []; runOptionalShutdownHooks();
     globalThis.WebSocket = realSocket; globalThis.fetch = realFetch;

@@ -10,6 +10,11 @@ import { createGrokResponsesControlFrameBlockRewrite } from "../../src/server/gr
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// Case-local, never file-wide: the other rows start a real server that takes the same lease.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 setDefaultTimeout(30_000);
 
@@ -114,6 +119,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   await isolated.restore();
   removeTreeWithRetry(TEST_DIR);
@@ -195,6 +202,9 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
         },
       } as OcxConfig;
 
+      // This row calls the handler directly instead of going through the server the other rows
+      // start, so it takes the writer lease itself. Dropped in the file's own teardown.
+      takeSpendHome();
       const response = await handleResponses(
         new Request("http://localhost/v1/responses", {
           method: "POST",

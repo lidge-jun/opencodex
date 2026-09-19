@@ -10,6 +10,12 @@ import { getRequestLogEntries, clearRequestLogsForTests } from "../../src/server
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { MAX_ACTIVE_TURNS, tryAdmitTurn } from "../../src/server/lifecycle";
 import { configSchema } from "../../src/config/schema/config-schema";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// The websocket handler dispatches through the real request path, so it reaches the shared spend
+// journal and needs the writer lease startServer would have taken. Without it the turn is refused
+// and the symptom is this file's own waitFor timing out, which names nothing.
+let releaseSpendHome: (() => void) | undefined;
 
 type Frame = Record<string, any>;
 const realSocket = globalThis.WebSocket;
@@ -58,6 +64,7 @@ function downstream(fields: Frame = {}, settings = config(), credential = "test"
   return { ws, sent, send, handler };
 }
 async function begin(fields: Frame = {}, credential = "test") {
+  releaseSpendHome ??= acquireOwnedSpendHome();
   const client = downstream(fields, config(), credential);
   await waitFor(() => client.sent.some(frame => frame.type === "response.created"));
   const socket = Socket.all.find(s => s.options.headers.authorization === `Bearer ${credential}`)!;
@@ -79,6 +86,8 @@ beforeEach(() => {
   clearRequestLogsForTests();
 });
 afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   for (const socket of Socket.all) socket.close();
   Socket.all = [];
   runOptionalShutdownHooks();
