@@ -9,8 +9,8 @@ This checkpoint does not declare the campaign complete. On 2026-09-19, a fresh G
 | #5111 | Closed; landed through #5126 | [`af4f744c75`](022_pr_5126.md); closure at 2026-09-19T10:01:05Z. |
 | #5112 | Open; incomplete | Report parent #5162 landed; strict-policy child #5167 requires new-base review, hosted verification and landing. [Record](033_schema_report_review.md). |
 | #5113 | Closed; landed through #5129 | [`bb2fa5ab25`](024_pr_5129.md); closure at 2026-09-19T10:04:15Z. |
-| #5114 | Open; incomplete | Resolver #5171 awaits hosted completion; consumer #5174 has hosted failures under repair. Both layers must land. [Record](035_static_policy_resolver.md). |
-| #5115 | Open; incomplete | Registry identity-map classification and selector/availability regressions still required. [Record](000_plan.md). |
+| #5114 | Open; incomplete | Resolver #5171 passed hosted CI but has unresolved review findings; consumer #5174 has hosted failures under repair. Both layers must land. [Record](035_static_policy_resolver.md). |
+| #5115 | Open; incomplete | Runtime owner now owns registry identity-map classification and selector/availability regressions; final landing follows #5174. [Record](000_plan.md). |
 | #5116 | Closed; landed through #5155 | [`6d42723387`](030_pr_5155.md); closure at 2026-09-19T11:07:05Z. |
 | #5117 | Open; incomplete | Opt-in metadata-only exporter is being implemented; full privacy/auth/counting/lifecycle acceptance remains unverified. [Record](000_plan.md). |
 | #5118 | Open; incomplete | Server-owned read-only preview, fingerprint validation and dialog integration still required. [Record](000_plan.md). |

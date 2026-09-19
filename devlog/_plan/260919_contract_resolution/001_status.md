@@ -6,8 +6,8 @@ Status: ACTIVE. Ten of the sixteen original issues are resolved and closed. Rema
 
 | Lane | State | Issues |
 | --- | --- | --- |
-| Runtime | Active in an isolated worktree | #5109 #5110 #5111 #5113 #5122 #5123 #5124 |
-| Policy and operator | Active in an isolated worktree | #5112 #5114 #5115 #5116 #5117 #5118 #5119 #5120 #5121 |
+| Runtime | Active in an isolated worktree | #5109 #5110 #5111 #5113 #5115 #5122 #5123 #5124 |
+| Policy and operator | Active in an isolated worktree | #5112 #5114 #5116 #5117 #5118 #5119 #5120 #5121 |
 
 Private orchestration records retain the actual task handles, model-selection evidence and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
 
@@ -124,3 +124,5 @@ Sidebanddiagnostic/cleanup PR5161 merged d1745ee7 afterexacthead fullapplicableC
 Report parent #5162 merged at `8a030721b3ffc909ca7d8b05ca0b7c873c1493a1` after current-head CI and reviews passed. Child #5167 still requires retarget/restack and fresh verification. Original resolved count remains 10/16; #5112 remains open.
 
 Runtime owner pushed `9e789c1613b22109dd0398e9619be8902bff9662` for #5157: management ACL failure injection is restricted to the token file, the stream retry fixture uses its narrow relay-platform seam, and the direct combo fixture holds a writer lease and drains its response. Assertions and production ownership rules are unchanged in this delta. Independent review and fresh hosted CI are required. Policy owner is implementing #5117 in its isolated checkout while repairing #5174; #5115 and #5118 remain required scope.
+
+Ownership amendment: #5115 moved to the runtime owner after the policy owner confirmed no implementation writer or commit existed. Independent preparation can proceed on current dev because its known-model hint region is unchanged by #5174; final landing remains after #5171 and #5174, with a fresh integration base, reviewed delta and exact-head hosted CI. The two-owner limit, acceptance criteria and execution restrictions are unchanged.
