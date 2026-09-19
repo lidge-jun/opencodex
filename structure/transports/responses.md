@@ -125,6 +125,16 @@ Function-call wrappers around freeform bodies are restored by
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
 
+Progressive preview for those wrappers is decoded by
+`src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
+function-call restoration. A prefix that can still become a complete outer fence stays held so
+completion never removes bytes already published in a delta; ordinary raw input remains
+progressive, fallback fields wait for a complete parse, and JSON escapes emit only complete
+decoded units. Routed restoration additionally keeps its existing hold for an unrecognized JSON
+object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that
+become invalid only after a valid prefix was emitted remain bounded exceptions: completion is
+authoritative because preserving progressive canonical input leaves no rewind mechanism.
+
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
 web-search variant, and `defer_loading` on any declaration, which `activateDeferredTool` clears only
