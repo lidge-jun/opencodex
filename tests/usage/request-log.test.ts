@@ -248,6 +248,9 @@ describe("request log metadata", () => {
         adapter: "openai-responses",
         sendCount: 1,
       })]);
+      // Read before the lease is released: the row asserts on metadata only, so without this it
+      // finishes with the turn's body still attached and the lease dropped underneath it.
+      await response.text();
     } finally {
       releaseSpendHome();
       globalThis.fetch = originalFetch;
