@@ -1,6 +1,6 @@
 import net, { type Socket } from "node:net";
 import tls, { type TLSSocket } from "node:tls";
-import { isNullBodyStatus } from "./http-response-semantics";
+import { classifyContentCoding, isNullBodyStatus } from "./http-response-semantics";
 
 const DEFAULT_SOCKS5_PORT = 1080;
 const SOCKS5_CONNECT_TIMEOUT_MS = 30_000;
@@ -531,11 +531,10 @@ function bodylessResponse(method: string, status: number): boolean {
  * the coded path would fail responses that succeed uncompressed.
  */
 function contentCodingFormat(headers: Headers): "gzip" | "deflate" | undefined {
-  const coding = (headers.get("content-encoding") ?? "").trim().toLowerCase();
-  if (coding === "" || coding === "identity") return undefined;
-  if (coding === "gzip" || coding === "x-gzip") return "gzip";
-  if (coding === "deflate") return "deflate";
-  throw new Socks5FetchError("SOCKS5 upstream returned an unsupported content-encoding: " + coding);
+  const coding = classifyContentCoding(headers);
+  if (coding.kind === "identity") return undefined;
+  if (coding.kind === "decodable") return coding.format;
+  throw new Socks5FetchError("SOCKS5 upstream returned an unsupported content-encoding: " + coding.coding);
 }
 
 export async function socks5Fetch(

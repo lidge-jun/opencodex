@@ -258,4 +258,21 @@ peer that is entitled to keep it alive, and their representation headers are pre
 arrived rather than decoded or refused, because there are no coded bytes to act on.
 `tests/lib/transport-null-body.test.ts` covers both transports against a keep-alive peer.
 
+## Raw transport content coding
+
+Content coding is each raw transport's own obligation, and the pinned direct helper now carries
+the same one the tunnel does. Provider outbound picks between these two routes, so decoding on
+only one of them made the same gzip JSON readable or unreadable depending on operator egress
+configuration. Both ask for `identity` unless the caller chose an `accept-encoding` itself,
+decode `gzip` and `deflate`, drop the coding and the coded length once the bytes no longer match
+them, and refuse any other coding by name instead of surfacing bytes no caller can parse. Only
+the coding the response actually carries decides this; a preference list that mentions an
+alternative this code cannot undo is not a refusal.
+
+The pinned helper's `maxBytes` binds both sides of that decode: the bytes that arrive on the
+socket keep their existing meaning, and the decoded bytes are bounded by the same ceiling, so a
+small coded response cannot expand past the limit a caller set to bound what it holds. A decoder
+failure surfaces as a named `PinnedHttpError` and closes the connection.
+`tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
+
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

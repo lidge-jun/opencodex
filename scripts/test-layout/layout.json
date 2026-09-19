@@ -1082,6 +1082,7 @@
     "passthrough-override.test.ts": "responses",
     "phase100-native-parity.test.ts": "e2e-style",
     "pi-path-contract.test.ts": "clients",
+    "pinned-http-content-coding.test.ts": "lib",
     "pinned-http.test.ts": "lib",
     "pinned-https-get.test.ts": "images",
     "plaintext-v2-agent-messages-server.test.ts": "server",

@@ -27,3 +27,31 @@
 export function isNullBodyStatus(status: number): boolean {
   return status === 204 || status === 205 || status === 304;
 }
+
+/** What a transport must do with the coding a response declares. */
+export type ContentCoding =
+  | { kind: "identity" }
+  | { kind: "decodable"; format: "gzip" | "deflate" }
+  | { kind: "unsupported"; coding: string };
+
+/**
+ * Classify the `content-encoding` a raw transport received.
+ *
+ * `fetch` undoes a content-coding below the Response constructor. A transport that assembles a
+ * body from a socket hands the coded bytes to whatever reads them instead: `response.json()`
+ * throws a SyntaxError on the gzip magic number and an SSE reader sees noise rather than frames.
+ * Only `gzip` and `deflate` can be undone with `DecompressionStream`, so anything else is
+ * reported as unsupported and each transport refuses it under its own error type rather than
+ * surfacing bytes no caller can parse.
+ *
+ * This reads the coding the response actually carries and nothing else. A caller whose
+ * `accept-encoding` names a coding this code cannot undo is not the problem; what the peer
+ * chose to send is.
+ */
+export function classifyContentCoding(headers: Headers): ContentCoding {
+  const coding = (headers.get("content-encoding") ?? "").trim().toLowerCase();
+  if (coding === "" || coding === "identity") return { kind: "identity" };
+  if (coding === "gzip" || coding === "x-gzip") return { kind: "decodable", format: "gzip" };
+  if (coding === "deflate") return { kind: "decodable", format: "deflate" };
+  return { kind: "unsupported", coding };
+}
