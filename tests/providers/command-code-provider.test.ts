@@ -750,6 +750,99 @@ describe("Command Code provider", () => {
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
   });
 
+  /*
+   * #5096: the shipped table is a default, not a ceiling configuration cannot reach past.
+   *
+   * The adapter used to read `commandCodeReasoningEfforts() ?? configuredReasoningEfforts()`,
+   * so a model WITH a row ignored `providers.command-code.modelReasoningEfforts` while a model
+   * WITHOUT one honoured it. The catalog never agreed with that: it advertises the picker from
+   * `configuredReasoningEfforts`, so an operator who widened a pinned row saw the wider ladder
+   * offered in Codex and then watched the adapter strip the rung on the way out.
+   *
+   * The seeded copy is the trap. `providerConfigSeed` writes the whole shipped table into every
+   * materialized preset, so "the config has a row for this model" proves nothing — only a row
+   * that DIFFERS from the shipped value is an operator decision.
+   */
+  test("an operator ladder that differs from the shipped row reaches the wire", async () => {
+    // Shipped: deepseek/deepseek-v4.1-flash is ["high", "max"], so xhigh is aliased down to max.
+    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["high", "max"]);
+    const shipped = await builtRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "xhigh", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(shipped.body).params.reasoning_effort).toBe("max");
+
+    const widened = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["low", "medium", "high", "xhigh", "max"] },
+    } as OcxProviderConfig);
+    const built = await widened.buildRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "xhigh", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(built.body).params.reasoning_effort).toBe("xhigh");
+
+    // Narrowing works in the same direction: an operator who removes a rung loses it.
+    const narrowed = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["high"] },
+    } as OcxProviderConfig);
+    const stripped = await narrowed.buildRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "max", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(stripped.body).params).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("a preset carrying the seeded table behaves exactly like the shipped table", async () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "command-code")!;
+    const seeded = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: { ...entry.modelReasoningEfforts },
+    } as OcxProviderConfig);
+    const cases = [
+      ["deepseek/deepseek-v4.1-flash", "xhigh"],
+      ["deepseek/deepseek-v4-flash", "ultra"],
+      ["google/gemini-3.7-flash", "max"],
+      ["zai-org/GLM-5.3", "low"],
+      ["meta/muse-spark-1.3", "xhigh"],
+    ] as const;
+    for (const [modelId, reasoning] of cases) {
+      const withSeed = await seeded.buildRequest({ ...parsed(modelId), options: { reasoning, maxOutputTokens: 100 } });
+      const withoutConfig = await builtRequest({ ...parsed(modelId), options: { reasoning, maxOutputTokens: 100 } });
+      expect(JSON.parse(withSeed.body).params.reasoning_effort, `${modelId} @ ${reasoning}`)
+        .toEqual(JSON.parse(withoutConfig.body).params.reasoning_effort);
+    }
+  });
+
+  test("an operator-authorized rung surfaces the upstream rejection instead of replaying without it", async () => {
+    const requests: string[] = [];
+    const fetch = (async (url: string | URL | Request) => {
+      requests.push(String(url));
+      if (String(url).includes("commandcode.ai/models/")) {
+        return new Response("Reasoning efforts high are supported; no other reasoning settings.");
+      }
+      return new Response(JSON.stringify({ error: "unsupported reasoning_effort" }), { status: 400 });
+    }) as typeof globalThis.fetch;
+    const adapter = createCommandCodeAdapter({
+      ...provider,
+      fetch,
+      modelReasoningEfforts: { "deepseek/deepseek-v4-flash": ["low", "medium", "high", "xhigh", "max"] },
+    } as OcxProviderConfig);
+    const request = await adapter.buildRequest({ ...parsed(), options: { reasoning: "xhigh", maxOutputTokens: 100 } });
+    expect(JSON.parse(request.body).params.reasoning_effort).toBe("xhigh");
+
+    const budget = createRequestExecutionBudget();
+    const { dispose } = budgetOwner(budget);
+    try {
+      const response = await adapter.fetchResponse!(request, { sendBudget: budget });
+      expect(response.status).toBe(400);
+      // One generate call and no profile fetch: the downgrade is skipped, not merely unsuccessful.
+      expect(requests.filter(url => url.endsWith("/alpha/generate"))).toHaveLength(1);
+      expect(requests.some(url => url.includes("commandcode.ai/models/"))).toBe(false);
+    } finally { dispose(); }
+  });
+
   // Pins the profileUrl of each id added for #2647 — nothing more.
   //
   // Be clear about what this does NOT prove: the stubbed response below returns

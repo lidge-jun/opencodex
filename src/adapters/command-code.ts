@@ -8,8 +8,8 @@ import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./bas
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { debugDroppedFrame } from "../lib/debug";
-import { configuredReasoningEfforts } from "../reasoning-effort";
-import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
+import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effort";
+import { commandCodeReasoningEfforts, commandCodeSeededReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
@@ -483,13 +483,50 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   }
 }
 
+/**
+ * Has the operator actually chosen a ladder for this model, or is this the shipped one?
+ *
+ * Both registry presets seed `modelReasoningEfforts` from the shipped Command Code table, so a
+ * configured row is only evidence of a decision when it DIFFERS from what was seeded. Comparing
+ * against the seeded value rather than the resolved one matters: a profile refresh may have
+ * narrowed the live ladder, and that correction must not be mistaken for an operator edit.
+ */
+function operatorChoseCommandCodeLadder(provider: OcxProviderConfig, canonicalId: string): boolean {
+  const declared = modelRecordValue(provider.modelReasoningEfforts, canonicalId);
+  if (declared === undefined) return false;
+  const seeded = commandCodeSeededReasoningEfforts(canonicalId);
+  if (seeded === undefined) return true;
+  return declared.length !== seeded.length || declared.some((value, index) => value !== seeded[index]);
+}
+
+/**
+ * Resolve the ladder this request may draw a wire effort from.
+ *
+ * The shipped table is a default, not a ceiling the operator cannot reach past. Until this
+ * existed the adapter read `commandCodeReasoningEfforts() ?? configuredReasoningEfforts()`, so a
+ * model with a row ignored configuration outright while a model without one honoured it — and
+ * the catalog disagreed with both, because `configuredReasoningEfforts` is what advertises the
+ * picker. An operator who widened a pinned row saw the wider ladder offered in Codex and then
+ * watched the adapter strip the rung on the way out (#5096).
+ *
+ * An operator row now resolves through the same function the catalog uses, so the picker and the
+ * wire agree, and sanitization, tier healing and learned-refusal dropping apply to it. Rows the
+ * operator never touched keep the shipped table, including a value learned by a profile refresh.
+ */
+function commandCodeEffortLadder(provider: OcxProviderConfig, canonicalId: string): readonly string[] | undefined {
+  if (operatorChoseCommandCodeLadder(provider, canonicalId)) {
+    return configuredReasoningEfforts(provider, canonicalId);
+  }
+  return commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
+}
+
 function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string, requested: string | undefined): string | undefined {
   if (!requested || requested === "none") return undefined;
   // Compatibility ids (deepseek-v4-flash / glm-5.2) must resolve to their canonical
   // Command Code id before the effort lookup, or legacy requests silently lose the
   // reasoning effort because the official table is keyed by the canonical ids.
   const canonicalId = canonicalCommandCodeModelId(modelId);
-  const supported = commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
+  const supported = commandCodeEffortLadder(provider, canonicalId);
   if (!supported) return undefined;
   // Only remap xhigh/ultra→max for models whose official profile documents that
   // aliasing (deepseek v4, glm-5.2). Muse Spark's upstream accepts xhigh as a
@@ -576,6 +613,11 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         try { return (JSON.parse(request.body) as { params?: { model?: unknown } }).params?.model; } catch { return undefined; }
       })();
       if (typeof modelId !== "string") return response;
+      // An operator who wrote this ladder authorized the rung deliberately. Replaying the turn
+      // without it would answer at the provider default and hide a wrong configuration behind a
+      // successful-looking response, so the upstream rejection is what the caller gets. The
+      // downgrade below stays for the shipped table, where the rung was never the caller's idea.
+      if (operatorChoseCommandCodeLadder(provider, canonicalCommandCodeModelId(modelId))) return response;
       const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor);
       if (!refreshed || refreshed.includes(currentEffort)) return response;
       const retry = requestWithoutReasoningEffort(request);

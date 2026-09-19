@@ -165,16 +165,29 @@ function keyFor(modelId: string): string {
   return modelId.trim().toLowerCase();
 }
 
-export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
+/**
+ * The ladder this file SHIPS for a model, ignoring any profile refresh.
+ *
+ * `providerConfigSeed` copies this table into every materialized Command Code preset, so the
+ * mere presence of `modelReasoningEfforts[model]` in a stored config proves nothing about who
+ * wrote it. A configured row that still equals this value is that copy; a row that differs is an
+ * operator decision. The adapter needs exactly that distinction to know whose ladder to honour,
+ * so the shipped value has to be readable on its own.
+ */
+export function commandCodeSeededReasoningEfforts(modelId: string): readonly string[] | undefined {
   const key = keyFor(modelId);
-  const refreshed = refreshedEfforts.get(key);
-  if (refreshed !== undefined) return refreshed;
   // Case-insensitive: the table keys match the EXACT upstream ids (e.g. `zai-org/GLM-5.3`),
   // but callers may pass either case.
   for (const [id, efforts] of Object.entries(COMMAND_CODE_MODEL_REASONING_EFFORTS)) {
     if (keyFor(id) === key) return efforts;
   }
   return undefined;
+}
+
+export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
+  const refreshed = refreshedEfforts.get(keyFor(modelId));
+  if (refreshed !== undefined) return refreshed;
+  return commandCodeSeededReasoningEfforts(modelId);
 }
 
 function parsedProfileEfforts(page: string): string[] | undefined {
