@@ -7,6 +7,7 @@ import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegrationCoordinated } from "../../src/integrations/writer";
 import { mutateAsideProfiles } from "../../src/integrations/aside-profiles";
+import { loadExportModels, previewExportModels, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -18,6 +19,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  */
 let home: string;
 let store: IntegrationStateStore;
+let priorOcxHome: string | undefined;
 const TEST_ENV = {} as NodeJS.ProcessEnv;
 
 const MODELS: ExportModel[] = [
@@ -32,9 +34,15 @@ beforeEach(() => {
   home = join(base, "home");
   mkdirSync(home, { recursive: true });
   store = createIntegrationStateStore(join(base, "store", "integrations"));
+  // A roster is admitted beside the configuration file, so these cases need their own
+  // configuration home rather than whatever the machine running them happens to have.
+  priorOcxHome = process.env.OPENCODEX_HOME;
+  process.env.OPENCODEX_HOME = join(base, "config");
 });
 
 afterEach(() => {
+  if (priorOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = priorOcxHome;
   removeTreeWithRetry(dirname(home));
 });
 
@@ -207,4 +215,45 @@ test("an input that cannot be copied refuses the write instead of reading it twi
   expect(checked).toBe(false);
   expect(reads).toBe(0);
   expect(existsSync(configPath)).toBe(false);
+});
+
+/**
+ * A committed change must not take the roster away from the change after it.
+ *
+ * The Aside commit reloads the roster while holding the configuration its preference write just
+ * edited. If that load cannot admit what it is holding it clears the retained roster, and the next
+ * confirmation is answered with "no roster is cached yet" rather than a comparison. That is the
+ * difference between a refusal an operator can act on and one they cannot.
+ */
+test("an Aside change leaves the roster available for the confirmation after it", async () => {
+  mkdirSync(join(home, ".aside", "u", "0"), { recursive: true });
+  writeFileSync(join(home, ".aside", "accounts.json"), JSON.stringify({
+    currentAccountId: 0, accounts: [{ id: 0, name: "Primary" }],
+  }));
+  const profilePath = join(home, ".aside", "u", "0", "models.json");
+  writeFileSync(profilePath, JSON.stringify({ theme: "keep", providers: { personal: { models: [] } } }));
+
+  const config = {
+    port: 10100,
+    hostname: CHECKED_HOST,
+    defaultProvider: "fixture",
+    providers: { fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", liveModels: false, models: ["one", "two"] } },
+  } as unknown as OcxConfig;
+
+  resetExportSnapshotForTests();
+  await loadExportModels(config, []);
+  expect(previewExportModels(config)).not.toBeNull();
+
+  const result = await mutateAsideProfiles(
+    {
+      config, models: () => loadExportModels(config), port: 10100, env: {} as NodeJS.ProcessEnv, home, store,
+      persistConfig: () => {},
+    },
+    { profileId: 0, enabled: true },
+  );
+
+  expect(result.ok).toBe(true);
+  // The commit's own reload is an ordinary authoritative load: it happens while the configuration
+  // carries the preference this action just wrote, and it has to be able to admit that.
+  expect(previewExportModels(config)).not.toBeNull();
 });
