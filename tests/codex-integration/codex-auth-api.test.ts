@@ -1,5 +1,6 @@
 import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
+import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
 import * as usageHistoryModule from "../../src/usage/log";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -2089,6 +2090,8 @@ describe("codex-auth API", () => {
     expect(config.codexAccounts?.find(account => account.id === "pool-plan-config-deleted")?.plan).toBe("plus");
     expect(existsSync(join(TEST_DIR, "config.json"))).toBe(false);
   });
+
+  registerPoolReauthCauseCases(makeConfig, seedPoolAccount);
 
   test("pool plan refresh batches multiple authoritative changes into one config save", async () => {
     const config = makeConfig();

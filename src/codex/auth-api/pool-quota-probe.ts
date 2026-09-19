@@ -46,6 +46,8 @@ export interface PoolQuotaResult {
   resetRefreshLineage?: ManualResetRefreshLineage;
   quota: StoredAccountQuota | null;
   needsReauth: boolean;
+  /** Failure source observed while obtaining the quota, when reauthentication is required. */
+  reauthReason?: "refresh_failed" | "quota_unauthorized";
   /** Credential generation whose cache or network result this DTO state belongs to. */
   credentialGeneration?: number;
   /** Present only when this call freshly parsed a WHAM usage response. */
@@ -178,7 +180,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
     // the credential it condemned, so a late terminal response arriving after the operator
     // re-authenticated would quarantine the replacement.
     markAccountNeedsReauth(accountId, captureConfigGeneration(), rejectedGeneration);
-    return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
+    return { quota: existing ?? null, needsReauth: true, reauthReason: "quota_unauthorized", credentialGeneration: rejectedGeneration };
   }
 
   const claim = claimQuotaRecovery(accountId, rejectedGeneration);
@@ -186,7 +188,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
     // A lineage fenced by a TERMINAL refresh failure stays terminal. Without this, the
     // budget being used would make the next bare 401 report a dead credential as healthy.
     if (quotaRecoveryTerminalFor(accountId, rejectedGeneration)) {
-      return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
+      return { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: rejectedGeneration };
     }
     // Otherwise: this lineage spent its attempt, another caller is mid-refresh, or a
     // transient failure is backing off. Report transient and let the next poll try —
@@ -226,7 +228,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
     // Everything else is unknown, and unknown is not proof.
     if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
       markAccountNeedsReauth(accountId, captureConfigGeneration(), rejectedGeneration);
-      return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
+      return { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: rejectedGeneration };
     }
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: rejectedGeneration };
   }
@@ -258,7 +260,7 @@ export async function recoverPoolQuotaFrom401(ctx: {
       // let the next poll call a dead credential healthy. The evidence is about the
       // REFRESHED credential, which is what the replay used.
       markAccountNeedsReauth(accountId, writerGeneration, refreshed.generation);
-      return { quota: existing ?? null, needsReauth: true, credentialGeneration: refreshed.generation };
+      return { quota: existing ?? null, needsReauth: true, reauthReason: "quota_unauthorized", credentialGeneration: refreshed.generation };
     }
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation };
   }
@@ -401,7 +403,7 @@ export async function fetchFreshPoolAccountQuota(
     }
     if (e instanceof TokenRefreshError) {
       return withQuotaProbeEvidence(
-        { quota: existing ?? null, needsReauth: true, credentialGeneration: requestCredentialGeneration },
+        { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: requestCredentialGeneration },
         quotaProbeEvidence,
       );
     }
