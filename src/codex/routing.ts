@@ -1,5 +1,6 @@
 import { saveConfigPreservingClaudeCode } from "../config";
-import { isCodexAccountGenerationLive } from "./account-store";
+import { isCodexAccountGenerationLive, registerCodexRefreshGenerationHandoff } from "./account-store";
+import { handOffThreadAffinityGeneration } from "./routing/thread-affinity";
 import { codexAccountLogLabel } from "./account-label";
 import { isCodexAccountPaused } from "./account-pause";
 import { clearCodexAccountPin, pinnedCodexAccountId } from "./account-priority";
@@ -205,6 +206,11 @@ export {
 } from "./routing/active-account";
 export { codexAccountPinDrainReason } from "./routing/pin-drain";
 export type { CodexPinDrainReason } from "./routing/pin-drain";
+
+// A shared refresh can outlive the request that opened it. Register the affinity
+// handoff with the flight so a detached G -> G+1 commit cannot strand bindings at G.
+registerCodexRefreshGenerationHandoff(handOffThreadAffinityGeneration);
+
 function hasConfiguredPoolAccount(
   config: OcxConfig,
   accountId: string,
