@@ -53,7 +53,7 @@
  *    that are re-applied to an EXISTING file rather than trusted from its creation.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
@@ -65,7 +65,7 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
-import { assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, resetSpendLedgerOwnerBindingForTest, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
+import { assertSpendLedgerOwnerHeld, bindSpendLedgerOwnerHome, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot } from "./spend-ledger-owner";
 
 export const SPEND_LEDGER_JOURNAL_FILENAME = "spend-ledger.jsonl";
 /**
@@ -391,7 +391,21 @@ function hardenLedgerFile(path: string, options: { readonly force?: boolean } = 
   } catch { /* best-effort: a non-owner cannot chmod */ }
 }
 
-export function createFileSpendJournal(path: string): SpendJournal {
+function assertSafeLedgerFile(path: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+    || (process.platform !== "win32" && stat.uid !== process.getuid!())) {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be opened safely.",
+    );
+  }
+}
+
+export function createFileSpendJournal(
+  path: string,
+  options: { readonly assertMutation?: () => void } = {},
+): SpendJournal {
   const ensureDir = (): string => {
     const dir = dirname(path);
     // The guard runs before any mutation so a rejected write leaves nothing behind.
@@ -402,25 +416,37 @@ export function createFileSpendJournal(path: string): SpendJournal {
   return {
     read(): string[] {
       if (!existsSync(path)) return [];
+      assertSafeLedgerFile(path);
       // Replay is once per process and is the moment a journal inherited from an older build
       // or a restored backup first passes through here.
       hardenLedgerFile(path, { force: true });
       return readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
     },
     append(line: string): void {
+      options.assertMutation?.();
       ensureDir();
       const created = !existsSync(path);
+      if (!created) assertSafeLedgerFile(path);
       appendFileSync(path, line + "\n", { encoding: "utf8", mode: 0o600 });
+      assertSafeLedgerFile(path);
       hardenLedgerFile(path, { force: created });
     },
     rewrite(lines: string[]): void {
+      options.assertMutation?.();
       ensureDir();
       // Same directory, so the rename is atomic on the same filesystem: a crash mid-compaction
       // leaves either the old journal or the new one, never a half-written ledger.
-      const temp = `${path}.compact-${process.pid}`;
-      writeFileSync(temp, lines.map((line) => line + "\n").join(""), { encoding: "utf8", mode: 0o600 });
+      if (existsSync(path)) assertSafeLedgerFile(path);
+      const temp = `${path}.compact-${process.pid}-${randomBytes(6).toString("hex")}`;
+      writeFileSync(temp, lines.map((line) => line + "\n").join(""), {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      assertSafeLedgerFile(temp);
       hardenLedgerFile(temp, { force: true });
       renameSync(temp, path);
+      assertSafeLedgerFile(path);
       hardenLedgerFile(path, { force: true });
     },
   };
@@ -433,17 +459,27 @@ export function createFileSpendJournal(path: string): SpendJournal {
  * recorded spend, which would hand every scope a fresh allowance -- so it is a file, not a
  * per-process value.
  */
-export function loadOrCreateSpendLedgerSalt(path: string): string {
+export function loadOrCreateSpendLedgerSalt(
+  path: string,
+  options: { readonly assertMutation?: () => void } = {},
+): string {
   if (existsSync(path)) {
+    assertSafeLedgerFile(path);
     hardenLedgerFile(path, { force: true });
     const existing = readFileSync(path, "utf8").trim();
     if (/^[0-9a-f]{32,}$/.test(existing)) return existing;
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be opened safely.",
+    );
   }
   const dir = dirname(path);
+  options.assertMutation?.();
   assertNotRealHomeUnderTest(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const salt = randomBytes(32).toString("hex");
-  writeFileSync(path, salt + "\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(path, salt + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+  assertSafeLedgerFile(path);
   hardenLedgerFile(path, { force: true });
   return salt;
 }
@@ -529,6 +565,8 @@ export function createSpendReservationLedger(options: {
    * no file anyone could correlate.
    */
   readonly salt?: string;
+  /** Shared production ledgers assert their live state-directory lease before mutation. */
+  readonly assertMutationOwner?: () => void;
 } = {}): SpendReservationLedger {
   // Mutable because the ceilings are operator configuration, and configuration is reloadable.
   // The three bounds below are read through functions for the same reason: a value captured
@@ -538,6 +576,7 @@ export function createSpendReservationLedger(options: {
   const journal = options.journal;
   const now = options.now ?? (() => Date.now());
   const salt = options.salt ?? "";
+  const assertMutationOwner = options.assertMutationOwner;
   const maxTrackedScopes = (): number => policy.maxTrackedScopes ?? DEFAULT_MAX_TRACKED_SCOPES;
   const maxTrackedSends = (): number => policy.maxTrackedSends ?? DEFAULT_MAX_TRACKED_SENDS;
   const compactAfterRecords = (): number => policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
@@ -592,7 +631,8 @@ export function createSpendReservationLedger(options: {
       journal.append(JSON.stringify(record));
       recordsOnDisk += 1;
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof SpendLedgerOwnerError) throw error;
       // In-memory state still bounds this process; the counter is how a caller learns the
       // restart guarantee degraded instead of discovering it after the fact.
       persistFailures += 1;
@@ -819,7 +859,8 @@ export function createSpendReservationLedger(options: {
     try {
       rewrite.call(journal, [JSON.stringify(checkpoint)]);
       recordsOnDisk = 1;
-    } catch {
+    } catch (error) {
+      if (error instanceof SpendLedgerOwnerError) throw error;
       // Compaction is maintenance, not accounting: a failed rewrite leaves the previous
       // journal intact and every figure in it still replayable.
       persistFailures += 1;
@@ -850,6 +891,7 @@ export function createSpendReservationLedger(options: {
     get policy() { return policy; },
 
     reserve(request: SpendReservationRequest): SpendReservationDecision {
+      assertMutationOwner?.();
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
@@ -904,6 +946,7 @@ export function createSpendReservationLedger(options: {
     },
 
     markDispatched(sendId: string): boolean {
+      assertMutationOwner?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || reservation.status !== "open") return false;
@@ -914,6 +957,7 @@ export function createSpendReservationLedger(options: {
     },
 
     abandon(sendId: string): boolean {
+      assertMutationOwner?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       // Only an UNDISPATCHED reservation may be released for free. Once bytes have left for
@@ -926,6 +970,7 @@ export function createSpendReservationLedger(options: {
     },
 
     settle(sendId: string, usage: SpendUsage): boolean {
+      assertMutationOwner?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
@@ -937,6 +982,7 @@ export function createSpendReservationLedger(options: {
     },
 
     markLost(sendId: string): boolean {
+      assertMutationOwner?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
@@ -967,6 +1013,7 @@ export function createSpendReservationLedger(options: {
     },
 
     prune(at: number = now()): void {
+      assertMutationOwner?.();
       // Removal requires BOTH inactive and not exhausted inside the window. An
       // exhausted-but-idle scope that was dropped would be recreated fresh under the
       // same id -- the exact laundering the ceiling exists to stop.
@@ -975,6 +1022,7 @@ export function createSpendReservationLedger(options: {
     },
 
     reconfigure(next: SpendReservationPolicy): void {
+      assertMutationOwner?.();
       policy = next;
     },
   };
@@ -1052,10 +1100,18 @@ export function sharedSpendLedger(): SpendReservationLedger {
   bindSpendLedgerOwnerHome();
   if (!sharedLedger) {
     const home = getConfigDir();
+    const journalPath = join(home, SPEND_LEDGER_JOURNAL_FILENAME);
+    const saltPath = join(home, SPEND_LEDGER_SALT_FILENAME);
+    const assertMutationOwner = (): void => {
+      assertSpendLedgerOwnerHeld(home);
+      if (existsSync(journalPath)) assertSafeLedgerFile(journalPath);
+      if (existsSync(saltPath)) assertSafeLedgerFile(saltPath);
+    };
     sharedLedger = createSpendReservationLedger({
-      journal: createFileSpendJournal(join(home, SPEND_LEDGER_JOURNAL_FILENAME)),
-      salt: loadOrCreateSpendLedgerSalt(join(home, SPEND_LEDGER_SALT_FILENAME)),
+      journal: createFileSpendJournal(journalPath, { assertMutation: assertMutationOwner }),
+      salt: loadOrCreateSpendLedgerSalt(saltPath, { assertMutation: assertMutationOwner }),
       policy: sharedPolicy,
+      assertMutationOwner,
     });
   }
   return sharedLedger;

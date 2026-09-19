@@ -36,6 +36,7 @@ import { isServiceViable } from "../../service";
 import { readRuntimePort } from "../../config/process-state";
 import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
+import { spendLedgerRestartEnvironment } from "../../lib/spend-ledger-owner";
 import {
   MEMORY_DRAIN_RESTART_MS,
   REPLACEMENT_READY_TIMEOUT_MS,
@@ -225,8 +226,12 @@ function spawnDetachedStart(
   return new Promise<void>((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
-      const env: NodeJS.ProcessEnv = { ...process.env };
-      delete env.OCX_SERVICE;
+      const sourceEnv: NodeJS.ProcessEnv = { ...process.env };
+      delete sourceEnv.OCX_SERVICE;
+      const env = spendLedgerRestartEnvironment(
+        sourceEnv,
+        waitForHealthBeforeParentExit ? undefined : process.pid,
+      );
       child = spawn(process.execPath, launchArgs, {
         detached: true,
         stdio: "ignore",

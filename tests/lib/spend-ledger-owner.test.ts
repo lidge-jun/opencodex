@@ -1,12 +1,14 @@
 /** Cross-process ownership for the process-wide spend journal (#5123). */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireSpendLedgerOwner,
   SPEND_LEDGER_OWNER_FILENAME,
+  SPEND_LEDGER_RESTART_PARENT_ENV,
   SpendLedgerOwnerError,
+  spendLedgerRestartEnvironment,
   spendLedgerOwnerSnapshot,
   type SpendLedgerOwnerLease,
 } from "../../src/lib/spend-ledger-owner";
@@ -47,12 +49,18 @@ afterEach(async () => {
   removeTreeWithRetry(root);
 });
 
-function spawnHolder(targetHome: string, mode: "observe" | "enforced", suffix: string) {
+function spawnHolder(
+  targetHome: string,
+  mode: "observe" | "enforced",
+  suffix: string,
+  extraEnv: Record<string, string> = {},
+) {
   const holdMarker = join(root, `held-${suffix}`);
   const releaseMarker = join(root, `release-${suffix}`);
   const child = Bun.spawn([process.execPath, childPath], {
     env: {
       ...process.env,
+      ...extraEnv,
       OPENCODEX_HOME: targetHome,
       OCX_SPEND_OWNER_CHILD: JSON.stringify({ holdMarker, releaseMarker, mode }),
     },
@@ -95,6 +103,15 @@ function busyError(): SpendLedgerOwnerError {
 }
 
 describe("real process ownership", () => {
+  test("only a parent-exit restart environment carries the handoff marker", () => {
+    const source = { OCX_SPEND_LEDGER_RESTART_PARENT_PID: "stale", KEEP_ME: "yes" };
+    expect(spendLedgerRestartEnvironment(source)).toEqual({ KEEP_ME: "yes" });
+    expect(spendLedgerRestartEnvironment(source, 4242)).toEqual({
+      KEEP_ME: "yes",
+      OCX_SPEND_LEDGER_RESTART_PARENT_PID: "4242",
+    });
+  });
+
   for (const [holderMode, contenderMode] of [["observe", "enforced"], ["enforced", "observe"]] as const) {
     test(`${holderMode} and ${contenderMode} configurations contend identically`, async () => {
       const holder = spawnHolder(home, holderMode, `${holderMode}-${contenderMode}`);
@@ -123,6 +140,22 @@ describe("real process ownership", () => {
     await childResult(holder.child);
     const next = acquireSpendLedgerOwner();
     next.release();
+  }, SPAWN_BUDGET_MS);
+
+  test("a marked restart child waits for the parent lease while an ordinary sibling fails immediately", async () => {
+    const parent = acquireSpendLedgerOwner();
+    const ordinary = spawnHolder(home, "observe", "ordinary-sibling");
+    expect((await childResult(ordinary.child)).code).toBe("SPEND_LEDGER_OWNER_BUSY");
+
+    const restart = spawnHolder(home, "observe", "restart-child", {
+      [SPEND_LEDGER_RESTART_PARENT_ENV]: String(process.pid),
+    });
+    await Bun.sleep(25);
+    expect(restart.child.exitCode).toBeNull();
+    parent.release();
+    await waitForMarker(restart.holdMarker, restart.child);
+    writeFileSync(restart.releaseMarker, "release");
+    expect((await childResult(restart.child)).status).toBe("acquired");
   }, SPAWN_BUDGET_MS);
 
   test("an abruptly killed owner is reacquirable without replacing the lock file", async () => {
@@ -182,6 +215,29 @@ describe("in-process references and privacy", () => {
     expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_HOME_CONFLICT");
   });
 
+  test("a retained shared ledger refuses mutation after its final lease releases", async () => {
+    const lease = acquireSpendLedgerOwner();
+    const retained = sharedSpendLedger();
+    lease.release();
+    const holder = spawnHolder(home, "observe", "retained-handle");
+    await waitForMarker(holder.holdMarker, holder.child);
+    let failure: unknown;
+    try {
+      retained.reserve({
+        sendId: "retained",
+        scopes: { rootId: "retained-root" },
+        inputTokens: 1,
+        outputCeilingTokens: 1,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_NOT_HELD");
+    writeFileSync(holder.releaseMarker, "release");
+    await childResult(holder.child);
+  }, SPAWN_BUDGET_MS);
+
   test("busy refusal contains no private identity or filesystem data", async () => {
     const holder = spawnHolder(home, "observe", "privacy");
     await waitForMarker(holder.holdMarker, holder.child);
@@ -206,5 +262,93 @@ describe("in-process references and privacy", () => {
     });
     expect(existsSync(join(home, SPEND_LEDGER_JOURNAL_FILENAME))).toBe(false);
     expect(existsSync(join(home, SPEND_LEDGER_SALT_FILENAME))).toBe(false);
+  });
+});
+
+describe("backing file identity", () => {
+  const expectBackingAliasesRefused = (kind: "hardlink" | "symlink"): void => {
+    const first = acquireSpendLedgerOwner(home);
+    sharedSpendLedger().reserve({
+      sendId: "first",
+      scopes: { rootId: "first-root" },
+      inputTokens: 1,
+      outputCeilingTokens: 1,
+    });
+    first.release();
+    resetSharedSpendLedgerForTest();
+
+    for (const filename of [SPEND_LEDGER_JOURNAL_FILENAME, SPEND_LEDGER_SALT_FILENAME]) {
+      const otherHome = join(root, `${kind}-${filename}`);
+      const prepared = acquireSpendLedgerOwner(otherHome);
+      prepared.release();
+      const source = join(home, filename);
+      const destination = join(otherHome, filename);
+      if (kind === "hardlink") linkSync(source, destination);
+      else symlinkSync(source, destination);
+      const owner = acquireSpendLedgerOwner(otherHome);
+      process.env.OPENCODEX_HOME = otherHome;
+      let failure: unknown;
+      try { sharedSpendLedger(); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+      expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+      owner.release();
+      resetSharedSpendLedgerForTest();
+    }
+  };
+
+  test("hard-linked owner files fail closed", () => {
+    const linkedHome = join(root, "owner-hardlink");
+    mkdirSync(linkedHome, { recursive: true });
+    const target = join(root, "owner-hardlink-target");
+    writeFileSync(target, "owner");
+    linkSync(target, join(linkedHome, SPEND_LEDGER_OWNER_FILENAME));
+    let failure: unknown;
+    try { acquireSpendLedgerOwner(linkedHome); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+  });
+
+  test.skipIf(process.platform === "win32")("symbolically linked owner files fail closed", () => {
+    const linkedHome = join(root, "owner-symlink");
+    mkdirSync(linkedHome, { recursive: true });
+    const target = join(root, "owner-symlink-target");
+    writeFileSync(target, "owner");
+    symlinkSync(target, join(linkedHome, SPEND_LEDGER_OWNER_FILENAME));
+    let failure: unknown;
+    try { acquireSpendLedgerOwner(linkedHome); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+  });
+
+  test("invalid or unusable owner databases fail closed", () => {
+    const invalidHome = join(root, "owner-invalid");
+    mkdirSync(invalidHome, { recursive: true });
+    writeFileSync(join(invalidHome, SPEND_LEDGER_OWNER_FILENAME), "not sqlite");
+    let invalid: unknown;
+    try { acquireSpendLedgerOwner(invalidHome); } catch (error) { invalid = error; }
+    expect(invalid).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((invalid as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+
+    const unusableHome = join(root, "owner-unusable");
+    mkdirSync(join(unusableHome, SPEND_LEDGER_OWNER_FILENAME), { recursive: true });
+    let unusable: unknown;
+    try { acquireSpendLedgerOwner(unusableHome); } catch (error) { unusable = error; }
+    expect(unusable).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((unusable as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_UNAVAILABLE");
+  });
+
+  test("linked journals and salts cannot cross independent homes", () => {
+    expectBackingAliasesRefused("hardlink");
+  });
+
+  test.skipIf(process.platform === "win32")("symbolically linked journals and salts fail closed", () => {
+    expectBackingAliasesRefused("symlink");
+  });
+
+  test("the shared ledger requires a live lease", () => {
+    let failure: unknown;
+    try { sharedSpendLedger(); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
+    expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_NOT_HELD");
   });
 });

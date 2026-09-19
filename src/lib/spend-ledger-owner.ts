@@ -8,6 +8,8 @@ import { assertNotRealHomeUnderTest } from "./test-home-guard";
 import { hardenSecretDir, hardenSecretPath } from "./windows-secret-acl";
 
 export const SPEND_LEDGER_OWNER_FILENAME = "spend-ledger-owner.sqlite";
+export const SPEND_LEDGER_RESTART_PARENT_ENV = "OCX_SPEND_LEDGER_RESTART_PARENT_PID";
+export const SPEND_LEDGER_RESTART_WAIT_MS = 5_000;
 const OWNER_SIDECARS = ["-journal", "-wal", "-shm"] as const;
 
 export type SpendLedgerOwnerErrorCode =
@@ -91,6 +93,23 @@ function stateDirectoryIdentity(configDir: string): string {
   return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
+function restartHandoffWaitMs(): number {
+  const markedParent = process.env[SPEND_LEDGER_RESTART_PARENT_ENV];
+  delete process.env[SPEND_LEDGER_RESTART_PARENT_ENV];
+  return markedParent === String(process.ppid) ? SPEND_LEDGER_RESTART_WAIT_MS : 0;
+}
+
+/** Mark only a parent-exit restart child for bounded lease acquisition. */
+export function spendLedgerRestartEnvironment(
+  source: NodeJS.ProcessEnv,
+  parentPid?: number,
+): NodeJS.ProcessEnv {
+  const env = { ...source };
+  if (parentPid === undefined) delete env[SPEND_LEDGER_RESTART_PARENT_ENV];
+  else env[SPEND_LEDGER_RESTART_PARENT_ENV] = String(parentPid);
+  return env;
+}
+
 /**
  * Hold one SQLite write transaction until the final in-process reference releases it.
  * SQLite and the OS release a crashed process; no PID, timestamp, TTL or lock-file unlink
@@ -98,6 +117,7 @@ function stateDirectoryIdentity(configDir: string): string {
  */
 export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedgerOwnerLease {
   const requestedHome = stateDirectoryIdentity(configDir);
+  const busyTimeout = restartHandoffWaitMs();
   if (boundLedgerHome !== null && boundLedgerHome !== requestedHome) {
     throw new SpendLedgerOwnerError(
       "SPEND_LEDGER_OWNER_HOME_CONFLICT",
@@ -130,7 +150,7 @@ export function acquireSpendLedgerOwner(configDir = getConfigDir()): SpendLedger
   let database: Database | undefined;
   try {
     database = new Database(prepared.path, { create: true });
-    database.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    database.exec(`PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = ${busyTimeout}; BEGIN IMMEDIATE`);
   } catch (cause) {
     try { database?.close(); } catch { /* preserve acquisition failure */ }
     if (isBusy(cause)) {
