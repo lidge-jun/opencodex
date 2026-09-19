@@ -26,6 +26,7 @@ import { fingerprint } from "../../src/integrations/ownership";
 import type { JournalEntry } from "../../src/integrations/journal";
 import type { OcxConfig } from "../../src/types";
 import { createIntegrationStateStore } from "../../src/integrations/store";
+import { applyIntegration, disableIntegration } from "../../src/integrations/writer";
 import { clinePendingPath } from "../../src/integrations/cline-io";
 import { resolveIntegrationPaths } from "../../src/integrations/registry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -570,5 +571,86 @@ describe("integration mutation plan: what an undo would change", () => {
     // The plan names places, never what is in them or where the file lives.
     expect(JSON.stringify(plan)).not.toContain(CANARY);
     expect(JSON.stringify(plan)).not.toContain(CONFIG_PATH);
+  });
+});
+
+describe("planning an undo of work that actually happened", () => {
+  function realApply(home: string, storeRoot: string) {
+    const store = createIntegrationStateStore(storeRoot);
+    const env = {} as NodeJS.ProcessEnv;
+    const { configPath, detectDir } = resolveIntegrationPaths("opencode", env, home);
+    mkdirSync(detectDir, { recursive: true });
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, "{}\n");
+    const input = { clientId: "opencode" as const, models: FIXTURE_MODELS, config: FIXTURE_CONFIG, port: 10100, env, home, store };
+    const applied = applyIntegration(input);
+    if (!applied.ok || !applied.opId) throw new Error("fixture apply failed");
+    return { input, configPath, applyOpId: applied.opId };
+  }
+
+  test("undoing a real apply reports taking the managed places back out", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-undo-apply-"));
+    const storeRoot = mkdtempSync(join(tmpdir(), "ocx-undo-apply-store-"));
+    try {
+      const { input, applyOpId } = realApply(home, storeRoot);
+
+      // Every input this classification reads comes from the apply that just happened: the
+      // ownership record it wrote and the document it produced, not values a builder supplied.
+      const plan = previewIntegration(input, { operation: "restore", opId: applyOpId });
+
+      expect(plan.canApply).toBe(true);
+      expect(plan.changes.some(change => change.kind === "remove")).toBe(true);
+      expect(plan.changes.some(change => change.kind === "replace")).toBe(false);
+      expect(plan.changes.some(change => change.kind === "add")).toBe(false);
+    } finally {
+      removeTreeWithRetry(home);
+      removeTreeWithRetry(storeRoot);
+    }
+  });
+
+  test("undoing a real disable reports adding the managed places back", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-undo-disable-"));
+    const storeRoot = mkdtempSync(join(tmpdir(), "ocx-undo-disable-store-"));
+    try {
+      const { input, configPath } = realApply(home, storeRoot);
+      const disabled = disableIntegration(input);
+      if (!disabled.ok || !disabled.opId) throw new Error("fixture disable failed");
+      // The disable took the block out, so the document does not hold those places now.
+      expect(readFileSync(configPath, "utf8")).not.toContain("opencodex");
+
+      const plan = previewIntegration(input, { operation: "restore", opId: disabled.opId });
+
+      expect(plan.canApply).toBe(true);
+      expect(plan.changes.some(change => change.kind === "add")).toBe(true);
+      expect(plan.changes.some(change => change.kind === "replace")).toBe(false);
+    } finally {
+      removeTreeWithRetry(home);
+      removeTreeWithRetry(storeRoot);
+    }
+  });
+
+  test("a document that cannot be read leaves every place a replacement and refuses nothing", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-undo-unreadable-"));
+    const storeRoot = mkdtempSync(join(tmpdir(), "ocx-undo-unreadable-store-"));
+    try {
+      const { input, configPath } = realApply(home, storeRoot);
+      const disabled = disableIntegration(input);
+      if (!disabled.ok || !disabled.opId) throw new Error("fixture disable failed");
+      // Restore eligibility is a byte comparison and stays one: the document is descriptive here,
+      // so an unparseable file still plans, and the places it cannot speak for are replacements.
+      writeFileSync(configPath, "{ this is not valid json");
+
+      const plan = previewIntegration(input, { operation: "restore", opId: disabled.opId, confirmDrift: true });
+
+      expect(plan.refusalReason).toBeUndefined();
+      expect(plan.canApply).toBe(true);
+      // The same undo reported additions when the document was readable and empty of them. With
+      // nothing readable to ask, it says replacement rather than inventing an answer.
+      expect(plan.changes.some(change => change.kind === "replace")).toBe(true);
+      expect(plan.changes.some(change => change.kind === "add")).toBe(false);
+    } finally {
+      removeTreeWithRetry(home);
+      removeTreeWithRetry(storeRoot);
+    }
   });
 });

@@ -393,8 +393,15 @@ function changesOf(input: PlanInput): readonly IntegrationPlanChange[] {
       const path = canonicalSchemaPath(input.clientId, fragment);
       if (path !== null) prior.set(path, fragment);
     }
+    /*
+     * A document we could not read says nothing about whether a place is there, and restore does
+     * not need it read: eligibility is a question about bytes. Where it cannot be read, each place
+     * is reported as a replacement, which is what this list said before any of it was derived.
+     */
+    const documentKnown = input.parsed !== PARSE_FAILED;
     for (const [path, fragment] of prior) {
-      changes.push({ kind: readPath(input.parsed, fragment) === undefined ? "add" : "replace", path });
+      const absent = documentKnown && readPath(input.parsed, fragment) === undefined;
+      changes.push({ kind: absent ? "add" : "replace", path });
     }
     for (const fragment of input.record?.fragmentPaths ?? []) {
       const path = canonicalSchemaPath(input.clientId, fragment);
@@ -595,6 +602,25 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
 }
 
 /**
+ * Which places are ours in the file this undo would rewrite, read the same way the general
+ * observation reads them.
+ *
+ * The store is selected exactly as the restore observation selects it, so a profile's own store is
+ * consulted for a profile row rather than the root one. A record written for another location
+ * grants nothing here, which is the same rule the writer applies.
+ */
+function currentRecordFor(
+  input: IntegrationWriteInput,
+  request: PreviewRequest,
+  clientId: IntegrationClientId,
+  configPath: string,
+): OwnershipRecord | null {
+  const store = request.resolved?.store ?? input.store ?? createIntegrationStateStore();
+  const stored = store.readRecords()[clientId] ?? null;
+  return stored && stored.clientId === clientId && stored.configPath === configPath ? stored : null;
+}
+
+/**
  * Plan an undo the way the writer performs one.
  *
  * State is derived from bytes alone: a missing target is absent, a target that no longer matches
@@ -633,10 +659,19 @@ function previewRestore(input: IntegrationWriteInput, request: PreviewRequest): 
     admissionBlocked: false,
     before: observed.before,
     contribution: null,
-    record: null,
+    // Descriptive, never decisive. The record says which places are ours now and the document
+    // says which of them the file holds, so the change list can distinguish a place this undo
+    // adds back from one it replaces and one it takes away. Neither is allowed to refuse: an
+    // unreadable document is reported as PARSE_FAILED and leaves every place a replacement, and
+    // restore eligibility stays the byte comparison it was.
+    record: currentRecordFor(input, request, observed.clientId, observed.configPath),
     models: input.models,
     classified: { state },
-    parsed: undefined,
+    parsed: observed.before === null
+      ? {}
+      : observed.clientId === "cline"
+        ? parseClineDocument(observed.before)
+        : parseConfig(observed.before, EXPORT_CLIENTS[observed.clientId].format),
     restore: {
       opId: observed.entry.opId,
       entry: observed.entry,

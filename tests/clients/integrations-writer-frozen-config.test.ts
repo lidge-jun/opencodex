@@ -381,13 +381,22 @@ test("a confirmed change that names no profile is refused rather than guessed", 
   const config = asideFixtureConfig(CHECKED_HOST);
 
   let checked = false;
+  let loads = 0;
   await expect(mutateAsideProfiles(
-    { config, models: MODELS, port: 10100, env: {} as NodeJS.ProcessEnv, home, store, persistConfig: () => {} },
+    {
+      config,
+      // A loader, not an array: resolving the roster is real work that reaches providers and can
+      // finalize an initial model selection, and a confirmation this cannot check must not cause
+      // it. An inert array would hide that.
+      models: () => { loads += 1; return MODELS; },
+      port: 10100, env: {} as NodeJS.ProcessEnv, home, store, persistConfig: () => {},
+    },
     { enabled: true },
     { revalidate: async () => { checked = true; return null; } },
   )).rejects.toThrow(/one profile/);
 
   expect(checked).toBe(false);
+  expect(loads).toBe(0);
   expect(config.asideProfileSync).toBeUndefined();
   expect(readFileSync(profilePath, "utf8")).toBe(before);
 });
