@@ -73,8 +73,9 @@ export function buildCompanionSettingsPatch(
   }
   if (next.models !== undefined && availableModels.length > 0) {
     const selected = next.models ?? [];
+    const selectedSet = new Set(selected);
     const allSelected = selected.length === availableModels.length
-      && availableModels.every(model => selected.includes(model));
+      && availableModels.every(model => selectedSet.has(model));
     if (allSelected) next.models = null;
   }
   return next;

@@ -249,6 +249,8 @@ export default function UsageCompanionPanel({
   }
   const providerNames = providers.map(provider => provider.provider).filter((provider, index, all) => all.indexOf(provider) === index).toSorted();
   const selectedModels = current.models ?? availableModels;
+  const selectedModelSet = new Set(selectedModels);
+  const hiddenProviderSet = new Set(current.hiddenProviders);
   const saveMessage = saveState === "saved" && response?.updatedAt
     ? t("usage.companion.saved", { time: formatSaveTime(response.updatedAt, locale) })
     : saveState === "error" ? t("usage.companion.saveFailed", { error: saveError ?? "" }) : "";
@@ -277,10 +279,10 @@ export default function UsageCompanionPanel({
             ["showCost", "cost"],
             ["showAccounts", "accounts"],
           ] as const).map(([key, label]) => (
-            <label key={key} className="usage-companion-switch">
+            <div key={key} className="usage-companion-switch">
               <span>{t(`usage.companion.section${label[0]!.toUpperCase()}${label.slice(1)}` as never)}</span>
-              <button type="button" className={`toggle ${current[key] ? "on" : ""}`} aria-pressed={current[key]} onClick={() => updateSettings({ [key]: !current[key] })}><span className="toggle-knob" /></button>
-            </label>
+              <button type="button" className={`toggle ${current[key] ? "on" : ""}`} aria-label={t(`usage.companion.section${label[0]!.toUpperCase()}${label.slice(1)}` as never)} aria-pressed={current[key]} onClick={() => updateSettings({ [key]: !current[key] })}><span className="toggle-knob" /></button>
+            </div>
           ))}
         </fieldset>
         <details className="usage-companion-advanced">
@@ -292,8 +294,8 @@ export default function UsageCompanionPanel({
               <input value={current.menuBarTemplate ?? ""} onChange={event => updateSettings({ menuBarTemplate: event.target.value })} maxLength={200} />
               <span className="muted text-caption">{t("usage.companion.placeholders")} <code>{"{requests} {totalTokens} {inputTokens} {outputTokens} {costUsd} {quotaPercent}"}</code></span>
             </label>
-            {availableModels.length > 0 && <fieldset className="usage-companion-check-list"><legend className="field-label">{t("usage.companion.modelsOnChart")}</legend>{availableModels.map(model => <label key={model}><input type="checkbox" checked={selectedModels.includes(model)} onChange={event => updateSettings({ models: event.target.checked ? [...selectedModels, model] : selectedModels.filter(item => item !== model) })} /> <span>{model}</span></label>)}</fieldset>}
-            {providerNames.length > 0 && <fieldset className="usage-companion-check-list"><legend className="field-label">{t("usage.companion.hideProviders")}</legend>{providerNames.map(provider => <label key={provider}><input type="checkbox" checked={current.hiddenProviders.includes(provider)} onChange={event => updateSettings({ hiddenProviders: event.target.checked ? [...current.hiddenProviders, provider] : current.hiddenProviders.filter(item => item !== provider) })} /> <span>{provider}</span></label>)}</fieldset>}
+            {availableModels.length > 0 && <fieldset className="usage-companion-check-list"><legend className="field-label">{t("usage.companion.modelsOnChart")}</legend>{availableModels.map(model => <label key={model}><input type="checkbox" checked={selectedModelSet.has(model)} onChange={event => updateSettings({ models: event.target.checked ? [...selectedModels, model] : selectedModels.filter(item => item !== model) })} /> <span>{model}</span></label>)}</fieldset>}
+            {providerNames.length > 0 && <fieldset className="usage-companion-check-list"><legend className="field-label">{t("usage.companion.hideProviders")}</legend>{providerNames.map(provider => <label key={provider}><input type="checkbox" checked={hiddenProviderSet.has(provider)} onChange={event => updateSettings({ hiddenProviders: event.target.checked ? [...current.hiddenProviders, provider] : current.hiddenProviders.filter(item => item !== provider) })} /> <span>{provider}</span></label>)}</fieldset>}
           </div>
         </details>
       </div>
