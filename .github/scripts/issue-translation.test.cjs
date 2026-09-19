@@ -1170,12 +1170,13 @@ describe("bot-owned control state", () => {
 
   it("defuses mention-shaped tokens at Markdown and punctuation boundaries", () => {
     const out = sanitizeTranslationBody(
-      "see @octocat, comma,@team, [@user], >@org/team, user@example.com, npm:@scope",
+      "see @octocat, comma,@team, [@user], >@org/team, Status:@maintainer, user@example.com, npm:@scope",
     );
     assert.match(out, /@\u200boctocat/);
     assert.match(out, /,@\u200bteam/);
     assert.match(out, /\[@\u200buser\]/);
     assert.match(out, />@\u200borg\/team/);
+    assert.match(out, /Status:@\u200bmaintainer/);
     assert.ok(out.includes("user@example.com"));
     assert.ok(out.includes("npm:@scope"));
   });
