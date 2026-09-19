@@ -99,6 +99,9 @@ export function createAdapterEventQueue(opts?: {
   const readers: QueueReader[] = [];
   const maxBacklog = opts?.maxBacklog ?? 1_024;
   const maxBacklogCodeUnits = opts?.maxBacklogCodeUnits ?? DEFAULT_MAX_BACKLOG_CODE_UNITS;
+  if (!Number.isSafeInteger(maxBacklogCodeUnits) || maxBacklogCodeUnits <= 0) {
+    throw new RangeError("maxBacklogCodeUnits must be a positive safe integer");
+  }
   let backlogCodeUnits = 0;
   let closed = false;
 
@@ -112,31 +115,29 @@ export function createAdapterEventQueue(opts?: {
   // contract while making the cap approximate buffered items again.
   // Pushed objects may be retained by adapters, so the tail is REPLACED with
   // a fresh object — never mutated (alias safety).
-  const coalesceIntoTail = (event: AdapterEvent): boolean => {
-    const tail = queued[queued.length - 1];
-    if (!tail) return false;
+  // Returns the replacement tail without mutating the queue, or null when the
+  // event must be queued as its own item.
+  const planTailMerge = (tail: AdapterEvent, event: AdapterEvent): AdapterEvent | null => {
     if (event.type === "heartbeat") {
-      if (tail.type !== "heartbeat") return false;
+      if (tail.type !== "heartbeat") return null;
       // Heartbeats carry no ordering between themselves, but the replay-unsafe
       // marker is not ordering — it is a latch. Dropping the incoming event
       // would discard the only record that Cursor already performed a local
       // side effect, and preflight would then permit an OAuth replay of it.
       if (event.replayUnsafe === true && tail.replayUnsafe !== true) {
-        queued[queued.length - 1] = { type: "heartbeat", replayUnsafe: true };
+        return { type: "heartbeat", replayUnsafe: true };
       }
-      return true;
+      return tail;
     }
     if (event.type === "text_delta" && tail.type === "text_delta" && tail.phase === event.phase) {
-      if (tail.text.length + event.text.length > COALESCE_MAX_CHUNK_LENGTH) return false;
-      queued[queued.length - 1] = { type: "text_delta", text: tail.text + event.text, phase: tail.phase };
-      return true;
+      if (tail.text.length + event.text.length > COALESCE_MAX_CHUNK_LENGTH) return null;
+      return { type: "text_delta", text: tail.text + event.text, phase: tail.phase };
     }
     if (event.type === "thinking_delta" && tail.type === "thinking_delta") {
-      if (tail.thinking.length + event.thinking.length > COALESCE_MAX_CHUNK_LENGTH) return false;
-      queued[queued.length - 1] = { type: "thinking_delta", thinking: tail.thinking + event.thinking };
-      return true;
+      if (tail.thinking.length + event.thinking.length > COALESCE_MAX_CHUNK_LENGTH) return null;
+      return { type: "thinking_delta", thinking: tail.thinking + event.thinking };
     }
-    return false;
+    return null;
   };
 
   const push = (event: AdapterEvent): boolean => {
@@ -146,7 +147,15 @@ export function createAdapterEventQueue(opts?: {
       reader({ done: false, value: event });
       return false;
     }
-    const eventCodeUnits = retainedEventStringCodeUnits(event);
+    const tail = queued[queued.length - 1];
+    const mergedTail = tail ? planTailMerge(tail, event) : null;
+    // Charge what the retained backlog actually gains. A merge keeps the
+    // tail's own fields — e.g. one phase for same-phase text deltas — so the
+    // incoming event's duplicated strings are never retained; only the delta
+    // between the replacement tail and the current tail is charged.
+    const eventCodeUnits = mergedTail && tail
+      ? retainedEventStringCodeUnits(mergedTail) - retainedEventStringCodeUnits(tail)
+      : retainedEventStringCodeUnits(event);
     if (eventCodeUnits > maxBacklogCodeUnits - backlogCodeUnits) {
       opts?.onBacklogExceeded?.();
       queued.push({ type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" });
@@ -154,7 +163,10 @@ export function createAdapterEventQueue(opts?: {
       return false;
     }
     backlogCodeUnits += eventCodeUnits;
-    if (coalesceIntoTail(event)) return true;
+    if (mergedTail) {
+      queued[queued.length - 1] = mergedTail;
+      return true;
+    }
     if (queued.length >= maxBacklog) {
       opts?.onBacklogExceeded?.();
       queued.push({ type: "error", message: "consumer stalled: adapter event backlog exceeded — turn aborted" });
