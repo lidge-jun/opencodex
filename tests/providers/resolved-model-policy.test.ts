@@ -215,33 +215,62 @@ describe("resolved static model policy parity", () => {
   });
 
   test("captured effective auth admits a usable key override without credential material", () => {
-    const entry = registry({ authKind: "oauth", allowKeyAuthOverride: true });
-    const configured = provider({ authMode: "key", apiKey: "usable-private-key" });
+    const entry = PROVIDER_REGISTRY.find(candidate => (
+      candidate.authKind === "oauth" && candidate.allowKeyAuthOverride === true
+    ))!;
+    const configured = provider({
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+      authMode: "key",
+      apiKey: "usable-private-key",
+    });
+    const authority = routedProviderConfig(entry.id, configured);
+    expect(authority.authMode).toBe("key");
     const policy = resolveModelPolicy({
-      providerName: "fixture-provider",
-      modelId: MODEL,
+      providerName: entry.id,
+      modelId: entry.defaultModel ?? MODEL,
       provider: configured,
       registryEntry: entry,
       transportMatchedRegistry: true,
-      effectiveAuth: { authMode: "key" },
+      effectiveAuth: { authMode: authority.authMode! },
     });
-    expect(policy.provider.authMode).toBe("key");
+    expect(policy.provider.authMode).toBe(authority.authMode);
     expect(policy.provenance.provider.authMode).toBe("captured-auth");
     expect(JSON.stringify(policy)).not.toContain("usable-private-key");
   });
 
   test("captured unresolved key authority falls back to registry OAuth", () => {
-    const policy = resolveModelPolicy({
-      providerName: "fixture-provider",
-      modelId: MODEL,
-      provider: provider({ authMode: "key", apiKey: "unresolved-private-reference" }),
-      registryEntry: registry({ authKind: "oauth", allowKeyAuthOverride: true }),
-      transportMatchedRegistry: true,
-      effectiveAuth: { authMode: "oauth" },
-    });
-    expect(policy.provider.authMode).toBe("oauth");
-    expect(policy.provenance.provider.authMode).toBe("captured-auth");
-    expect(JSON.stringify(policy)).not.toContain("unresolved-private-reference");
+    const entry = PROVIDER_REGISTRY.find(candidate => (
+      candidate.authKind === "oauth" && candidate.allowKeyAuthOverride === true
+    ))!;
+    const envName = "OCX_TEST_RESOLVED_POLICY_MISSING_KEY";
+    const previous = process.env[envName];
+    delete process.env[envName];
+    try {
+      const reference = `\${${envName}}`;
+      const configured = provider({
+        adapter: entry.adapter,
+        baseUrl: entry.baseUrl,
+        authMode: "key",
+        apiKey: reference,
+      });
+      const authority = routedProviderConfig(entry.id, configured);
+      expect(authority.authMode).toBe("oauth");
+      const policy = resolveModelPolicy({
+        providerName: entry.id,
+        modelId: entry.defaultModel ?? MODEL,
+        provider: configured,
+        registryEntry: entry,
+        transportMatchedRegistry: true,
+        effectiveAuth: { authMode: authority.authMode! },
+      });
+      expect(policy.provider.authMode).toBe(authority.authMode);
+      expect(policy.provenance.provider.authMode).toBe("captured-auth");
+      expect(JSON.stringify(policy)).not.toContain(reference);
+    } finally {
+      if (previous === undefined) delete process.env[envName];
+      else process.env[envName] = previous;
+    }
   });
 
   test("a custom transport receives no registry policy", () => {
