@@ -219,3 +219,28 @@ Canonical Responses identity sanitation and narrowly scoped pre-output combo rec
 Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+## Inbound stream-health clock ownership
+
+The T04 inbound stream-health watchdog in `src/adapters/cursor/live-transport.ts` fails a turn that
+received its first frame and then went silent for `CURSOR_STREAM_SILENCE_FAIL_MS` (30s) or
+produced only liveness frames for `CURSOR_STREAM_HEARTBEAT_ONLY_FAIL_MS` (90s), instead of waiting
+out the 300s bridge stall watchdog. One timer covers both thresholds and re-arms on every
+decoded frame, so the deadline is always recomputed from the newest frame.
+
+Those two budgets are the production contract and a test does not move them to make itself
+pass. What a test may replace is the watchdog's time source: `streamHealthClock` on
+`CursorTransportFactoryInput` supplies `now`, `setTimeout` and `clearTimeout`, defaulting to the
+globals, and the seam is deliberately scoped to T04 alone — the first-frame timer, the
+turn-ended close grace, the client-tool finalize grace and the outbound heartbeat all stay on
+the global timers, as does the `elapsedMs` diagnostic, whose `turnStartedAt` is stamped on the
+wall clock.
+
+The seam exists because the re-arming half of the contract cannot be stated against real
+timers without also asserting that the machine keeps up: showing that a deadline did NOT expire
+means keeping a synthetic server ahead of the silence budget for several multiples of it, which
+is what failed in the unsharded macOS lane while the watchdog was correct. Scaling the budget
+lengthens the window rather than shrinking the exposure. The firing half needs no seam and is
+still covered on real timers in `tests/providers/cursor/cursor-stream-health.test.ts`: silence
+after the first frame, heartbeat-only traffic reaching the progress threshold, and `turnEnded`
+cancelling the watchdog while the server holds the stream open.
