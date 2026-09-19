@@ -122,9 +122,9 @@ Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援�
 Google 工具宣告會依所選端點類別進行編譯。透過 `ocx debug provider on`、儀表板 Logs 開關或
 `OCX_DEBUG=1` 啟用供應商偵錯後，相容性轉換中的結構描述損失會輸出一筆
 `[ocx:google:google-tool-schema-loss]` 記錄（可用 `ocx debug provider logs -f` 持續查看），
-其中只包含報告版本、端點類別、`lossy` 指標、帶有上限計數的固定損失類別與截斷旗標，
+其中只包含報告版本、端點類別、`lossy` 指標、有上限的不確定比較計數、帶有上限計數的固定損失類別與截斷旗標，
 絕不包含工具名稱、屬性名稱、路徑、值或結構描述文字。省略政策或使用 `compatible` 時只觀察
-轉換。`reject-lossy` 會在傳送前拒絕初始損失。對 Vertex 與 Cloud Code Assist 而言，會移除
+轉換。`reject-lossy` 會在傳送前拒絕初始損失或結果不確定的有界比較。對 Vertex 與 Cloud Code Assist 而言，會移除
 限制的修復會輸出同樣不含內容的 `google-tool-schema-repair` 記錄，並在不傳送修改請求的情況下
 回傳原始 400。直接 AI Studio 不執行此修復。原生輸出結構描述不屬於這兩條政策路徑。請參閱
 [偵錯命令參考](/zh-tw/reference/cli/agents/)。

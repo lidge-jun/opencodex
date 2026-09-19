@@ -150,9 +150,9 @@ Google araç bildirimleri seçilen uç nokta sınıfına göre derlenir. Sağlay
 `ocx debug provider on`, kontrol panelindeki Logs anahtarı veya `OCX_DEBUG=1` ile açıldığında,
 uyumluluk dönüşümü sırasında şema kaybı bir `[ocx:google:google-tool-schema-loss]` kaydı yayınlar
 (`ocx debug provider logs -f` ile takip edin). Kayıt yalnızca rapor sürümünü, uç nokta sınıfını,
-bir `lossy` göstergesini, sınırlı sayımlara sahip sabit kayıp kategorilerini ve kesilme işaretini
+bir `lossy` göstergesini, sınırlı bir belirsiz karşılaştırma sayısını, sınırlı sayımlara sahip sabit kayıp kategorilerini ve kesilme işaretini
 taşır. Araç ve özellik adları, yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Politika
-yoksa veya `compatible` ise dönüşüm reddedilmeden gözlemlenir. `reject-lossy` ilk kaybı gönderimden
+yoksa veya `compatible` ise dönüşüm reddedilmeden gözlemlenir. `reject-lossy` ilk kaybı veya sonucu belirsiz sınırlı bir karşılaştırmayı gönderimden
 önce reddeder. Vertex ve Cloud Code Assist için kısıtları kaldıracak bir onarım, aynı şekilde içeriksiz
 bir `google-tool-schema-repair` kaydı üretir ve değiştirilmiş gönderim yapmadan özgün 400 yanıtını
 döndürür. Doğrudan AI Studio bu onarımı yapmaz. Yerel çıktı şemaları iki politika yolunun da

@@ -214,10 +214,10 @@ Google Antigravity account and provider quota probes use fixed Google accounting
 Google tool declarations are compiled against the selected endpoint class. When provider debug is
 on — `ocx debug provider on`, the dashboard Logs toggle, or `OCX_DEBUG=1` — schema loss during compatibility
 conversion emits a `[ocx:google:google-tool-schema-loss]` record (tail with `ocx debug provider logs -f`)
-carrying only the report version, endpoint class, a `lossy` indicator, fixed loss categories with
-bounded counts, and a truncation flag. Tool and property names, paths, values, and schema text are
+carrying only the report version, endpoint class, a `lossy` indicator, a bounded uncertainty count,
+fixed loss categories with bounded counts, and a truncation flag. Tool and property names, paths, values, and schema text are
 never included. With an omitted or `compatible` policy, this diagnostic observes the existing
-conversion without rejecting it. `reject-lossy` rejects initial loss before dispatch. For Vertex
+conversion without rejecting it. `reject-lossy` rejects initial loss or an indeterminate bounded comparison before dispatch. For Vertex
 and Cloud Code Assist, a repair that would erase constraints emits a similarly content-free
 `google-tool-schema-repair` record and returns the original 400 without a changed send. Direct AI
 Studio never performs this repair. Native output schemas are outside both policy paths. See the

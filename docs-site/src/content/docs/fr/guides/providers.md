@@ -137,11 +137,11 @@ Les déclarations d’outils Google sont compilées selon la classe du point de 
 Lorsque le débogage du fournisseur est activé — avec `ocx debug provider on`, le bouton Logs du
 tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion de compatibilité émet un enregistrement
 `[ocx:google:google-tool-schema-loss]` (à suivre avec `ocx debug provider logs -f`) ne contenant que
-la version du rapport, la classe du point de terminaison, un indicateur `lossy`, des catégories de
-perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
+la version du rapport, la classe du point de terminaison, un indicateur `lossy`, un compteur borné de
+comparaisons indéterminées, des catégories de perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
 propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
 absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. `reject-lossy` refuse
-la perte initiale avant l’envoi. Pour Vertex et Cloud Code Assist, une réparation qui supprimerait
+la perte initiale ou une comparaison bornée indéterminée avant l’envoi. Pour Vertex et Cloud Code Assist, une réparation qui supprimerait
 des contraintes émet un enregistrement `google-tool-schema-repair` également sans contenu et renvoie
 le 400 d’origine sans nouvel envoi. AI Studio direct ne tente jamais cette réparation. Les schémas
 de sortie natifs restent hors de ces deux chemins. Consultez la
