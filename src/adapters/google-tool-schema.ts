@@ -88,6 +88,8 @@ export interface GoogleToolSchemaLossReport {
   endpointClass: GoogleToolSchemaEndpointClass;
   lossy: boolean;
   truncated: boolean;
+  /** Bounded comparisons that exhausted their allowance; uncertainty is not proven loss. */
+  uncertainComparisons: number;
   /** Saturating proven-loss counts only; capped/unknown structural comparisons add no category. */
   categories: Partial<Record<GoogleToolSchemaLossCategory, number>>;
 }
@@ -112,8 +114,17 @@ export function createGoogleToolSchemaLossReport(
     endpointClass: profile.endpointClass,
     lossy: false,
     truncated: false,
+    uncertainComparisons: 0,
     categories: {},
   };
+}
+
+function addGoogleToolSchemaUncertainty(report: GoogleToolSchemaLossReport): void {
+  if (report.uncertainComparisons >= GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT) {
+    report.truncated = true;
+    return;
+  }
+  report.uncertainComparisons++;
 }
 
 export function addGoogleToolSchemaLoss(
@@ -141,6 +152,9 @@ export function mergeGoogleToolSchemaLossReport(
   for (const [category, count] of Object.entries(source.categories)) {
     addGoogleToolSchemaLoss(target, category as GoogleToolSchemaLossCategory, count);
   }
+  const uncertainty = target.uncertainComparisons + source.uncertainComparisons;
+  target.uncertainComparisons = Math.min(uncertainty, GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT);
+  if (uncertainty > GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT) target.truncated = true;
   if (source.truncated) target.truncated = true;
 }
 
@@ -263,7 +277,97 @@ function boundedJsonEqual(
   return leftCount === rightCount ? "equal" : "different";
 }
 
+function boundedStringSetEqual(
+  left: unknown,
+  right: unknown,
+  normalize: (value: string) => string,
+  state: BoundedEqualityState = { remainingNodes: MAX_SCHEMA_NODES },
+): BoundedEquality {
+  const leftValues = Array.isArray(left) ? left : [left];
+  const rightValues = Array.isArray(right) ? right : [right];
+  const collect = (values: unknown[]): Set<string> | undefined => {
+    const result = new Set<string>();
+    for (const value of values) {
+      if (state.remainingNodes <= 0) return undefined;
+      state.remainingNodes--;
+      if (typeof value === "string") result.add(normalize(value));
+    }
+    return result;
+  };
+  const leftSet = collect(leftValues);
+  const rightSet = collect(rightValues);
+  if (!leftSet || !rightSet) return "unknown";
+  if (leftSet.size !== rightSet.size) return "different";
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return "different";
+  }
+  return "equal";
+}
+
+function boundedJsonSetEqual(
+  left: unknown[],
+  right: unknown[],
+  state: BoundedEqualityState = { remainingNodes: MAX_SCHEMA_NODES },
+): BoundedEquality {
+  const unique = (values: unknown[]): { comparison: BoundedEquality; values: unknown[] } => {
+    const result: unknown[] = [];
+    for (const value of values) {
+      if (state.remainingNodes <= 0) return { comparison: "unknown", values: result };
+      state.remainingNodes--;
+      let duplicate = false;
+      for (const candidate of result) {
+        const comparison = boundedJsonEqual(value, candidate, state);
+        if (comparison === "unknown") return { comparison, values: result };
+        if (comparison === "equal") {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) result.push(value);
+    }
+    return { comparison: "equal", values: result };
+  };
+  const leftUnique = unique(left);
+  if (leftUnique.comparison !== "equal") return leftUnique.comparison;
+  const rightUnique = unique(right);
+  if (rightUnique.comparison !== "equal") return rightUnique.comparison;
+  if (leftUnique.values.length !== rightUnique.values.length) return "different";
+  const unmatched = [...rightUnique.values];
+  for (const value of leftUnique.values) {
+    let matched = -1;
+    for (let index = 0; index < unmatched.length; index++) {
+      const comparison = boundedJsonEqual(value, unmatched[index], state);
+      if (comparison === "unknown") return comparison;
+      if (comparison === "equal") {
+        matched = index;
+        break;
+      }
+    }
+    if (matched < 0) return "different";
+    unmatched.splice(matched, 1);
+  }
+  return "equal";
+}
+
 function compareMergedValue(key: string, left: unknown, right: unknown): BoundedEquality {
+  if (key === "enum" && Array.isArray(left) && Array.isArray(right)) {
+    return boundedJsonSetEqual(left, right);
+  }
+  if (key === "required" && Array.isArray(left) && Array.isArray(right)) {
+    if (left.every(value => typeof value === "string") && right.every(value => typeof value === "string")) {
+      return boundedStringSetEqual(left, right, value => value);
+    }
+    return boundedJsonEqual(left, right);
+  }
+  if (key === "type") {
+    const leftValues = Array.isArray(left) ? left : [left];
+    const rightValues = Array.isArray(right) ? right : [right];
+    if (leftValues.every(value => typeof value === "string")
+      && rightValues.every(value => typeof value === "string")) {
+      return boundedStringSetEqual(left, right, value => value.toLowerCase());
+    }
+    return boundedJsonEqual(left, right);
+  }
   if (BOUNDED_VALUE_KEYS.has(key)) return boundedJsonEqual(left, right);
   return Object.is(left, right) ? "equal" : "different";
 }
@@ -273,9 +377,10 @@ function mergeRefTarget(target: Schema, overlay: Schema, state: SanitizeState): 
   if (Object.hasOwn(target, "$ref")) merged.$ref = target.$ref;
   for (const key of MERGED_SCHEMA_KEYS) {
     if (Object.hasOwn(overlay, key)) {
-      if (key !== "description" && Object.hasOwn(target, key)
-        && compareMergedValue(key, overlay[key], target[key]) === "different") {
-        addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
+      if (key !== "description" && Object.hasOwn(target, key)) {
+        const comparison = compareMergedValue(key, overlay[key], target[key]);
+        if (comparison === "different") addGoogleToolSchemaLoss(state.report, "ref-overlay-replaced");
+        else if (comparison === "unknown") addGoogleToolSchemaUncertainty(state.report);
       }
       merged[key] = overlay[key];
     } else if (Object.hasOwn(target, key)) merged[key] = target[key];
@@ -543,8 +648,10 @@ function sanitizeSchema(
     const normalized = normalizeAnyOf(node.anyOf, defs, depth, refDepth, state);
     for (const key of RETAINED_UNION_KEYS) {
       if (Object.hasOwn(out, key) && Object.hasOwn(normalized, key)
-        && boundedJsonEqual(out[key], normalized[key]) === "different") {
-        addGoogleToolSchemaLoss(state.report, "union-sibling-replaced");
+      ) {
+        const comparison = compareMergedValue(key, out[key], normalized[key]);
+        if (comparison === "different") addGoogleToolSchemaLoss(state.report, "union-sibling-replaced");
+        else if (comparison === "unknown") addGoogleToolSchemaUncertainty(state.report);
       }
     }
     Object.assign(out, normalized);

@@ -144,6 +144,7 @@ describe("Google tool-schema loss report", () => {
       endpointClass,
       lossy: true,
       truncated: false,
+      uncertainComparisons: 0,
       categories: { "enum-value-filtered": 2 },
     })));
   });
@@ -267,6 +268,7 @@ describe("Google tool-schema loss report", () => {
       endpointClass: "ai-studio",
       lossy: false,
       truncated: false,
+      uncertainComparisons: 0,
       categories: {},
     });
   });
@@ -338,20 +340,22 @@ describe("Google tool-schema loss report", () => {
     const result = sanitize({
       type: "object",
       properties: {
-        enumValue: { $ref: "#/$defs/EnumValue", enum: ["a"] },
+        enumValue: { $ref: "#/$defs/EnumValue", enum: ["b", "a", "a"] },
+        typeValue: { $ref: "#/$defs/TypeValue", type: "STRING" },
         objectValue: {
           $ref: "#/$defs/ObjectValue",
           properties: { name: { type: "string" } },
         },
-        requiredValue: { $ref: "#/$defs/RequiredValue", required: ["name"] },
+        requiredValue: { $ref: "#/$defs/RequiredValue", required: ["other", "name", "name"] },
       },
       $defs: {
-        EnumValue: { type: "string", enum: ["a"] },
+        EnumValue: { type: "string", enum: ["a", "b"] },
+        TypeValue: { type: "string" },
         ObjectValue: { type: "object", properties: { name: { type: "string" } } },
         RequiredValue: {
           type: "object",
           properties: { name: { type: "string" }, other: { type: "string" } },
-          required: ["name"],
+          required: ["name", "other"],
         },
       },
     });
@@ -360,6 +364,7 @@ describe("Google tool-schema loss report", () => {
       endpointClass: "ai-studio",
       lossy: false,
       truncated: false,
+      uncertainComparisons: 0,
       categories: {},
     });
   });
@@ -405,8 +410,28 @@ describe("Google tool-schema loss report", () => {
       endpointClass: "ai-studio",
       lossy: false,
       truncated: false,
+      uncertainComparisons: 1,
       categories: {},
     });
+    // Compatible mode keeps the overlay bytes. The stacked strict child must refuse uncertainty.
+    const value = (result.parameters.properties as Record<string, Record<string, unknown>>).value;
+    expect(value.enum).toEqual(values);
+    const compiled = compileGoogleWireBody({
+      tools: [{ functionDeclarations: [{
+        name: "uncertain_comparison",
+        parameters: {
+          type: "object",
+          properties: { value: { $ref: "#/$defs/Value", enum: [...values] } },
+          $defs: { Value: { type: "string", enum: [...values] } },
+        },
+      }] }],
+    }, { endpointClass: "ai-studio" });
+    expect(compiled.toolSchemaLossReport.uncertainComparisons).toBe(1);
+    expect(compiled.toolSchemaLossReport.lossy).toBe(false);
+    const declaration = (compiled.body.tools as Array<{
+      functionDeclarations: Array<{ parameters: Record<string, unknown> }>;
+    }>)[0]!.functionDeclarations[0]!;
+    expect(declaration.parameters).toEqual(result.parameters);
   });
 
   test("default-equivalent constraints are neutral", () => {
@@ -424,6 +449,7 @@ describe("Google tool-schema loss report", () => {
       endpointClass: "ai-studio",
       lossy: false,
       truncated: false,
+      uncertainComparisons: 0,
       categories: {},
     });
   });
@@ -470,6 +496,7 @@ describe("Google tool-schema loss report", () => {
       endpointClass: "vertex",
       lossy: true,
       truncated: true,
+      uncertainComparisons: 0,
       categories: { "unsupported-constraint-dropped": GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT },
     });
   });
@@ -545,6 +572,7 @@ describe("Google tool-schema loss report", () => {
       endpointClass: "cloud-code-assist",
       lossy: true,
       truncated: false,
+      uncertainComparisons: 0,
       categories: {
         "unsupported-constraint-dropped": 1,
         "enum-value-filtered": 1,
