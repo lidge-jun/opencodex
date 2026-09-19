@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { applyCompactionRoutingOverride } from "../../src/server/responses/compaction-routing";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
@@ -12,9 +12,17 @@ import { clearComboRecallForTests, recallComboForLane, rememberComboForLane } fr
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { OcxConfig } from "../../src/types";
 
 const originalFetch = globalThis.fetch;
+/**
+ * `startServer` takes the spend-journal writer lease before anything can serve, so an ordinary
+ * turn dispatched straight into the handler owns no state directory and the ledger refuses to
+ * write for it (#5157). Compaction handoffs draw on the parent request's reservation and so did
+ * not notice; every plain turn in this file did.
+ */
+let releaseSpendHome: (() => void) | undefined;
 const metadata = (trigger = "manual", request_kind = "compaction") =>
   JSON.stringify({ request_kind, compaction: { trigger } });
 
@@ -71,7 +79,14 @@ function upstreamCompletion(input: Record<string, unknown>): Response {
     : Response.json(response);
 }
 
+beforeEach(() => {
+  releaseSpendHome = acquireOwnedSpendHome();
+});
+
 afterEach(() => {
+  // Released first, before any other teardown touches the state directory.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearComboSelectionState();
   clearComboTargetCooldowns();
