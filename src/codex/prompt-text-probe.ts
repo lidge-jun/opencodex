@@ -75,7 +75,7 @@ const UNMAPPED_LAYER_IDS = [
   // The Rust source names a <git_attribution> marker pair, but a world-state section is
   // DIFF-rendered: it emits nothing on a turn where its state has not changed. Live
   // `codex debug prompt-input` (codex-cli 0.145.0, 32978 bytes) showed no such block and
-  // no attribution text. Listing the id here reports "not exposed" honestly instead of
+  // no attribution text. Listing the id here reports "unmapped" honestly instead of
   // claiming a tag this extractor has never actually matched - the same mistake the
   // header above records for permissions.
   "git-attribution",
@@ -103,7 +103,7 @@ export interface LayerText {
 
 /**
  * Why the base prompt is or is not readable, at the granularity a reader can act
- * on. `LayerText.reason` has five coarse values and cannot express any of this,
+ * on. `LayerText.reason` has six coarse values and cannot express any of this,
  * which is why the detailed answer travels on its own record.
  */
 export type BasePromptReason =
@@ -374,7 +374,7 @@ function readBasePrompt(codexHome: string): BasePromptText {
 /**
  * Project the base prompt onto the legacy `base-instructions` layer slot.
  *
- * The slot is lossy by construction - five coarse reasons, no renderer that reads
+ * The slot is lossy by construction - six coarse reasons, no renderer that reads
  * `representation` - so it carries only what it can carry honestly: published text
  * when the source is text Codex sends, and otherwise no text at all. A template is
  * deliberately NOT `ok` here, because the dialog labels every `ok` layer "Text

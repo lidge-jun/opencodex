@@ -1526,9 +1526,39 @@ describe("020 coverage completions", () => {
     // base-prompt-specific explanation for it. Reusing that reason for layers
     // whose tag the extractor has not verified showed that explanation on
     // unrelated layers.
-    const probe = await Bun.file(new URL("../../src/codex/prompt-text-probe.ts", import.meta.url)).text();
-    expect(probe).toContain('"unmapped" | "unavailable"');
-    expect(probe).toContain('layers[id] ??= { text: null, reason: "unmapped"');
+    const fx = fixture("");
+    // The probe reads the base prompt from CODEX_HOME - the decoy here, whose
+    // sentinel config selects model "sentinel". A catalog row that publishes
+    // only an instructions_template makes the base confirmed unprintable, so
+    // base-instructions must report "not-exposed" while the tag-less layers
+    // report "unmapped".
+    writeFileSync(join(fx.decoyHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "sentinel", model_messages: { instructions_template: "template {{unprintable}}" } }],
+    }), "utf8");
+    const probeOutput = JSON.stringify([{
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "<skills_instructions>Skill text.</skills_instructions>" }],
+    }]);
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(probeOutput)});`],
+    });
+
+    const res = await call("GET", "/api/codex-prompt/text", fx);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.base.representation).toBe("template");
+    expect(res.body.layers["base-instructions"].reason).toBe("not-exposed");
+    // Mirrors UNMAPPED_LAYER_IDS in prompt-text-probe.ts.
+    for (const id of [
+      "model-switch", "context-window-guidance", "environments-instructions",
+      "tools", "multi-agent-mode", "personality", "realtime", "collaboration",
+      "git-attribution",
+    ]) {
+      expect(res.body.layers[id]?.reason).toBe("unmapped");
+    }
+    expectDecoyUntouched(fx);
   });
 
 
