@@ -1,0 +1,125 @@
+{
+  "proofType": "fixture-rendered GUI proof from an exact-head hosted build; not a live backend",
+  "sourceArtifact": {
+    "name": "PR #5197 exact-head hosted GUI build",
+    "entrypoint": "index.html",
+    "javascript": "assets/index-DGwN6Z5D.js",
+    "stylesheet": "assets/index-BTuCbqQd.css",
+    "commit": "bf1bf424f3ebabe977af0dd7b54e3c285baf1769",
+    "guiTree": "ce7f1018aa53203767a665de94d7e6005311f2a8"
+  },
+  "fixtureRoutes": [
+    { "method": "GET", "path": "/", "purpose": "serve index.html" },
+    { "method": "GET", "path": "/assets/*", "purpose": "serve hosted GUI assets" },
+    { "method": "GET", "path": "/provider-icons/*", "purpose": "serve client icons" },
+    { "method": "GET", "path": "/healthz", "purpose": "minimal dashboard health bootstrap" },
+    { "method": "GET", "path": "/api/startup-health", "purpose": "minimal startup state" },
+    { "method": "GET", "path": "/api/client-integrations", "purpose": "integration list fixture" },
+    { "method": "GET", "path": "/api/client-integrations/opencode", "purpose": "OpenCode integration state fixture" },
+    { "method": "GET", "path": "/api/client-integrations/journal?client=opencode", "purpose": "OpenCode rollback journal fixture" },
+    { "method": "POST", "path": "/api/client-integrations/preview", "purpose": "apply or overwrite preview plan" },
+    { "method": "PUT", "path": "/api/client-integrations/opencode", "purpose": "confirmed mutation; stale mode returns one 409 with a fresh plan" },
+    { "method": "POST", "path": "/api/client-integrations/restore/preview", "purpose": "restore preview plan" },
+    { "method": "POST", "path": "/api/client-integrations/restore", "purpose": "confirmed restore mutation" },
+    { "method": "POST", "path": "/__fixture/mode", "purpose": "select apply, overwrite, restore, or stale fixture state" },
+    { "method": "GET", "path": "/__fixture/state", "purpose": "inspect current fixture state" }
+  ],
+  "requestSequences": {
+    "apply": [
+      "POST /__fixture/mode {mode: apply}",
+      "GET /api/client-integrations/opencode",
+      "GET /api/client-integrations/journal?client=opencode",
+      "POST /api/client-integrations/preview {clientId: opencode, operation: apply} -> apply plan"
+    ],
+    "foreign-overwrite": [
+      "POST /__fixture/mode {mode: overwrite}",
+      "GET /api/client-integrations/opencode -> conflict with reason foreign-edit",
+      "GET /api/client-integrations/journal?client=opencode",
+      "POST /api/client-integrations/preview {clientId: opencode, operation: overwrite} -> foreign-edit replace plan"
+    ],
+    "restore-drift": [
+      "POST /__fixture/mode {mode: restore}",
+      "GET /api/client-integrations/opencode",
+      "GET /api/client-integrations/journal?client=opencode -> op-restore-001",
+      "POST /api/client-integrations/restore/preview {opId: op-restore-001, confirmDrift: false} -> drift-aware restore plan"
+    ],
+    "stale-409-reconfirmation": [
+      "POST /__fixture/mode {mode: stale}",
+      "GET /api/client-integrations/opencode",
+      "GET /api/client-integrations/journal?client=opencode",
+      "POST /api/client-integrations/preview {clientId: opencode, operation: apply} -> initial plan",
+      "PUT /api/client-integrations/opencode with initial fingerprint -> 409 integration_preview_stale plus fresh plan",
+      "GET /api/client-integrations/opencode and GET /api/client-integrations/journal?client=opencode for reconciliation",
+      "capture before the second confirmation"
+    ],
+    "ko-restore-drift-390": [
+      "select Korean from the dashboard Language combobox",
+      "use the restore-drift request sequence",
+      "capture at CSS viewport width 390"
+    ],
+    "ko-stale-reconfirm-390": [
+      "keep Korean selected in the dashboard Language combobox",
+      "use the stale-409-reconfirmation request sequence",
+      "capture at CSS viewport width 390 before reconfirming"
+    ],
+    "keyboard-smoke": [
+      "POST /__fixture/mode {mode: apply}",
+      "open the apply confirmation dialog",
+      "press Tab twice from the dialog backdrop focus to focus the primary Apply button",
+      "capture the visible primary-button focus ring",
+      "press Escape and verify the dialog count changes from 1 to 0"
+    ]
+  },
+  "viewports": [
+    {
+      "name": "desktop",
+      "cssWidth": 1280,
+      "cssHeight": 720,
+      "devicePixelRatio": 2,
+      "files": [
+        "apply-desktop.png",
+        "overwrite-foreign-desktop.png",
+        "restore-drift-desktop.png",
+        "stale-reconfirm-desktop.png",
+        "keyboard-focus.png"
+      ]
+    },
+    {
+      "name": "narrow",
+      "cssWidth": 480,
+      "cssHeight": 800,
+      "devicePixelRatio": 2,
+      "files": [
+        "apply-narrow.png",
+        "overwrite-foreign-narrow.png",
+        "restore-drift-narrow.png",
+        "stale-reconfirm-narrow.png"
+      ]
+    },
+    {
+      "name": "ko-390",
+      "cssWidth": 390,
+      "cssHeight": 686,
+      "devicePixelRatio": 2.5,
+      "browserZoomPercent": 125,
+      "note": "Native browser zoom plus window sizing was used to reach an observed innerWidth of exactly 390 without modifying page DOM or CSS.",
+      "files": [
+        "ko-restore-drift-390.png",
+        "ko-stale-reconfirm-390.png"
+      ]
+    }
+  ],
+  "pngSha256": {
+    "apply-desktop.png": "cb462ebefad0494a20ab8e878a504068a74d001f13ac8d0d9fd009124a239c8f",
+    "apply-narrow.png": "5151bcee86f656f7dd37b0865ac57c5d461da1ac982cb0c2c8ceb08dbb537741",
+    "keyboard-focus.png": "5e9c2c738a149d696ab9efbe712f123b1bd2464b5dfe839e78a6d134c23453dd",
+    "ko-restore-drift-390.png": "205f72689b392f551b1efe4552e2087c26af7f5becec4e9c7c5dc9de1e4d1af0",
+    "ko-stale-reconfirm-390.png": "a39670070f68efca408cb46d44141563e0aee6147d0946a4429bbfa9e4ecd556",
+    "overwrite-foreign-desktop.png": "1141600b938e28881bbabb73d45e260fa90566026f4955905a9fa0518930a8b0",
+    "overwrite-foreign-narrow.png": "5cec48444e0a88bfcbbf4e2582735bbb91154bcaf6534478014c4f7d3a9ad273",
+    "restore-drift-desktop.png": "feade5901845715a575588cdc4cb0f6d09a8d6a3804e0e7d5732f8a064696f1d",
+    "restore-drift-narrow.png": "3c831fc361ce60210820b533eca91292142800389c45a2d52bfe61a1c454d60c",
+    "stale-reconfirm-desktop.png": "ccf802e2cc7ef81b461a90bdbf167266ae5ccaabea582d0a1d1988a3189ebf58",
+    "stale-reconfirm-narrow.png": "0088073e9cbaabb149137846e0a32ec39f212e29600897e3deac0e67aa0c6e40"
+  }
+}
