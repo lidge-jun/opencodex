@@ -336,7 +336,16 @@ describe("resolved static model policy parity", () => {
       maxOutputTokens: current.maxOutputTokens,
     });
     expect(policy.model).toMatchObject({ contextWindow: 70_000, maxInputTokens: 50_000, maxOutputTokens: 8_000 });
-    expect(JSON.stringify(policy)).not.toContain("90000");
+    // The frozen policy legitimately retains the registry map's "registry-only": 90_000 entry,
+    // so a blanket substring ban cannot prove the observed clamp stayed out. Prove non-mutation
+    // instead: deep-frozen snapshot equality across both clamp calls, exact model caps, the
+    // registry-only entry retained, and no observed fields on the model projection.
+    const beforeSnapshot = JSON.stringify(policy);
+    clampObservedModelLimits(policy.model, { contextWindow: 90_000, maxInputTokens: 60_000, maxOutputTokens: 12_000 });
+    clampObservedModelLimits(policy.model, { contextWindow: 40_000, maxInputTokens: 30_000, maxOutputTokens: 4_000 });
+    expect(JSON.stringify(policy)).toBe(beforeSnapshot);
+    expect(policy.provider.modelContextWindows?.["registry-only"]).toBe(90_000);
+    expect(policy.model).not.toHaveProperty("observedContextWindow");
   });
 
   test("hard pins outrank explicit model adapters and registry wire defaults", () => {
