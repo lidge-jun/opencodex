@@ -74,15 +74,15 @@ describe("warm-up judge: the shapes it accepts", () => {
   });
 
   test("return and a concise body connect the promise as well as await does", () => {
-    expect(judge(BUN_TEST, HELPER, ...hook("return warmModuleGraph(options);")).registrations[0].shape)
-      .toBe("hook-return");
-    expect(judge(BUN_TEST, HELPER, ...hook("return await warmModuleGraph(options);")).registrations[0].shape)
-      .toBe("hook-return");
-    expect(judge(
+    const shapes = (...lines: string[]): string[] =>
+      judge(...lines).registrations.map(entry => entry.shape);
+    expect(shapes(BUN_TEST, HELPER, ...hook("return warmModuleGraph(options);"))).toEqual(["hook-return"]);
+    expect(shapes(BUN_TEST, HELPER, ...hook("return await warmModuleGraph(options);"))).toEqual(["hook-return"]);
+    expect(shapes(
       BUN_TEST,
       HELPER,
       "beforeAll(() => warmModuleGraph(options), COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
-    ).registrations[0].shape).toBe("hook-expression");
+    )).toEqual(["hook-expression"]);
     expect(registers(
       BUN_TEST,
       HELPER,
@@ -110,6 +110,19 @@ describe("warm-up judge: the shapes it accepts", () => {
       { helper: "warmModuleGraph", local: "warmUp", shape: "hook-statement", line: 5 },
     ]);
     expect(registers(BUN_TEST, HELPER, ...hook("await warmModuleGraph?.(options);"))).toBe(true);
+  });
+
+  test("both entry points are recognised, not only the one most files use", () => {
+    // warmColdSpawn is the replay form, used where an import scan cannot reach the cold cost. If
+    // it fell out of the recognised set, its files would be refused as never calling the helper.
+    const report = judge(
+      BUN_TEST,
+      'import { warmColdSpawn } from "../helpers/cold-spawn-warmup";',
+      ...hook("await warmColdSpawn(graph, replay);"),
+    );
+    expect(report.registrations).toEqual([
+      { helper: "warmColdSpawn", local: "warmColdSpawn", shape: "hook-statement", line: 5 },
+    ]);
   });
 
   test("a module-level await is a warm-up the file always pays", () => {
@@ -203,6 +216,26 @@ describe("warm-up judge: what it refuses, and says why", () => {
       "}));");
     expect([uncalled, guarded, expressionBodied].map(warmupIsRegistered)).toEqual([false, false, false]);
     expect(warmupRegistrationComplaints(expressionBodied).join(" ")).toContain("does not model");
+  });
+
+  test("a suite that is not a plain describe statement does not make its hooks run", () => {
+    // describe.skip registers a suite that never runs, and a describe behind a false condition is
+    // never called at all. Both leave a correctly written beforeAll inside a suite that is not
+    // there, which is a registration in shape only.
+    const skipped = judge(BUN_TEST, HELPER,
+      'describe.skip("subject", () => {',
+      "  beforeAll(async () => {",
+      "    await warmModuleGraph(options);",
+      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+      "});");
+    const guardedSuite = judge(BUN_TEST, HELPER,
+      'if (false) describe("subject", () => {',
+      "  beforeAll(async () => {",
+      "    await warmModuleGraph(options);",
+      "  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);",
+      "});");
+    expect([skipped, guardedSuite].map(warmupIsRegistered)).toEqual([false, false]);
+    expect(warmupRegistrationComplaints(guardedSuite).join(" ")).toContain("plain statement");
   });
 
   test("an expression-bodied arrow is a scope, so a warm-up inside an uncalled one is refused", () => {
@@ -313,4 +346,3 @@ describe("warm-up judge: what a disposition has to match", () => {
       .toContain("nothing here reaches");
   });
 });
-

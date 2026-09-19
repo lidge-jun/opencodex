@@ -25,11 +25,15 @@ import { argumentEnd, at, CLOSERS, lineOf, OPENERS, tokenize, type Token } from 
  *   hook-expression   describe(...)* > beforeAll(() => W(...), ...) and its awaited form
  *   module-top-level  await W(...); as a whole statement at the top level of the file
  *
- * In the two statement shapes the call is the whole statement: it begins right after a brace or a
- * semicolon and ends on its own semicolon or on the closing brace of the hook. A function
- * expression stands in for the arrow in any of them. Nesting is exact - every block between the
- * file and the hook must be a describe callback, and the open calls must be exactly the calls that
- * own those blocks, so an extra paren or an extra block is not the same shape.
+* In the two statement shapes the call is the whole statement: it begins right after a brace or a
+* semicolon and ends on its own semicolon or on the closing brace of the hook. A function
+* expression stands in for the arrow in any of them. Nesting is exact - every block between the
+* file and the hook must be a describe callback, and the open calls must be exactly the calls that
+* own those blocks, so an extra paren or an extra block is not the same shape.
+ *
+ * A describe callback counts only when the describe is a plain statement call of the bare imported
+ * name. describe.skip registers a suite that never runs and a describe behind a condition is never
+ * called, so a hook inside either one is a registration in shape only.
  *
  * ## What it refuses, by design
  *
@@ -39,9 +43,11 @@ import { argumentEnd, at, CLOSERS, lineOf, OPENERS, tokenize, type Token } from 
  *   a namespace import of the helper, and any call made through it;
  *   a barrel or re-export path, because the specifier does not resolve to the helper module;
  *   an alias through a variable, const warm = W, and a callback the hook reaches by name;
- *   a call in a scope this judge does not model - a nested function, an uncalled helper, a bare
- *     block, a conditional branch, even when every branch warms;
- *   fire-and-forget, void, and a call that is one operand of a larger expression.
+*   a call in a scope this judge does not model - a nested function, an uncalled helper, a bare
+*     block, a conditional branch, even when every branch warms;
+ *   a hook inside a suite that is not a plain describe statement, such as describe.skip or
+ *     describe.each;
+*   fire-and-forget, void, and a call that is one operand of a larger expression.
  *
  * That list is the design rather than a backlog. TypeScript 7.0.2 publishes no in-process parser
  * (see tests/helpers/warmup-tokens.ts), so the alternative to an exact accept-set is reconstructing
@@ -232,7 +238,14 @@ export function analyzeWarmupRegistration(fileName: string, source: string): War
   return { bindings: [...bindings.keys()], importsHelperModule, mentionsEntryPoint, registrations, refusals };
 }
 
-type CallFrame = Readonly<{ callee: string; open: number }>;
+type CallFrame = Readonly<{
+  /** The bare identifier being called, or empty when the call is anything more elaborate. */
+  callee: string;
+  /** Token index of the paren that opened the call. */
+  open: number;
+  /** Whether the callee itself starts a statement, which is what makes its callback run. */
+  statement: boolean;
+}>;
 
 /** How a scope reads in a refusal, so the message says where the call actually sits. */
 const LAYER_LABELS: Readonly<Record<string, string>> = {
@@ -288,7 +301,7 @@ function judgeOccurrences(j: Judgement): WarmupRegistration[] {
       continue;
     }
     if (token.kind === SyntaxKind.OpenParenToken) {
-      calls.push({ callee: calleeBefore(tokens, i), open: i });
+      calls.push(callFrame(tokens, i));
       continue;
     }
     if (token.kind === SyntaxKind.OpenBraceToken) {
@@ -343,13 +356,28 @@ function braceLayer(
   const owner = calls[calls.length - 1];
   if (!opensArgumentCallback(j.tokens, brace, matches)) return { kind: "other", end, bodyStart };
   if (owner !== undefined && accepted.has(owner.open)) return { kind: "hook", end, bodyStart };
-  if (owner !== undefined && j.suites.has(owner.callee) && !j.rebound.has(owner.callee)) {
+  if (owner !== undefined && owner.statement && j.suites.has(owner.callee) && !j.rebound.has(owner.callee)) {
     return { kind: "suite", end, bodyStart };
   }
-  const rebinding = owner === undefined ? undefined : j.rebound.get(owner.callee);
-  const reason = rebinding === undefined ? undefined
-    : owner!.callee + " is rebound at line " + lineOf(j.source, rebinding.start) + ", so this is not bun:test";
+  const reason = braceLayerReason(j, owner);
   return { kind: "other", end, bodyStart, reason };
+}
+
+/**
+ * Why a block that looks like a describe body is not one. A rebound name is not bun:test, and a
+ * describe that is not itself a plain statement - behind a condition, through a member such as
+ * describe.skip, or inside another callback - registers hooks that never run.
+ */
+function braceLayerReason(j: Judgement, owner: CallFrame | undefined): string | undefined {
+  if (owner === undefined) return undefined;
+  const rebinding = j.rebound.get(owner.callee);
+  if (rebinding !== undefined) {
+    return owner.callee + " is rebound at line " + lineOf(j.source, rebinding.start) + ", so this is not bun:test";
+  }
+  if (j.suites.has(owner.callee) && !owner.statement) {
+    return owner.callee + " is not called as a plain statement here, so its callback is not known to run";
+  }
+  return undefined;
 }
 
 function conciseArrowLayer(
@@ -631,19 +659,17 @@ function rebindingOf(tokens: readonly Token[], name: string): Token | undefined 
 }
 
 /**
- * The name of the call an open paren belongs to, following a member chain back to its root so
- * describe.only reads as describe. An empty string when the paren opens something else.
+ * The call an open paren belongs to. Only a BARE identifier counts as the callee: describe.skip
+ * and describe.each reach a suite this judge cannot claim runs, and reading them as describe is
+ * how a hook inside a skipped suite would be recorded as a registration.
  */
-function calleeBefore(tokens: readonly Token[], open: number): string {
-  let k = open - 1;
-  if (tokens[k] === undefined || tokens[k].kind !== SyntaxKind.Identifier) return "";
-  let root = tokens[k].text;
-  while (tokens[k - 1] !== undefined && tokens[k - 1].kind === SyntaxKind.DotToken
-    && tokens[k - 2] !== undefined && tokens[k - 2].kind === SyntaxKind.Identifier) {
-    k -= 2;
-    root = tokens[k].text;
+function callFrame(tokens: readonly Token[], open: number): CallFrame {
+  const name = tokens[open - 1];
+  if (name === undefined || name.kind !== SyntaxKind.Identifier || isMemberName(tokens, open - 1)) {
+    return { callee: "", open, statement: false };
   }
-  return root;
+  const before = tokens[open - 2];
+  return { callee: name.text, open, statement: before === undefined || STATEMENT_START.has(before.kind) };
 }
 
 /**
