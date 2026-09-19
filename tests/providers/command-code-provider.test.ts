@@ -759,9 +759,11 @@ describe("Command Code provider", () => {
    * `configuredReasoningEfforts`, so an operator who widened a pinned row saw the wider ladder
    * offered in Codex and then watched the adapter strip the rung on the way out.
    *
-   * The seeded copy is the trap. `providerConfigSeed` writes the whole shipped table into every
-   * materialized preset, so "the config has a row for this model" proves nothing — only a row
-   * that DIFFERS from the shipped value is an operator decision.
+   * The seeded copy is the trap, and it is why the override is a declared flag rather than an
+   * inference. `providerConfigSeed` writes the whole shipped table into every materialized
+   * preset, and enrichment and routing both keep a persisted row over the current seed, so
+   * neither the presence of a row nor its difference from today's table proves a human wrote it.
+   * `modelReasoningEffortsAuthoritative` is never written by seeding, so its presence does.
    */
   test("an authoritative operator ladder reaches the wire", async () => {
     // Shipped: deepseek/deepseek-v4.1-flash is ["high", "max"], so xhigh is aliased down to max.

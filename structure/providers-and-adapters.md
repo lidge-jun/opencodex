@@ -86,6 +86,36 @@ not an authentication or entitlement decision.
 
 Routed Responses continuations whose local replay state is missing resolve their recovery decision from the selected wire protocol, not the model name; the contract lives in [Responses transport](transports/responses.md).
 
+Volcengine Ark Coding Plan is a native Responses preset at `/api/coding/v3/responses`. Validated
+tool continuations there reject the reasoning item the previous turn returned, so its registry
+entry sets `dropResponsesReasoningItems`, which removes replayed Responses `reasoning` items from
+continuation input before forwarding. That is lossy — summaries, item ids and `encrypted_content`
+go with the item — and an explicit `false` on the provider turns it off. The flag belongs to the
+DESTINATION rather than to the provider-wide wire, so `routedProviderConfig` fills it on the
+early-return path too: a row saved on Chat still reaches the Responses adapter when one model
+opts in through `modelAdapters`, and would otherwise forward the rejected item. Because it changes
+the continuation body, it is part of the compatibility behavior record and two routes that
+disagree about it are not the same subject.
+
+A row already saved on `openai-chat` keeps that wire. The entry is
+`preserveCustomDestination` with key auth, so `providerMatchesRegistryTransport` refuses the
+adapter mismatch and the request path returns the stored row unchanged, and the retired Chat
+destination stays an alias so that row keeps this entry's metadata. There is deliberately no
+startup config migration: the Z.AI one (`src/providers/zai-responses-migration.ts`) is
+behavior-preserving only because it gates on `providerMatchesRegistryTransport` and therefore
+rewrites rows the router already canonicalizes, which a Volcengine Chat row is not.
+
+Command Code ships its own per-model `reasoning_effort` table in
+`src/providers/command-code-efforts.ts`, and that table decides the wire effort. Configuration can
+take precedence, but only when the provider declares `modelReasoningEffortsAuthoritative`:
+`providerConfigSeed` copies the shipped table into every materialized preset and both enrichment
+and routing keep a persisted row over the current seed, so neither the presence of a configured
+row nor its difference from today's table establishes that a human wrote it. With the flag the
+ladder resolves through `configuredReasoningEfforts`, the same function that advertises the Codex
+picker, so the catalog and the wire agree; a rung the upstream then refuses is returned as that
+error rather than replayed without the effort, because the operator asked for it. The flag is part
+of the compatibility behavior record for the same reason as above.
+
 The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
 ## Hosted-search continuation binding

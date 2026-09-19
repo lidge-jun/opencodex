@@ -27,7 +27,7 @@ export type StaticProviderPolicyField =
   | "responsesPath" | "chatCompletionsPath" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip"
   | "defaultModel" | "models" | "liveModels" | "contextWindow" | "modelContextWindows"
   | "modelDisplayNames" | "modelInputModalities" | "modelMaxInputTokens" | "defaultMaxOutputTokens"
-  | "modelMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts"
+  | "modelMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts" | "modelReasoningEffortsAuthoritative"
   | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "reasoningWireFormat" | "noVisionModels" | "noReasoningModels" | "noTemperatureModels"
   | "noTopPModels" | "noPenaltyModels" | "noJsonSchemaModels" | "parallelToolCalls"
@@ -194,6 +194,11 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   putMergedMap("modelInputModalities", entry?.modelInputModalities, provider.modelInputModalities);
   putMergedMap("modelMaxOutputTokens", entry?.modelMaxOutputTokens, provider.modelMaxOutputTokens);
   putMergedMap("modelReasoningEfforts", entry?.modelReasoningEfforts, provider.modelReasoningEfforts);
+  // Operator-only: no registry entry declares it, and it decides whether the map above is the
+  // wire contract or only the catalog's. A policy reader that omitted it would report the same
+  // effective ladder for two providers that send different efforts.
+  put("modelReasoningEffortsAuthoritative", provider.modelReasoningEffortsAuthoritative,
+    provider.modelReasoningEffortsAuthoritative !== undefined ? "operator" : "unknown");
   putMergedMap("modelDefaultReasoningEfforts", entry?.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
   const registryServiceTier = !entry?.modelServiceTierCapabilityBaseUrlGuard
     || entry.modelServiceTierCapabilityBaseUrlGuard(provider.baseUrl)
