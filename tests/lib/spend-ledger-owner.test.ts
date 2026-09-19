@@ -16,11 +16,13 @@ import {
 import {
   SPEND_LEDGER_JOURNAL_FILENAME,
   SPEND_LEDGER_SALT_FILENAME,
+  configureSharedSpendLedger,
   createOwnedFileSpendJournal,
   loadOrCreateSpendLedgerSalt,
   resetSharedSpendLedgerForTest,
   sharedSpendLedger,
   spendLedgerDiagnosticsSnapshot,
+  type SpendReservationPolicy,
 } from "../../src/lib/spend-reservation-ledger";
 import { helperPath } from "../helpers/repo-root";
 import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, removeOwnedConfigState } from "../../src/lib/config-ownership";
@@ -113,6 +115,22 @@ function busyError(): SpendLedgerOwnerError {
   throw new Error("expected spend-ledger ownership refusal");
 }
 
+/**
+ * The contender's own spend configuration, in this process, before it tries to acquire.
+ *
+ * Recording a policy touches no journal while this process owns nothing, so this is exactly the
+ * state a second instance is in when it starts: configured one way or the other, and not yet a
+ * writer. Without it the matrix below named a contender mode it never activated.
+ */
+function contenderPolicy(mode: "observe" | "enforced"): SpendReservationPolicy {
+  return {
+    root: mode === "enforced" ? { maxTokens: 1_000 } : {},
+    identity: {},
+    pool: {},
+    retentionMs: 60_000,
+  };
+}
+
 describe("real process ownership", () => {
   test("only a parent-exit restart environment carries the handoff marker", () => {
     const source = { OCX_SPEND_LEDGER_RESTART_PARENT_PID: "stale", KEEP_ME: "yes" };
@@ -123,16 +141,42 @@ describe("real process ownership", () => {
     });
   });
 
-  for (const [holderMode, contenderMode] of [["observe", "enforced"], ["enforced", "observe"]] as const) {
+  // All four combinations, not the two mixed ones. The rule under test is that ownership does
+  // not depend on either side's ceiling, so a matrix missing observe/observe and
+  // enforced/enforced was not testing the claim its names made.
+  for (const [holderMode, contenderMode] of [
+    ["observe", "observe"],
+    ["observe", "enforced"],
+    ["enforced", "observe"],
+    ["enforced", "enforced"],
+  ] as const) {
     test(`${holderMode} and ${contenderMode} configurations contend identically`, async () => {
       const holder = spawnHolder(home, holderMode, `${holderMode}-${contenderMode}`);
       await waitForMarker(holder.holdMarker, holder.child);
+      configureSharedSpendLedger(contenderPolicy(contenderMode));
       const refusal = busyError();
       expect(refusal.code).toBe("SPEND_LEDGER_OWNER_BUSY");
       writeFileSync(holder.releaseMarker, "release");
       expect((await childResult(holder.child)).status).toBe("acquired");
     }, SPAWN_BUDGET_MS);
   }
+
+  test("turning a ceiling on after an observe-only start does not change contention", async () => {
+    const holder = spawnHolder(home, "observe", "ceiling-transition");
+    await waitForMarker(holder.holdMarker, holder.child);
+
+    configureSharedSpendLedger(contenderPolicy("observe"));
+    expect(busyError().code).toBe("SPEND_LEDGER_OWNER_BUSY");
+
+    // The operator enables a ceiling while another process still owns the directory. A policy
+    // is a recorded value until a ledger exists, so this changes what WOULD be refused, never
+    // who may write, and the ownership refusal is identical either side of the transition.
+    configureSharedSpendLedger(contenderPolicy("enforced"));
+    expect(busyError().code).toBe("SPEND_LEDGER_OWNER_BUSY");
+
+    writeFileSync(holder.releaseMarker, "release");
+    expect((await childResult(holder.child)).status).toBe("acquired");
+  }, SPAWN_BUDGET_MS);
 
   test("independent state directories are independent", async () => {
     const holder = spawnHolder(home, "observe", "independent");
