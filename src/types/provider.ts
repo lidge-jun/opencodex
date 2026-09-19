@@ -778,6 +778,18 @@ export interface OcxProviderConfig {
    */
   webSearchBridge?: ProviderWebSearchBridgeConfig;
   /**
+   * Dictation (mic → text) WebSocket endpoint for this provider. Setting it makes the provider a
+   * valid `dictation.provider` / `dictation.byModel` target. The endpoint must speak the same
+   * frame protocol Codex already uses with ChatGPT's dictation stream (client `session.start` /
+   * `audio.append` / `session.close`; server `transcript.*`); opencodex relays frames verbatim and
+   * never resolves a ChatGPT account, so no provider adapter is involved.
+   */
+  dictationUrl?: string;
+  /** Extra handshake headers for `dictationUrl`. Each value may be a whole `${ENV_VAR}` reference. */
+  dictationHeaders?: Record<string, string>;
+  /** WebSocket subprotocols offered on the `dictationUrl` handshake. */
+  dictationProtocols?: string[];
+  /**
    * Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values.
    * Map a label to the reserved value `"__omit__"` to send no reasoning field at all for that
    * effort, so the upstream model's own default applies. The sentinel is

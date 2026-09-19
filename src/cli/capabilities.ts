@@ -879,23 +879,22 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["agent", "dictation"],
-    summary: "Show or set the per-model dictation backend and its custom WebSocket providers.",
+    summary: "Show or set the dictation backend and its per-model overrides.",
     routes: [
       { method: "GET", path: "/api/dictation-settings" },
       { method: "PUT", path: "/api/dictation-settings" },
     ],
     flags: [
-      { name: "--default", value: "string", summary: "Default backend target (openai or a configured provider); \"-\" clears it." },
-      { name: "--by-model", value: "string", summary: "JSON object mapping provider/model ids to backend targets; \"-\" clears it." },
-      { name: "--providers", value: "string", summary: "JSON object of custom backend definitions; \"-\" clears them." },
+      { name: "--provider", value: "string", summary: "Default backend (\"openai\" or a custom provider id); \"-\" clears it." },
+      { name: "--by-model", value: "string", summary: "JSON object mapping provider/model ids to backends; \"-\" clears it." },
       { name: "--list", value: "boolean", summary: "List currently-available model ids." },
       { name: "--json", value: "boolean", summary: "Emit the settings as JSON." },
     ],
     mutates: true,
     json: "payload",
     details: [
-      "Targets are \"openai\" (the existing ChatGPT dictation stream) or a key in providers.",
-      "Custom providers are WebSocket endpoints speaking the same frame protocol; frames relay verbatim.",
+      "Targets are \"openai\" (the existing ChatGPT dictation stream) or a custom provider id.",
+      "A custom provider carries providers.<id>.dictationUrl and speaks the same frame protocol; frames relay verbatim.",
     ],
   },
 ];

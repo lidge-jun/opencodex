@@ -1,8 +1,12 @@
 import { formatErrorResponse } from "../bridge";
-import { resolveEnvValue } from "../config";
-import { DICTATION_OPENAI_TARGET } from "../config/dictation";
+import {
+  dictationProviderEndpointError,
+  resolveDictationHeaders,
+  resolveDictationTarget,
+  type DictationTargetResolution,
+} from "../config/dictation";
 import type { AdmissionLease } from "../lib/admission";
-import type { OcxConfig, OcxDictationProviderConfig } from "../types";
+import type { OcxConfig } from "../types";
 import type { AudioClient } from "./audio-client";
 import { resolveAudioUpstream, TRANSCRIPTION_MODEL, type AudioUpstream } from "./audio-upstream";
 import { getRequestLogEntries, type RequestLogContext, type RequestLogEntry } from "./request-log";
@@ -67,26 +71,14 @@ export function finishAudioUpstream(relay: AudioUpstream): AudioSocketTarget["fi
   };
 }
 
-export interface DictationBackendSelection {
-  /** Backend name: "openai" or a key in `dictation.providers`. */
-  target: string;
-  /** Present only for a custom target that resolves in `dictation.providers`. */
-  provider?: OcxDictationProviderConfig;
-}
-
 /**
- * Pick the dictation backend for one active model: exact `byModel` entry, then `default`,
- * then the reserved `openai` (the historical ChatGPT stream). A name that is neither
- * `openai` nor a configured provider yields a selection without a provider so the caller
- * can fail closed instead of silently falling back.
+ * Pick the dictation backend for one active model: exact `byModel` entry, then `dictation.provider`,
+ * then the reserved `"openai"` (the historical ChatGPT stream). Resolution is the shared config
+ * helper, so the runtime reports the same unknown/registry-managed rejection the write boundary does.
  */
-export function selectDictationBackend(config: OcxConfig, modelId: string | undefined): DictationBackendSelection {
-  const dictation = config.dictation;
-  const override = modelId ? dictation?.byModel?.[modelId] : undefined;
-  const target = override ?? dictation?.default ?? DICTATION_OPENAI_TARGET;
-  if (target === DICTATION_OPENAI_TARGET) return { target };
-  const provider = dictation?.providers?.[target];
-  return provider ? { target, provider } : { target };
+export function selectDictationBackend(config: OcxConfig, modelId: string | undefined): DictationTargetResolution {
+  const target = (modelId ? config.dictation?.byModel?.[modelId] : undefined) ?? config.dictation?.provider;
+  return resolveDictationTarget(config.providers, target);
 }
 
 /** Normalized conversation digests a dictation upgrade can be correlated with. */
@@ -133,29 +125,21 @@ export function resolveDictationActiveModelId(headers: Headers): string | undefi
   return latestDictationModelFromEntries(getRequestLogEntries(), dictationConversationIds(headers));
 }
 
-/** Resolve `${ENV_VAR}` references in configured handshake headers; drop unresolvable ones. */
-export function resolveDictationProviderHeaders(provider: OcxDictationProviderConfig): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const [name, value] of Object.entries(provider.headers ?? {})) {
-    const resolved = resolveEnvValue(value);
-    if (resolved !== undefined) headers[name] = resolved;
-  }
-  return headers;
-}
-
 export async function resolveDictationSocket(
   client: AudioClient, config: OcxConfig, log: RequestLogContext, lease: AdmissionLease, signal?: AbortSignal,
 ): Promise<AudioSocketTarget | Response> {
   const selection = selectDictationBackend(config, resolveDictationActiveModelId(client.headers));
-  if (selection.target !== DICTATION_OPENAI_TARGET) {
+  if (selection.kind === "invalid") {
+    return formatErrorResponse(400, "invalid_request_error", selection.error);
+  }
+  if (selection.kind === "custom") {
     // A custom endpoint relays frames verbatim, so it never resolves a ChatGPT account.
-    if (!selection.provider) {
-      return formatErrorResponse(400, "invalid_request_error", `Dictation backend "${selection.target}" is not configured`);
-    }
+    const endpointError = dictationProviderEndpointError(selection.providerName, selection.provider);
+    if (endpointError) return formatErrorResponse(400, "invalid_request_error", endpointError);
     return {
-      upstreamWsUrl: selection.provider.url,
-      headers: resolveDictationProviderHeaders(selection.provider),
-      protocols: selection.provider.protocols,
+      upstreamWsUrl: selection.provider.dictationUrl!,
+      headers: resolveDictationHeaders(selection.provider.dictationHeaders),
+      protocols: selection.provider.dictationProtocols,
       validateFrame: createDictationFrameValidator(),
       maxSessionMs: DICTATION_SESSION_MAX_MS,
       finish: () => {},

@@ -12,7 +12,14 @@ function emptyConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return {
     port: 10100,
     defaultProvider: "dummy",
-    providers: { dummy: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    providers: {
+      dummy: { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+      "my-dictation": {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test/v1",
+        dictationUrl: "wss://dictation.example.test/stream",
+      },
+    },
     ...overrides,
   } as OcxConfig;
 }
@@ -57,39 +64,54 @@ describe("dictation-settings management route", () => {
   });
 
   test("GET reports the effective block and an available-model list", async () => {
-    const response = await getSettings(emptyConfig({ dictation: { default: "openai" } }));
+    const response = await getSettings(emptyConfig({ dictation: { provider: "openai" } }));
     expect(response.status).toBe(200);
     const body = await response.json() as { dictation: Record<string, unknown>; models: unknown };
-    expect(body.dictation).toEqual({ default: "openai" });
+    expect(body.dictation).toEqual({ provider: "openai" });
     expect(Array.isArray(body.models)).toBe(true);
   });
 
   test("PUT persists a valid block and echoes it", async () => {
     const config = emptyConfig();
-    const provider = { url: "wss://dictation.example.test/stream", protocols: ["dictation-v1"] };
-    const response = await putSettings(config, {
-      default: "custom",
-      byModel: { "zai/glm-5.3-flash": "custom" },
-      providers: { custom: provider },
-    });
+    const dictation = { provider: "my-dictation", byModel: { "zai/glm-5.3-flash": "my-dictation" } };
+    const response = await putSettings(config, dictation);
     expect(response.status).toBe(200);
     const body = await response.json() as { ok: boolean; dictation: Record<string, unknown> };
     expect(body.ok).toBe(true);
-    expect(body.dictation).toEqual({ default: "custom", byModel: { "zai/glm-5.3-flash": "custom" }, providers: { custom: provider } });
-    expect(loadConfig().dictation).toEqual(body.dictation);
+    expect(body.dictation).toEqual(dictation);
+    expect(config.dictation).toEqual(dictation);
+    expect(loadConfig().dictation).toEqual(dictation);
   });
 
   test("PUT rejects an unknown target and leaves the stored block untouched", async () => {
-    const config = emptyConfig({ dictation: { default: "openai" } });
-    const response = await putSettings(config, { default: "ghost" });
+    const config = emptyConfig({ dictation: { provider: "openai" } });
+    const response = await putSettings(config, { provider: "ghost" });
     expect(response.status).toBe(400);
-    expect((await response.json() as { error: string }).error).toContain("not a configured provider");
+    expect((await response.json() as { error: string }).error).toContain("is not configured");
     // The rejected write never reached disk, so the in-memory block is untouched.
-    expect(config.dictation).toEqual({ default: "openai" });
+    expect(config.dictation).toEqual({ provider: "openai" });
+  });
+
+  test("PUT rejects a registry-managed provider id", async () => {
+    const config = emptyConfig({
+      providers: { anthropic: { adapter: "openai-chat", baseUrl: "https://example.test/v1", dictationUrl: "wss://x" } },
+    });
+    const response = await putSettings(config, { provider: "anthropic" });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: string }).error).toContain("must name a custom provider");
+  });
+
+  test("PUT rejects a custom target without a dictation endpoint", async () => {
+    const config = emptyConfig({
+      providers: { bare: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    });
+    const response = await putSettings(config, { provider: "bare" });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: string }).error).toContain("has no dictation endpoint");
   });
 
   test("PUT with an empty block clears the key so the file stays minimal", async () => {
-    const config = emptyConfig({ dictation: { default: "openai" } });
+    const config = emptyConfig({ dictation: { provider: "openai" } });
     const response = await putSettings(config, {});
     expect(response.status).toBe(200);
     expect(config.dictation).toBeUndefined();

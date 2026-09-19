@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
-import { dictationConfigValueError } from "../config/dictation";
+import { dictationConfigError } from "../config/dictation";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
@@ -165,13 +165,8 @@ function visionReasoningError(value: unknown): string | null {
   return `schema_invalid: visionSidecar.reasoning: must be one of ${VISION_REASONING_EFFORTS.join(", ")}`;
 }
 
-function dictationError(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return dictationConfigValueError((value as Record<string, unknown>).dictation);
-}
-
 function validateCandidate(value: unknown): ReturnType<typeof validateConfigCandidate> {
-  const error = visionReasoningError(value) ?? dictationError(value);
+  const error = visionReasoningError(value) ?? dictationConfigError(value);
   return error ? { ok: false, error } : validateConfigCandidate(value);
 }
 

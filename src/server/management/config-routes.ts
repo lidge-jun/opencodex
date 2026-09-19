@@ -1040,7 +1040,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
     if (raw.dictation !== undefined && !isPlainRecord(raw.dictation)) return jsonResponse({ error: "dictation must be an object" }, 400);
     const dictation = (raw.dictation ?? {}) as Record<string, unknown>;
-    const error = dictationConfigValueError(dictation);
+    // Targets are validated against the live provider table: a custom provider id must exist and
+    // carry a dictationUrl, and registry-managed ids are refused.
+    const error = dictationConfigValueError(dictation, config.providers);
     if (error) return jsonResponse({ error }, 400);
     // Full replacement: an empty block clears the key so config files stay minimal.
     if (Object.keys(dictation).length === 0) deleteConfigTopLevelKey(config, "dictation");

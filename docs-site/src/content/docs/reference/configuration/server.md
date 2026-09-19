@@ -683,18 +683,26 @@ Selects the backend for Codex dictation on `/v1/audio/transcriptions/stream`. Th
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `default?` | `string` | `openai` | Backend for a model with no `byModel` entry: `openai` or a key in `providers`. |
+| `provider?` | `string` | `openai` | Backend for a model with no `byModel` entry: `openai` or a custom provider id. |
 | `byModel?` | `Record<string, string>` | `{}` | Per active `provider/model` override (for example `zai/glm-5.3-flash`). |
-| `providers?` | `Record<string, object>` | `{}` | Custom backends: `url` (`ws://` or `wss://`), optional `headers` whose values may each be a whole `${ENV_VAR}` reference resolved from the environment, and optional `protocols`. |
 
-A custom provider is any WebSocket endpoint that speaks the **same frame protocol** Codex already
-uses with ChatGPT dictation (`session.start`, `audio.append`, `session.close` inbound;
-`transcript.*` outbound). opencodex relays frames verbatim and never resolves a ChatGPT account for
-a custom target, so no Codex login is required there. `openai` is always the reserved built-in
-stream and is never treated as a provider key, even when a provider is named `openai`.
+A custom target is a CUSTOM entry in `providers` — one that is not registry-managed — carrying the
+dictation endpoint fields:
+
+| Provider field | Type | Meaning |
+| --- | --- | --- |
+| `dictationUrl?` | `string` | WebSocket endpoint (`ws://` or `wss://`). Required to use the provider as a dictation target. |
+| `dictationHeaders?` | `Record<string, string>` | Extra handshake headers; each value may be a whole `${ENV_VAR}` reference resolved from the environment. |
+| `dictationProtocols?` | `string[]` | Subprotocols offered on the upstream handshake. |
+
+The endpoint must speak the **same frame protocol** Codex already uses with ChatGPT dictation
+(`session.start`, `audio.append`, `session.close` inbound; `transcript.*` outbound). opencodex
+relays frames verbatim and never resolves a ChatGPT account for a custom target, so no Codex login
+is required there. A registry-managed provider id is rejected as a target, mirroring
+`images.provider`; `openai` is reserved even when a provider is named `openai`.
 
 The active model is resolved for the thread from the request log using the `thread-id` and
-`x-codex-parent-thread-id` upgrade headers; when no lookup succeeds, `default` applies. Invalid
+`x-codex-parent-thread-id` upgrade headers; when no lookup succeeds, `provider` applies. Invalid
 `dictation` values are rejected on write by `ocx config` and by `PUT /api/dictation-settings`.
 
 ## Remote Hub keys and defaults

@@ -30,8 +30,8 @@ const USAGE = `Usage:
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
       [--reasoning <level>] [--max-descriptions <n>] [--json]
-  ocx agent dictation <status|set> [--default <target|->] [--by-model <json|->]
-      [--providers <json|->] [--list] [--json]
+  ocx agent dictation <status|set> [--provider <id|->] [--by-model <json|->]
+      [--list] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -247,28 +247,23 @@ async function dictation(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     return;
   }
   if (action !== "set") throw new CliUsageError(`unknown dictation action ${action}`, USAGE);
-  const defaultTarget = clearable(takeOption(args, "--default"));
+  const provider = clearable(takeOption(args, "--provider"));
   const byModel = parseDictationObject(takeOption(args, "--by-model"));
-  const providers = parseDictationObject(takeOption(args, "--providers"));
   rejectArgs(args, USAGE);
-  if (defaultTarget === undefined && byModel === undefined && providers === undefined) {
+  if (provider === undefined && byModel === undefined) {
     throw new CliUsageError("at least one dictation option is required", USAGE);
   }
   // PUT replaces the whole block, so merge onto the server's current value: a partial
-  // `set --default` must not silently drop an existing byModel map or provider table.
+  // `set --provider` must not silently drop an existing byModel map.
   const current = await runtimeRequest("/api/dictation-settings", {}, deps) as { dictation?: Record<string, unknown> };
   const merged: Record<string, unknown> = { ...(current.dictation ?? {}) };
-  if (defaultTarget !== undefined) {
-    if (defaultTarget === null) delete merged.default;
-    else merged.default = defaultTarget;
+  if (provider !== undefined) {
+    if (provider === null) delete merged.provider;
+    else merged.provider = provider;
   }
   if (byModel !== undefined) {
     if (byModel === null) delete merged.byModel;
     else merged.byModel = byModel;
-  }
-  if (providers !== undefined) {
-    if (providers === null) delete merged.providers;
-    else merged.providers = providers;
   }
   const result = await runtimeRequest("/api/dictation-settings", { method: "PUT", body: JSON.stringify({ dictation: merged }) }, deps);
   printData(result, wantsJson, ["Dictation settings updated."]);

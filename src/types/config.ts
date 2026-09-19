@@ -1319,31 +1319,20 @@ export interface OcxImagesConfig {
 }
 
 /**
- * A custom dictation backend: a WebSocket endpoint that speaks the same frame protocol Codex
- * already uses with ChatGPT's dictation stream (client `session.start` / `audio.append` /
- * `session.close`; server `speech_start`, `transcript.delta|segment|final`, `transcript.done`,
- * `transcript.failed`). The proxy relays frames verbatim, so any endpoint implementing that
- * protocol works without a provider adapter.
+ * Selects the dictation backend. A target is either the reserved `"openai"` (the unchanged
+ * ChatGPT dictation stream) or the id of a CUSTOM provider in `config.providers`, where the
+ * WebSocket endpoint lives on the provider entry itself (`dictationUrl` / `dictationHeaders` /
+ * `dictationProtocols`). Registry-managed provider ids are rejected as targets, mirroring
+ * `images.provider`: those built-ins do not carry a dictation endpoint.
  */
-export interface OcxDictationProviderConfig {
-  /** Upstream WebSocket URL (ws:// or wss://). */
-  url: string;
-  /** Extra handshake headers. Values may use an ${ENV_VAR} reference. */
-  headers?: Record<string, string>;
-  /** WebSocket subprotocols offered on the upstream handshake. */
-  protocols?: string[];
-}
-
 export interface OcxDictationConfig {
   /** Backend used when `byModel` has no match. "openai" (default) keeps ChatGPT dictation. */
-  default?: string;
+  provider?: string;
   /**
    * Per `provider/model` override. Keys match the active model's namespaced id exactly (for
-   * example "zai/glm-5.3-flash"); values are "openai" or a key in `providers`.
+   * example "zai/glm-5.3-flash"); values are "openai" or a custom provider id.
    */
   byModel?: Record<string, string>;
-  /** Custom dictation backends addressed by `default` or `byModel`. */
-  providers?: Record<string, OcxDictationProviderConfig>;
 }
 
 export interface OcxSearchConfig {
