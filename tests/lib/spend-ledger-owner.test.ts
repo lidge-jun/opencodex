@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   acquireSpendLedgerOwner,
   SPEND_LEDGER_OWNER_FILENAME,
+  mintSpendLedgerStorage,
   SPEND_LEDGER_RESTART_PARENT_ENV,
   SpendLedgerOwnerError,
   spendLedgerRestartEnvironment,
@@ -15,6 +16,8 @@ import {
 import {
   SPEND_LEDGER_JOURNAL_FILENAME,
   SPEND_LEDGER_SALT_FILENAME,
+  createOwnedFileSpendJournal,
+  loadOrCreateSpendLedgerSalt,
   resetSharedSpendLedgerForTest,
   sharedSpendLedger,
   spendLedgerDiagnosticsSnapshot,
@@ -24,6 +27,13 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const childPath = helperPath("spend-ledger-owner-child.ts");
+/** The shape the ledger actually takes: scopes plus the two token figures it books against. */
+const reserveRequest = (sendId: string) => ({
+  sendId,
+  scopes: { rootId: "r1" },
+  inputTokens: 1,
+  outputCeilingTokens: 1,
+});
 let root = "";
 let home = "";
 let previousHome: string | undefined;
@@ -237,13 +247,47 @@ describe("in-process references and privacy", () => {
     expect((failure as SpendLedgerOwnerError).code).toBe("SPEND_LEDGER_OWNER_NOT_HELD");
 
     let mutation: unknown;
-    try {
-      retained.reserve({ sendId: "s1", targets: [{ scope: "root", scopeId: "r1" }], tokens: 1 });
-    } catch (error) { mutation = error; }
+    try { retained.reserve(reserveRequest("s1")); } catch (error) { mutation = error; }
     expect(mutation).toBeInstanceOf(SpendLedgerOwnerError);
+
+    // Reads are refused for the same reason writes are: the figures describe a journal this
+    // handle no longer owns.
+    for (const read of [
+      () => retained.knows("s1"),
+      () => retained.exhausted("root", "r1"),
+      () => retained.policy,
+      () => retained.degraded,
+      () => retained.persistFailures,
+      () => retained.corruptRecords,
+    ]) {
+      expect(read).toThrow(SpendLedgerOwnerError);
+    }
 
     // A handle taken under the new ownership works and sees the journal as it is now.
     expect(() => sharedSpendLedger().snapshot("root", "r1")).not.toThrow();
+  });
+
+  test("storage this module did not mint is not accepted as proof", () => {
+    // The defect this closes: a required guard the caller supplies can be a guard that does
+    // nothing, so a look-alike object must be refused on identity rather than on shape.
+    const lease = acquireSpendLedgerOwner();
+    leases.push(lease);
+    const forged = {
+      path: join(home, SPEND_LEDGER_JOURNAL_FILENAME),
+      assert(): void { /* a caller-supplied guard proves nothing */ },
+    } as unknown as Parameters<typeof createOwnedFileSpendJournal>[0];
+
+    expect(() => createOwnedFileSpendJournal(forged)).toThrow(SpendLedgerOwnerError);
+    expect(() => loadOrCreateSpendLedgerSalt(forged)).toThrow(SpendLedgerOwnerError);
+    expect(existsSync(join(home, SPEND_LEDGER_JOURNAL_FILENAME))).toBe(false);
+  });
+
+  test("minting refuses a name that is not a plain file in the owned directory", () => {
+    const lease = acquireSpendLedgerOwner();
+    leases.push(lease);
+    for (const name of ["../escape.jsonl", "nested/child.jsonl", ".."]) {
+      expect(() => mintSpendLedgerStorage(name)).toThrow(SpendLedgerOwnerError);
+    }
   });
 
   test("a dangling journal symlink is refused rather than followed", () => {
@@ -254,8 +298,7 @@ describe("in-process references and privacy", () => {
     symlinkSync(target, journal);
 
     let failure: unknown;
-    try { sharedSpendLedger().reserve({ sendId: "s1", targets: [{ scope: "root", scopeId: "r1" }], tokens: 1 }); }
-    catch (error) { failure = error; }
+    try { sharedSpendLedger().reserve(reserveRequest("s1")); } catch (error) { failure = error; }
     expect(failure).toBeInstanceOf(SpendLedgerOwnerError);
     // The point of the case: the link's target must not have been created by following it.
     expect(existsSync(target)).toBe(false);

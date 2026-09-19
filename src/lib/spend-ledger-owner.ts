@@ -226,6 +226,67 @@ export function currentSpendLedgerOwnerGeneration(): number {
   return ownerGeneration;
 }
 
+const STORAGE_BRAND: unique symbol = Symbol("spend-ledger-storage");
+
+/**
+ * Permission to touch one file under the owned state directory, for as long as this exact
+ * ownership lasts.
+ *
+ * A callback supplied by the caller cannot be this proof: the caller can pass one that does
+ * nothing, which is how a "required guard" still allowed an unowned write. Only this module
+ * mints one, it derives the path from the directory actually owned rather than accepting a
+ * path to trust, and the brand means a structurally similar object is not accepted in its place.
+ */
+export interface SpendLedgerStorage {
+  readonly [STORAGE_BRAND]: true;
+  readonly path: string;
+  /** Throws unless the ownership this was minted under is still the current one. */
+  assert(): void;
+}
+
+/**
+ * Mint storage permission for one file name directly under the owned state directory.
+ *
+ * The name is a file name, never a path: joining a caller-supplied path would let the caller
+ * choose the destination, which is the thing ownership is supposed to decide.
+ */
+export function mintSpendLedgerStorage(fileName: string): SpendLedgerStorage {
+  if (fileName.includes("/") || fileName.includes("\\") || fileName === "." || fileName === "..") {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be established safely.",
+    );
+  }
+  assertSpendLedgerOwnerHeld();
+  const owner = activeOwner;
+  if (!owner) {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_NOT_HELD",
+      "Spend-ledger ownership is required before the shared ledger can be used.",
+    );
+  }
+  const generation = ownerGeneration;
+  const home = owner.home;
+  return Object.freeze({
+    [STORAGE_BRAND]: true as const,
+    path: join(home, fileName),
+    assert(): void {
+      assertSpendLedgerOwnerGeneration(generation, home);
+    },
+  });
+}
+
+/** Reject anything that did not come from {@link mintSpendLedgerStorage}. */
+export function assertMintedStorage(storage: SpendLedgerStorage): void {
+  if (storage?.[STORAGE_BRAND] !== true) {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_NOT_HELD",
+      "Spend-ledger ownership is required before the shared ledger can be used.",
+    );
+  }
+  storage.assert();
+}
+
 /**
  * Refuse a handle built under an ownership that has since ended.
  *
