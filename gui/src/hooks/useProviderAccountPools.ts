@@ -161,7 +161,8 @@ export function useProviderAccountPools(deps: {
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
 
   const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
-    const bounded = createBoundedFetch(20_000);
+    const isQuotaRead = url.includes("quota=1");
+    const bounded = createBoundedFetch(isQuotaRead ? 60_000 : 20_000);
     const abort = () => bounded.controller.abort();
     if (signal?.aborted) abort();
     signal?.addEventListener("abort", abort, { once: true });
@@ -233,8 +234,12 @@ export function useProviderAccountPools(deps: {
             return !enriched.some(row => row.quotaUnavailable === true);
           } catch {
             if (!currentQuota()) return false;
+            // Keep existing quota bars instead of blanking them on transient errors
             setAccountSets(current => currentQuota() && current[provider] ? {
-              ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts, rows) },
+              ...current, [provider]: {
+                ...current[provider],
+                accounts: current[provider].accounts.map(a => a.quota ? a : { ...a, quotaUnavailable: true }),
+              },
             } : current);
             return false;
           }

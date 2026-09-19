@@ -223,7 +223,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [oauthStatus, setOauthStatus] = useState<Record<string, import("./providers-shared").OAuthStatus>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [loginInfo, setLoginInfo] = useState<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>(null);
-  const [workspaceSelected, setWorkspaceSelected] = useState<string | null>(null);
+  const [workspaceSelected, setWorkspaceSelectedState] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_workspace_selected_provider");
+      return saved && saved.trim() ? saved.trim() : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setWorkspaceSelected = useCallback((name: string | null) => {
+    setWorkspaceSelectedState(name);
+    try {
+      if (name) localStorage.setItem("ocx_workspace_selected_provider", name);
+      else localStorage.removeItem("ocx_workspace_selected_provider");
+    } catch { /* localStorage unavailable */ }
+  }, []);
   const [addIntent, setAddIntent] = useState<AddProviderIntent | null>(null);
   const [removeConfirmName, setRemoveConfirmName] = useState<string | null>(null);
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
@@ -284,7 +299,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setAddIntent(null);
     setWorkspaceSelected(provider);
     setAccountsFocus(previous => ({ token: previous.token + 1, provider }));
-  }, []);
+  }, [setWorkspaceSelected]);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
 
   // Warm the Add Provider catalog cache while the page is open so opening the
@@ -384,6 +399,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     return refreshAccountRosters(target);
   }, [refreshAccountRosters, oauthCardProviders, keyCardProviders]);
   const recoverSelectionStream = useAccountSelectionEvents(apiBase, config !== null, refreshSelection);
+  const previousActiveAccountsRef = useRef<Record<string, string | null>>({});
+  useEffect(() => {
+    for (const [provider, set] of Object.entries(accountSets)) {
+      const prev = previousActiveAccountsRef.current[provider];
+      const curr = set.activeAccountId;
+      if (prev !== undefined && prev !== null && curr && prev !== curr) {
+        const switchedTo = set.accounts.find(a => a.id === curr);
+        const name = switchedTo?.alias?.trim() || switchedTo?.email || curr.slice(-6);
+        notify(t("pws.accountSwitchNotice", { account: name }), true);
+      }
+      previousActiveAccountsRef.current[provider] = curr;
+    }
+  }, [accountSets, notify, t]);
+
   const rosterKey = JSON.stringify([apiBase, oauthCardProviders.toSorted(), keyCardProviders.toSorted()]);
   const rosterRecoveryKeyRef = useRef<string | null>(null);
   useKeyedClientResource(`provider-rosters:${rosterKey}`, [rosterKey], async signal => {

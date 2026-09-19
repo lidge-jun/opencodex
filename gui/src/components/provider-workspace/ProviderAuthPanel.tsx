@@ -3,25 +3,33 @@
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
  * handlers via props-down; no internal auth machinery.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
-import { displayAccountId } from "../../lib/privacy";
-import {
-  formatOAuthHealthLabel,
-  formatOAuthHealthSummary,
-  oauthHealthBadgeClass,
-  oauthHealthIsCooldown,
-  oauthHealthShowsReauth,
-} from "../../oauth-health-display";
+import { oauthHealthShowsReauth } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
-import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
+import ProviderAccountsToolbar from "./ProviderAccountsToolbar";
+import ProviderAccountCard from "./ProviderAccountCard";
+import {
+  analyzeAccountQuota,
+  filterAccounts,
+  sortAccounts,
+  type AccountFilterKey,
+  type AccountSortKey,
+  type AccountDisplayKey,
+  type AccountViewModeKey,
+} from "./account-quota-analysis";
+import { getPoolSettings, putPoolSettings } from "../../pool-settings";
+import { normalizeAccountPoolStrategy, type AccountPoolStrategy } from "../../account-pool-strategy";
+import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../../account-pool-strategy";
+import { RemoveAccountConfirmDialog } from "./ProviderDialogs";
+import { GrokResetCouponModal } from "./GrokResetCoupons";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
 import { Switch } from "../../ui";
@@ -234,6 +242,114 @@ export default function ProviderAuthPanel({
   );
   const grokCoupons = useGrokResetCoupons({ apiBase, accountIds: grokAccountIds, enabled: grokCouponsEnabled });
   const [couponAccount, setCouponAccount] = useState<OAuthAccountRow | null>(null);
+  const [accountToRemove, setAccountToRemove] = useState<OAuthAccountRow | null>(null);
+  const [removingAccount, setRemovingAccount] = useState(false);
+  const [accountFilter, setAccountFilter] = useState<AccountFilterKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_filter");
+      const valid = ["with_limits", "with_limits_gemini", "with_limits_claude", "all", "gemini_exhausted", "claude_exhausted", "fully_exhausted"];
+      if (saved && valid.includes(saved)) return saved as AccountFilterKey;
+    } catch { /* localStorage unavailable */ }
+    return "with_limits";
+  });
+  const [accountSort, setAccountSort] = useState<AccountSortKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_sort");
+      const valid = ["more_headroom", "less_headroom", "reset_5h_soonest", "reset_7d_soonest"];
+      if (saved && valid.includes(saved)) return saved as AccountSortKey;
+    } catch { /* localStorage unavailable */ }
+    return "more_headroom";
+  });
+  const [accountTitleMode, setAccountTitleMode] = useState<AccountDisplayKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_title_mode");
+      const valid = ["login", "masked", "alias"];
+      if (saved && valid.includes(saved)) return saved as AccountDisplayKey;
+    } catch { /* localStorage unavailable */ }
+    return "login";
+  });
+  const [accountViewMode, setAccountViewMode] = useState<AccountViewModeKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_view_mode");
+      const valid = ["cards", "compact"];
+      if (saved && valid.includes(saved)) return saved as AccountViewModeKey;
+    } catch { /* localStorage unavailable */ }
+    return "cards";
+  });
+  const handleFilterChange = (next: AccountFilterKey) => {
+    setAccountFilter(next);
+    try { localStorage.setItem("ocx_account_filter", next); } catch { /* ignore */ }
+  };
+  const handleSortChange = (next: AccountSortKey) => {
+    setAccountSort(next);
+    try { localStorage.setItem("ocx_account_sort", next); } catch { /* ignore */ }
+  };
+  const handleTitleModeChange = (next: AccountDisplayKey) => {
+    setAccountTitleMode(next);
+    try { localStorage.setItem("ocx_account_title_mode", next); } catch { /* ignore */ }
+  };
+  const handleViewModeChange = (next: AccountViewModeKey) => {
+    setAccountViewMode(next);
+    try { localStorage.setItem("ocx_account_view_mode", next); } catch { /* ignore */ }
+  };
+  const [accountSearch, setAccountSearch] = useState("");
+  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
+  const [genericPool, setGenericPool] = useState<{ enabled: boolean; strategy: AccountPoolStrategy } | null>(null);
+  useEffect(() => {
+    // The panel is not remounted per provider: without this, a failed read (or an
+    // empty roster) leaves the previous provider's strategy on screen, and the
+    // toggle would persist it under the new provider.
+    setGenericPool(null);
+    if (!isOauth || item.name === "openai" || item.name === "anthropic") return;
+    // Pool settings govern rotation between accounts; with an empty roster there
+    // is nothing to rotate, so skip the settings fetch until accounts arrive.
+    if (accounts.length === 0) return;
+    let cancelled = false;
+    void getPoolSettings(apiBase, item.name).then(res => {
+      if (cancelled || !res) return;
+      setGenericPool({
+        enabled: res.enabled === true || res.enabledEffective === true,
+        strategy: normalizeAccountPoolStrategy(res.strategy),
+      });
+    });
+    return () => { cancelled = true; };
+  }, [apiBase, isOauth, item.name, accounts.length]);
+  const handleTogglePoolEnabled = useCallback(() => {
+    if (!genericPool) return;
+    const nextEnabled = !genericPool.enabled;
+    setGenericPool(prev => prev ? { ...prev, enabled: nextEnabled } : null);
+    void putPoolSettings(apiBase, item.name, {
+      enabled: nextEnabled,
+      strategy: genericPool.strategy,
+    });
+  }, [apiBase, genericPool, item.name]);
+  const handleSelectPoolStrategy = useCallback((nextStrategy: AccountPoolStrategy) => {
+    if (!genericPool) return;
+    setGenericPool(prev => prev ? { ...prev, strategy: nextStrategy } : null);
+    void putPoolSettings(apiBase, item.name, {
+      enabled: genericPool.enabled,
+      strategy: nextStrategy,
+    });
+  }, [apiBase, genericPool, item.name]);
+  const showModelFamilies = item.name === "google-antigravity";
+  useEffect(() => {
+    if (showModelFamilies) return;
+    if (
+      accountFilter === "with_limits_gemini"
+      || accountFilter === "with_limits_claude"
+      || accountFilter === "gemini_exhausted"
+      || accountFilter === "claude_exhausted"
+    ) {
+      handleFilterChange("with_limits");
+    }
+  }, [showModelFamilies, accountFilter]);
+  const analyzedAccounts = useMemo(() => {
+    return accounts.map(a => analyzeAccountQuota(a, item.name));
+  }, [accounts, item.name]);
+  const filteredAndSortedAccounts = useMemo(() => {
+    const filtered = filterAccounts(analyzedAccounts, accountFilter, accountSearch);
+    return sortAccounts(filtered, accountSort, accountFilter);
+  }, [analyzedAccounts, accountFilter, accountSearch, accountSort]);
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
@@ -512,80 +628,81 @@ export default function ProviderAuthPanel({
                 )}
               </div>
             )}
-            {accounts.length > 0 && (
-              <ul className="pwi-auth-list">
-                {accounts.map(account => {
-                  const label = oauthAccountDisplayLabel(accounts, account, t);
-                  const switching = switchingAccountId === account.id;
-                  const healthStatus = account.health?.status;
-                  const showReauth = accountShowsReauth(account);
-                  const inCooldown = oauthHealthIsCooldown(healthStatus);
-                  const maskedId = displayAccountId(account.id);
-                  const healthLabel = formatOAuthHealthLabel(t, account.health);
-                  const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
-                  return (
-                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
-                    <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
-                    <button type="button" className="pwi-auth-row-main"
-                      onClick={() => { if (!account.active && !showReauth && !inCooldown && !switchingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
-                      aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
-                      disabled={Boolean(showReauth || inCooldown || (switchingAccountId && !switching))}>
-                      <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                      <span className="pwi-auth-row-copy">
-                        <span className="pwi-auth-row-label">{label}</span>
-                        <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
-                        {healthSummary && (
-                          <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
-                        )}
-                        {inCooldown && (
-                          <span className="pwi-auth-row-secondary faint">{t("pws.healthCooldownHint")}</span>
-                        )}
-                      </span>
-                      {healthLabel && (
-                        <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
-                      )}
-                      {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
-                      {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                      {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
-                    </button>
-                    {showReauth && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busy || Boolean(switchingAccountId)}
-                        onClick={() => void authHandlers.onReauth(item.name, account.id)}
-                      >
-                        {t("pws.reauthenticate")}
+                        {accounts.length > 0 && (
+              <>
+                <ProviderAccountsToolbar
+                  analyzedList={analyzedAccounts}
+                  showModelFamilies={showModelFamilies}
+                  filter={accountFilter}
+                  onFilterChange={handleFilterChange}
+                  sortKey={accountSort}
+                  onSortChange={handleSortChange}
+                  titleMode={accountTitleMode}
+                  onTitleModeChange={handleTitleModeChange}
+                  viewMode={accountViewMode}
+                  onViewModeChange={handleViewModeChange}
+                  searchQuery={accountSearch}
+                  onSearchQueryChange={setAccountSearch}
+                  refreshingAll={refreshingQuota}
+                  onRefreshAll={canRefreshQuota ? () => { void refreshQuota(); } : undefined}
+                  quotaRefreshResultText={quotaRefreshResult?.text}
+                  quotaRefreshResultOk={quotaRefreshResult?.ok}
+                  poolSupported={genericPool !== null}
+                  poolEnabled={genericPool?.enabled ?? false}
+                  onTogglePoolEnabled={handleTogglePoolEnabled}
+                  poolStrategy={genericPool?.strategy ?? DEFAULT_ACCOUNT_POOL_STRATEGY}
+                  onSelectPoolStrategy={handleSelectPoolStrategy}
+                />
+                {filteredAndSortedAccounts.length > 0 ? (
+                  <div className={accountViewMode === "compact" ? "compact-dense-grid" : "pwi-accounts-grid-2col"}>
+                    {filteredAndSortedAccounts.map(analyzed => (
+                      <ProviderAccountCard
+                        key={analyzed.account.id}
+                        analyzed={analyzed}
+                        viewMode={accountViewMode}
+                        titleMode={accountTitleMode}
+                        switching={switchingAccountId === analyzed.account.id}
+                        disabled={busy || Boolean(switchingAccountId && switchingAccountId !== analyzed.account.id)}
+                        refreshing={refreshingQuota && (refreshingAccountId === analyzed.account.id || !refreshingAccountId)}
+                        onSwitch={acc => void authHandlers.onSwitchAccount(item.name, acc)}
+                        onRefreshSingle={canRefreshQuota ? acc => {
+                          setRefreshingAccountId(acc.id);
+                          void refreshQuota().finally(() => setRefreshingAccountId(null));
+                        } : undefined}
+                        onEditAlias={acc => void authHandlers.onEditAlias(item.name, "oauth", acc.id, acc.alias)}
+                        onRemove={acc => setAccountToRemove(acc)}
+                        onReauth={acc => void authHandlers.onReauth(item.name, acc.id)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="pwi-auth-state pwi-auth-state--empty" style={{ justifyContent: "center", gap: 12 }}>
+                    <span>{t("modal.noMatch")}</span>
+                    {accountFilter !== "all" && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleFilterChange("all")}>
+                        {t("pws.filterAllAccounts")}
                       </button>
                     )}
-                    {grokCouponsEnabled && !showReauth && (
-                      <GrokCouponBadge
-                        entry={grokCoupons.entries[account.id]}
-                        t={t}
-                        onClick={() => setCouponAccount(account)}
-                      />
-                    )}
-                    <button type="button" className="btn btn-ghost btn-sm"
-                      onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
-                      {t("prov.editAlias")}
-                    </button>
-                    <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                      aria-label={`${t("common.remove")} — ${label}`}
-                      title={`${t("common.remove")} — ${label}`}
-                      disabled={Boolean(switchingAccountId)}
-                      onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
-                      <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
-                    </button>
-                    </div>
-                    <div className="pwi-auth-acct-quota">
-                      <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
-                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure} />
-                    </div>
-                  </li>
-                  );
-                })}
-              </ul>
+                  </div>
+                )}
+              </>
+            )}
+            {accountToRemove && (
+              <RemoveAccountConfirmDialog
+                accountLabel={oauthAccountDisplayLabel(accounts, accountToRemove, t)}
+                removing={removingAccount}
+                onCancel={() => { if (!removingAccount) setAccountToRemove(null); }}
+                onConfirm={async () => {
+                  if (removingAccount || !accountToRemove) return;
+                  setRemovingAccount(true);
+                  try {
+                    await authHandlers.onRemoveAccount(item.name, accountToRemove);
+                    setAccountToRemove(null);
+                  } finally {
+                    setRemovingAccount(false);
+                  }
+                }}
+              />
             )}
             {couponAccount && (
               <GrokResetCouponModal
