@@ -449,6 +449,11 @@ export async function prepareResponsesRequest(
     route = shadowRoute ?? resolveRoute(parsed.modelId);
     if (options.compactionRoutingOverride && !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)) {
       credentialDomainWasRewritten = true;
+      // The destination does not share the conversation's credential domain, so it can neither
+      // verify the source backend's reasoning ciphertext nor decode its native compaction blob.
+      // This is the same condition an account change already reports (account-change-state.ts),
+      // and the serializer turns a stored summary into readable text instead of dropping it.
+      parsed._stripReasoningEncryptedContent = true;
       if (parsed._compactionRequest === true) parsed._portableCompaction = true;
     }
     logCtx.routeDecision = route.routeDecision;

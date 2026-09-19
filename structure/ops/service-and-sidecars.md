@@ -196,4 +196,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The service loads the optional `compactionRouting` block from persisted configuration.
-[Responses ingress](../transports/responses.md#compaction-routing-overrides) applies it to individual manual requests.
+[Responses ingress](../transports/responses.md#compaction-routing-overrides) applies it to individual compaction
+requests whose trigger the block names.

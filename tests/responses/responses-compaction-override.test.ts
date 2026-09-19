@@ -4,6 +4,7 @@ import { handleResponses, handleResponsesCompact } from "../../src/server/respon
 import { clearCompactHandoffRoutesForTests } from "../../src/server/responses/compact";
 import { decodeCompactionSummary, SUMMARY_PREFIX } from "../../src/responses/compaction";
 import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
+import { routeCompactionModel } from "../../src/router";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { warnDegradedCompactionRouting } from "../../src/config/load-degrade";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
@@ -562,7 +563,7 @@ describe("compaction routing triggers", () => {
       expect(configSchema.parse(raw).compactionRouting).toBeUndefined();
     });
 
-  test("a named auto trigger is what releases the canonical OpenAI compaction reservation", async () => {
+  test.each(["v1", "v2"])("%s: a named auto trigger is what releases the canonical OpenAI compaction reservation", async version => {
     const settings = config();
     // An enabled canonical provider is the condition #2901 left in place: a bare native
     // compaction model stays reserved for it, and #5012 hit that while its quota was gone.
@@ -580,19 +581,52 @@ describe("compaction routing triggers", () => {
         : Response.json({ error: { message: "The usage limit has been reached.", code: "rate_limit_exceeded" } }, { status: 429 });
     }) as typeof fetch;
 
-    const routed = await handleResponsesCompact(request({ ...body(false), model: "gpt-5.6-luna" }, "auto"), settings, { model: "", provider: "" });
+    // The v1 native endpoint and the v2 compaction_trigger turn are separate entry points with
+    // separate gates, so the opt-in has to be proven on both.
+    const handler = version === "v1" ? handleResponsesCompact : handleResponses;
+    const input = { ...body(version !== "v1"), model: "gpt-5.6-luna" };
+    const routed = await handler(request(input, "auto"), settings, { model: "", provider: "" });
     expect(routed.status).toBe(200);
     await routed.text();
     expect(calls).not.toHaveLength(0);
     expect(calls.every(call => call.url.startsWith("https://gateway.example"))).toBe(true);
     expect(calls[0]!.model).toBe("cheap");
 
-    // Without the opt-in the same request keeps the reservation, which is the behavior every
-    // installation that does not configure this block must still get.
+    // Without the opt-in the reservation still owns the bare native compaction model. Asserting
+    // the route directly, rather than only the absence of a gateway call, keeps this half from
+    // passing on a regression that fails before reaching any upstream at all.
     calls.length = 0;
     delete settings.compactionRouting;
-    const reserved = await handleResponsesCompact(request({ ...body(false), model: "gpt-5.6-luna" }, "auto"), settings, { model: "", provider: "" });
+    expect(routeCompactionModel(settings, "gpt-5.6-luna").providerName).toBe("openai");
+    const reserved = await handler(request({ ...body(version !== "v1"), model: "gpt-5.6-luna" }, "auto"), settings, { model: "", provider: "" });
     await reserved.text();
     expect(calls.some(call => call.url.startsWith("https://gateway.example"))).toBe(false);
+  });
+
+  test("a cross-identity override does not forward the source backend's opaque state", async () => {
+    const settings = config();
+    settings.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    settings.compactionRouting = { model: "gateway/cheap", triggers: ["manual", "auto"] };
+    const calls: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return Response.json(completion());
+    }) as typeof fetch;
+    const input = body();
+    input.model = "gpt-6-astra";
+    input.input = [
+      { type: "reasoning", summary: [], encrypted_content: "native-reasoning-blob" },
+      ...(input.input as unknown[]),
+    ];
+    const response = await handleResponses(request(input, "auto"), settings, { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(calls).not.toHaveLength(0);
+    // gateway shares neither the credential nor the backend that minted this blob, so it cannot
+    // verify it; forwarding it leaks backend-private state and can fail the summarizing turn.
+    expect(JSON.stringify(calls[0])).not.toContain("native-reasoning-blob");
   });
 });

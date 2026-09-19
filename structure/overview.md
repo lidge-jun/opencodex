@@ -195,5 +195,6 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
 
-Manual Codex compaction can select a request-local model through the
-[existing Responses handlers](transports/responses.md#compaction-routing-overrides), while subsequent turns keep their conversation settings.
+Codex compaction can select a request-local model through the
+[existing Responses handlers](transports/responses.md#compaction-routing-overrides) for the configured
+manual and automatic triggers, while subsequent turns keep their conversation settings.
