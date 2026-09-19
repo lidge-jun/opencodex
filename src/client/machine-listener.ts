@@ -75,8 +75,8 @@ export function startMachineListener(
   const machineApiDeps: MachineApiDeps = {
     sync: deps.machineApi?.sync ?? syncConnectedClient,
     disconnect: deps.machineApi?.disconnect ?? disconnectClient,
-    scheduleStandaloneRecycle: deps.machineApi?.scheduleStandaloneRecycle ?? (() => {
-      void import("./runtime").then(module => module.scheduleStandaloneRecycle());
+    scheduleStandaloneRecycle: deps.machineApi?.scheduleStandaloneRecycle ?? (tokenFingerprint => {
+      void import("./runtime").then(module => module.scheduleStandaloneRecycle(tokenFingerprint));
     }),
     hubReachability: deps.machineApi?.hubReachability ?? (() => hubReachability),
     setHubReachability: deps.machineApi?.setHubReachability ?? (value => { hubReachability = value; }),
