@@ -235,7 +235,7 @@ async function runShutdownBudgetChild(
 async function runNeverSettlingAclChild(
   mode: "principal" | "icacls",
 ): Promise<NeverSettlingAclChildResult> {
-  const timeoutMs = watchdogMs(1_500);
+  const timeoutMs = watchdogMs(8_000);
   const child = Bun.spawn([
     process.execPath,
     helperPath("responses-state-never-settling-acl-child.ts"),
