@@ -86,6 +86,14 @@ keeps a combo's advertised intersection aligned with the final custom row withou
 provider-native row or inventing capabilities for other models. Public custom-row materialization
 and routed-slug deduplication remain the final catalog owner's responsibility.
 Codex's native `ultra` mode is preserved and is not a literal API wire promise.
+
+Selector decode hints are identity evidence and nothing else. `knownModelIdsForProvider` unions
+the configured models, the registry's static list, the native ids the registry's classified
+model-keyed maps name (`src/providers/registry/model-ids.ts`), the last-known-good discovery
+cache and custom model ids, so an id declared only in a policy map still round-trips through an
+encoded selector. A hint publishes no catalog row, grants no availability or entitlement and
+confers no transport authority: the registry transport identity is checked before hints are
+read, and an ambiguous selector is still rejected rather than guessed.
 When account selectors are enabled, the sync path may also observe exact, visible, API-supported
 OpenAI-family ids from Codex's user-owned catalog/cache. Only rows with native catalog provenance
 are trusted; unknown ids are carried through startup cache invalidation as hidden observations and
