@@ -198,13 +198,18 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     resetCodexModelEntitlementCacheForTests();
   });
 
+  /** The liveness seam is a factory so one lookup loads the credential store once. */
+  function onlyGenerationIsLive(live: number): void {
+    setObservedDenialGenerationCheck(() => (_id, generation) => generation === live);
+  }
+
   test("evidence from a superseded credential stops denying the replacement", () => {
     const now = Date.now();
     recordCodexModelDenialEvidence("pooled", SOL, 1, now);
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
 
     // The account reauthenticates: same id, generation 1 is no longer live.
-    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    onlyGenerationIsLive(2);
 
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
   });
@@ -213,7 +218,7 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     const now = Date.now();
     // The replacement has already been refused and re-granted, so nothing is recorded
     // for generation 2 — then generation 1's in-flight 400 finally lands.
-    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    onlyGenerationIsLive(2);
     recordCodexModelDenialEvidence("pooled", SOL, 1, now);
 
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
@@ -226,7 +231,7 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     // generation, which would make it vanish the moment the reader checks liveness.
     recordCodexModelDenialEvidence("pooled", SOL, 1, now);
 
-    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    onlyGenerationIsLive(2);
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
   });
 
@@ -237,7 +242,7 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     // re-admit an account that the current credential has just been refused by.
     clearCodexModelDenialEvidence("pooled", SOL, 1);
 
-    setObservedDenialGenerationCheck((_id, generation) => generation === 2);
+    onlyGenerationIsLive(2);
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pooled"]));
   });
 
@@ -248,12 +253,81 @@ describe("denial evidence is scoped to the credential generation (#4952)", () =>
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
   });
 
-  test("evidence with no generation is dropped rather than attributed to the current one", () => {
+  // A `main-pool` context — the stored main login taking part in rotation — has a real account
+  // id and NO pool credential generation, because its credential lives in auth.json. Dropping
+  // its evidence would silently revert #4906 for that account: the pool would re-send the model
+  // the login just refused, on every request. Its evidence is account-scoped instead.
+  test("evidence with no generation is account-scoped, not discarded", () => {
     const now = Date.now();
-    // A main-account context carries no pool generation. It also carries no account
-    // id, so this is belt-and-braces — but recording against whatever is current now
-    // would be attributing a refusal to a credential that never earned it.
-    recordCodexModelDenialEvidence("pooled", SOL, undefined, now);
+    recordCodexModelDenialEvidence("main-pool-account", SOL, undefined, now);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["main-pool-account"]));
+  });
+
+  test("account-scoped evidence is not expired by a pool generation rolling over", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("main-pool-account", SOL, undefined, now);
+    // No generation was ever claimed, so there is nothing for the liveness fence to supersede.
+    onlyGenerationIsLive(7);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["main-pool-account"]));
+  });
+
+  test("an account-scoped success clears account-scoped evidence", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("main-pool-account", SOL, undefined, now);
+    clearCodexModelDenialEvidence("main-pool-account", SOL, undefined);
     expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toBeUndefined();
+  });
+
+  // The write fence has to reject a stale refusal BEFORE it mutates the map, not only when the
+  // same key already holds newer evidence. With no entry for its own key the stale row would be
+  // inserted, and at the entry bound the insert evicts the oldest valid row — which no later
+  // read fence can restore, because the evidence is simply gone.
+  test("a stale refusal for an unseen key cannot evict valid evidence at the entry bound", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("first-pooled", SOL, 2, now);
+    for (let i = 0; i < 511; i++) recordCodexModelDenialEvidence(`filler-${i}`, SOL, 2, now);
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)?.has("first-pooled")).toBe(true);
+
+    // Generation 1 is dead and this account has no entry of its own. The insert would take the
+    // map to 513 and evict the oldest row, which is the valid one recorded first.
+    onlyGenerationIsLive(2);
+    recordCodexModelDenialEvidence("late-stale", SOL, 1, now);
+
+    const denied = cachedDeniedCodexAccountIdsForModel(SOL, now);
+    expect(denied?.has("first-pooled")).toBe(true);
+    expect(denied?.has("late-stale")).toBe(false);
+  });
+
+  // The issue asks for identity validation AFTER the exclusion read fence. An excluded account
+  // — a draining profile switch, or a request-owned credential — must not cause a credential
+  // store read on its behalf, and must stay unknown rather than denied.
+  test("an excluded account is skipped before the liveness check reads anything", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("excluded", SOL, 1, now);
+    let lookups = 0;
+    setObservedDenialGenerationCheck(() => {
+      lookups += 1;
+      return () => true;
+    });
+
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now, {
+      excludeAccountIds: new Set(["excluded"]),
+    })).toBeUndefined();
+    expect(lookups).toBe(0);
+  });
+
+  test("the credential store is opened at most once per lookup", () => {
+    const now = Date.now();
+    recordCodexModelDenialEvidence("pool-a", SOL, 1, now);
+    recordCodexModelDenialEvidence("pool-b", SOL, 1, now);
+    recordCodexModelDenialEvidence("pool-c", SOL, 1, now);
+    let opens = 0;
+    setObservedDenialGenerationCheck(() => {
+      opens += 1;
+      return () => true;
+    });
+
+    expect(cachedDeniedCodexAccountIdsForModel(SOL, now)).toEqual(new Set(["pool-a", "pool-b", "pool-c"]));
+    expect(opens).toBe(1);
   });
 });

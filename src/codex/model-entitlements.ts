@@ -3,8 +3,8 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { CodexAccountCredentialRecord, OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import {
+  beginCodexAccountGenerationLiveCheck,
   getValidCodexToken,
-  isCodexAccountGenerationLive,
   loadCodexAccountRecordSnapshot,
 } from "./account-store";
 import {
@@ -1302,13 +1302,14 @@ export function cachedDeniedCodexAccountIdsForModel(
   // absent an ongoing catalog sync the loop above contributes nothing at all. An upstream
   // refusal does not expire on that schedule and is not a snapshot of a pending answer: it is
   // the account's own Codex surface naming this model and declining it (#4906).
-  for (const accountId of observedDeniedCodexAccountIdsForModel(modelId, now) ?? []) {
-    // Under the caller's read fence, like the roster loop above. Nothing here reads account
-    // storage, but an excluded account must stay UNKNOWN rather than denied so a profile switch
-    // or a request-owned credential produces the same selection it does today.
-    if (options.excludeAccountIds?.has(accountId)) continue;
-    denied.add(accountId);
-  }
+  // The caller's read fence is passed IN rather than applied to the result, so an excluded
+  // account is skipped before the credential-generation validation reads account storage
+  // (#4952). An excluded account must stay UNKNOWN rather than denied, so a profile switch or
+  // a request-owned credential produces the same selection it does today.
+  const observedDenied = observedDeniedCodexAccountIdsForModel(modelId, now, {
+    ...(options.excludeAccountIds ? { excludeAccountIds: options.excludeAccountIds } : {}),
+  });
+  for (const accountId of observedDenied ?? []) denied.add(accountId);
   // One account holds one entry per client version, and upstream filters the roster by that
   // version. So the same account can legitimately carry a granted entry under a current client
   // and a denied one under an older client that predates the model. Positive evidence is
@@ -1337,7 +1338,7 @@ export function cachedDeniedCodexAccountIdsForModel(
  */
 // Denial evidence is credential-scoped (#4952). The store stays a leaf module, so the
 // liveness predicate is injected here, where the account store is already a dependency.
-setObservedDenialGenerationCheck(isCodexAccountGenerationLive);
+setObservedDenialGenerationCheck(beginCodexAccountGenerationLiveCheck);
 
 export function recordCodexModelDenialEvidence(
   accountId: string | null | undefined,
@@ -1347,11 +1348,12 @@ export function recordCodexModelDenialEvidence(
 ): void {
   if (!accountId || !modelId) return;
   if (!ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(modelId)) return;
-  // A refusal with no credential generation cannot be attributed to the credential that
-  // earned it, so it is dropped rather than recorded against whatever is current now
-  // (#4952). Every production caller has the dispatched auth context in hand.
-  if (typeof generation !== "number") return;
-  recordObservedCodexModelDenial(accountId, modelId, generation, now);
+  // A caller that cannot name a credential generation records ACCOUNT-scoped evidence rather
+  // than none. The one production context in that position is `main-pool`, whose credential
+  // lives in `auth.json` and has no pool generation; discarding its refusals would revert
+  // #4906 for the stored main login (#4952). Request-owned `main` never reaches here — its
+  // `accountId` is null and the guard above returns.
+  recordObservedCodexModelDenial(accountId, modelId, typeof generation === "number" ? generation : undefined, now);
 }
 
 /** Drop the refusal evidence for a pair the account has just served successfully. */
@@ -1361,10 +1363,9 @@ export function clearCodexModelDenialEvidence(
   generation: number | null | undefined,
 ): void {
   if (!accountId || !modelId) return;
-  // Same reasoning as the write: a success that cannot name its generation must not clear
-  // evidence that may belong to a newer credential (#4952).
-  if (typeof generation !== "number") return;
-  clearObservedCodexModelDenial(accountId, modelId, generation);
+  // Mirror of the write: an account-scoped success clears account-scoped evidence. It cannot
+  // clear a credential-scoped entry that names a newer generation, and vice versa (#4952).
+  clearObservedCodexModelDenial(accountId, modelId, typeof generation === "number" ? generation : undefined);
 }
 
 /** Synchronous projection for management/catalog readers after a discovery pass. */
