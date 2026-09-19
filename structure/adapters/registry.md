@@ -77,7 +77,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   hints, so `CompletionConfiguration` field #3 no longer serializes the encoder's
   128000 fallback. Smaller operator hints cap live evidence and never enlarge it;
   with no evidence the adapter hint is omitted and the encoder still serializes
-  its own 128000 fallback for field #3. Investigation and limits:
+  its own 128000 fallback for field #3. Connect trailer diagnostics expose only an
+  allowlisted error code and hexadecimal trace id; upstream message text stays inside
+  the parser because it can reflect the request credential. Investigation and limits:
   `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
