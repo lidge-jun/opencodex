@@ -122,6 +122,18 @@ describe("routed Responses custom-tool stream consistency", () => {
     }
   });
 
+  test("publishes nothing for a wrapper carrying a literal control character", () => {
+    // A raw newline inside a JSON string makes the object unparseable, so completion keeps the
+    // whole wrapper as the input. Previewing the decoded value first would be the same
+    // disagreement a fenced body causes, reached through a different invalid spelling.
+    const argumentsText = '{"input":"one\ntwo"}';
+    const result = restoreExecStream(argumentsText, [argumentsText]);
+    expect(result.preview).toBe("");
+    expect(result.doneInput).toBe(argumentsText);
+    expect(result.itemInput).toBe(argumentsText);
+    expect(result.terminalInput).toBe(argumentsText);
+  });
+
   test("holds a wrapped fenced exec body at every split boundary", () => {
     const argumentsText = JSON.stringify({ input: "```js\ntext(1)\n```" });
     for (let split = 0; split <= argumentsText.length; split++) {

@@ -74,7 +74,14 @@ function decodeJsonStringPrefix(body: string): string | null {
   for (let i = 0; i < body.length; i++) {
     const c = body[i];
     if (c === '"') break; // unescaped closing quote: value complete
-    if (c !== "\\") { out += c; continue; }
+    if (c !== "\\") {
+      // A literal control character is not legal inside a JSON string, so `JSON.parse` will
+      // reject this wrapper and completion will return the raw text. Emitting the decoded value
+      // first is the disagreement this decoder exists to prevent, so stop instead.
+      if (c!.charCodeAt(0) <= 0x1f) return null;
+      out += c;
+      continue;
+    }
     const n = body[i + 1];
     if (n === undefined) break; // escape split across chunks: wait for more
     if (n === "u") {
