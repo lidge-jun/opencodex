@@ -177,9 +177,11 @@ function detachConfig(live: OcxConfig): DetachedConfig | null {
         if (field === null) return null;
         const fieldValue = provider[field];
         if (fieldValue === undefined) continue;
-        // The executor exception applies to an executor. A provider carrying a `fetch` value that
-        // is not one is ordinary data a configuration file could hold, and refusing the whole
-        // admission over it would take previews away for a field nobody is calling.
+        // The executor exception applies to an executor. A provider entry keeps unknown
+        // configuration keys, so a fetch value that is not a function is something an operator
+        // wrote into the file, and it is copied and compared as the data it is. Discovery reads it
+        // the same way: the outbound transport takes its built-in path unless the value is
+        // callable.
         if (field === "fetch" && typeof fieldValue === "function") {
           executors.set(name, fieldValue);
           continue;

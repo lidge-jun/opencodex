@@ -185,16 +185,20 @@ export function mutateAsideProfiles(
      * path selection is frozen by this point, which is everything the check needs.
      */
     if (options?.revalidate) {
-      const guarded = change.profileId === undefined
-        ? [...prepared.values()][0]
-        : prepared.get(change.profileId);
+      // A confirmation describes one profile, and HTTP refuses one that names none. This refuses
+      // it too: guessing which prepared input a bindingless confirmation meant would be inventing
+      // the thing the check exists to verify.
+      if (change.profileId === undefined) {
+        throw new AsideProfileErrorClass("invalid_aside_profile", 400, "a confirmed change applies to one profile");
+      }
+      const guarded = prepared.get(change.profileId);
       // Nothing prepared is nothing to check and nothing to write; refusing keeps a binding from
       // being dropped on the way to a write that would then be unchecked.
       const stale: AsideProfileWriteOutcome | null = guarded === undefined
-        ? refused.get(change.profileId ?? -1) ?? {
+        ? refused.get(change.profileId) ?? {
           ok: false, reason: "unsafe", state: "conflict", clientId: "aside",
           message: "that profile cannot be prepared for this change",
-          profileId: change.profileId ?? profiles[0]?.id ?? 0,
+          profileId: change.profileId,
         }
         : await options.revalidate(guarded);
       if (stale) {

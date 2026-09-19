@@ -306,14 +306,27 @@ export async function loadExportModels(
     lastExportSnapshot = null;
     return exported;
   }
-  lastExportSnapshot = {
-    admission,
-    // Prefer the revisions the gather stamped; fall back to observing only when the roster was
-    // supplied and no gather happened, where there is nothing tighter to use.
-    cacheStamp: gathered.size > 0 ? stampFrom(admitted, gathered) : modelCacheStamp(admitted),
-    generation: ++exportSnapshotGeneration,
-    models: Object.freeze(structuredClone(exported)),
-  };
+  // Prefer the revisions the gather stamped; fall back to observing only when the roster was
+  // supplied and no gather happened, where there is nothing tighter to use.
+  const cacheStamp = gathered.size > 0 ? stampFrom(admitted, gathered) : modelCacheStamp(admitted);
+  const retained = lastExportSnapshot;
+  /*
+   * An identical roster keeps the identity it already had.
+   *
+   * The generation moved on every load, so an ordinary read that rebuilt the same rows, which the
+   * Integrations collection does, invalidated a confirmation an operator was in the middle of
+   * submitting. Nothing about the roster had changed; only the counter had. The rows themselves
+   * are compared rather than assumed equal from the configuration and the cache stamp, because a
+   * projection also reads entitlement state neither of those two describes.
+   */
+  const models = Object.freeze(structuredClone(exported));
+  if (retained !== null
+    && retained.cacheStamp === cacheStamp
+    && isExportConfigAdmissionCurrent(retained.admission, config)
+    && JSON.stringify(retained.models) === JSON.stringify(models)) {
+    return exported;
+  }
+  lastExportSnapshot = { admission, cacheStamp, generation: ++exportSnapshotGeneration, models };
   return exported;
 }
 

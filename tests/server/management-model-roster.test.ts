@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
+  exportSnapshotIdentity,
   listManagementModelRows,
   loadExportModels,
   previewExportModels,
@@ -129,6 +130,25 @@ describe("a preview reads only a roster an authoritative load already finished",
     // cannot see it, and an authority generation does not move for it either.
     expect(setCached("supplied", [{ id: "discovered-later", provider: "supplied" }])).toBe(true);
     expect(previewExportModels(CONFIG)).toBeNull();
+  });
+
+  test("an unchanged roster keeps the identity a caller is already holding", async () => {
+    resetExportSnapshotForTests();
+    await loadExportModels(CONFIG, SUPPLIED);
+    const held = exportSnapshotIdentity(CONFIG);
+    expect(held).not.toBeNull();
+
+    // An ordinary read rebuilds the same rows, and the Integrations collection performs one on
+    // every visit. Moving the identity for that turned a confirmation an operator was in the
+    // middle of submitting into a stale one, for no change they could see.
+    await loadExportModels(CONFIG, SUPPLIED);
+    expect(exportSnapshotIdentity(CONFIG)).toBe(held);
+
+    // A roster that genuinely differs still takes a new identity.
+    await loadExportModels(CONFIG, [...SUPPLIED, { id: "second-model", provider: "supplied" }]);
+    const moved = exportSnapshotIdentity(CONFIG);
+    expect(moved).not.toBeNull();
+    expect(moved).not.toBe(held);
   });
 
   test("a wholesale clear retires the snapshot even though no provider counter survives it", async () => {

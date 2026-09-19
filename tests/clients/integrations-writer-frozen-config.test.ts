@@ -368,3 +368,26 @@ test("a roster edited during the preference write is not the roster written", as
   expect(written).toContain("claude-opus-4-8");
   expect(written).not.toContain("edited-during-the-preference-write");
 });
+
+/**
+ * A confirmation describes one profile.
+ *
+ * HTTP refuses a bound change that names none, and this refuses it too. Guessing which prepared
+ * input such a confirmation meant would be inventing the thing the check exists to verify.
+ */
+test("a confirmed change that names no profile is refused rather than guessed", async () => {
+  const profilePath = seedAsideProfile();
+  const before = readFileSync(profilePath, "utf8");
+  const config = asideFixtureConfig(CHECKED_HOST);
+
+  let checked = false;
+  await expect(mutateAsideProfiles(
+    { config, models: MODELS, port: 10100, env: {} as NodeJS.ProcessEnv, home, store, persistConfig: () => {} },
+    { enabled: true },
+    { revalidate: async () => { checked = true; return null; } },
+  )).rejects.toThrow(/one profile/);
+
+  expect(checked).toBe(false);
+  expect(config.asideProfileSync).toBeUndefined();
+  expect(readFileSync(profilePath, "utf8")).toBe(before);
+});
