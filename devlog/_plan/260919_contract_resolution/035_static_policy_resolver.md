@@ -1,0 +1,19 @@
+# Resolved static model policy review
+
+Prepared25019c8ae765b317aa732d90b6df94a8232d45f1 isfirstlayerfor5114: staticresolverandparityfixtures, notyetconsumer migration. Sevenfilesindependentreviewassigned. Verifyfieldprecedence/explicitfalse/hardpins/aliases/customunknownmetadata, pureimmutabledata, nofrozencredentials/health/quota andparityagainstexistingconsumers. Latermigrationmustretain captureauthorityandlatebinding. No localexecution; nofullissuecompletionclaim.
+
+25019 reviewrequires3paritycorrections beforeconsumer migration: explicitmodelCapabilities modalities precedence, admittedkey-auth override authority withoutfreezingcredentials, andmodelidentitynormalization/virtualalias/idempotence fixtures. Existingimmutable/detachedresult, lateobservedlimitsandhardpinparityaccepted. Ownerreceivedsourceanchorsandscopedalternatives; no newpolicy language.
+
+cbafc6 correctionreview accepts explicitcapabilities precedence, credential-freecaptured auth, realmodelalias/virtualnormalization andidempotence. One parityfixturegap remains: effectiveauthmanuallysupplied instead ofderivedfromexistingroutingauthority. Ownerrequested usablekey/unresolvedreference fixtures capturedthroughactualroutedProviderConfig beforepassingstaticresolver, preventingimplementation-mirrortest.
+
+9eecc2b finalauth-oracle testreviewPASS. Latest64b7196 rebasescurrentdev; resolverandfocusedtest blobs byte-identical toreviewedhead. P1aparentpublication authorized withperPRhostedCI; consumer migration stillrequired for5114closure.
+
+PR5171 publishedat64b7196c73039b8ed13d9ac07941d4c91a1aebf3 andattached. Resolver+parityfirstlayerreviewaccepted; actualconsumermigration remainsnextmanualchildand5114staysopen.
+
+Hosted64b test4run35445279670/job105903138954 failsglobalJSONsubstring90000absence. Sourcefixturealreadycontains registry-only:90000, soassertioncollideswithlegitimatepreservedstaticdata. Actualclampandmodelcapassertionspass. Ownerrequested exactbefore/afterwholepolicycomparison plusunchangedmodelcaps/registry-onlyentry, retainingexistingconsumeroracle; no productionchange orblindrerun.
+
+Parent fixture corrected at `2fdd21004eb256890ae9d7a54baab6c00653c65d`: whole-policy equality across repeated observed clamps, exact static caps, preserved registry-only entry and no observed projection field. Child #5174 at `7b25d449d9828019de8a9799f51539863d2eec68` now performs the consumer migration. Base is the parent branch; native-stack lookup returned empty. Independent reviews split provider/catalog authority from router/server transitions. Hosted CI is pending, so neither layer nor issue #5114 is declared complete.
+
+Independent provider/catalog subset review of `7b25d449d9828019de8a9799f51539863d2eec68` passed field precedence, explicit false, frozen gather capture, late observed limits, and virtual wire identity. The parent fixture correction also passed. Existing hosted suites remain necessary for consumers not directly exercised by the new focused file. Latest child CI failed Linux shards and the gates job; its owner has already begun diagnosis of four reported failure classes. Static subset PASS is not whole-PR approval, and no merge is permitted pending corrected source and exact-head hosted proof.
+
+Second independent review passed router/server source tracing at `7b25d449d9828019de8a9799f51539863d2eec68`: admission-before-capture ordering, inbound and virtual identity recapture, dynamic credential rebuilds, repeated body-size admission, and stream/terminal decisions. This complements the provider/catalog review but does not override the observed hosted failures. Owner was explicitly told to retain CI as a blocking gate and use concrete failures to identify review or test-coverage gaps. No local execution was performed.
