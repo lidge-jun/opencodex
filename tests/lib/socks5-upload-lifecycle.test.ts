@@ -289,19 +289,31 @@ describe("SOCKS5 upload lifecycle", () => {
   test("interim informational answers are consumed and the upload runs to completion", async () => {
     /*
      * A peer may answer 100 and 103 before the request body is finished, and those are not the
-     * answer. The transport consumes them and keeps uploading; one that treated the first head it
-     * saw as final would hand the caller an empty 100 and stop writing mid-body.
+     * answer. The transport consumes them and reads on for the real one, while the upload keeps
+     * going; one that treated the first head it saw as final would hand the caller an empty 100
+     * and stop writing mid-body.
+     *
+     * The ordering is arranged rather than hoped for. The peer answers the request head before any
+     * body byte, and the caller's stream withholds its last chunk and the end of the body until
+     * that has happened, so everything asserted below about the rest of the upload genuinely
+     * happened after the interim answers were sent.
      */
     let received = "";
-    let informed = false;
+    let receivedWhenInformed: number | undefined;
+    let markInformed: () => void = () => { /* replaced below */ };
+    const informed = new Promise<void>(resolve => { markInformed = resolve; });
+    let markPeerClosed: () => void = () => { /* replaced below */ };
+    const peerClosed = new Promise<void>(resolve => { markPeerClosed = resolve; });
     const target = createTcpServer(socket => {
       socket.once("error", () => { /* teardown may reset this peer */ });
+      socket.once("close", () => markPeerClosed());
       socket.on("data", chunk => {
         received += chunk.toString("latin1");
-        if (!informed && received.includes("\r\n\r\n")) {
-          informed = true;
+        if (receivedWhenInformed === undefined && received.includes("\r\n\r\n")) {
           socket.write("HTTP/1.1 100 Continue\r\n\r\n");
           socket.write("HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n");
+          receivedWhenInformed = received.length;
+          markInformed();
         }
         if (!received.includes("0\r\n\r\n")) return;
         socket.write("HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nposted");
@@ -310,9 +322,16 @@ describe("SOCKS5 upload lifecycle", () => {
     const proxy = socksProxy();
     const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
     const encoder = new TextEncoder();
+    let released = false;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode("hello "));
+      },
+      async pull(controller) {
+        if (released) return;
+        released = true;
+        // Nothing more of this body exists until the peer has answered with both interim heads.
+        await informed;
         controller.enqueue(encoder.encode("socks"));
         controller.close();
       },
@@ -320,16 +339,24 @@ describe("SOCKS5 upload lifecycle", () => {
     try {
       const response = await post(targetPort, proxyPort, stream);
 
-      // The final answer is the one the caller gets, with the interim heads consumed rather than
-      // surfaced or left in the buffer ahead of the body.
-      expect(informed).toBe(true);
+      /*
+       * The final answer reaching the caller is the transport-side receipt: 200 with its body can
+       * only be read by something that consumed both interim heads and went on reading. A
+       * transport that stopped at the first head would answer 100 with nothing in it.
+       */
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("posted");
-      // Upload continuity: everything after the interim answers still reached the peer, including
-      // the terminating chunk that ends the request.
+
+      // Upload continuity, measured against the moment the interim answers were sent rather than
+      // against the whole exchange: the rest of the body and its terminator arrived afterwards.
+      expect(receivedWhenInformed).toBeDefined();
+      const afterInterim = received.slice(receivedWhenInformed ?? 0);
       expect(received).toContain("hello ");
-      expect(received).toContain("socks");
-      expect(received).toContain("0\r\n\r\n");
+      expect(afterInterim).toContain("socks");
+      expect(afterInterim).toContain("0\r\n\r\n");
+
+      // The exchange ends by itself, before anything here tears a peer down.
+      expect(await settlesWithin(peerClosed)).toBe(true);
     } finally {
       await Promise.all([close(proxy), close(target)]);
     }
