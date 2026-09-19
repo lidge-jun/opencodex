@@ -312,9 +312,20 @@ test("a bound undo follows the copy resolution actually chose", async () => {
   const sibling2Before = readFileSync(path(2), "utf8");
   const preview = await api("/api/client-integrations/aside/profiles/1/preview", "POST", { operation: "restore", opId });
   expect(preview.status).toBe(200);
-  const plan = await preview.json() as { canApply: boolean; fingerprint: string; profileId?: number };
+  const plan = await preview.json() as {
+    canApply: boolean; fingerprint: string; profileId?: number;
+    changes: Array<{ kind: string; path: string }>;
+  };
   expect(plan.canApply).toBe(true);
   expect(plan.profileId).toBe(1);
+  /*
+   * This undo takes the managed block back out, because the apply it reverses had nothing of ours
+   * before it. Saying so requires reading the ownership of the file being rewritten, which lives
+   * in the profile's own store, while the row and its snapshot were resolved out of the root one.
+   * Reading the selected row's store instead would describe another file's ownership.
+   */
+  expect(plan.changes.some(change => change.kind === "remove")).toBe(true);
+  expect(plan.changes.some(change => change.kind === "add")).toBe(false);
 
   const undo = await api("/api/client-integrations/aside/profiles/1/restore", "POST", {
     opId, operation: "restore", planFingerprint: plan.fingerprint,

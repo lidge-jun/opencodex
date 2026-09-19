@@ -26,7 +26,7 @@ import { fingerprint } from "../../src/integrations/ownership";
 import type { JournalEntry } from "../../src/integrations/journal";
 import type { OcxConfig } from "../../src/types";
 import { createIntegrationStateStore } from "../../src/integrations/store";
-import { applyIntegration, disableIntegration } from "../../src/integrations/writer";
+import { applyIntegration, disableIntegration, restoreIntegration } from "../../src/integrations/writer";
 import { clinePendingPath } from "../../src/integrations/cline-io";
 import { resolveIntegrationPaths } from "../../src/integrations/registry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -592,7 +592,8 @@ describe("planning an undo of work that actually happened", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-undo-apply-"));
     const storeRoot = mkdtempSync(join(tmpdir(), "ocx-undo-apply-store-"));
     try {
-      const { input, applyOpId } = realApply(home, storeRoot);
+      const { input, configPath, applyOpId } = realApply(home, storeRoot);
+      expect(readFileSync(configPath, "utf8")).toContain("opencodex");
 
       // Every input this classification reads comes from the apply that just happened: the
       // ownership record it wrote and the document it produced, not values a builder supplied.
@@ -602,6 +603,11 @@ describe("planning an undo of work that actually happened", () => {
       expect(plan.changes.some(change => change.kind === "remove")).toBe(true);
       expect(plan.changes.some(change => change.kind === "replace")).toBe(false);
       expect(plan.changes.some(change => change.kind === "add")).toBe(false);
+
+      // And the undo does what the plan said: the managed block is gone from the file.
+      const restored = restoreIntegration({ ...input, opId: applyOpId });
+      expect(restored.ok).toBe(true);
+      expect(readFileSync(configPath, "utf8")).toBe("{}\n");
     } finally {
       removeTreeWithRetry(home);
       removeTreeWithRetry(storeRoot);
@@ -623,6 +629,11 @@ describe("planning an undo of work that actually happened", () => {
       expect(plan.canApply).toBe(true);
       expect(plan.changes.some(change => change.kind === "add")).toBe(true);
       expect(plan.changes.some(change => change.kind === "replace")).toBe(false);
+
+      // And the undo does what the plan said: the managed block is back in the file.
+      const restored = restoreIntegration({ ...input, opId: disabled.opId });
+      expect(restored.ok).toBe(true);
+      expect(readFileSync(configPath, "utf8")).toContain("opencodex");
     } finally {
       removeTreeWithRetry(home);
       removeTreeWithRetry(storeRoot);

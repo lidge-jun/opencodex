@@ -388,7 +388,7 @@ test("a confirmed change that names no profile is refused rather than guessed", 
       // A loader, not an array: resolving the roster is real work that reaches providers and can
       // finalize an initial model selection, and a confirmation this cannot check must not cause
       // it. An inert array would hide that.
-      models: () => { loads += 1; return MODELS; },
+      models: async () => { loads += 1; return MODELS; },
       port: 10100, env: {} as NodeJS.ProcessEnv, home, store, persistConfig: () => {},
     },
     { enabled: true },

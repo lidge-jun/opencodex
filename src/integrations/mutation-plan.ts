@@ -605,17 +605,19 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
  * Which places are ours in the file this undo would rewrite, read the same way the general
  * observation reads them.
  *
- * The store is selected exactly as the restore observation selects it, so a profile's own store is
- * consulted for a profile row rather than the root one. A record written for another location
- * grants nothing here, which is the same rule the writer applies.
+ * Read from the store bound to the target being rewritten, never from the store a historical row
+ * was selected out of. Aside keeps a copy of an operation in the root store while the profile's
+ * own store holds the ownership for its file, so asking the selected row's store would have
+ * described the wrong file's ownership. The selected store stays what it is for: the row and its
+ * snapshot. A record written for another location grants nothing here either, which is the same
+ * rule the writer applies.
  */
 function currentRecordFor(
   input: IntegrationWriteInput,
-  request: PreviewRequest,
   clientId: IntegrationClientId,
   configPath: string,
 ): OwnershipRecord | null {
-  const store = request.resolved?.store ?? input.store ?? createIntegrationStateStore();
+  const store = input.store ?? createIntegrationStateStore();
   const stored = store.readRecords()[clientId] ?? null;
   return stored && stored.clientId === clientId && stored.configPath === configPath ? stored : null;
 }
@@ -664,7 +666,7 @@ function previewRestore(input: IntegrationWriteInput, request: PreviewRequest): 
     // adds back from one it replaces and one it takes away. Neither is allowed to refuse: an
     // unreadable document is reported as PARSE_FAILED and leaves every place a replacement, and
     // restore eligibility stays the byte comparison it was.
-    record: currentRecordFor(input, request, observed.clientId, observed.configPath),
+    record: currentRecordFor(input, observed.clientId, observed.configPath),
     models: input.models,
     classified: { state },
     parsed: observed.before === null
