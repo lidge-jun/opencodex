@@ -53,7 +53,7 @@
  *    that are re-applied to an EXISTING file rather than trusted from its creation.
  */
 
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
@@ -397,6 +397,23 @@ function hardenLedgerFile(path: string, options: { readonly force?: boolean } = 
 }
 
 /**
+ * Fault injection for the journal's own filesystem steps. Internal test contract, not config.
+ *
+ * The compaction cleanup only runs when a step after the exclusive create fails, and there is no
+ * portable way to make a validate, harden or rename fail on demand. Without a seam the cleanup
+ * would ship asserted by reading alone, which is how a failure path stays broken.
+ */
+export type SpendJournalFaultStep = "create" | "write" | "validate" | "harden" | "rename";
+
+let journalFaultForTests: ((step: SpendJournalFaultStep, temp: string) => void) | undefined;
+
+export function setSpendJournalFaultForTests(
+  fault: ((step: SpendJournalFaultStep, temp: string) => void) | undefined,
+): void {
+  journalFaultForTests = fault;
+}
+
+/**
  * Does a directory entry exist here, whatever it points at?
  *
  * `existsSync` follows the link, so a symlink whose target is absent reads as "no file" and an
@@ -475,25 +492,39 @@ export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJ
       // leaves either the old journal or the new one, never a half-written ledger.
       if (ledgerEntryExists(path)) assertSafeLedgerFile(path);
       const temp = `${path}.compact-${process.pid}-${randomBytes(6).toString("hex")}`;
-      writeFileSync(temp, lines.map((line) => line + "\n").join(""), {
-        encoding: "utf8",
-        mode: 0o600,
-        flag: "wx",
-      });
-      // Everything after the temp exists is failure-cleaned. The name carries random bytes, so
-      // a validate, harden or rename that throws used to leave a uniquely named file behind and
-      // the next attempt made another: repeated failures accumulated instead of overwriting one
-      // fixed name. Only this exact temp is removed, and only on the failure path, so the
-      // original journal and the primary error both survive.
+      // The creation is INSIDE the cleanup, not before it. The name carries random bytes, so a
+      // failure anywhere after the entry exists used to leave a uniquely named file and the next
+      // attempt made another: repeated failures accumulated instead of overwriting one fixed
+      // name. Only an entry this call created is removed, so a name that turned out to belong to
+      // something else is left alone, and the original journal and the primary error survive.
+      let fd: number | undefined;
+      let created = false;
       let renamed = false;
       try {
+        // Exclusive create FIRST, so "this entry is ours" is a fact rather than a guess about
+        // which error a combined write threw. EEXIST leaves created false and the name is left
+        // alone; every failure after this point is cleaned because the entry is provably ours,
+        // including a write that stopped partway through.
+        journalFaultForTests?.("create", temp);
+        fd = openSync(temp, "wx", 0o600);
+        created = true;
+        journalFaultForTests?.("write", temp);
+        writeFileSync(fd, lines.map((line) => line + "\n").join(""), { encoding: "utf8" });
+        closeSync(fd);
+        fd = undefined;
+        journalFaultForTests?.("validate", temp);
         assertSafeLedgerFile(temp);
+        journalFaultForTests?.("harden", temp);
         hardenLedgerFile(temp, { force: true });
+        journalFaultForTests?.("rename", temp);
         renameSync(temp, path);
         renamed = true;
       } finally {
-        if (!renamed) {
-          try { unlinkSync(temp); } catch { /* the compaction failure is the one to report */ }
+        if (fd !== undefined) {
+          try { closeSync(fd); } catch { /* the compaction failure is the one to report */ }
+        }
+        if (created && !renamed) {
+          try { unlinkSync(temp); } catch { /* same */ }
         }
       }
       assertSafeLedgerFile(path);

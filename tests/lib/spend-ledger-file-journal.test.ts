@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   SPEND_LEDGER_JOURNAL_FILENAME,
   SPEND_LEDGER_SALT_FILENAME,
   resetSharedSpendLedgerForTest,
+  setSpendJournalFaultForTests,
 } from "../../src/lib/spend-reservation-ledger";
 import {
   acquireSpendLedgerOwner,
@@ -44,6 +45,7 @@ function ownedHome(prefix: string): string {
 }
 
 afterEach(() => {
+  setSpendJournalFaultForTests(undefined);
   for (const lease of leases.splice(0)) {
     try { lease.release(); } catch { /* a failed release must not mask the case's result */ }
   }
@@ -126,6 +128,77 @@ describe("spend ledger file journal", () => {
     expect(readdirSync(dir).filter(name => name.includes(".compact-"))).toEqual([]);
     expect(readdirSync(dir)).toContain(SPEND_LEDGER_JOURNAL_FILENAME);
     if (posixModes) expect(modeOf(path)).toBe(0o600);
+  });
+
+  /**
+   * Compaction failure paths, driven through the journal's own fault seam.
+   *
+   * The temp name carries random bytes, so a failure that leaves it behind is not one stale file
+   * but one per attempt. Each case below drives the same compaction repeatedly and asserts the
+   * directory holds no compaction residue and the original journal is untouched.
+   */
+  for (const step of ["validate", "harden", "rename"] as const) {
+    test(`a compaction that fails at ${step} leaves no temp behind`, () => {
+      const dir = ownedHome(`ocx-spend-compact-${step}-`);
+      const path = join(dir, SPEND_LEDGER_JOURNAL_FILENAME);
+      const journal = createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME));
+      journal.append(line("alias-one"));
+      const original = readFileSync(path, "utf8");
+
+      setSpendJournalFaultForTests((actual) => {
+        if (actual === step) throw new Error(`fault injected at ${step}`);
+      });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        expect(() => journal.rewrite?.call(journal, [line("checkpoint")])).toThrow(/fault injected/);
+      }
+      setSpendJournalFaultForTests(undefined);
+
+      expect(readdirSync(dir).filter(name => name.includes(".compact-"))).toEqual([]);
+      expect(readFileSync(path, "utf8")).toBe(original);
+    });
+  }
+
+  test("a compaction whose write stops partway leaves neither residue nor a truncated journal", () => {
+    const dir = ownedHome("ocx-spend-compact-partial-");
+    const path = join(dir, SPEND_LEDGER_JOURNAL_FILENAME);
+    const journal = createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME));
+    journal.append(line("alias-one"));
+    const original = readFileSync(path, "utf8");
+
+    // The entry already exists by the time the write runs, which is the case the exclusive
+    // create exists to make unambiguous: a short write still leaves a file that is ours.
+    setSpendJournalFaultForTests((actual, temp) => {
+      if (actual !== "write") return;
+      expect(existsSync(temp)).toBe(true);
+      throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(() => journal.rewrite?.call(journal, [line("checkpoint")])).toThrow(/no space left/);
+    }
+    setSpendJournalFaultForTests(undefined);
+
+    expect(readdirSync(dir).filter(name => name.includes(".compact-"))).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
+  test("a compaction candidate that already exists is left exactly as it was", () => {
+    const dir = ownedHome("ocx-spend-compact-eexist-");
+    const journal = createOwnedFileSpendJournal(mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME));
+    journal.append(line("alias-one"));
+
+    // Occupy the exact candidate name before the exclusive create reaches it. The create then
+    // fails EEXIST, and because this call never created the entry it must not remove it.
+    let occupied: string | undefined;
+    setSpendJournalFaultForTests((actual, temp) => {
+      if (actual !== "create" || occupied !== undefined) return;
+      occupied = temp;
+      writeFileSync(temp, "not ours\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+    });
+    expect(() => journal.rewrite?.call(journal, [line("checkpoint")])).toThrow();
+    setSpendJournalFaultForTests(undefined);
+
+    expect(occupied).toBeDefined();
+    expect(readFileSync(occupied!, "utf8")).toBe("not ours\n");
   });
 
   test("the alias salt is minted once and reused, so replay still matches live requests", () => {

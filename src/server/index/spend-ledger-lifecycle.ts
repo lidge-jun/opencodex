@@ -18,7 +18,10 @@ export interface SpendLedgerServerLifecycle {
 /** Acquire before config loading so every later startup failure has one rollback owner. */
 export function acquireSpendLedgerServerLifecycle(configDir: string): SpendLedgerServerLifecycle {
   const owner: SpendLedgerOwnerLease = acquireSpendLedgerOwner(configDir);
-  const failedStartStops: Array<() => void> = [];
+  // Each entry returns whatever the listener's own stop returned. Typed as void-or-promise
+  // because the rollback below has to WAIT on it: declaring it `() => void` let the call site
+  // compile while statically erasing the promise it needs to await.
+  const failedStartStops: Array<() => void | Promise<void>> = [];
   let released = false;
   const release = (): void => {
     if (released) return;
