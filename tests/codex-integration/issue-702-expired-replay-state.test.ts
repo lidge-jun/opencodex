@@ -793,26 +793,12 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.secondStatus).toBe(400);
     expect(JSON.parse(scenario.secondResponseText)).toEqual({
       error: {
-        message: "OpenAI forward continuation state is unavailable or expired; resend the full conversation without previous_response_id.",
+        message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
         type: "invalid_request_error",
         code: "previous_response_not_found",
       },
     });
     expect(scenario.upstreamRequests).toHaveLength(1);
-  });
-
-  test("a task-scope mismatch is indistinguishable from state this process never had", async () => {
-    // The refusal must not tell a caller which of the two happened. If a mismatch answered with
-    // its own message, the difference between that message and the one an unusable id already
-    // gets would itself disclose that retained state exists and belongs to another task.
-    const mismatch = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
-    const unusable = await runForwardScenario("expired");
-
-    expect(mismatch.secondStatus).toBe(unusable.secondStatus);
-    expect(mismatch.secondResponseText).toBe(unusable.secondResponseText);
-    // Neither answer reaches the model, so neither can be told apart by a side effect either.
-    expect(mismatch.upstreamRequests).toHaveLength(1);
-    expect(unusable.upstreamRequests).toHaveLength(1);
   });
 
   test("a WebSocket client whose task scope changed is refused and recovers by replaying in full", async () => {
@@ -882,6 +868,77 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.upstreamRequests[0]!.path).toBe("/responses");
     expect(scenario.upstreamRequests[0]!.body.previous_response_id).toBeUndefined();
     expect(JSON.stringify(scenario.upstreamRequests[0]!.body)).toContain(HISTORICAL_USER_SENTINEL);
+  });
+
+  test("a destination that owns continuations still gets an unknown id, but never a foreign one", async () => {
+    // An id this process cannot resolve is the destination's business, and forwarding it is the
+    // behavior the case below pins. An id this process CAN resolve, to another task's state, is
+    // not: forwarding it would continue that task's conversation for a different caller. The
+    // refusal therefore comes before the native exception, not after it.
+    const upstreamRequests: Record<string, unknown>[] = [];
+    let upstream: ReturnType<typeof Bun.serve> | null = null;
+    let server: ReturnType<typeof startServer> | null = null;
+    try {
+      upstream = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          upstreamRequests.push(await request.json() as Record<string, unknown>);
+          return new Response(completedSse("resp_native_forwarded", "forwarded"), {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+      saveConfig({
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "test-openai",
+        providers: {
+          "test-openai": {
+            adapter: "openai-responses",
+            baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+            allowPrivateNetwork: true,
+            apiKey: "provider-key",
+            defaultModel: "gpt-5.5",
+            statelessResponses: false,
+          },
+        },
+      } as OcxConfig);
+      server = startServer(0);
+      rememberResponseState(
+        { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
+        { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
+        undefined,
+        { force: true, clientThreadId: "task-a" },
+      );
+      const send = (previousResponseId: string, threadId: string) => originalFetch(
+        new URL("/v1/responses", server!.url),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-codex-parent-thread-id": threadId },
+          body: JSON.stringify({
+            model: "test-openai/gpt-5.5",
+            previous_response_id: previousResponseId,
+            input: [inputMessage(CURRENT_USER_SENTINEL)],
+            stream: true,
+            store: false,
+          }),
+        },
+      );
+
+      const foreign = await send(FIRST_RESPONSE_ID, "task-b");
+      expect(foreign.status).toBe(400);
+      expect(await foreign.json()).toMatchObject({ error: { code: "previous_response_not_found" } });
+      expect(upstreamRequests).toHaveLength(0);
+
+      const unknown = await send("resp_never_seen_here", "task-b");
+      expect(unknown.status).toBe(200);
+      await unknown.text();
+      expect(upstreamRequests).toHaveLength(1);
+      expect(upstreamRequests[0]!.previous_response_id).toBe("resp_never_seen_here");
+    } finally {
+      await server?.stop(true);
+      await upstream?.stop(true);
+    }
   });
 
   test.each(["message", "function", "custom"] as const)("API-key Responses providers can still forward native %s continuation state", async kind => {

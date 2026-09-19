@@ -244,17 +244,13 @@ export async function prepareResponsesRequest(
     body = expandPreviousResponseInput(body, inboundClientThreadId);
     const replayFailure = previousResponseReplayFailure(body);
     if (replayFailure?.reason === "scope_mismatch") {
-      // Bounded and content-free: neither the task scopes nor anything about the retained entry
-      // may reach a log line.
+      // Bounded and content-free: no task scope and nothing about the retained entry.
       console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
     }
-    // A mismatch deliberately falls through to the route-dependent refusals below, which are the
-    // same ones an id this process has never seen receives. Answering it here instead would give
-    // it a different message from an unknown id on the identical route, and that difference is
-    // itself the disclosure: a client could tell "state exists and belongs to another task" from
-    // "no state". Falling through also keeps a destination that genuinely owns the continuation
-    // chain working exactly as it does today for an unknown id.
-    if (replayFailure && replayFailure.reason !== "scope_mismatch") {
+    // Refuse here, before the route-dependent handling below. A mismatch is not an id this
+    // process cannot resolve: it is one it resolved to another task's state. Letting it reach a
+    // destination that owns the continuation chain would forward that task's conversation.
+    if (replayFailure) {
       return formatErrorResponse(
         400,
         "previous_response_not_found",

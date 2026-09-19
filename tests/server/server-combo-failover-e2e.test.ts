@@ -2453,9 +2453,8 @@ describe("server combo failover 030 activation matrix", () => {
       previous_response_id: "resp_combo_scoped",
       input: fullInput,
     }, {}, { "x-codex-parent-thread-id": "other-task" });
-    // The envelope an unresolvable continuation already gets; a different one would leak state.
     const genericError = {
-      error: { message: "Routed continuation requires unavailable local history; resend the full conversation without previous_response_id.",
+      error: { message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
         type: "invalid_request_error", code: "previous_response_not_found" },
     };
     expect(legacyResponse.status).toBe(400);
