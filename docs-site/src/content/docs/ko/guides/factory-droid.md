@@ -1,7 +1,51 @@
 ---
-title: Factory Droid 브리지
-description: 로컬 Responses 호환 브리지를 통해 Factory Droid 모델을 opencodex에 연결합니다.
+title: Factory Droid 연동
+description: Droid에서 OpenCodex 모델을 사용하거나 로컬 브리지로 Factory 모델을 OpenCodex에 연결합니다.
 ---
+
+Factory Droid와 OpenCodex는 두 방향으로 연결할 수 있습니다. Droid 안에서 OpenCodex 모델을
+사용하려면 아래의 관리형 연동을 사용합니다. 뒤의 브리지 절은 반대 방향, 즉 OpenCodex에서
+Factory가 제공하는 모델을 호출할 때 사용합니다.
+
+## Droid에서 OpenCodex 모델 사용
+
+[Droid CLI](https://docs.factory.ai/droid-cli/quickstart)를 설치하고 로그인한 뒤, OpenCodex를
+루프백에서 실행하고 OpenCodex **연동** 화면에서 **Factory Droid**를 활성화합니다. 같은 작업을
+CLI로 실행할 수도 있습니다.
+
+```bash
+ocx integration client status --client droid
+ocx integration client enable --client droid
+```
+
+OpenCodex는 활성 모델마다 하나의 항목을 `~/.factory/settings.json`의 `customModels`에 추가합니다.
+각 항목은 안정적인 `custom:opencodex:<provider/model>` ID, OpenCodex `/v1` Base URL,
+Factory의 `generic-chat-completion-api` 프로바이더를 사용합니다. 컨텍스트, 이미지, reasoning
+메타데이터는 실제 OpenCodex 카탈로그에서 가져옵니다. Droid가 전체 컨텍스트 창을 출력으로
+요청하지 않도록 응답 한도는 16,384 토큰으로 설정합니다. 실제 API 키는 파일에 기록하지 않습니다.
+
+이 연동은 정확히 OpenCodex가 추가한 항목만 소유합니다. 기존 Factory 설정과 사용자 지정 모델은
+그대로 유지됩니다. 모델 선택 변경이나 `ocx sync`는 이미 소유한 카탈로그를 갱신합니다.
+비활성화는 OpenCodex 항목만 제거하고, 되돌리기는 선택한 작업 직전의 파일 스냅샷을 복원합니다.
+
+```bash
+ocx integration client disable --client droid
+ocx integration client restore --op <opId> [--confirm-drift]
+```
+
+`~/.factory/settings.json`을 바꾸지 않고 시험하려면 임시 파일로 내보내 `--settings`로 전달합니다.
+
+```bash
+ocx export --client droid --out /tmp/opencodex-droid-settings.json --force
+droid exec --settings /tmp/opencodex-droid-settings.json \
+  --model custom:opencodex:gpt-5.6-luna \
+  "DROID_OK만 답하세요."
+```
+
+이 연동은 루프백 전용입니다. Factory 사용자 지정 모델 스키마로는 자격 증명을 저장하지 않고
+OpenCodex의 전용 원격 인증 헤더를 전달할 수 없으므로, OpenCodex는 비루프백 바인드를 거부합니다.
+
+## OpenCodex에서 Factory 모델 사용
 
 Factory Droid는 에이전트 런타임이며, 문서화된 OpenAI 호환 추론 엔드포인트가 아닙니다. 내부
 Factory LLM URL을 사용자 지정 프로바이더로 등록했을 때 `403 Forbidden`이 발생한다면,

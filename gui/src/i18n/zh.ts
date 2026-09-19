@@ -2888,4 +2888,7 @@ export const zh: Record<TKey, string> = {
   "remote.event.status": "状态",
   "remote.event.tool": "远程工具",
   "remote.event.error": "错误",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "管理 Factory Droid settings.json 中启用的 OpenCodex 模型。同步仅更新 OpenCodex 条目，禁用会移除这些条目，撤销会恢复先前文件。",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

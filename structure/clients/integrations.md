@@ -7,6 +7,15 @@ third-party client's existing config without taking ownership of the rest of tha
 promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
 and refuses refresh, disable, or restore when the current file cannot be classified safely.
 
+Factory Droid is the row-oriented case: its contribution contains one exact
+`customModels[id=custom:opencodex:<selector>]` fragment per active model. The shared selector merge
+preserves sibling rows and top-level settings; disable removes only recorded rows and restore uses
+the same snapshot transaction as every other JSON client. Droid reaches the loopback
+`/v1/chat/completions` surface through `generic-chat-completion-api`. The export stays loopback-only
+because its schema cannot carry the dedicated remote admission header without persisting a secret.
+Each row uses Factory's documented 16,384-token response ceiling rather than turning the context
+window into the request's output budget.
+
 Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
 The OrcaRouter login ceiling applies to its key exchange; client configuration files retain the
@@ -95,6 +104,7 @@ All registered integrations consume the shared catalog, including [Anthropic see
 | Kimi Code | `capabilities: ["image_in"]` only for declared image input; omitted for unknown/text-only models |
 | MiniMax Code | No per-model image capability field emitted |
 | Raycast | `abilities.vision.supported` |
+| Factory Droid | `noImageSupport` (inverse of declared image input) |
 
 No exporter infers image support from a model name. Existing client eligibility filters and ownership/refresh rules remain unchanged; exports do not add fields to schemas without a supported mapping.
 

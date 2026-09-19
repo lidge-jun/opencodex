@@ -2889,4 +2889,7 @@ export const ko: Record<TKey, string> = {
   "remote.event.status": "상태",
   "remote.event.tool": "원격 도구",
   "remote.event.error": "오류",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Factory Droid settings.json에서 OpenCodex 활성 모델을 관리합니다. 동기화는 OpenCodex 항목만 갱신하고, 비활성화는 해당 항목을 제거하며, 되돌리기는 이전 파일을 복원합니다.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

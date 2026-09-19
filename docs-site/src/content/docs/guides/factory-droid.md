@@ -1,7 +1,53 @@
 ---
-title: Factory Droid bridge
-description: Connect Factory Droid models to opencodex through a local Responses-compatible bridge.
+title: Factory Droid integrations
+description: Use OpenCodex models in Droid, or connect Factory models to OpenCodex through a local bridge.
 ---
+
+Factory Droid and OpenCodex can connect in two directions. The managed integration below is the
+normal choice when you want to run OpenCodex models inside Droid. The bridge section is for the
+opposite direction, where OpenCodex calls a model supplied by Factory.
+
+## Use OpenCodex models in Droid
+
+Install and sign in to the [Droid CLI](https://docs.factory.ai/droid-cli/quickstart), start OpenCodex
+on loopback, then enable **Factory Droid** on the OpenCodex **Integrations** page. The equivalent CLI
+commands are:
+
+```bash
+ocx integration client status --client droid
+ocx integration client enable --client droid
+```
+
+OpenCodex adds one row per active model to `~/.factory/settings.json` under `customModels`. Each row
+uses a stable `custom:opencodex:<provider/model>` ID, the OpenCodex `/v1` base URL, and Factory's
+`generic-chat-completion-api` provider. Context, image, and reasoning metadata come from the live
+OpenCodex catalog. The response ceiling is 16,384 tokens so Droid does not request the full context
+window as output. OpenCodex does not write a real API key.
+
+The integration owns only those exact OpenCodex rows. Existing Factory settings and custom models
+remain untouched. A model selection change or `ocx sync` refreshes an already-owned catalog.
+Disabling removes only the OpenCodex rows, and restore puts back the exact file snapshot recorded
+for the selected operation:
+
+```bash
+ocx integration client disable --client droid
+ocx integration client restore --op <opId> [--confirm-drift]
+```
+
+For a process-only trial that does not modify `~/.factory/settings.json`, export to a temporary file
+and pass it to Droid:
+
+```bash
+ocx export --client droid --out /tmp/opencodex-droid-settings.json --force
+droid exec --settings /tmp/opencodex-droid-settings.json \
+  --model custom:opencodex:gpt-5.6-luna \
+  "Reply with DROID_OK only."
+```
+
+This integration is loopback-only. Factory's custom model schema cannot carry OpenCodex's dedicated
+remote admission header without persisting a credential, so OpenCodex refuses a non-loopback bind.
+
+## Use Factory models in OpenCodex
 
 Factory Droid is an agent runtime, not a documented OpenAI-compatible inference endpoint. If a
 custom provider pointed at an internal Factory LLM URL returns `403 Forbidden`, changing only the

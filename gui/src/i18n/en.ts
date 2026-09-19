@@ -2901,6 +2901,9 @@ export const en = {
   "remote.event.status": "Status",
   "remote.event.tool": "Remote tool",
   "remote.event.error": "Error",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Manages OpenCodex active models in Factory Droid settings.json. Sync updates only OpenCodex rows, disable removes them, and undo restores the prior file.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 } as const;
 
 export type TKey = keyof typeof en;

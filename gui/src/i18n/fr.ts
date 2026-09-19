@@ -2855,4 +2855,7 @@ export const fr: Record<TKey, string> = {
   "remote.event.status": "État",
   "remote.event.tool": "Outil distant",
   "remote.event.error": "Erreur",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Gère les modèles OpenCodex actifs dans le fichier settings.json de Factory Droid. La synchronisation ne met à jour que les entrées OpenCodex, la désactivation les supprime et l’annulation restaure le fichier précédent.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };

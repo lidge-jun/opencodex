@@ -309,6 +309,12 @@ describe("ocx export --out (accept criterion 3)", () => {
 });
 
 describe("ocx export argument validation (accept criterion 4)", () => {
+  test("loopback-only clients refuse a remote live proxy before fetching its catalog", async () => {
+    const result = await run(["--client", "droid", "--json"], { baseUrl: "http://192.0.2.1:10100" });
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("droid export is loopback-only");
+  });
+
   test("an unknown --client names every valid value", async () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "cursor"], { baseUrl: proxy.baseUrl });

@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast ve omo'yu opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI ve Factory Droid'i opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On altı istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -24,6 +24,11 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekild
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
+| Factory Droid | `~/.factory/settings.json` | JSON | yeni oturumlarda ve model seçici yenilendiğinde | yok — yalnızca loopback |
+
+Factory Droid, Factory'nin `generic-chat-completion-api` lehçesi üzerinden her etkin OpenCodex modeli
+için bir `customModels` girdisi alır. Entegrasyon yalnızca kendi kararlı kimliklerini yönetir,
+kullanıcı modellerini korur ve yalnızca loopback üzerinde çalışır.
 
 Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
 `llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
@@ -232,9 +237,9 @@ ocx mcode
 ```
 
 Bağlandıktan sonra `ocx sync` ve `POST /api/sync`, yönetilen MCode, Pi, Aside,
-Raycast ve omo kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
+Raycast, omo ve Factory Droid kataloglarını yeniler. Proxy başlangıcı da yönetilen Raycast
 kataloğunu yeniler. Model görünürlüğü, sağlayıcı veya ön ayar değişiklikleri Pi,
-Aside, Raycast ve omo kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
+Aside, Raycast, omo ve Factory Droid kataloglarını günceller. Eksik, dışarıdan düzenlenmiş, güvenli olmayan
 veya elle kaldırılmış bloklara dokunmaz; yeniden bağlamak istediğinizde
 entegrasyonu açıkça etkinleştirin.
 

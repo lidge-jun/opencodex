@@ -2890,4 +2890,7 @@ export const tr: Record<TKey, string> = {
   "remote.event.status": "Durum",
   "remote.event.tool": "Uzak araç",
   "remote.event.error": "Hata",
+  "integrations.tab.factoryDroid": "Factory Droid",
+  "integrations.semantics.factoryDroid": "Factory Droid settings.json dosyasındaki etkin OpenCodex modellerini yönetir. Eşitleme yalnızca OpenCodex girdilerini günceller, devre dışı bırakma bunları kaldırır ve geri alma önceki dosyayı geri yükler.",
+  "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };
