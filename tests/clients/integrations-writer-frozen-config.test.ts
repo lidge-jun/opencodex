@@ -357,6 +357,10 @@ test("a roster edited during the preference write is not the roster written", as
       },
     },
     { profileId: 0, enabled: true },
+    // A confirmed change, which is what brings the roster forward: the check has to read the same
+    // rows the write will use. An unconfirmed change resolves them later, because a preference
+    // write that fails must not have done model work by then.
+    { revalidate: async () => null },
   );
 
   expect(result.ok).toBe(true);
