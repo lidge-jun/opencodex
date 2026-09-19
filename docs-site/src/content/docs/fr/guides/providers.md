@@ -131,6 +131,15 @@ ocx logout <provider>
 
 Les vérifications de quota Google Antigravity utilisent des points de terminaison Google fixes, y compris le repli vers la liste des modèles. Elles prennent en charge le DNS Fake-IP transparent pour ces destinations en conservant la vérification TLS, le refus des redirections et les contrôles des adresses privées. Une URL de base personnalisée ne modifie que les requêtes de modèles ; `NO_PROXY` conserve la politique de connexion directe.
 
+### Diagnostic de perte du schéma d’outil Google
+
+Les déclarations d’outils Google sont compilées selon la classe du point de terminaison sélectionné.
+Lorsque le débogage du fournisseur est activé, l’élargissement de compatibilité n’émet que cette
+classe, des catégories de perte fixes, des compteurs bornés et un indicateur de troncature. Les noms
+d’outils et de propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Ce
+diagnostic observe la conversion compatible existante sans rejeter la requête. Les schémas de sortie
+natifs n’entrent pas dans ce diagnostic.
+
 
 Après un échec définitif d'actualisation de Nous, exécutez `ocx login nous` pour vous réauthentifier.
 

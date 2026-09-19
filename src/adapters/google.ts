@@ -23,6 +23,7 @@ import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-tr
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionAnchor, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
 import { compileGoogleWireBody } from "./google-wire-compiler";
+import type { GoogleToolSchemaLossReport, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import {
   antigravityUsesReplayCache,
@@ -738,6 +739,13 @@ function invalidGoogleShapeEvent(
 }
 
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
+  const toolSchemaProfile = {
+    endpointClass: provider.googleMode ?? "ai-studio",
+  } satisfies GoogleToolSchemaProfile;
+  const reportToolSchemaLoss = (report: GoogleToolSchemaLossReport): void => {
+    if (!report.lossy) return;
+    debugProviderDiagnosticLazy("google", "google-tool-schema-loss", () => ({ ...report }));
+  };
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
@@ -971,7 +979,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
           draftRequest.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
         }
-        const compiled = compileGoogleWireBody(draftRequest);
+        const compiled = compileGoogleWireBody(draftRequest, toolSchemaProfile);
+        reportToolSchemaLoss(compiled.toolSchemaLossReport);
         const request = compiled.body;
         restoreGoogleToolName = compiled.restoreToolName;
         // Compile names before replay: signatures are keyed by the exact provider-visible name.
@@ -1021,7 +1030,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       if (provider.googleMode === "vertex") {
-        const compiled = compileGoogleWireBody(body);
+        const compiled = compileGoogleWireBody(body, toolSchemaProfile);
+        reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
         const vertexLocation = provider.location || process.env.GOOGLE_CLOUD_LOCATION || "global";
@@ -1067,7 +1077,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
       headers["x-goog-api-key"] = apiKey;
 
-      const compiled = compileGoogleWireBody(body);
+      const compiled = compileGoogleWireBody(body, toolSchemaProfile);
+      reportToolSchemaLoss(compiled.toolSchemaLossReport);
       restoreGoogleToolName = compiled.restoreToolName;
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },

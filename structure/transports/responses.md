@@ -553,6 +553,11 @@ Arguments, user text, and schema property names are never rewritten.
 
 ### Declared-tool membership by inbound wire
 
+Inbound declaration membership and schemas remain unchanged by Google's
+[tool-schema loss report](../providers/google.md#google-tool-schema-loss-reporting). Only the final
+Google wire compiler observes and reports compatibility narrowing; the Responses bridges neither
+derive nor consume that report.
+
 `declaredToolNames` carries the request's tool catalog into both bridges, and it does two separate
 jobs that are separately controlled.
 

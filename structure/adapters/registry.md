@@ -105,6 +105,10 @@ Do not add a second switch/list of adapter factories in request routing. Focused
 
 This decision does not change routed `apply_patch` behavior, Cursor structured-edit conversion, Azure/MiMo request construction, or provider wire selection. Those behaviors remain owned by their existing modules and focused tests. The registry exposes the universe and semantic relationships; the next stack layer consumes that metadata for generic conformance.
 
+Registry selection neither derives nor consumes Google's endpoint-scoped
+[tool-schema loss report](../providers/google.md#google-tool-schema-loss-reporting). That report is
+owned by the selected adapter's final compiler and cannot affect adapter selection.
+
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
 ## Moonshot `$ref`-with-siblings normalization

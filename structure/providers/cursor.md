@@ -135,6 +135,9 @@ on the freeform path.
 Namespaced tools do not acquire bare-shell behavior. Regression coverage lives in
 `tests/providers/cursor/cursor-tool-definitions.test.ts`.
 
+Google's [tool-schema loss report](google.md#google-tool-schema-loss-reporting) is confined to the
+Google final compiler and does not change Cursor's advertised or normalized schema ownership.
+
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
 Shared raw-reasoning events retain content-channel presentation; provider-authored thinking keeps its existing summary path. See [bridge contract](chat-compat.md).

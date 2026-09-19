@@ -14,7 +14,7 @@ the [bounded ingestion contract](transports/inventory.md#bounded-response-ingest
 | `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
 | `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `tool-call-validation.ts`, `tool-schema.ts`, `errors.ts`). Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
 | `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. |
-| `src/adapters/google.ts` | Gemini bridge. |
+| `src/adapters/google.ts` | Gemini bridge. The final wire compiler owns [endpoint-scoped, content-free tool-schema loss reporting](providers/google.md#google-tool-schema-loss-reporting); reporting does not change routing or request bytes. |
 | `src/adapters/azure.ts` | Azure OpenAI bridge. |
 | `src/adapters/cursor.ts`, `src/adapters/cursor/` | Cursor protobuf transport: discovery, request builder, event decoding, MCP, thread continuity, native-exec policy. |
 | `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog and JWT support RPCs remain outside inference-send accounting. |

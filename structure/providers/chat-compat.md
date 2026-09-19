@@ -26,6 +26,10 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Reasoning and tool-result compatibility
 
+Google tool-declaration narrowing is observed by the Google final compiler, not this shared Chat
+compatibility layer. Its endpoint profile and privacy boundary are specified in the
+[Google provider contract](google.md#google-tool-schema-loss-reporting).
+
 Chat models sometimes return a freeform call body under a common alternate field or wrap the whole
 body in a Markdown fence. Restoration in `src/responses/apply-patch-envelope.ts` is deliberately
 narrow: only bare `exec` and `apply_patch` accept one recognized alternate field or one complete

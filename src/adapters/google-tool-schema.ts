@@ -8,7 +8,31 @@ const ALLOWED_TYPES = new Set(["string", "integer", "number", "boolean", "array"
 const MAX_SCHEMA_DEPTH = 24; // Google's documented nesting limit is 32; leave headroom for CCA.
 const MAX_DEREF_DEPTH = 16;
 const MAX_SCHEMA_NODES = 1_024;
+export const GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT = 255;
 const BUDGET_EXHAUSTED = Symbol("schema-budget-exhausted");
+const NUMERIC_BOUND_KEYS = ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"] as const;
+const SIZE_BOUND_KEYS = ["minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties"] as const;
+const UNSUPPORTED_CONSTRAINT_KEYS = [
+  "allOf",
+  "oneOf",
+  "not",
+  "multipleOf",
+  "pattern",
+  "additionalProperties",
+  "uniqueItems",
+  "contains",
+  "minContains",
+  "maxContains",
+  "dependentRequired",
+  "dependentSchemas",
+  "patternProperties",
+  "propertyNames",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+  "default",
+  "examples",
+  "title",
+] as const;
 const MERGED_SCHEMA_KEYS = [
   "type",
   "nullable",
@@ -24,9 +48,109 @@ const MERGED_SCHEMA_KEYS = [
 
 type SanitizeResult = Schema | typeof BUDGET_EXHAUSTED;
 
+export type GoogleToolSchemaEndpointClass = "ai-studio" | "vertex" | "cloud-code-assist";
+
+export interface GoogleToolSchemaProfile {
+  endpointClass: GoogleToolSchemaEndpointClass;
+}
+
+export type GoogleToolSchemaLossCategory =
+  | "enum-value-filtered"
+  | "numeric-bound-dropped"
+  | "size-bound-dropped"
+  | "union-widened"
+  | "recursive-ref-widened"
+  | "dereference-limit-widened"
+  | "depth-limit-widened"
+  | "node-budget-widened"
+  | "unsupported-constraint-dropped"
+  | "invalid-schema-widened";
+
+export interface GoogleToolSchemaLossReport {
+  version: 1;
+  endpointClass: GoogleToolSchemaEndpointClass;
+  lossy: boolean;
+  truncated: boolean;
+  categories: Partial<Record<GoogleToolSchemaLossCategory, number>>;
+}
+
+export interface GoogleToolSchemaSanitizeResult {
+  parameters: Record<string, unknown>;
+  lossReport: GoogleToolSchemaLossReport;
+}
+
 interface SanitizeState {
   activeRefs: Set<string>;
   remainingNodes: number;
+  budgetReported: boolean;
+  report: GoogleToolSchemaLossReport;
+}
+
+export function createGoogleToolSchemaLossReport(
+  profile: GoogleToolSchemaProfile,
+): GoogleToolSchemaLossReport {
+  return {
+    version: 1,
+    endpointClass: profile.endpointClass,
+    lossy: false,
+    truncated: false,
+    categories: {},
+  };
+}
+
+export function addGoogleToolSchemaLoss(
+  report: GoogleToolSchemaLossReport,
+  category: GoogleToolSchemaLossCategory,
+  amount = 1,
+): void {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  report.lossy = true;
+  const increment = Math.floor(amount);
+  const current = report.categories[category] ?? 0;
+  const next = current + increment;
+  if (next >= GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT) {
+    report.categories[category] = GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT;
+    if (next > GOOGLE_TOOL_SCHEMA_LOSS_COUNT_LIMIT) report.truncated = true;
+    return;
+  }
+  report.categories[category] = next;
+}
+
+export function mergeGoogleToolSchemaLossReport(
+  target: GoogleToolSchemaLossReport,
+  source: GoogleToolSchemaLossReport,
+): void {
+  for (const [category, count] of Object.entries(source.categories)) {
+    addGoogleToolSchemaLoss(target, category as GoogleToolSchemaLossCategory, count);
+  }
+  if (source.truncated) target.truncated = true;
+}
+
+function reportBudgetExhausted(state: SanitizeState): void {
+  if (state.budgetReported) return;
+  state.budgetReported = true;
+  addGoogleToolSchemaLoss(state.report, "node-budget-widened");
+}
+
+function reportDroppedConstraints(node: Schema, state: SanitizeState): void {
+  let numericBounds = 0;
+  for (const key of NUMERIC_BOUND_KEYS) {
+    if (Object.hasOwn(node, key)) numericBounds++;
+  }
+  addGoogleToolSchemaLoss(state.report, "numeric-bound-dropped", numericBounds);
+
+  let sizeBounds = 0;
+  for (const key of SIZE_BOUND_KEYS) {
+    if (Object.hasOwn(node, key)) sizeBounds++;
+  }
+  addGoogleToolSchemaLoss(state.report, "size-bound-dropped", sizeBounds);
+
+  let unsupported = 0;
+  for (const key of UNSUPPORTED_CONSTRAINT_KEYS) {
+    if (Object.hasOwn(node, key)) unsupported++;
+  }
+  if (Object.hasOwn(node, "const") && typeof node.const !== "string") unsupported++;
+  addGoogleToolSchemaLoss(state.report, "unsupported-constraint-dropped", unsupported);
 }
 
 function isRecord(value: unknown): value is Schema {
@@ -85,9 +209,11 @@ function normalizeType(value: unknown, out: Schema, preserveNullType: boolean): 
   else out.nullable = true;
 }
 
-function sanitizeEnum(value: unknown): string[] | undefined {
+function sanitizeEnum(value: unknown, state?: SanitizeState): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const values = [...new Set(value.filter((item): item is string => typeof item === "string"))];
+  const stringValues = value.filter((item): item is string => typeof item === "string");
+  if (state) addGoogleToolSchemaLoss(state.report, "enum-value-filtered", value.length - stringValues.length);
+  const values = [...new Set(stringValues)];
   return values.length > 0 ? values : undefined;
 }
 
@@ -98,10 +224,16 @@ function normalizeAnyOf(
   refDepth: number,
   state: SanitizeState,
 ): Schema {
-  if (!Array.isArray(value) || value.length === 0) return {};
+  if (!Array.isArray(value) || value.length === 0) {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
+    return {};
+  }
   const schemas: Schema[] = [];
   for (let index = 0; index < value.length; index++) {
-    if (state.remainingNodes <= 0) return {};
+    if (state.remainingNodes <= 0) {
+      reportBudgetExhausted(state);
+      return {};
+    }
     const schema = sanitizeSchema(value[index], defs, depth + 1, refDepth, true, state);
     if (schema === BUDGET_EXHAUSTED) return {};
     schemas.push(schema);
@@ -130,6 +262,7 @@ function normalizeAnyOf(
 
   // CCA's Claude bridge turns typed anyOf branches into an invalid input_schema. Widen only this
   // node when a union cannot be collapsed losslessly; parent annotations and structure survive.
+  addGoogleToolSchemaLoss(state.report, "union-widened");
   return {};
 }
 
@@ -144,7 +277,10 @@ function sanitizeProperties(
   const properties: Record<string, Schema> = Object.create(null) as Record<string, Schema>;
   for (const name in value) {
     if (!Object.hasOwn(value, name)) continue;
-    if (state.remainingNodes <= 0) break;
+    if (state.remainingNodes <= 0) {
+      reportBudgetExhausted(state);
+      break;
+    }
     // Property names form a name bag and must never be interpreted as schema keywords.
     const schema = sanitizeSchema(value[name], defs, depth + 1, refDepth, false, state);
     if (schema === BUDGET_EXHAUSTED) break;
@@ -161,15 +297,35 @@ function sanitizeSchema(
   preserveNullType: boolean,
   state: SanitizeState,
 ): SanitizeResult {
-  if (state.remainingNodes <= 0) return BUDGET_EXHAUSTED;
+  if (state.remainingNodes <= 0) {
+    reportBudgetExhausted(state);
+    return BUDGET_EXHAUSTED;
+  }
   state.remainingNodes -= 1;
-  if (depth >= MAX_SCHEMA_DEPTH || !isRecord(node)) return {};
+  if (depth >= MAX_SCHEMA_DEPTH) {
+    addGoogleToolSchemaLoss(state.report, "depth-limit-widened");
+    return {};
+  }
+  if (!isRecord(node)) {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
+    return {};
+  }
 
-  if (typeof node.$ref === "string" && refDepth < MAX_DEREF_DEPTH) {
+  reportDroppedConstraints(node, state);
+
+  if (typeof node.$ref === "string" && refDepth >= MAX_DEREF_DEPTH) {
+    addGoogleToolSchemaLoss(state.report, "dereference-limit-widened");
+  } else if (typeof node.$ref === "string") {
     const target = resolveRef(node.$ref, defs);
     if (isRecord(target)) {
-      if (state.activeRefs.has(node.$ref)) return {};
+      if (state.activeRefs.has(node.$ref)) {
+        addGoogleToolSchemaLoss(state.report, "recursive-ref-widened");
+        return {};
+      }
       state.activeRefs.add(node.$ref);
+      // Unsupported constraints on a definition are not copied into the safe merged view below,
+      // so account for them before selecting only sanitizer-owned keys.
+      reportDroppedConstraints(target, state);
       // Select only inputs the sanitizer can consume. Spreading an untrusted definition here would
       // enumerate and allocate every unsupported annotation before the node budget can stop work.
       const merged = mergeRefTarget(target, node);
@@ -178,6 +334,8 @@ function sanitizeSchema(
       } finally {
         state.activeRefs.delete(node.$ref);
       }
+    } else {
+      addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
     }
   }
 
@@ -188,40 +346,66 @@ function sanitizeSchema(
   if (typeof node.description === "string") out.description = node.description;
   if (typeof node.format === "string") out.format = node.format;
 
-  const enumValues = sanitizeEnum(node.enum ?? (typeof node.const === "string" ? [node.const] : undefined));
+  const enumValues = sanitizeEnum(
+    node.enum ?? (typeof node.const === "string" ? [node.const] : undefined),
+    state,
+  );
   if (enumValues) out.enum = enumValues;
 
   const properties = sanitizeProperties(node.properties, defs, depth, refDepth, state);
   if (properties) out.properties = properties;
 
   if (properties && Array.isArray(node.required)) {
-    const required = [...new Set(node.required.filter((item): item is string => (
+    const validRequired = node.required.filter((item): item is string => (
       typeof item === "string" && Object.hasOwn(properties, item)
-    )))];
+    ));
+    const required = [...new Set(validRequired)];
+    addGoogleToolSchemaLoss(
+      state.report,
+      "unsupported-constraint-dropped",
+      node.required.length - validRequired.length,
+    );
     if (required.length > 0) out.required = required;
   }
 
-  if (state.remainingNodes <= 0) return out;
+  if (state.remainingNodes <= 0) {
+    if (Object.hasOwn(node, "items") || Object.hasOwn(node, "anyOf")) reportBudgetExhausted(state);
+    return out;
+  }
 
   if (isRecord(node.items)) {
     const items = sanitizeSchema(node.items, defs, depth + 1, refDepth, false, state);
     if (items !== BUDGET_EXHAUSTED) out.items = items;
+  } else if (Object.hasOwn(node, "items")) {
+    addGoogleToolSchemaLoss(state.report, "invalid-schema-widened");
   }
 
-  if (state.remainingNodes <= 0) return out;
+  if (state.remainingNodes <= 0) {
+    if (Object.hasOwn(node, "anyOf")) reportBudgetExhausted(state);
+    return out;
+  }
   if (node.anyOf !== undefined) {
     Object.assign(out, normalizeAnyOf(node.anyOf, defs, depth, refDepth, state));
   }
   return out;
 }
 
-export function sanitizeGeminiToolParameters(parameters: unknown): Record<string, unknown> {
+export function sanitizeGeminiToolParametersWithReport(
+  parameters: unknown,
+  profile: GoogleToolSchemaProfile,
+): GoogleToolSchemaSanitizeResult {
+  const report = createGoogleToolSchemaLossReport(profile);
+  if (parameters === undefined) {
+    return { parameters: { type: "object", properties: {} }, lossReport: report };
+  }
   try {
     const defs = new Map<string, unknown>();
     collectDefs(parameters, defs);
     const state: SanitizeState = {
       activeRefs: new Set(),
       remainingNodes: MAX_SCHEMA_NODES,
+      budgetReported: false,
+      report,
     };
     const sanitized = sanitizeSchema(parameters, defs, 0, 0, false, state);
     const root = sanitized === BUDGET_EXHAUSTED ? {} : sanitized;
@@ -230,9 +414,14 @@ export function sanitizeGeminiToolParameters(parameters: unknown): Record<string
     // missing root type even when those forms are valid general-purpose JSON Schema.
     root.type = "object";
     if (!isRecord(root.properties)) root.properties = {};
-    return root;
+    return { parameters: root, lossReport: report };
   } catch {
     // Last-resort containment: no third-party schema may break every tool in the request.
-    return { type: "object", properties: {} };
+    addGoogleToolSchemaLoss(report, "invalid-schema-widened");
+    return { parameters: { type: "object", properties: {} }, lossReport: report };
   }
+}
+
+export function sanitizeGeminiToolParameters(parameters: unknown): Record<string, unknown> {
+  return sanitizeGeminiToolParametersWithReport(parameters, { endpointClass: "ai-studio" }).parameters;
 }

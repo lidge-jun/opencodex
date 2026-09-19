@@ -13,6 +13,10 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
+only. It copies no request content and adds no bytes to the upstream wire; see the
+[Google provider contract](../providers/google.md#google-tool-schema-loss-reporting).
+
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
 `JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These

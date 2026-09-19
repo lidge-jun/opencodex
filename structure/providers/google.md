@@ -73,6 +73,23 @@ configuration contradicts JSON-constrained text; and a `json_schema` format carr
 no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
 with no structured-output request keeps its existing `responseModalities` behavior.
 
+## Google tool-schema loss reporting
+
+`src/adapters/google-tool-schema.ts` compiles tool declarations against an explicit `ai-studio`,
+`vertex`, or `cloud-code-assist` endpoint profile. All three profiles currently use the same
+conservative documented subset. Compilation returns the compatible parameters plus a versioned
+loss report containing only endpoint class, fixed category counts, and bounded/truncated flags.
+Counts saturate at 255. The report never retains tool or property names, paths, descriptions,
+schema or enum values, references, hashes, request ids, project ids, or account ids.
+
+This layer observes loss and does not reject it. The emitted request body remains the same as
+before reporting. The existing limits remain 24 schema levels, 16 local-reference dereferences,
+and 1,024 visited nodes; reporting stops with those limits and does not inspect omitted content.
+`src/adapters/google-wire-compiler.ts` aggregates reports across declarations, and
+`src/adapters/google.ts` emits a `google-tool-schema-loss` provider diagnostic only when provider
+debug is enabled. `generationConfig.responseMimeType` and `generationConfig.responseJsonSchema`
+are output-schema fields and never enter tool-schema sanitation or loss accounting.
+
 ## Google wire-shape projection
 
 `src/adapters/google-wire-shape.ts` describes a compiled Google request without carrying any of
