@@ -156,6 +156,77 @@ describe("upstream sends per logical request", () => {
     }
   });
 
+  test("a Devin turn the budget refuses last logs no send at the request boundary", async () => {
+    // The defect this pins lives in the outer runTurn path, not in the adapter: the attempt's
+    // first send was logged before the adapter ran, so a request whose allowance earlier combo
+    // members had already spent recorded a send Devin never made. The direct-adapter case in
+    // tests/adapters covers the executor side; only this one can see `sendCount`.
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousJwtFlag = process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    const home = mkdtempSync(join(tmpdir(), "devin-send-denied-"));
+    process.env.OPENCODEX_HOME = home;
+    delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    const apiKey = "devin-denied-test";
+    await saveCredential("devin", {
+      access: apiKey,
+      refresh: apiKey,
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth",
+      apiBaseUrl: DEVIN_API_SERVER,
+    });
+    setCachedCatalogForTests({
+      apiKey,
+      host: DEVIN_API_SERVER,
+      fetchedAt: Date.now(),
+      byUid: new Map([["swe-2", { modelUid: "swe-2", label: "SWE-2", disabled: false }]]),
+    });
+    const urls: string[] = [];
+    globalThis.fetch = (async input => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ error: { message: "busy", type: "server_error" } }), {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    // Devin sits last behind chat targets that spend the allowance first, which is the shape
+    // that leaves nothing for its initial send.
+    const config = {
+      defaultProvider: "t0",
+      providers: {
+        t0: transientChatProvider("t0"),
+        devin: { adapter: "devin", baseUrl: DEVIN_API_SERVER, models: ["swe-2"] },
+      },
+      combos: {
+        fan: {
+          strategy: "failover",
+          targets: [{ provider: "t0", model: "model-t0" }, { provider: "devin", model: "swe-2" }],
+        },
+      },
+    } as unknown as OcxConfig;
+
+    try {
+      const response = await handleResponses(responsesRequest("combo/fan"), config, logCtx);
+      const body = await response.text();
+      const devinAttempt = (logCtx.attempts ?? []).find(attempt => attempt.adapter === "devin");
+
+      expect({
+        devinCalls: urls.filter(url => url.includes("GetChatMessage")).length,
+        devinSendCount: devinAttempt?.sendCount ?? 0,
+      }, `status ${response.status}: ${body.slice(0, 200)}`).toEqual({ devinCalls: 0, devinSendCount: 0 });
+      // The members that did send still account for themselves, so the refusal removed a
+      // phantom rather than suppressing real counts.
+      expect(totalSends(logCtx)).toBe(urls.filter(url => !url.includes("GetChatMessage")).length);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousJwtFlag === undefined) delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+      else process.env.OPENCODEX_DEVIN_SEND_USER_JWT = previousJwtFlag;
+      setCachedCatalogForTests(null);
+      removeTreeWithRetry(home);
+    }
+  });
+
   test("a 5xx streak on a single target spends the base allowance and stops", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };
