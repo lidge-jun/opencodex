@@ -4,7 +4,7 @@ import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
-import { serviceApiTokenFingerprint } from "../lib/service-secrets";
+import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { findAvailablePort } from "../server/ports";
 import { startMachineListener } from "./machine-listener";
 import { readClientConnectionState } from "./state";
@@ -24,8 +24,18 @@ export function standaloneRecycleEnv(
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
-  if (admissionToken && serviceApiTokenFingerprint(admissionToken) === disconnectedTokenFingerprint) {
-    delete childEnv.OPENCODEX_API_AUTH_TOKEN;
+  if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
+    // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can
+    // reintroduce the disconnected token.
+    return childEnv;
+  }
+  if (admissionToken) delete childEnv.OPENCODEX_API_AUTH_TOKEN;
+  // The respawned `ocx start` loads OCX_API_TOKEN_FILE into OPENCODEX_API_AUTH_TOKEN when the
+  // env token is absent, so vet the file by content: drop the pointer when it is unreadable or
+  // holds the disconnected token, keep it when it holds a different operator credential.
+  if (!childEnv.OCX_API_TOKEN_FILE?.trim()) return childEnv;
+  const fileToken = loadServiceTokenFromFile(childEnv);
+  if (fileToken === null || serviceApiTokenFingerprint(fileToken) === disconnectedTokenFingerprint) {
     delete childEnv.OCX_API_TOKEN_FILE;
   }
   return childEnv;
