@@ -14,7 +14,7 @@ test("product fonts retain priority in the UI font stack", () => {
 
 // Keep system fonts ahead of Apple SD Gothic Neo, which also covers Latin.
 // This guards fallback order; actual glyph selection requires a browser check.
-test.each(["system-ui", "-apple-system", "BlinkMacSystemFont"])(
+test.each(["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "system-ui"])(
   "%s precedes Apple SD Gothic Neo in the UI font stack",
   systemFont => {
     const systemIndex = families.indexOf(systemFont);
