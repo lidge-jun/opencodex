@@ -87,6 +87,19 @@ export interface RouteResult {
   routeDecision?: RouteDecisionTraceV1;
 }
 
+const REGISTRY_BY_ID = new Map(PROVIDER_REGISTRY.map(entry => [entry.id, entry]));
+
+const REGISTRY_STATIC_MODEL_IDS = new Map<string, readonly string[]>(
+  PROVIDER_REGISTRY.map(entry => {
+    const ids = new Set<string>();
+    for (const id of entry.models ?? []) ids.add(id);
+    for (const id of registryModelIdKeys(entry)) ids.add(id);
+    return [entry.id, Object.freeze([...ids])];
+  }),
+);
+
+const REGISTRY_ALIAS_BY_ID = new Map(PROVIDER_REGISTRY.flatMap(entry => entry.alias ? [[entry.id, entry.alias]] : []));
+
 export function captureRouteStaticPolicy(
   providerName: string,
   modelId: string,
@@ -94,7 +107,8 @@ export function captureRouteStaticPolicy(
   effectiveAlias?: string | null,
   inboundWire: "responses" | "chat" | "anthropic" = "responses",
 ): ResolvedModelPolicy {
-  const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
+  const registryEntry = REGISTRY_BY_ID.get(providerName)
+    ?? PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   const transportMatchedRegistry = !!registryEntry
     && providerMatchesRegistryTransportWithStaticGuards(providerName, provider);
   return resolveModelPolicy({
@@ -125,19 +139,6 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
   },
 ];
 
-const REGISTRY_BY_ID = new Map(PROVIDER_REGISTRY.map(entry => [entry.id, entry]));
-
-const REGISTRY_STATIC_MODEL_IDS = new Map<string, readonly string[]>(
-  PROVIDER_REGISTRY.map(entry => {
-    const ids = new Set<string>();
-    for (const id of entry.models ?? []) ids.add(id);
-    for (const id of registryModelIdKeys(entry)) ids.add(id);
-    return [entry.id, Object.freeze([...ids])];
-  }),
-);
-
-const REGISTRY_ALIAS_BY_ID = new Map(PROVIDER_REGISTRY.flatMap(entry => entry.alias ? [[entry.id, entry.alias]] : []));
-
 
 /**
  * Known native model ids for a provider — the decode source for the Codex slug codec
@@ -157,6 +158,12 @@ export function knownModelIdsForProvider(
     const staticIds = REGISTRY_STATIC_MODEL_IDS.get(provName);
     if (staticIds) {
       for (let i = 0; i < staticIds.length; i++) ids.add(staticIds[i]);
+    } else {
+      const dynamicEntry = PROVIDER_REGISTRY.find(entry => entry.id === provName);
+      if (dynamicEntry) {
+        for (const id of dynamicEntry.models ?? []) ids.add(id);
+        for (const id of registryModelIdKeys(dynamicEntry)) ids.add(id);
+      }
     }
   }
   for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
@@ -268,7 +275,8 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   provider = { ...provider, _apiKeyAttempt: provider._apiKeyAttempt ?? captureProviderApiKeySelection(provider) };
-  const registryEntry = REGISTRY_BY_ID.get(providerName);
+  const registryEntry = REGISTRY_BY_ID.get(providerName)
+    ?? PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     // A row whose adapter no longer matches its registry entry still reaches the Responses
@@ -708,7 +716,8 @@ function routeModelInternal(
         // and whose registry alias has not been claimed by another configured provider name or alias
         const registryMatches = Object.entries(config.providers).filter(([name, provider]) => {
           if (provider.alias !== undefined) return false;
-          const regAlias = REGISTRY_ALIAS_BY_ID.get(name);
+          const regAlias = REGISTRY_ALIAS_BY_ID.get(name)
+            ?? PROVIDER_REGISTRY.find(entry => entry.id === name)?.alias;
           if (!regAlias || regAlias.toLowerCase() !== requestedLower) return false;
           const claimedByOther = Object.entries(config.providers).some(([otherName, p]) =>
             otherName !== name && (
