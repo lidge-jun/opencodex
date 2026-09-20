@@ -170,6 +170,22 @@ still cover the rule, which is a judgement only review makes.
   pages are compared against their English source, so a changed default fails a check instead of
   leaving two documents to disagree; see [`chat-compat.md`](providers/chat-compat.md).
   Enforced by `tests/ci-workflows/docs-developer-role-policy.test.ts`.
+- **INV-DESKTOP-01** — Where the desktop app has a usable tray, only the tray's Quit ends it:
+  closing the window and the platform's quit gesture hide, which on macOS needs the default menu's
+  predefined Quit replaced because it raises no cancellable event. Every ending drains first — the
+  tray's Quit, an update's coordinated restart, and a window close on a session with no tray all
+  hold the exit, stop the app-owned runtime through the management stop, and treat only an observed
+  child exit or a refused connection as proof it stopped. No shell file kills the child, a runtime
+  this app did not start is never stopped, and a runtime started while an exit is in flight is not
+  started at all; see [`desktop-shell.md`](desktop-shell.md).
+  Enforced by `tests/clients/desktop-exit-ownership.test.ts`.
+- **INV-DESKTOP-02** — Tray availability is an answer from the session, not the tray backend's
+  construction result and not the watcher's mere existence: the shell asks whether
+  `org.kde.StatusNotifierWatcher` reports a host registered, and reads an unanswerable probe the
+  same way as an unregistered one. Linux assumes no tray until the probe answers. Where there is
+  none, no icon is claimed, the window is shown on launch whatever the launch origin, and closing it
+  quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
+  Enforced by `tests/clients/desktop-tray-availability.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

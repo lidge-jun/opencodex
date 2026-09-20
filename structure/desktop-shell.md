@@ -5,11 +5,62 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
-`desktop/ui/` is only a short bootstrap page. Once `/healthz` answers, the shell
-navigates the webview to the proxy's loopback dashboard
-(`/#/usage`) rather than bundling or serving `gui/dist` itself.
-Only the bootstrap page has Tauri IPC capability; the loopback dashboard never
-does because `dangerousRemoteDomainIpcAccess` is not configured.
+`desktop/ui/` is the startup surface. Once the runtime reports healthy the shell navigates the
+webview to the proxy's loopback dashboard (`/#/usage`) rather than bundling or serving `gui/dist`
+itself. The page renders what the shell tells it and probes nothing on its own; it asks
+`startup_phases` for the state list rather than restating it, takes the current state from
+`startup_snapshot` on load because the first states finish in milliseconds, and then follows the
+`startup-phase` event. It uses no `alert`, `confirm` or `prompt`: the embedded webview implements
+none of the matching WKUIDelegate panel methods on macOS, so a platform dialog is declined without
+drawing anything.
+`withGlobalTauri` is on so that page can invoke without a bundler. Only the local app origin
+carries a capability, so the loopback dashboard reaches no command: `capabilities/default.json`
+declares no `remote` entry, and Tauri checks the ACL for any invoke from a non-local origin.
+
+## Startup, quit and the tray
+
+The window is created and shown before anything is registered, resolved, probed or started, and
+`desktop/src-tauri/src/startup.rs` runs the whole sequence inside it as named states —
+registering, resolving, probing, attaching or starting, waiting, then ready or failed — under one
+30-second deadline. Every probe beneath that deadline is bounded by the time left rather than by the
+HTTP client's own timeout, so the ceiling is the ceiling. The failure state carries a retry, the
+child's exit code and a copyable diagnostic naming the state, the endpoint, the configuration home
+and the runtime's last output; `desktop/src-tauri/src/sidecar.rs` consumes the spawn event stream
+into that record instead of discarding it, which is what makes an immediate sidecar exit
+distinguishable from a slow start. The page asks for the state list and the run's progress rather
+than reconstructing either, because the early states finish faster than a listener can attach.
+
+Registering runs first, before the runtime is touched. A login launch starts hidden, so a tray
+installed only after a successful start would leave a failed start with no window and no icon. The
+login item is registered in that state too, before the tray, so its Start at Login checkbox reads
+the state first run leaves behind. A launch carrying the `--autostart` argument that the login
+item passes back is the only one that starts hidden, and only where there is a tray to hide in.
+
+`desktop/src-tauri/src/exit.rs` owns what ends the process. Where there is a usable tray, closing
+the window and the platform's quit gesture both hide; only the tray's Quit asks to end, and an
+installed update asks for a coordinated restart. Where there is no usable tray, closing the window
+is the quit. macOS needs one thing beyond the event loop: Tauri's default menu carries a predefined
+Quit wired to Cocoa's `terminate:` and the pinned tao raises no cancellable event for it, so
+`desktop/src-tauri/src/menu.rs` rebuilds that menu with an ordinary item on the same accelerator.
+
+Every ending drains first. The app-owned runtime is asked to stop, and it counts as gone only when
+the child reports its own exit or the endpoint refuses a connection — a timeout or an unauthorized
+reply is not proof. Nothing kills the child; the CLI's stop restores client configuration and lets
+in-flight requests finish. A drain that has not completed within `DRAIN_DEADLINE` is reported and
+the exit still proceeds, which can leave the runtime running: refusing to quit when the user asked
+is the worse answer, and a standing runtime is recoverable with `ocx stop`. A runtime this app did
+not start is never stopped. A quit that arrives while the sequence is starting one is held: the
+spawn and the record of ownership happen under the same lock the drain takes.
+
+`desktop/src-tauri/src/tray_availability.rs` asks the session bus whether
+`org.kde.StatusNotifierWatcher` reports a host registered; macOS and Windows answer yes without a
+probe. Neither construction success nor the watcher's mere existence is the question — the pinned
+Linux backend creates an AppIndicator and reports success with no host attached, and a watcher with
+no host accepts registrations and draws nothing. Until the probe answers, Linux assumes no tray, so
+a window closed in the first moments quits rather than vanishing. Where the answer is no, no tray
+icon is claimed, the window is shown on launch whatever the launch origin, and closing it quits
+through the same drain. The update controls live in the tray menu, so a session without one checks
+for updates in the background and has no place to install them from.
 
 `desktop/src-tauri/src/first_run.rs` turns Start at Login on once per installation,
 before the tray is built so its checkbox reads the resulting state. A menu bar app
