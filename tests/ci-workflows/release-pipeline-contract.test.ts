@@ -127,5 +127,48 @@ describe("release pipeline contract", () => {
     expect(attach).toBeDefined();
     expect(needsOf(attach).sort()).toEqual(["package-desktop", "package-standalone", "publish"]);
   });
+});
 
+describe("service lifecycle trigger coverage", () => {
+  const lifecycleText = readFileSync(repoPath(".github", "workflows", "service-lifecycle.yml"), "utf8");
+  const releaseText = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
+
+  test("both triggers cover the service directory and the desktop shell", () => {
+    const pushPaths = triggerPaths(lifecycleText, "push", "workflow_dispatch");
+    const prPaths = triggerPaths(lifecycleText, "pull_request", "push");
+    for (const paths of [prPaths, pushPaths]) {
+      expect(paths).toContain("src/service.ts");
+      expect(paths).toContain("src/service/**");
+      expect(paths).toContain("desktop/**");
+    }
+    expect([...prPaths].sort()).toEqual([...pushPaths].sort());
+  });
+
+  test("the release service gate matches every implemented service module and desktop file", () => {
+    const gateSource = releaseText.match(/grep -Eq '(\^\([^']+\)\$)'/)?.[1];
+    expect(gateSource).toBeDefined();
+    const gate = new RegExp(gateSource!);
+
+    // Derived from the tree, not restated: the service implementation is a directory, so
+    // every module in it must satisfy the gate that demands lifecycle evidence.
+    const serviceModules = readdirSync(repoPath("src", "service"))
+      .filter(entry => entry.endsWith(".ts"));
+    expect(serviceModules.length).toBeGreaterThanOrEqual(10);
+    for (const module of serviceModules) {
+      expect(gate.test(`src/service/${module}`), `src/service/${module}`).toBe(true);
+    }
+    expect(gate.test("src/service.ts")).toBe(true);
+
+    const desktopSurfaces = [
+      ...readdirSync(repoPath("desktop", "scripts")).map(entry => `desktop/scripts/${entry}`),
+      ...readdirSync(repoPath("desktop", "src-tauri", "src")).map(entry => `desktop/src-tauri/src/${entry}`),
+    ];
+    expect(desktopSurfaces.length).toBeGreaterThanOrEqual(10);
+    for (const path of desktopSurfaces) {
+      expect(gate.test(path), path).toBe(true);
+    }
+
+    expect(gate.test("src/router.ts")).toBe(false);
+    expect(gate.test("docs-site/src/pages/index.astro")).toBe(false);
+  });
 });
