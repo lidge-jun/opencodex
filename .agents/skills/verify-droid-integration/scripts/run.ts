@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { mkdir } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 type Status = "pass" | "fail" | "error" | "unsupported";
@@ -207,6 +207,10 @@ if (exportResult.exitCode !== 0 || exportResult.timedOut) {
 const settings = await Bun.file(settingsPath).json() as DroidSettings;
 if (!Array.isArray(settings.customModels) || settings.customModels.length === 0) {
   throw new Error("exported settings contain no customModels");
+}
+if (settings.customModels.some(model => Object.hasOwn(model, "apiKey"))) {
+  await unlink(settingsPath);
+  throw new Error("exported settings contain an API key field");
 }
 const ids = settings.customModels.map(model => model.id);
 if (new Set(ids).size !== ids.length) throw new Error("exported custom model IDs are not unique");
