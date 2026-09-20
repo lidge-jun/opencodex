@@ -6,6 +6,7 @@ import { saveConfig } from "../../src/config";
 import {
   resetCodexModelEntitlementCacheForTests,
 } from "../../src/codex/model-entitlements";
+import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -36,6 +37,20 @@ afterEach(() => {
   isolatedCodexHome = null;
   if (testDir) removeTreeWithRetry(testDir);
 });
+
+/**
+ * `startServer` returns while native-main convergence still holds its
+ * `recovery-pending` fence; a request that lands inside it gets the fail-closed
+ * answer (no main credential, no upstream roster fetch). These tests assert on
+ * main-admitted entitlement rows, so they wait for the gate — the same seam
+ * codex-envkey-admission-substitution uses — rather than racing it on a loaded
+ * Windows shard.
+ */
+async function startSettledServer(): Promise<ReturnType<typeof startServer>> {
+  const server = startServer(0);
+  await waitForNativeMainStartupGate();
+  return server;
+}
 
 function configWithStaticModels(claudeCode?: OcxConfig["claudeCode"]): OcxConfig {
   return {
@@ -219,7 +234,7 @@ test("Codex discovery applies the OpenAI context cap to native rows (#1430)", as
   };
   config.providerContextCaps = { openai: 272_000 };
   saveConfig(config);
-  const server = startServer(0);
+  const server = await startSettledServer();
   try {
     const response = await fetch(new URL("/v1/models?client_version=1.0.0", server.url));
     expect(response.status).toBe(200);
@@ -451,7 +466,7 @@ test("Codex discovery exposes the observed native as a selector row plus one glo
     }
     return originalFetch(input, init);
   }) as typeof fetch;
-  const server = startServer(0);
+  const server = await startSettledServer();
   try {
     const plain = await fetch(new URL("/v1/models", server.url))
       .then(response => response.json()) as { data: Array<{ id: string }> };
@@ -589,7 +604,7 @@ test("the request's client_version reaches entitlement discovery (#2886)", async
   // restored, or every later test in this file inherits it.
   let server: ReturnType<typeof startServer> | null = null;
   try {
-    server = startServer(0);
+    server = await startSettledServer();
     await fetch(new URL("/v1/models?client_version=0.151.7", server.url))
       .then(response => response.json());
     expect(askedVersions.length).toBeGreaterThan(0);
@@ -648,7 +663,7 @@ test("with no inbound or runtime version, /v1/models still exposes the gated row
 
   let server: ReturnType<typeof startServer> | null = null;
   try {
-    server = startServer(0);
+    server = await startSettledServer();
     // No client_version on the request, and no persisted runtime in this isolated home.
     const catalog = await fetch(new URL("/v1/models", server.url))
       .then(response => response.json()) as { data: Array<{ id: string }> };
