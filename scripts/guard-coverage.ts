@@ -53,29 +53,7 @@ function refusals(file: string, source: string): Site[] {
   return out;
 }
 
-const redSource = await Bun.file("tests/red.ts").text();
-
-type RedEntry = { file: string; from: string };
-const redEntries: RedEntry[] = [];
-for (const block of redSource.split(/\n  \{\n/).slice(1)) {
-  const file = block.match(/file:\s*"([^"]+)"/)?.[1];
-  // The template-literal arm has to skip escaped backticks: a non-greedy
-  // `([\s\S]*?)` stops at the first \` inside the entry and truncates it,
-  // which showed up as four entries the tool could not locate.
-  const from = block.match(
-    /from:\s*(?:`((?:[^`\\]|\\.)*)`|'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/,
-  );
-  if (!file || !from) continue;
-  const raw = from[1] ?? from[2] ?? from[3] ?? "";
-  // One left-to-right pass, not a chain of replaces: chained, `\\b` becomes
-  // `\b` and then the next rule reprocesses it. Each escape is consumed once.
-  const source = raw.replace(/\\(.)/g, (_, ch: string) => {
-    if (ch === "n") return "\n";
-    if (ch === "t") return "\t";
-    return ch; // ` $ " ' \ and anything else stands for itself
-  });
-  redEntries.push({ file, from: source });
-}
+import { GUARDS } from "../tests/red-guards";
 
 /** The guard's own block, by brace matching. A guard that opens no block
  *  covers only its own lines — a fixed line window over-claimed in the Rust
@@ -98,24 +76,25 @@ function blockEnd(source: string, at: number, from: string): number {
 
 const covered = new Map<string, Set<number>>();
 const unlocated: string[] = [];
-for (const entry of redEntries) {
-  const source = await Bun.file(entry.file).text().catch(() => "");
-  const at = source.indexOf(entry.from);
+for (const guard of GUARDS) {
+  const source = await Bun.file(guard.file).text().catch(() => "");
+  const at = source.indexOf(guard.from);
   if (at === -1) {
-    unlocated.push(`${entry.file}: ${entry.from.split("\n")[0]!.trim()}`);
+    // Not "this guard covers nothing" — the tool cannot see it.
+    unlocated.push(`${guard.file}: ${guard.from.split("\n")[0]!.trim()}`);
     continue;
   }
   const start = source.slice(0, at).split("\n").length;
-  const end = source.slice(0, blockEnd(source, at, entry.from)).split("\n").length;
-  if (!covered.has(entry.file)) covered.set(entry.file, new Set());
-  const lines = covered.get(entry.file)!;
+  const end = source.slice(0, blockEnd(source, at, guard.from)).split("\n").length;
+  if (!covered.has(guard.file)) covered.set(guard.file, new Set());
+  const lines = covered.get(guard.file)!;
   for (let line = start; line <= end; line++) lines.add(line);
 }
 
-const MUST_PARSE = ["target.model !== undefined", "speechUrl"];
-const blind = MUST_PARSE.filter(f => !redEntries.some(e => e.from.includes(f)));
-if (blind.length || redEntries.length < 4 || unlocated.length) {
-  console.error(`guard-coverage cannot read tests/red.ts: parsed ${redEntries.length} entries` +
+const MUST_COVER = ["target.model !== undefined", "speechUrl"];
+const blind = MUST_COVER.filter(f => !GUARDS.some(g => g.from.includes(f)));
+if (blind.length || GUARDS.length < 4 || unlocated.length) {
+  console.error(`guard-coverage cannot use the guard list: ${GUARDS.length} entries` +
     (blind.length ? `, missing ${blind.join(", ")}` : ""));
   for (const entry of unlocated) console.error(`  could not locate  ${entry}`);
   process.exit(2);
