@@ -14,15 +14,35 @@
  * Run: bun tests/red.ts
  */
 
-import { $ } from "bun";
 
 import { GUARDS, VOICE } from "./red-guards";
 
 
 
+/**
+ * A suite run with a wall-clock limit.
+ *
+ * A break can make the code loop rather than fail — removing a deadline check
+ * does exactly that — and without a timeout the runner waits forever holding
+ * the lock, with the guard still removed. That happened in the sibling repo.
+ * A timeout counts as a failure, which is the right answer: the guard was
+ * noticed, just not by returning.
+ */
+const SUITE_TIMEOUT_MS = 60_000;
+
 async function runSuite(suite: string): Promise<{ ok: boolean; output: string }> {
-  const done = await $`bun test ${suite}`.nothrow().quiet();
-  return { ok: done.exitCode === 0, output: done.stdout.toString() + done.stderr.toString() };
+  const proc = Bun.spawn(["bun", "test", suite], { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => proc.kill(), SUITE_TIMEOUT_MS);
+  try {
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const code = await proc.exited;
+    return { ok: code === 0, output: out + err + (code === null ? "\n(timed out)" : "") };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
