@@ -11,6 +11,7 @@ import {
   clearModelCache,
   clearProviderDiscoveryStatus,
   captureModelCacheGeneration,
+  observeModelCacheRevision,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
@@ -108,6 +109,14 @@ import { captureProviderGather, materializeCapturedHeaders } from "./gather-capt
 export interface ProviderModelsResult {
   readonly models: CatalogModel[];
   readonly outcome: CatalogGatherProviderModelOutcome;
+  /**
+   * The provider's cache content revision as it stood when these rows were chosen.
+   *
+   * Sampled here rather than by the caller because only this point is synchronous with the
+   * choice. A caller reading it after its own await can observe a revision another flight
+   * published in between, and would then record these rows under that flight's identity.
+   */
+  readonly contentRevision: string;
 }
 export const refreshingModelsAuthResolver: ModelsAuthResolver = { kind: "refreshing" };
 
@@ -145,7 +154,11 @@ export async function fetchProviderModelsWithAuth(
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
-  ): ProviderModelsResult => ({ models, outcome: { provider: name, state } });
+  ): ProviderModelsResult => ({
+    models,
+    outcome: { provider: name, state },
+    contentRevision: observeModelCacheRevision(name),
+  });
   // Capture before any credential refresh or outbound await. OAuth account changes clear this
   // generation, so a request started with the former account cannot later publish its result.
   const cacheGeneration = captureModelCacheGeneration(name);
@@ -372,7 +385,11 @@ export async function fetchProviderModelsWithAuth(
       ...(cursorFetch ? { fetch: cursorFetch } : {}),
     });
     if (liveResult.ok) {
-      const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
+      const available = filterCursorConfiguredModelsByLiveDiscovery(
+        configured,
+        liveResult.models,
+        liveResult.maxModeModels ?? [],
+      );
       const result = available.length > 0 ? available : configured;
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.

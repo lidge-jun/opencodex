@@ -31,6 +31,7 @@ import {
   disableIntegrationCoordinated,
   overwriteIntegrationCoordinated,
   restoreIntegrationCoordinated,
+  type CoordinatedIntegrationOptions,
   type IntegrationRestoreInput,
   type IntegrationWriteInput,
   type WriteRefused,
@@ -45,7 +46,13 @@ import {
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
-import { loadExportModels } from "./model-rows";
+import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot } from "./model-rows";
+import {
+  previewIntegration,
+  type IntegrationMutationPlan,
+  type IntegrationPlanOperation,
+  type PreviewRequest,
+} from "../../integrations/mutation-plan";
 
 
 const INTEGRATION_ROUTE_PREFIX = "/api/client-integrations/";
@@ -247,6 +254,37 @@ async function buildIntegrationWriteInput(
 }
 
 /**
+ * The same input a mutation would build, from the read-only roster.
+ *
+ * It differs from the mutation's in exactly one way, and the difference is deliberate: the roster
+ * comes from `previewExportModels`, which gathers without running the initial-selection finalizer
+ * that persists configuration. Everything else is shared, so a preview and the commit that follows
+ * it cannot disagree for any reason except the state genuinely moving.
+ */
+async function buildIntegrationPreviewInput(
+  clientId: IntegrationClientId,
+  ctx: ManagementContext,
+  store: IntegrationStateStore,
+): Promise<{ input: IntegrationWriteInput; identity: string } | null> {
+  const snapshot = previewExportSnapshot(ctx.config);
+  // No cached roster means no honest snapshot to plan against. Gathering one here would make a
+  // read refresh credentials and write the provider cache, which is the thing preview must not do.
+  if (snapshot === null) return null;
+  return {
+    identity: snapshot.identity,
+    input: {
+      clientId,
+      models: snapshot.models,
+      config: ctx.config,
+      port: Number(ctx.url.port) || ctx.config.port,
+      store,
+      io: integrationMutationTestHooks?.io,
+      ...pathOverrides(),
+    },
+  };
+}
+
+/**
  * The file's current bytes, or `null` when it is missing.
  *
  * `null` is NOT the same as `""`: an absent file and an empty one are
@@ -269,6 +307,97 @@ function invalidClientResponse(ctx: ManagementContext): Response {
     code: "invalid_integration_client",
     validClients: INTEGRATION_CLIENT_IDS,
   }, 400, ctx.req, ctx.config);
+}
+
+/**
+ * No cached model roster, so there is nothing honest to plan against.
+ *
+ * Answered as a bounded refusal rather than by gathering one: discovery refreshes credentials and
+ * writes the provider cache, and a preview that did either would be a write wearing a read's name.
+ * The caller opens the models view or performs the mutation directly.
+ */
+function previewUnavailableResponse(ctx: ManagementContext): Response {
+  return jsonResponse({
+    error: "no model roster is cached yet, so this change cannot be planned",
+    code: "integration_preview_unavailable",
+  }, 409, ctx.req, ctx.config);
+}
+
+/**
+ * A confirmed plan, or a reason the request cannot carry one.
+ *
+ * Both fields or neither. A half-bound request is rejected rather than quietly treated as
+ * unbound, because dropping one half would answer 200 to a caller who believed their
+ * confirmation was being checked.
+ */
+function planBindingOf(
+  body: Record<string, unknown>,
+): { operation: IntegrationPlanOperation; fingerprint: string } | "none" | "half" | "unknown-operation" {
+  const { operation, planFingerprint } = body;
+  if (operation === undefined && planFingerprint === undefined) return "none";
+  if (operation === undefined || typeof planFingerprint !== "string" || planFingerprint.length === 0) return "half";
+  if (operation !== "apply" && operation !== "overwrite" && operation !== "disable" && operation !== "restore") {
+    return "unknown-operation";
+  }
+  return { operation, fingerprint: planFingerprint };
+}
+
+function halfBoundResponse(ctx: ManagementContext): Response {
+  return jsonResponse({
+    error: "operation and planFingerprint must be sent together",
+    code: "invalid_preview_binding",
+  }, 400, ctx.req, ctx.config);
+}
+
+/**
+ * Re-plan and compare before the mutation runs.
+ *
+ * The fingerprint is an optimistic token, never authorization: management authentication and
+ * every ownership rule still apply. What it adds is that a confirmation stops meaning anything
+ * the moment the state it described moved, and the refusal carries a fresh plan so the operator
+ * decides again against what is true now.
+ */
+function stalePlanGuard(
+  clientId: IntegrationClientId,
+  ctx: ManagementContext,
+  store: IntegrationStateStore,
+  request: PreviewRequest,
+  fingerprint: string,
+  capturedIdentity: string | null,
+): {
+  revalidate: NonNullable<CoordinatedIntegrationOptions["revalidate"]>;
+  response: () => Response | null;
+} {
+  let stale: IntegrationMutationPlan | "unavailable" | null = null;
+  return {
+    revalidate: async frozen => {
+      /*
+       * Plan the coordinator's OWN frozen input, never a freshly built one. Rebuilding here let
+       * the check validate against one roster while the mutation wrote from another, because an
+       * ordinary load can replace the snapshot at any time and nothing serialises that against
+       * this lock. The captured identity is verified separately, so a replacement is detected
+       * without ever swapping the roster this mutation is about to use.
+       */
+      if (exportSnapshotIdentity(ctx.config) !== capturedIdentity) {
+        const refreshed = await buildIntegrationPreviewInput(clientId, ctx, store);
+        stale = refreshed === null ? "unavailable" : previewIntegration(refreshed.input, request);
+        return { ok: false, reason: "conflict", state: "conflict", clientId, message: "the model roster changed while confirming" };
+      }
+      const plan = previewIntegration(frozen, request);
+      if (plan.canApply && plan.fingerprint === fingerprint) return null;
+      stale = plan;
+      return { ok: false, reason: "conflict", state: plan.state, clientId, message: "that confirmation no longer describes this file" };
+    },
+    response: () => {
+      if (stale === null) return null;
+      if (stale === "unavailable") return previewUnavailableResponse(ctx);
+      return jsonResponse({
+        error: "integration preview is stale",
+        code: "integration_preview_stale",
+        plan: stale,
+      }, 409, ctx.req, ctx.config);
+    },
+  };
 }
 
 function internalErrorResponse(error: unknown, ctx: ManagementContext): Response {
@@ -565,6 +694,88 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }
   }
 
+  if (url.pathname === "/api/client-integrations/preview") {
+    if (req.method !== "POST") return null;
+    const parsed = await readJsonBody(ctx);
+    if (parsed instanceof Response) return parsed;
+    if (!isPlainRecord(parsed)) {
+      return jsonResponse({ error: "preview body must be an object", code: "invalid_preview_body" }, 400, req, ctx.config);
+    }
+    const previewClient = parsed.clientId;
+    if (typeof previewClient !== "string"
+      || !(INTEGRATION_CLIENT_IDS as readonly string[]).includes(previewClient)) {
+      return invalidClientResponse(ctx);
+    }
+    /*
+     * Aside is a set of profiles, not one file, and every mutation it has requires a profile. A
+     * plan built here would describe the legacy single-account location and no bound mutation
+     * would accept it, so an operator could confirm something nothing can carry out. The canonical
+     * per-profile preview answers this question properly, and the mutation routes already refuse
+     * the unscoped spelling the same way.
+     */
+    if (previewClient === "aside") {
+      return jsonResponse({ error: "Use the canonical Aside profile path", code: "invalid_aside_profile_path" }, 400, req, ctx.config);
+    }
+    const operation = parsed.operation;
+    if (operation !== "apply" && operation !== "overwrite" && operation !== "disable") {
+      return jsonResponse({
+        error: "operation must be apply, overwrite or disable",
+        code: "invalid_preview_operation",
+      }, 400, req, ctx.config);
+    }
+    try {
+      const captured = await buildIntegrationPreviewInput(previewClient as IntegrationClientId, ctx, integrationStore());
+      if (!captured) return previewUnavailableResponse(ctx);
+      return jsonResponse(previewIntegration(captured.input, { operation }), 200, req, ctx.config);
+    } catch (error) {
+      return internalErrorResponse(error, ctx);
+    }
+  }
+
+  if (url.pathname === "/api/client-integrations/restore/preview") {
+    if (req.method !== "POST") return null;
+    const parsed = await readJsonBody(ctx);
+    if (parsed instanceof Response) return parsed;
+    if (!isPlainRecord(parsed) || typeof parsed.opId !== "string" || parsed.opId.trim().length === 0) {
+      return jsonResponse({ error: "opId must be a non-empty string", code: "invalid_op_id" }, 400, req, ctx.config);
+    }
+    if (parsed.confirmDrift !== undefined && typeof parsed.confirmDrift !== "boolean") {
+      return jsonResponse({ error: "confirmDrift must be a boolean", code: "invalid_confirm_drift" }, 400, req, ctx.config);
+    }
+    const opId = parsed.opId.trim();
+    try {
+      const store = integrationStore();
+      const operation = store.findOperation(opId);
+      /*
+       * Answered as "not found" rather than by reading the row back to the caller. A preview is
+       * reached before any confirmation, so it is the cheapest place to probe journal contents,
+       * and it declines to be one.
+       */
+      if (!operation) {
+        return jsonResponse({
+          error: "integration operation not found",
+          code: "integration_operation_not_found",
+          opId,
+        }, 404, req, ctx.config);
+      }
+      // Same rule, decided after the row is found so an unscoped undo of an Aside operation is
+      // refused for what it is rather than answered as a missing operation.
+      if (operation.clientId === "aside") {
+        return jsonResponse({ error: "Use the canonical Aside profile path", code: "invalid_aside_profile_path" }, 400, req, ctx.config);
+      }
+      const captured = await buildIntegrationPreviewInput(operation.clientId, ctx, store);
+      if (!captured) return previewUnavailableResponse(ctx);
+      const plan = previewIntegration(captured.input, {
+        operation: "restore",
+        opId,
+        confirmDrift: parsed.confirmDrift ?? false,
+      });
+      return jsonResponse(plan, 200, req, ctx.config);
+    } catch (error) {
+      return internalErrorResponse(error, ctx);
+    }
+  }
+
   if (url.pathname === "/api/client-integrations/restore") {
     if (req.method !== "POST") return null;
     const parsed = await readJsonBody(ctx);
@@ -584,7 +795,22 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
 
     const opId = parsed.opId.trim();
     const confirmDrift = parsed.confirmDrift ?? false;
-    const asideRestore = await asideRestoreResponse(ctx, { opId, confirmDrift }, profileOptions);
+    const restoreBinding = planBindingOf(parsed);
+    if (restoreBinding === "half") return halfBoundResponse(ctx);
+    if (restoreBinding === "unknown-operation" || (restoreBinding !== "none" && restoreBinding.operation !== "restore")) {
+      return jsonResponse({
+        error: "operation does not match the requested change",
+        code: "invalid_preview_operation",
+      }, 400, req, ctx.config);
+    }
+    // The binding travels with the request. Dropping it here routed a bound Aside restore into
+    // the unbound path, which executed the mutation while its confirmation went unexamined.
+    const asideRestore = await asideRestoreResponse(ctx, {
+      opId,
+      confirmDrift,
+      ...(parsed.operation === undefined ? {} : { operation: parsed.operation }),
+      ...(parsed.planFingerprint === undefined ? {} : { planFingerprint: parsed.planFingerprint }),
+    }, profileOptions);
     if (asideRestore) return asideRestore;
     let restoreClientId: IntegrationClientId | undefined;
     try {
@@ -607,7 +833,21 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         }, 410, req, ctx.config);
       }
 
-      const writeInput = await buildIntegrationWriteInput(operation.clientId, ctx, store);
+      const boundRestore = restoreBinding === "none"
+        ? null
+        : await buildIntegrationPreviewInput(operation.clientId, ctx, store);
+      if (restoreBinding !== "none" && boundRestore === null) return previewUnavailableResponse(ctx);
+      const writeInput = boundRestore
+        ? boundRestore.input
+        : await buildIntegrationWriteInput(operation.clientId, ctx, store);
+      const restoreGuard = restoreBinding === "none" ? null : stalePlanGuard(
+        operation.clientId,
+        ctx,
+        store,
+      { operation: "restore", opId, confirmDrift },
+      restoreBinding.fingerprint,
+        boundRestore === null ? null : boundRestore.identity,
+    );
       const restoreInput: IntegrationRestoreInput = {
         ...writeInput,
         opId,
@@ -619,8 +859,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         writeInput.io?.now ?? Date.now,
         () => restoreIntegrationCoordinated(restoreInput, {
           lockSeams: integrationMutationTestHooks?.lockSeams,
+          ...(restoreGuard ? { revalidate: restoreGuard.revalidate } : {}),
         }),
       );
+      const restoreStale = restoreGuard?.response();
+      if (restoreStale) return restoreStale;
       if (!result.ok) {
         /*
          * Drift is NOT special-cased here.
@@ -698,20 +941,59 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     }, 400, req, ctx.config);
   }
 
+  const requestedOperation: IntegrationPlanOperation = parsed.enabled
+    ? (parsed.overwriteConflict === true ? "overwrite" : "apply")
+    : "disable";
+  const binding = planBindingOf(parsed);
+  if (binding === "half") return halfBoundResponse(ctx);
+  if (binding === "unknown-operation" || (binding !== "none" && binding.operation !== requestedOperation)) {
+    // A confirmation that names a different operation than the request performs is not a
+    // confirmation of this request.
+    return jsonResponse({
+      error: "operation does not match the requested change",
+      code: "invalid_preview_operation",
+    }, 400, req, ctx.config);
+  }
+
   try {
-    const input = await buildIntegrationWriteInput(requestedClient, ctx, integrationStore());
+    /*
+     * A bound request is built from the same passive roster the guard re-plans against, and an
+     * unbound one keeps its existing refreshing path. Building the refreshing input first would
+     * have had the mutation and its own confirmation check disagree about the roster by
+     * construction, which is the disagreement this binding exists to detect.
+     */
+    const boundToggle = binding === "none"
+      ? null
+      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore());
+    if (binding !== "none" && boundToggle === null) return previewUnavailableResponse(ctx);
+    const input = boundToggle
+      ? boundToggle.input
+      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore());
+    const guard = binding === "none" ? null : stalePlanGuard(
+      requestedClient,
+      ctx,
+      integrationStore(),
+      { operation: binding.operation },
+      binding.fingerprint,
+      boundToggle === null ? null : boundToggle.identity,
+    );
     const result = await runIntegrationMutationFlight(
       requestedClient,
       parsed.enabled ? (parsed.overwriteConflict === true ? "overwrite" : "apply") : "disable",
       input.io?.now ?? Date.now,
       () => {
-        const options = { lockSeams: integrationMutationTestHooks?.lockSeams };
+        const options = {
+          lockSeams: integrationMutationTestHooks?.lockSeams,
+          ...(guard ? { revalidate: guard.revalidate } : {}),
+        };
         if (!parsed.enabled) return disableIntegrationCoordinated(input, options);
         return parsed.overwriteConflict === true
           ? overwriteIntegrationCoordinated(input, options)
           : applyIntegrationCoordinated(input, options);
       },
     );
+    const stale = guard?.response();
+    if (stale) return stale;
     if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
     return jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
   } catch (error) {

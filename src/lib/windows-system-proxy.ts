@@ -16,7 +16,7 @@ import { decodeWindowsTextBytes } from "./windows-text";
 const INTERNET_SETTINGS_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
 
 export type WindowsSystemProxyResult =
-  | { kind: "proxy"; url: string }
+  | { kind: "proxy"; httpUrl?: string; httpsUrl?: string }
   | { kind: "disabled" }
   | { kind: "socks-only" }
   | { kind: "unsupported" }
@@ -63,35 +63,40 @@ export function readWindowsProxyRegistry(): WindowsProxyRegistryValues | null {
 
 /**
  * `ProxyServer` is either a bare `host:port` (applies to every scheme) or a semicolon list of
- * `scheme=host:port` entries. Prefer the https entry, then http; a SOCKS-only value cannot be
- * mirrored into HTTP_PROXY/HTTPS_PROXY.
+ * `scheme=host:port` entries. Bare values apply to both HTTP and HTTPS destinations; per-scheme
+ * values retain their WinINET scope. A SOCKS-only value cannot be mirrored into HTTP(S)_PROXY.
  */
-export function parseWindowsProxyServer(value: string): { kind: "proxy"; url: string } | { kind: "socks-only" } | { kind: "disabled" } {
+export function parseWindowsProxyServer(value: string): Extract<WindowsSystemProxyResult, { kind: "proxy" | "socks-only" | "disabled" }> {
   const trimmed = value.trim();
   if (!trimmed) return { kind: "disabled" };
-  if (!trimmed.includes("=")) return normalize(trimmed);
+  if (!trimmed.includes("=")) {
+    const url = normalize(trimmed);
+    return url ? { kind: "proxy", httpUrl: url, httpsUrl: url } : { kind: "disabled" };
+  }
   const entries = new Map<string, string>();
   for (const part of trimmed.split(";")) {
     const eq = part.indexOf("=");
     if (eq <= 0) continue;
     entries.set(part.slice(0, eq).trim().toLowerCase(), part.slice(eq + 1).trim());
   }
-  const candidate = entries.get("https") || entries.get("http");
-  if (candidate) return normalize(candidate);
+  const httpUrl = normalize(entries.get("http") ?? "");
+  const httpsUrl = normalize(entries.get("https") ?? "");
+  if (httpUrl || httpsUrl) return { kind: "proxy", ...(httpUrl && { httpUrl }), ...(httpsUrl && { httpsUrl }) };
   if (entries.has("socks")) return { kind: "socks-only" };
   return { kind: "disabled" };
 }
 
-function normalize(hostPort: string): { kind: "proxy"; url: string } | { kind: "disabled" } {
+function normalize(hostPort: string): string | undefined {
+  if (!hostPort) return undefined;
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(hostPort) ? hostPort : `http://${hostPort}`;
   try {
     const url = new URL(withScheme);
-    if (!url.hostname || (url.protocol !== "http:" && url.protocol !== "https:")) return { kind: "disabled" };
+    if (!url.hostname || (url.protocol !== "http:" && url.protocol !== "https:")) return undefined;
     // Keep userinfo: a credentialed proxy is valid in HTTP_PROXY. Only the log strips it.
     const auth = url.username ? `${url.username}${url.password ? `:${url.password}` : ""}@` : "";
-    return { kind: "proxy", url: `${url.protocol}//${auth}${url.host}` };
+    return `${url.protocol}//${auth}${url.host}`;
   } catch {
-    return { kind: "disabled" };
+    return undefined;
   }
 }
 

@@ -15,6 +15,7 @@ const enc = new TextEncoder();
 beforeEach(() => clearCodeBuddyBinaryCache());
 
 interface FakeChild extends EventEmitter {
+  pid?: number;
   stdout: Readable;
   stderr: Readable;
   stdin: Writable;
@@ -612,6 +613,41 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(killSignal).toBe("SIGTERM");
     expect(events.some(e => e.type === "error")).toBe(true);
     expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("a Windows abort terminates the cmd shim process tree", async () => {
+    const controller = new AbortController();
+    const stdoutStream = new Readable({
+      read() { setTimeout(() => controller.abort(), 5); },
+    });
+    const child = new EventEmitter() as FakeChild;
+    child.pid = 4242;
+    child.stdout = stdoutStream;
+    child.stderr = Readable.from([]);
+    child.written = [];
+    child.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+    child.killed = false;
+    child.exitCode = null;
+    const directSignals: string[] = [];
+    child.kill = signal => { directSignals.push(signal ?? "SIGTERM"); return true; };
+    const killedTrees: number[] = [];
+
+    const adapter = createCodeBuddyAdapter(provider(), {
+      platform: "win32",
+      spawn: () => child as unknown as ChildProcess,
+      which: () => "C:\\npm\\codebuddy.cmd",
+      killWindowsProcessTree: pid => {
+        killedTrees.push(pid);
+        child.exitCode = 1;
+        child.emit("close", 1);
+      },
+      killGraceMs: 20,
+    });
+    const events = await run(adapter, parsed(), incoming(controller.signal));
+
+    expect(killedTrees).toEqual([4242]);
+    expect(directSignals).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", retryable: false }));
   });
 
   test("a timeout destroys a stalled stdout stream and returns even when close never arrives", async () => {

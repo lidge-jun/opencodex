@@ -12,6 +12,8 @@ import {
   TIER_SPECS,
   type EncodeFn,
 } from "../../../src/adapters/anthropic-image-normalize";
+import { bunImageEncode, bunImageValidate } from "../../../src/adapters/anthropic-image-codec";
+import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 import { phaseTimer } from "../../helpers/phase-timing";
@@ -98,6 +100,20 @@ function headerOnlyPngB64(width: number, height: number, base64Length: number): 
   bytes.write("IHDR", 12);
   bytes.writeUInt32BE(width, 16);
   bytes.writeUInt32BE(height, 20);
+  return bytes.toString("base64");
+}
+
+/** BMP header claiming the given dimensions; sniffImageDimensions has no BMP branch. */
+function headerOnlyBmpB64(width: number, height: number): string {
+  const bytes = Buffer.alloc(54);
+  bytes.write("BM", 0);
+  bytes.writeUInt32LE(bytes.length, 2);
+  bytes.writeUInt32LE(54, 10);
+  bytes.writeUInt32LE(40, 14);
+  bytes.writeInt32LE(width, 18);
+  bytes.writeInt32LE(height, 22);
+  bytes.writeUInt16LE(1, 26);
+  bytes.writeUInt16LE(24, 28);
   return bytes.toString("base64");
 }
 
@@ -270,6 +286,29 @@ describe("openai-chat inline image normalization", () => {
       },
     });
     expect(encodeCalls).toBe(0);
+    expect(imageParts(messages as ChatMsg[])[0]?.image_url?.url).toBe(original);
+  });
+
+  test("an oversized image whose header cannot be sniffed is rejected by the decode metadata bound", async () => {
+    // sniffImageDimensions reads only PNG/JPEG/GIF/WebP headers, so this header-only
+    // BMP claiming 5000x4000 (20MPx > MAX_INPUT_PIXELS) clears the pre-decode gates
+    // unsized. The bound that stops it is the metadata check inside the decode path
+    // itself: bunImageValidate on the pass-through branch, bunImageEncode elsewhere.
+    const bmp = headerOnlyBmpB64(5_000, 4_000);
+    expect(sniffImageDimensions(bmp)).toBeNull();
+    const input = Uint8Array.from(Buffer.from(bmp, "base64"));
+    await expect(bunImageValidate(input)).rejects.toThrow("image dimensions exceed the safe decode limit");
+    await expect(bunImageEncode(input, TIER_SPECS[0], 80)).rejects.toThrow("image dimensions exceed the safe decode limit");
+
+    // End to end the normalizer drops it after one rejected decode attempt, and this
+    // wire retains the original bytes on drop.
+    const original = dataUrl(bmp, "image/bmp");
+    const messages = [{
+      role: "user",
+      content: [{ type: "image_url", image_url: { url: original } }],
+    }];
+    await normalizeOpenAIChatImages(messages);
+    expect(getNormalizeStatsForTests().encodeCalls).toBe(1);
     expect(imageParts(messages as ChatMsg[])[0]?.image_url?.url).toBe(original);
   });
 

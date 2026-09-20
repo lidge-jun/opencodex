@@ -82,6 +82,43 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/client-integrations/journal?client=...` | 列出復原操作，也可限定為單一用戶端。每一項都包含由伺服器計算的 `deletable` 欄位。 | 400 用戶端無效 |
 | `DELETE /api/client-integrations/journal?opId=...` | 停用一筆較舊的復原操作，並在可能時刪除其快照。成功回應中的 `snapshotRemoved: false` 表示清理工作已保留，等待維護重試。 | 400 缺少 `opId`；404 操作不存在或已停用；409 該用戶端的最新操作 |
 
+## 預覽整合變更
+
+預覽只呈現變更會做什麼，而不會執行。這些路由不寫入任何內容：不留快照、不留歸屬紀錄、不留
+日誌列、不加鎖、不做維護與復原。
+
+| 方法與路徑 | 用途 | 主要錯誤 |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | 為單一用戶端規劃 `apply`、`overwrite` 或 `disable`；請求內容為 `{ "clientId": "...", "operation": "..." }` | 400 用戶端或操作無效；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | 規劃一次復原；請求內容為 `{ "opId": "...", "confirmDrift": false }` | 404 操作不存在；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | 規劃單一 Aside 設定檔的變更；`restore` 需要 `opId` | 400 請求內容無效或未指定設定檔；404 設定檔或操作不存在；409 `integration_preview_unavailable` |
+
+計畫包含 `version`、`clientId`、`operation`、`state`、`foreignEdit`，由 `kind` 與 `path` 組成的
+`changes` 清單，不透明的 `fingerprint`，以及 `canApply` 與 `willChange`；`refusalReason` 與
+`profileId` 為選用。路徑要麼是受管理的結構路徑，要麼是 `$snapshot`、`$ownership`、`$journal`
+這三個固定標記；執行時才決定的位置會顯示為 `*`。不會回傳任何設定值、檔案位置或所選項目的名稱。
+
+`canApply` 為真而 `willChange` 為假，表示操作會成功，但受管理的用戶端文件不會有任何變動，例如
+重複套用已經套用過的內容。
+
+Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後，會先記錄該設定檔的同步偏好，之後才會動
+用戶端文件。因此關閉一個受管理區塊已經不存在的設定檔，只會儲存偏好，文件與其歷史維持不變。
+
+`integration_preview_unavailable` 表示目前沒有可用的模型清單：代理剛啟動是一種情況，因設定或
+供應方快取變動而捨棄原有清單也是一種情況。讀取 `GET /api/client-integrations` 會在探測成功
+且能確認設定時建立清單，因此這通常是解決方式，但並非必然建立。
+
+## 確認已預覽的變更
+
+變更路由接受與原有請求內容並列的 `operation` 與 `planFingerprint`。兩者要麼都送出，要麼都省略：
+只帶其中一個會被拒絕，`operation` 與所請求的變更不一致也會被拒絕。Aside 的綁定只針對單一設定
+檔，因為一個指紋無法描述多個各自獨立變動的檔案。
+
+伺服器在寫入前會重新規劃，若確認的內容已不再符合實際，會回傳 `409 integration_preview_stale`
+並附上重新計算的 `plan`。請依新計畫再做一次決定；請求不會自動重試。
+
+指紋只是樂觀檢查，不是授權。變更是否被允許，仍由管理 API 的驗證與歸屬規則決定。
+
 刪除操作會附加墓碑記錄，而不會重寫日誌。伺服器會保護每個用戶端的最新操作，
 以保留目前的復原點。
 

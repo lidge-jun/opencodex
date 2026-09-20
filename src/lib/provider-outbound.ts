@@ -160,7 +160,11 @@ async function providerOutboundRequest(
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
   }
-  if (provider.fetch) {
+  // A provider entry keeps unknown configuration keys, so `fetch` can arrive as a value the
+  // operator wrote into the file rather than an executor a caller attached. Calling that would
+  // throw inside discovery and fail the provider for a reason nothing in its configuration
+  // explains; the built-in transport is what a configured value means.
+  if (typeof provider.fetch === "function") {
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
     // the built-in transport. Main-request migration must define that executor contract first.

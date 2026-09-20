@@ -60,6 +60,12 @@ effort variants the roster carries. That is deliberate — Cursor advertises ids
 variant-level quarantine exist for — so a new family is admitted by adding its capability row,
 not by relaxing the filter.
 
+Synthetic ultra rows (`<base>-1m` markers such as `kimi-k3-1m`, kept in `configured` by legacy
+pins or retain lists) clear that base-availability check and one more: the live roster must flag
+Max Mode for the base (`GetUsableModels.maxMode`), or the row stays hidden. Base availability
+alone is not enough — an account on a plan without Max Mode would otherwise see a row whose
+ultra request it cannot serve.
+
 A seeded ladder carries only rungs supported by vendor evidence. `muse-spark-1.3` is seeded at
 `minimal` through `xhigh` even though Cursor's roster also advertises `muse-spark-1.3-max`:
 Meta publishes no `max` rung for Muse Spark and an independent probe rejected it, both already

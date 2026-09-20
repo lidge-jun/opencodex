@@ -245,12 +245,19 @@ export function requestLogDto(
  * share the same fetch, the same per-provider cache (dedups Codex's frequent /v1/models polling),
  * and the same stale fallback when a provider blips, instead of a parallel uncached copy.
  */
-export async function fetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
+export async function fetchAllModels(
+  config: OcxConfig,
+  /** Filled with each provider's content revision as of the moment its rows were chosen. */
+  providerContentRevisions?: Map<string, string>,
+): Promise<CatalogModel[]> {
   const { gatherRoutedModels } = await import("../../codex/catalog");
   const baseline = captureInitialSelectionBaseline(config);
-  if (!baseline) return gatherRoutedModels(config);
+  if (!baseline) return gatherRoutedModels(config, providerContentRevisions ? { providerContentRevisions } : undefined);
   const outcomes: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
-  const models = await gatherRoutedModels(config, { providerModelOutcomes: outcomes });
+  const models = await gatherRoutedModels(config, {
+    providerModelOutcomes: outcomes,
+    ...(providerContentRevisions ? { providerContentRevisions } : {}),
+  });
   finalizeInitialModelSelection(config, baseline, uniqueCatalogModelsForPublicList(models),
     outcomes.filter(outcome => outcome.state === "authoritative").map(outcome => outcome.provider));
   return models;

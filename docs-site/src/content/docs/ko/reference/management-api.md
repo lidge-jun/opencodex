@@ -86,6 +86,48 @@ Authorization: Bearer <admin-token>
 | `GET /api/client-integrations/journal?client=...` | 롤백 작업을 조회합니다. 특정 클라이언트로 제한할 수 있으며 각 행에는 서버가 계산한 `deletable` 값이 포함됩니다. | 400 잘못된 클라이언트 |
 | `DELETE /api/client-integrations/journal?opId=...` | 이전 롤백 작업을 폐기하고 가능한 경우 스냅샷도 제거합니다. 성공 응답의 `snapshotRemoved`가 `false`면 유지보수 재시도를 위해 정리 작업이 보존됩니다. | 400 `opId` 누락, 404 없거나 이미 폐기된 작업, 409 해당 클라이언트의 최신 작업 |
 
+## 통합 변경 미리 보기
+
+미리 보기는 변경 내용을 적용하지 않고 보여 줍니다. 스냅샷도, 소유권 기록도, 저널도, 잠금도,
+복구도 남기지 않습니다.
+
+| 메서드 및 경로 | 목적 | 주요 오류 |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | 클라이언트 하나의 `apply`, `overwrite`, `disable`을 계획합니다. 본문은 `{ "clientId": "...", "operation": "..." }` | 400 잘못된 클라이언트나 작업, 400 `invalid_aside_profile_path`, 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | 실행 취소를 계획합니다. 본문은 `{ "opId": "...", "confirmDrift": false }` | 404 없는 작업, 400 `invalid_aside_profile_path`, 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Aside 프로필 하나의 변경을 계획합니다. `restore`에는 `opId`가 필요합니다 | 400 잘못된 본문이나 프로필 미지정, 404 없는 프로필이나 작업, 409 `integration_preview_unavailable` |
+
+계획에는 `version`, `clientId`, `operation`, `state`, `foreignEdit`, `kind`와 `path` 쌍으로 이루어진
+`changes`, 불투명한 `fingerprint`, `canApply`, `willChange`가 담기고 `refusalReason`과
+`profileId`는 선택 항목입니다. 경로는 관리 대상 스키마 경로이거나 `$snapshot`, `$ownership`,
+`$journal` 표식이며, 실행 중에 정해지는 자리는 `*`로 적습니다. 설정 값이나 파일 위치, 선택된
+항목의 이름은 돌려주지 않습니다.
+
+`canApply`가 참인데 `willChange`가 거짓이면 작업은 성공하지만 관리 대상 클라이언트 문서에서는
+아무것도 바뀌지 않습니다. 이미 적용된 것을 다시 적용하는 경우가 그렇습니다.
+
+Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보내면 클라이언트 문서에 손대기 전에 그
+프로필의 동기화 설정이 먼저 기록되므로, 관리 블록이 이미 없는 프로필을 끄면 설정만 저장되고
+문서와 기록은 그대로 남습니다.
+
+`integration_preview_unavailable`은 지금 쓸 수 있는 모델 목록이 없다는 뜻입니다. 프록시를 막
+시작했을 때도 그렇고, 설정이나 공급자 캐시가 바뀌어 기존 목록을 버린 경우에도 그렇습니다.
+`GET /api/client-integrations`를 읽으면 조회가 성공하고 설정을 확인할 수 있을 때 목록이
+준비되므로, 보통은 이렇게 해결되지만 항상 보장되지는 않습니다.
+
+## 미리 본 변경 확정하기
+
+변경 요청 본문에 `operation`과 `planFingerprint`를 함께 보냅니다. 둘 다 보내거나 둘 다
+생략해야 하며, 하나만 보내거나 요청과 다른 작업을 적으면 거부합니다. Aside는 프로필 하나에만
+묶을 수 있습니다. 지문 하나로 여러 파일의 변경을 설명할 수는 없기 때문입니다.
+
+서버는 쓰기 전에 다시 계획해 보고, 확인한 내용이 더 이상 맞지 않으면 새 계획을 담아
+`409 integration_preview_stale`을 돌려줍니다. 자동으로 다시 시도하지 않으니 새 계획을 보고
+다시 결정하면 됩니다.
+
+지문은 낙관적 확인일 뿐 권한이 아닙니다. 변경을 허용할지는 관리 인증과 소유권 규칙이
+결정합니다.
+
 삭제는 저널을 다시 쓰지 않고 툼스톤을 추가합니다. 현재 실행 취소 지점을 유지하기 위해
 각 클라이언트의 최신 작업은 서버에서 삭제하지 못하게 보호합니다.
 
