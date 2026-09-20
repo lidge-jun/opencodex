@@ -175,7 +175,8 @@ function validateCandidate(value: unknown): ReturnType<typeof validateConfigCand
     value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
   const error = visionReasoningError(value)
     ?? dictationConfigError(value)
-    ?? voiceConfigValueError(block("transcription"), providers, "transcription");
+    ?? voiceConfigValueError(block("transcription"), providers, "transcription")
+    ?? voiceConfigValueError(block("speech"), providers, "speech");
   return error ? { ok: false, error } : validateConfigCandidate(value);
 }
 

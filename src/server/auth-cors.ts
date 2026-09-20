@@ -490,6 +490,7 @@ export interface ApiAuthMatrixRow {
  */
 export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/audio/transcriptions", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  { endpoint: "/v1/audio/speech", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/live", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/realtime/calls", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // #1686: a bearer that is one of OUR admission secrets is now accepted here. It is safe

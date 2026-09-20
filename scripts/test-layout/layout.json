@@ -287,6 +287,7 @@
     "audio-dictation-target.test.ts": "server",
     "audio-dictation.test.ts": "server",
     "audio-transcriptions.test.ts": "server",
+    "audio-voice-routes.test.ts": "server",
     "auto-compact-budget.test.ts": "providers",
     "autostart-health.test.ts": "service",
     "azure-adapter.test.ts": "providers",

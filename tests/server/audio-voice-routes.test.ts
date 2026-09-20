@@ -1,0 +1,210 @@
+import { describe, expect, test } from "bun:test";
+import {
+  resolveVoiceTarget,
+  selectVoiceBackend,
+  voiceConfigValueError,
+  voiceProviderEndpointError,
+} from "../../src/config/voice-target";
+import { handleAudioSpeech } from "../../src/server/audio-speech";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+
+const PROVIDERS = {
+  handy: {
+    adapter: "openai",
+    baseUrl: "http://127.0.0.1:8915/v1",
+    transcriptionUrl: "http://127.0.0.1:8915/v1/audio/transcriptions",
+  },
+  pocket: {
+    adapter: "openai",
+    baseUrl: "http://127.0.0.1:8911/v1",
+    speechUrl: "http://127.0.0.1:8911/v1/audio/speech",
+    speechHeaders: { authorization: "${POCKET_TOKEN}" },
+  },
+  bare: { adapter: "openai", baseUrl: "https://example.test/v1" },
+} satisfies Record<string, OcxProviderConfig>;
+
+function config(extra: Partial<OcxConfig> = {}): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "handy",
+    providers: PROVIDERS,
+    ...extra,
+  } as OcxConfig;
+}
+
+const ADMISSION = { kind: "environment", source: "bearer", contextPrincipalId: "p" } as unknown as DataPlaneAdmission;
+const LOG = { model: "speech", provider: "unknown" } as RequestLogContext;
+
+function speechRequest(body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request("http://127.0.0.1/v1/audio/speech", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("voice target resolution", () => {
+  test("the reserved name selects the built-in path for every route", () => {
+    for (const kind of ["dictation", "transcription", "speech"] as const) {
+      expect(resolveVoiceTarget(PROVIDERS, undefined, kind).kind).toBe("openai");
+      expect(resolveVoiceTarget(PROVIDERS, "openai", kind).kind).toBe("openai");
+    }
+  });
+
+  test("a custom provider resolves per route", () => {
+    expect(resolveVoiceTarget(PROVIDERS, "handy", "transcription")).toMatchObject({ kind: "custom", providerName: "handy" });
+    expect(resolveVoiceTarget(PROVIDERS, "pocket", "speech")).toMatchObject({ kind: "custom", providerName: "pocket" });
+  });
+
+  test("an unconfigured provider name is refused, not ignored", () => {
+    const result = resolveVoiceTarget(PROVIDERS, "nope", "speech");
+    expect(result.kind).toBe("invalid");
+    expect(result.kind === "invalid" && result.error).toContain("not configured");
+  });
+
+  test("each route reads its own endpoint field", () => {
+    // handy carries transcriptionUrl but no speechUrl: naming it for speech must
+    // fail, or a read-aloud would silently POST text at a transcription endpoint.
+    expect(voiceProviderEndpointError("handy", PROVIDERS.handy, "transcription")).toBeNull();
+    expect(voiceProviderEndpointError("handy", PROVIDERS.handy, "speech")).toContain("speechUrl");
+    expect(voiceProviderEndpointError("pocket", PROVIDERS.pocket, "speech")).toBeNull();
+    expect(voiceProviderEndpointError("pocket", PROVIDERS.pocket, "transcription")).toContain("transcriptionUrl");
+  });
+
+  test("a provider with no voice endpoint at all is refused", () => {
+    expect(voiceProviderEndpointError("bare", PROVIDERS.bare, "transcription")).toContain("transcriptionUrl");
+  });
+
+  test("byModel beats provider, and an exact model id is required", () => {
+    const block = { provider: "handy", byModel: { "zai/glm-5.3": "pocket" } };
+    expect(selectVoiceBackend(PROVIDERS, block, "zai/glm-5.3", "speech")).toMatchObject({ providerName: "pocket" });
+    expect(selectVoiceBackend(PROVIDERS, block, "zai/glm-5.3-flash", "speech")).toMatchObject({ providerName: "handy" });
+    expect(selectVoiceBackend(PROVIDERS, block, undefined, "speech")).toMatchObject({ providerName: "handy" });
+  });
+
+  test("config validation names the offending field", () => {
+    expect(voiceConfigValueError({ provider: "pocket" }, PROVIDERS, "speech")).toBeNull();
+    expect(voiceConfigValueError({ provider: "handy" }, PROVIDERS, "speech")).toContain("speech.provider");
+    expect(voiceConfigValueError({ byModel: { m: "bare" } }, PROVIDERS, "speech")).toContain("speech.byModel.m");
+    expect(voiceConfigValueError({ nope: 1 }, PROVIDERS, "speech")).toContain("unknown key");
+    expect(voiceConfigValueError("string", PROVIDERS, "speech")).toContain("must be an object");
+    expect(voiceConfigValueError(undefined, PROVIDERS, "speech")).toBeNull();
+  });
+});
+
+describe("speech route", () => {
+  test("an unconfigured speech backend reports 501, not a silent OpenAI fallback", async () => {
+    // opencodex has no built-in text-to-speech, so "openai" here means nothing
+    // is configured — answering 404 would read as a routing bug.
+    const response = await handleAudioSpeech(speechRequest({ input: "hello" }), config(), LOG, ADMISSION);
+    expect(response.status).toBe(501);
+    expect(await response.text()).toContain("speech.provider");
+  });
+
+  test("a misconfigured target reports which setting is wrong", async () => {
+    const response = await handleAudioSpeech(
+      speechRequest({ input: "hello" }),
+      config({ speech: { provider: "handy" } } as Partial<OcxConfig>),
+      LOG,
+      ADMISSION,
+    );
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("speechUrl");
+  });
+
+  test("an empty input is refused before any upstream call", async () => {
+    const response = await handleAudioSpeech(
+      speechRequest({ input: "   " }),
+      config({ speech: { provider: "pocket" } } as Partial<OcxConfig>),
+      LOG,
+      ADMISSION,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("nonempty");
+  });
+
+  test("an unknown field is refused rather than forwarded", async () => {
+    const response = await handleAudioSpeech(
+      speechRequest({ input: "hi", sneaky: 1 }),
+      config({ speech: { provider: "pocket" } } as Partial<OcxConfig>),
+      LOG,
+      ADMISSION,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("sneaky");
+  });
+
+  test("a non-JSON content type is refused", async () => {
+    const request = new Request("http://127.0.0.1/v1/audio/speech", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "hello",
+    });
+    const response = await handleAudioSpeech(request, config({ speech: { provider: "pocket" } } as Partial<OcxConfig>), LOG, ADMISSION);
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("transcription provider relay", () => {
+  function wav(): File {
+    // A minimal valid-looking payload; the stub never decodes it.
+    return new File([new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0])], "clip.wav", { type: "audio/wav" });
+  }
+
+  function transcriptionRequest(): Request {
+    const form = new FormData();
+    form.append("file", wav());
+    form.append("model", "gpt-4o-transcribe");
+    return new Request("http://127.0.0.1/v1/audio/transcriptions", { method: "POST", body: form });
+  }
+
+  async function relayWith(provider: OcxProviderConfig): Promise<{ status: number; sent: FormData | null; url: string }> {
+    const real = globalThis.fetch;
+    let sent: FormData | null = null;
+    let url = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      url = String(input);
+      sent = init?.body as FormData;
+      return new Response(JSON.stringify({ text: "ok" }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const { handleAudioTranscriptions } = await import("../../src/server/audio-transcriptions");
+      const response = await handleAudioTranscriptions(
+        transcriptionRequest(),
+        config({ transcription: { provider: "stub" }, providers: { ...PROVIDERS, stub: provider } } as Partial<OcxConfig>),
+        LOG,
+        ADMISSION,
+      );
+      return { status: response.status, sent, url };
+    } finally {
+      globalThis.fetch = real;
+    }
+  }
+
+  test("the caller's OpenAI model name is not forwarded to a custom backend", async () => {
+    // opencodex only accepts OpenAI's transcription model names, which mean
+    // nothing to a self-hosted engine. Forwarding one made Handy reject every
+    // request with HTTP 400.
+    const { status, sent, url } = await relayWith({
+      adapter: "openai",
+      baseUrl: "http://127.0.0.1:8915/v1",
+      transcriptionUrl: "http://127.0.0.1:8915/v1/audio/transcriptions",
+    } as OcxProviderConfig);
+    expect(status).toBe(200);
+    expect(url).toBe("http://127.0.0.1:8915/v1/audio/transcriptions");
+    expect(sent!.get("model")).toBeNull();
+    expect(sent!.get("file")).toBeInstanceOf(File);
+  });
+
+  test("a configured transcriptionModel is sent instead", async () => {
+    const { sent } = await relayWith({
+      adapter: "openai",
+      baseUrl: "http://127.0.0.1:8915/v1",
+      transcriptionUrl: "http://127.0.0.1:8915/v1/audio/transcriptions",
+      transcriptionModel: "parakeet-unified-en-0.6b",
+    } as OcxProviderConfig);
+    expect(sent!.get("model")).toBe("parakeet-unified-en-0.6b");
+  });
+});

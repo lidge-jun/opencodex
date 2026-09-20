@@ -126,6 +126,7 @@ import {
   resolveLiveSidebandUpgrade,
 } from "../live";
 import { handleAudioTranscriptions } from "../audio-transcriptions";
+import { handleAudioSpeech } from "../audio-speech";
 import {
   resolveAudioAdmission,
   TRANSCRIPTION_MODEL,
@@ -1546,6 +1547,29 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         };
         return runAdmittedHttpTurn(req, policy, async lease => {
           const response = await handleAudioTranscriptions(req, config, logCtx, admission, lease);
+          addFinalRequestLog(requestId, start, logCtx, response.status);
+          return withCors(response, req, policy);
+        }, { requestId, start, logCtx });
+      }
+
+      if (url.pathname === "/v1/audio/speech" && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveAudioAdmission(req.headers, config);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin audio request blocked"), req, policy);
+        }
+        const start = Date.now();
+        const requestId = nextRequestLogId(start);
+        const logCtx: RequestLogContext = {
+          model: "speech",
+          provider: "unknown",
+          ...requestMetricsLogContext,
+          ...admissionFields(admission),
+        };
+        return runAdmittedHttpTurn(req, policy, async lease => {
+          const response = await handleAudioSpeech(req, config, logCtx, admission, lease);
           addFinalRequestLog(requestId, start, logCtx, response.status);
           return withCors(response, req, policy);
         }, { requestId, start, logCtx });
