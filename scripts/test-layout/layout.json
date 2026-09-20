@@ -1385,7 +1385,6 @@
     "spend-ledger-owner-startup.test.ts": "server",
     "spend-ledger-owner.test.ts": "lib",
     "spend-reservation-ledger.test.ts": "lib",
-    "stepfun-provider.test.ts": "providers",
     "sse-client-frame-bounds.test.ts": "responses",
     "sse-decoder.test.ts": "responses",
     "sse-failed-tail.test.ts": "responses",
