@@ -977,7 +977,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     let body: { profile?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     try {
-      const { parseDesktopProfile, reconcileDesktopProfile } = await import("../../claude/desktop-profile");
+      const { parseDesktopProfile, preserveDesktopAppliedState, reconcileDesktopProfile } = await import("../../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
       const current = await buildClaudeDesktopState(config);
       const availableRoutes = new Set(current.models.filter(item => item.available).map(item => item.route));
@@ -1000,8 +1000,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           throw new Error(`현재 사용할 수 없는 모델은 기본값으로 지정할 수 없습니다: ${nextDefault}`);
         }
       }
-      const state = await buildClaudeDesktopState(config, parsed);
-      config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: reconcileDesktopProfile(state.profile, state.models) };
+      // Applied markers are server-owned bookkeeping. Discard client copies, then
+      // restore the trusted markers only if the desired profile stayed identical.
+      const editable = { version: 1 as const, assignments: parsed.assignments, defaults: parsed.defaults };
+      const state = await buildClaudeDesktopState(config, editable);
+      const rebuilt = reconcileDesktopProfile(state.profile, state.models);
+      config.claudeCode = {
+        ...(config.claudeCode ?? {}),
+        desktopProfile: preserveDesktopAppliedState(current.profile, rebuilt),
+      };
       saveConfigPreservingClaudeCode(config);
       const saved = await buildClaudeDesktopState(config);
       const runtimePort = Number(url.port) || config.port;

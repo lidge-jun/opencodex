@@ -69,11 +69,12 @@ describe("ocx sync fans out to enabled native clients and owned file integration
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
-    // The Desktop write gets the native context limits, same as every other Desktop
-    // call site. 8b672205e threaded `nativeContextLimits` through those writers and
-    // left this assertion naming the retired `providerContextCap` spelling, so the
-    // source-shape check failed against the very change it is meant to pin.
     expect(fn).toContain("nativeContextLimits(latest)");
+    // Cleanup accepts only the fingerprint of the exact credential-bearing profile we wrote.
+    // Sync must durably advance that ownership marker rather than leaving the old value behind.
+    expect(fn).toContain("mutatePersistedConfig(persisted =>");
+    expect(fn).toContain("appliedFingerprint: r.fingerprint");
+    expect(fn.indexOf("nativeContextLimits(latest)")).toBeLessThan(fn.indexOf("appliedFingerprint: r.fingerprint"));
     // A client that is off is omitted rather than reported: the caller has to be able to
     // tell "left alone" from "tried and failed", so there is no skipped state to emit.
     expect(fn).not.toContain('"skipped"');
@@ -144,7 +145,7 @@ describe("Desktop sync rechecks persisted state after discovery", () => {
           writes.push(args);
           return outcome === "refusal"
             ? { written: false, path: "fixture", reason: "desktop_remote_store_active" }
-            : { written: true, path: "fixture" };
+            : { written: true, path: "fixture", fingerprint: "0123456789abcdef" };
         },
       });
       try {

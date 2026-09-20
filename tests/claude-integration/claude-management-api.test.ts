@@ -875,6 +875,38 @@ test("Claude Desktop PUT rejects invalid JSON profile without mutating saved con
   }
 });
 
+test("Claude Desktop PUT clears applied markers when routing changes", async () => {
+  const server = startServer(0);
+  try {
+    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "static" }),
+    });
+    expect(apply.status).toBe(200);
+    expect(loadConfig().claudeCode?.desktopProfile?.appliedFingerprint).toBeString();
+
+    const state = await fetch(new URL("/api/claude-desktop", server.url)).then(r => r.json()) as Record<string, any>;
+    const edited = structuredClone(state.profile);
+    edited.assignments["mock/test-model"].family = "sonnet";
+    edited.defaults.opus = Object.keys(edited.assignments)
+      .filter(route => edited.assignments[route].family === "opus")
+      .sort()[0] ?? null;
+    edited.defaults.sonnet = "mock/test-model";
+
+    const put = await fetch(new URL("/api/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: edited }),
+    });
+    expect(put.status).toBe(200);
+    expect(loadConfig().claudeCode?.desktopProfile).not.toHaveProperty("appliedFingerprint");
+    expect(loadConfig().claudeCode?.desktopProfile).not.toHaveProperty("appliedAt");
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("Claude Desktop PUT retains but cannot move an unavailable route", async () => {
   const seeded = loadConfig();
   seeded.claudeCode = {
