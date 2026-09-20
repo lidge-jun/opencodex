@@ -1193,7 +1193,14 @@ jobs:
 
       - name: Build unsigned desktop app
         working-directory: desktop
-        run: bunx tauri build --ci --bundles app
+        # `createUpdaterArtifacts` is on and the updater public key is committed, so a plain
+        # `tauri build` stops with "A public key has been found, but no private key" unless
+        # TAURI_SIGNING_PRIVATE_KEY is set. This job proves the appex and the app bundle build
+        # and that the widget is embedded; it does not ship an update, and a verification
+        # build has no business holding the release key. Updater artifacts are therefore off
+        # here and the signing path stays in release.yml, which already reads the secret and
+        # refuses to publish a manifest when it is absent.
+        run: bunx tauri build --ci --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Verify WidgetKit appex and desktop app
         run: |
