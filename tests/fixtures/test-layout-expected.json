@@ -951,6 +951,7 @@
   "ports.test.ts": "server",
   "prime-client.test.ts": "clients",
   "privacy-mask-account.test.ts": "lib",
+  "privacy-scan-asset-names.test.ts": "ci-workflows",
   "privacy-scan-meta-key.test.ts": "ci-workflows",
   "privacy-scan-ssh-endpoint.test.ts": "ci-workflows",
   "probe-lease.test.ts": "routing",
