@@ -321,10 +321,15 @@ export interface ImageBridgeDeps {
    * 429 states the window's reset epoch even when it omits Retry-After -- and a rotation that
    * cannot see it cools the drained account for the short default instead of until the window
    * actually reopens. Optional so existing callers keep compiling.
+   *
+   * `retryParsed` is the exact iteration-local request the retry will be built from. The loop
+   * sends a shallow copy of the outer parsed request, so a rotation that rebinds only the outer
+   * object never reaches the wire. Optional so existing callers keep compiling.
    */
   on429?: (
     retryAfterHeader: string | null,
     responseHeaders?: Headers,
+    retryParsed?: OcxParsedRequest,
   ) => ProviderAdapter | null | Promise<ProviderAdapter | null>;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
@@ -660,7 +665,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       // 429 key-failover parity with web-search / normal routed path.
       while (prepared.response.status === 429 && deps.on429) {
-        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers);
+        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers, iterParsed);
         if (!rotated) break;
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated;
