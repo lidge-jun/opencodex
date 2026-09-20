@@ -1,9 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   comboStreamPayloadCommitsOutput,
+  deferProtocolSafeResetRecovery,
   preflightComboStreamResponse,
 } from "../../src/server/responses/combo-stream-preflight";
-import { stageCommitment } from "../../src/lib/request-failure-model";
+import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 
@@ -599,6 +600,46 @@ describe("combo stream preflight", () => {
     const reader = committed.response.body!.getReader();
     expect((await reader.read()).value).toEqual(outputPrefix);
     await expect(reader.read()).rejects.toBe(readError);
+  });
+
+  /**
+   * The boundary that decides resend permission, asserted where it is actually enforced.
+   *
+   * The stage a read error is reported at is only half the guarantee. What matters is that a
+   * stream which committed output never gets a replacement offered at all, and the seam that
+   * decides it is the deferred wrapper, not the preflight. The commitment is read from
+   * `stageCommitment` rather than compared against a written-out stage name, so a stage added
+   * to the model later cannot pass this by being unlisted.
+   */
+  test("a replacement is offered only for a stage the caller observed nothing at", async () => {
+    const readError = new Error("preflight-read-reset");
+    const logCtx: RequestLogContext = { model: "m1", provider: "a" };
+    const seen: RequestFailureStage[] = [];
+    const recover = async (_error: unknown, stage: RequestFailureStage): Promise<Response | null> => {
+      seen.push(stage);
+      return null;
+    };
+
+    const prelude = deferProtocolSafeResetRecovery(
+      prefixThenReadError(createdPrefix, readError).response, logCtx, recover);
+    const preludeReader = prelude.body!.getReader();
+    expect((await preludeReader.read()).value).toEqual(createdPrefix);
+    await expect(preludeReader.read()).rejects.toBe(readError);
+    expect(seen).toHaveLength(1);
+    expect(stageCommitment(seen[0]!)).toBe("nothing-observed");
+
+    seen.length = 0;
+    const outputPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
+      type: "response.output_text.delta", delta: "hi",
+    })}\n\n`);
+    const committed = deferProtocolSafeResetRecovery(
+      prefixThenReadError(outputPrefix, readError).response, logCtx, recover);
+    const committedReader = committed.body!.getReader();
+    expect((await committedReader.read()).value).toEqual(outputPrefix);
+    await expect(committedReader.read()).rejects.toBe(readError);
+    // Never consulted. A turn whose output the caller already saw cannot be replaced, and it
+    // does not get as far as asking.
+    expect(seen).toEqual([]);
   });
 
   test("a response.created carrying output is not a prelude", () => {
