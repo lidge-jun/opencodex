@@ -9,6 +9,7 @@ import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, i
 import { stripAssistantEchoedToolEnvelope } from "./envelope-echo";
 import { normalizeCursorToolResultText } from "./tool-result-normalize";
 import { debugProviderDiagnostic } from "../../lib/debug";
+import { OPAQUE_COMPACTION_NOTE, SUMMARY_PREFIX } from "../../responses/compaction";
 import {
   createCursorBlobRequestScope,
   cursorBlobByteLength,
@@ -100,8 +101,9 @@ export const CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE =
   + "Do not resume an earlier goal that this request limits. If the request is satisfied, report the result and stop.";
 
 export const CURSOR_GROK_CODE_MODE_CONTINUATION_GUIDANCE =
-  "[Code-mode continuation] The exec cells have already emitted their output through text()/notify(). "
-  + "Those completed emissions are tool observations, not text you need to emit again in your assistant reply. "
+  "[Code-mode continuation] Read emitted exec output as tool observations, not text to emit again in your assistant reply. "
+  + "An empty completed cell does not prove a failed command or lost context: return values are discarded unless passed to text(...) or notify(...). "
+  + "Emit needed observations in future cells. Do not repeat a completed side effect to recover missing output; verify its state with a read-only call. "
   + "Use the observations to perform the next required action or produce the user's requested final answer. "
   + "Do not prefix the final answer with intermediate raw tool output unless the user explicitly requests that raw output.";
 
@@ -372,6 +374,8 @@ function rootPromptMessages(
     if (message.role === "user" || message.role === "developer") {
       replayRuns.clear();
       toolCallCounts.clear();
+      maxRunLength = 1;
+      maxToolCallCount = 1;
       const text = historyContentText(message).trim();
       // Cursor root replay expects OpenAI-style content parts for historical user messages.
       // A bare string survives blob hydration but external workers reject the completed replay
@@ -428,16 +432,17 @@ function rootPromptMessages(
       pushDeduped(toolResultRootPayload(text, toolResultRole), "toolResult", { messageIndex: i, text, toolResultRole }, text);
     }
   }
-  // Severe repetition: tell the model ONCE, imperatively, to change strategy.
-  if (externalModel && maxToolCallCount >= 3) {
+  // Counts are evidence, not proof of a stall: legitimate polling can repeat a call.
+  // A fresh active user action has not entered the replay loop; it starts a new scope too.
+  if (externalModel && activeUserIndex < 0 && maxToolCallCount >= 3) {
     entries.push(rootBlobCandidate({
       role: "user",
-      content: [{ type: "text", text: `[context note] The transcript above contains the same tool call repeated ${maxToolCallCount} times in this user turn. Repeating it again is a failure. Take a DIFFERENT action now, or state plainly what is blocking progress.` }],
+      content: [{ type: "text", text: `[context note] The transcript above contains the same tool call repeated ${maxToolCallCount} times in this user turn. Requested polling or changed observations can justify repetition. If nothing changed and no new evidence requires another check, use the existing result. Take a DIFFERENT action now only when the repeated check cannot advance the current request. Do not repeat a completed side effect merely to recover missing output.` }],
     }, "user", {}));
-  } else if (externalModel && maxRunLength >= 3) {
+  } else if (externalModel && activeUserIndex < 0 && maxRunLength >= 3) {
     entries.push(rootBlobCandidate({
       role: "user",
-      content: [{ type: "text", text: `[context note] The transcript above contains the same output repeated ${maxRunLength} times in a row. Repeating it again is a failure. Take a DIFFERENT action now, or state plainly what is blocking progress.` }],
+      content: [{ type: "text", text: `[context note] The transcript above contains the same output repeated ${maxRunLength} times in a row. Use completed observations to advance the current request. Take a DIFFERENT action now if there is no new evidence to check; requested polling remains valid. Do not repeat a completed side effect merely to recover missing output.` }],
     }, "user", {}));
   }
 
@@ -770,12 +775,30 @@ function contentText(message: OcxMessage): string {
     .join("\n");
 }
 
+function isAmbientBrowserContext(text: string): boolean {
+  if (!/^<in-app-browser-context\s/.test(text) || !text.endsWith("</in-app-browser-context>")) return false;
+  const openingEnd = text.indexOf(">");
+  if (openingEnd < 0) return false;
+  // Inspect one opening tag, not overlapping greedy scans over arbitrary user text.
+  return /\ssource=(["'])ambient-ui-state\1(?=\s|>)/.test(text.slice(0, openingEnd + 1));
+}
+
 function latestUserRequestText(rawMessages: CursorRunRequest["rawMessages"]): string {
   if (!Array.isArray(rawMessages) || rawMessages.length === 0) return "";
   try {
-    const latestUser = rawMessages.findLast(message => message?.role === "user");
-    if (!latestUser) return "";
-    return contentText(latestUser);
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      const message = rawMessages[i];
+      if (message?.role !== "user") continue;
+      const text = contentText(message);
+      const trimmed = text.trim();
+      // Host-generated context remains in history, but is not a new user instruction.
+      // Match whole canonical wrappers; a user quoting a marker must keep their scope.
+      if (trimmed.startsWith(SUMMARY_PREFIX + "\n") || trimmed.startsWith(SUMMARY_PREFIX + "\r\n")
+        || trimmed === OPAQUE_COMPACTION_NOTE || isAmbientBrowserContext(trimmed)) continue;
+      // Blank/image-only input is still a real boundary: never revive an older goal.
+      return text;
+    }
+    return "";
   } catch {
     debugProviderDiagnostic("cursor", "current-user-request-unreadable", {
       rawMessages: rawMessages.length,
