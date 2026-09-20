@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import { findGuiDist } from "../server/gui-static";
+import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
 // Best-effort recovery for runtime execution and spawned children if launched
 // from an unlinked/deleted working directory (runs after hoisted ESM module imports).
@@ -1596,6 +1599,16 @@ async function handleStatus() {
     }
   }
   console.log(`   Dashboard: ${status.json.dashboard.url}${local}`);
+  // The dashboard is a build artifact, so a checkout that moved without `bun run build:gui` keeps
+  // serving the previous bundle and every feature added since simply does not appear (#5196's
+  // usage panel was invisible this way for five days). Reported next to the dashboard URL, which
+  // is where someone looks when the page is wrong.
+  for (const line of staleGuiBundleLines(inspectGuiBundleFreshness({
+    bundlePath: findGuiDist(),
+    sourcePath: join(import.meta.dir, "..", "..", "gui", "src"),
+  }))) {
+    console.log(`     ${line}`);
+  }
   console.log(`   Config: ${status.json.paths.config}${local}`);
   console.log(`   PID file: ${status.json.paths.pid}${local}`);
   console.log(`   Runtime: ${status.json.paths.runtime}${local}`);
