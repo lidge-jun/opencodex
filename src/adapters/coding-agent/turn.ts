@@ -406,6 +406,24 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         }
         for (const event of mapStreamMessageToEvents(message, state)) {
           if (toolBridge && event.type === "tool_call_start") {
+            // The bridge server must be validated (system/init with exactly that server
+            // connected) before any tool call: a stream that emits tool calls first and a
+            // valid init later would otherwise forward tool lifecycle events to the client
+            // from an unvalidated bridge, and the delayed message_stop check could not
+            // reject it once the late init flipped the flag.
+            if (!initValidated) {
+              emitOnce({
+                type: "error",
+                message: "Coding-agent tool bridge init frame was not observed before the first tool call.",
+                status: 502,
+                errorType: "upstream_error",
+                code: "tool_bridge_init_missing",
+                retryable: false,
+              });
+              failClosed = true;
+              kill();
+              break;
+            }
             toolCallStarts += 1;
             if (toolCallStarts > toolBridge.maxTurnToolCalls) {
               emitOnce({

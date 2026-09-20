@@ -245,6 +245,32 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
+  test("a tool call before the init frame fails closed with tool_bridge_init_missing", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const spawn: SpawnFn = (_cmd, _args) => fakeChild(frameLines([
+      // A complete tool call arrives before the init frame: the bridge was never validated
+      // when the model started calling tools.
+      toolUseStart(cliName),
+      inputJsonDelta("{}"),
+      BLOCK_STOP,
+      INIT_OK,
+      MESSAGE_STOP,
+    ])) as unknown as ChildProcess;
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "tool_bridge_init_missing",
+      status: 502,
+      retryable: false,
+    });
+    // No tool lifecycle events surface from an unvalidated bridge.
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
   test("a result frame before message_stop defers to the synthesized tool_use done", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
