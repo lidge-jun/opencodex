@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useI18n } from "../i18n/shared";
+import { useI18n, type TFn, type TKey } from "../i18n/shared";
 import { relativeTimeLabelsFromT, formatRelativeTime } from "../provider-workspace/usage";
 import { Switch } from "../ui";
 import { UsageCompanionChart } from "./usage-companion-chart";
+import { desktopShellVersion, hostOs, isDesktopShell, type HostOs } from "../lib/desktop-shell";
 import {
   bucketMinutesForWindow,
   buildCompanionSettingsPatch,
@@ -24,6 +25,50 @@ const CHART_STYLES = ["line", "stackedBar"] as const;
 const TOKEN_METRICS = ["total", "input", "output", "cached"] as const;
 const AGGREGATIONS = ["sum", "average", "max"] as const;
 const GROUPINGS = ["model", "modelAccount"] as const;
+const MENU_METRIC_KEYS: Record<(typeof MENU_METRICS)[number], TKey> = {
+  requests: "usage.companion.menuRequests",
+  tokens: "usage.companion.menuTokens",
+  cost: "usage.companion.menuCost",
+  quota: "usage.companion.menuQuota",
+  none: "usage.companion.menuNone",
+};
+const WINDOW_KEYS: Record<(typeof WINDOWS)[number], TKey> = {
+  6: "usage.companion.window6",
+  24: "usage.companion.window24",
+  72: "usage.companion.window72",
+  168: "usage.companion.window168",
+};
+const TOKEN_METRIC_KEYS: Record<(typeof TOKEN_METRICS)[number], TKey> = {
+  total: "usage.companion.metricTotal",
+  input: "usage.companion.metricInput",
+  output: "usage.companion.metricOutput",
+  cached: "usage.companion.metricCached",
+};
+const SECTION_OPTIONS = [
+  ["showToday", "usage.companion.sectionToday"],
+  ["showChart", "usage.companion.sectionChart"],
+  ["showModels", "usage.companion.sectionModels"],
+  ["showCost", "usage.companion.sectionCost"],
+  ["showAccounts", "usage.companion.sectionAccounts"],
+] as const;
+const AGGREGATION_KEYS: Record<(typeof AGGREGATIONS)[number], TKey> = {
+  sum: "usage.companion.aggregationSum",
+  average: "usage.companion.aggregationAverage",
+  max: "usage.companion.aggregationMax",
+};
+type InstallOs = Exclude<HostOs, "unknown">;
+
+const INSTALL_STEP_KEYS: Record<InstallOs, readonly [TKey, TKey, TKey]> = {
+  macos: ["usage.companion.installMacStep1", "usage.companion.installMacStep2", "usage.companion.installMacStep3"],
+  windows: ["usage.companion.installWinStep1", "usage.companion.installWinStep2", "usage.companion.installWinStep3"],
+  linux: ["usage.companion.installLinuxStep1", "usage.companion.installLinuxStep2", "usage.companion.installLinuxStep3"],
+};
+
+const OS_LABEL_KEYS: Record<InstallOs, TKey> = {
+  macos: "usage.companion.osMac",
+  windows: "usage.companion.osWindows",
+  linux: "usage.companion.osLinux",
+};
 
 function formatSaveTime(value: number, locale: string): string {
   return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(value);
@@ -32,6 +77,26 @@ function formatSaveTime(value: number, locale: string): string {
 function errorMessage(value: unknown): string {
   if (value instanceof Error && value.message) return value.message;
   return String(value);
+}
+
+function OsSelector({
+  value,
+  onChange,
+  t,
+}: {
+  value: InstallOs;
+  onChange: (value: InstallOs) => void;
+  t: TFn;
+}) {
+  return (
+    <div className="usage-segmented" role="group" aria-label={t("usage.companion.installOs")}>
+      {(Object.keys(OS_LABEL_KEYS) as InstallOs[]).map(os => (
+        <button key={os} type="button" className={`usage-segmented-btn${value === os ? " active" : ""}`} aria-pressed={value === os} onClick={() => onChange(os)}>
+          {t(OS_LABEL_KEYS[os])}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function Segment<T extends string | number>({
@@ -129,6 +194,10 @@ export default function UsageCompanionPanel({
   const settingsRef = useRef(settings);
   const knownTotalsRef = useRef(new Map<string, number>());
   const [knownTotals, setKnownTotals] = useState<Map<string, number>>(new Map());
+  const [installOs, setInstallOs] = useState<InstallOs>(() => {
+    const detected = hostOs();
+    return detected === "unknown" ? "macos" : detected;
+  });
 
   useEffect(() => {
     saveStateRef.current = saveState;
@@ -275,6 +344,20 @@ export default function UsageCompanionPanel({
     }
   }, [apiBase, loadSettings]);
 
+  const openInBrowser = useCallback(async () => {
+    try {
+      const path = location.hash ? `/${location.hash}` : "/#/usage";
+      const result = await fetch(`${apiBase}/api/companion/open-in-browser`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (!result.ok) throw new Error(`${result.status} ${result.statusText}`.trim());
+    } catch (error) {
+      setSaveError(errorMessage(error));
+    }
+  }, [apiBase]);
+
   if (settingsError) {
     return <section ref={rootRef} className="usage-companion-panel"><p role="alert">{t("usage.companion.settingsUnavailable")}</p><button type="button" className="btn btn-ghost btn-sm" onClick={() => void loadSettings()}>{t("common.retry")}</button></section>;
   }
@@ -307,29 +390,51 @@ export default function UsageCompanionPanel({
         const lastSeenAt = response?.companion?.lastSeenAt ?? null;
         const connected = lastSeenAt !== null && fetchedAt !== null && fetchedAt - lastSeenAt <= 10 * 60 * 1000;
         const age = lastSeenAt === null || fetchedAt === null ? "" : formatRelativeTime(lastSeenAt, relativeTimeLabelsFromT(t), fetchedAt);
+        const shell = isDesktopShell();
+        const shellVersion = desktopShellVersion() ?? __APP_VERSION__;
+        const stepKeys = INSTALL_STEP_KEYS[installOs];
         const steps = (
           <ol className="usage-companion-install-steps">
-            <li>{t("usage.companion.installStep1")} <a className="btn btn-ghost btn-sm" href="https://github.com/lidge-jun/opencodex/releases/latest" target="_blank" rel="noreferrer">{t("common.github")}</a></li>
-            <li>{t("usage.companion.installStep2")}</li>
-            <li>{t("usage.companion.installStep3")}</li>
+            <li>{t(stepKeys[0])} <a className="btn btn-ghost btn-sm" href="https://github.com/lidge-jun/opencodex/releases/latest" target="_blank" rel="noreferrer">{t("common.github")}</a></li>
+            <li>{t(stepKeys[1])}</li>
+            <li>{t(stepKeys[2])}</li>
           </ol>
         );
+        const installCommand = installOs === "macos"
+          ? <code className="usage-companion-install-command">xattr -d com.apple.quarantine /Applications/OpenCodex.app</code>
+          : installOs === "linux"
+            ? <code className="usage-companion-install-command">chmod +x OpenCodex-*.AppImage</code>
+            : null;
+        const installGuidance = (
+          <details>
+            <summary>{t("usage.companion.installAnother")}</summary>
+            <OsSelector value={installOs} onChange={setInstallOs} t={t} />
+            {steps}
+            {installCommand}
+          </details>
+        );
+        if (shell) {
+          return (
+            <div className="usage-companion-install usage-companion-install--shell">
+              <p>{t("usage.companion.runningInDesktop", { version: shellVersion })}</p>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void openInBrowser()}>{t("usage.companion.openInBrowser")}</button>
+              {installGuidance}
+            </div>
+          );
+        }
         return connected ? (
           <div className="usage-companion-install usage-companion-install--connected">
-            <div className="usage-companion-install-status"><span className="usage-companion-install-dot" aria-hidden="true" />{t("usage.companion.connected", { age })}</div>
-            <details>
-              <summary>{t("usage.companion.installAnother")}</summary>
-              {steps}
-              <code className="usage-companion-install-command">xattr -d com.apple.quarantine /Applications/OpenCodex.app</code>
-            </details>
+            <div className="usage-companion-install-status"><span className="usage-companion-install-dot" aria-hidden="true" />{t(response?.companion?.kind === "desktop" ? "usage.companion.connectedDesktop" : "usage.companion.connected", { age })}</div>
+            {installGuidance}
           </div>
         ) : (
           <details className="usage-companion-install" open>
             <summary>{t("usage.companion.installTitle")}</summary>
             {lastSeenAt !== null && <p className="usage-companion-install-last-seen muted text-caption">{t("usage.companion.lastSeen", { age })}</p>}
             {lastSeenAt === null && <p className="usage-companion-install-last-seen muted text-caption">{t("usage.companion.notConnected")}</p>}
+            <OsSelector value={installOs} onChange={setInstallOs} t={t} />
             {steps}
-            <code className="usage-companion-install-command">xattr -d com.apple.quarantine /Applications/OpenCodex.app</code>
+            {installCommand}
           </details>
         );
       })()}
@@ -378,30 +483,24 @@ export default function UsageCompanionPanel({
         </div>
       </section>}
       <fieldset className="usage-companion-controls" disabled={response?.corrupt}>
-        <Segment label={t("usage.companion.menuBarShows")} value={current.menuBarMetric} options={MENU_METRICS} optionLabel={value => t(`usage.companion.menu${value[0]!.toUpperCase()}${value.slice(1)}` as never)} onChange={value => updateSettings({ menuBarMetric: value })} />
-        <Segment label={t("usage.companion.window")} value={current.chartHours} options={WINDOWS} optionLabel={value => t(`usage.companion.window${value}` as never)} onChange={value => updateSettings({ chartHours: value, bucketMinutes: bucketMinutesForWindow(value) })} />
+        <Segment label={t("usage.companion.menuBarShows")} value={current.menuBarMetric} options={MENU_METRICS} optionLabel={value => t(MENU_METRIC_KEYS[value])} onChange={value => updateSettings({ menuBarMetric: value })} />
+        <Segment label={t("usage.companion.window")} value={current.chartHours} options={WINDOWS} optionLabel={value => t(WINDOW_KEYS[value])} onChange={value => updateSettings({ chartHours: value, bucketMinutes: bucketMinutesForWindow(value) })} />
         <Segment label={t("usage.companion.style")} value={current.chartStyle} options={CHART_STYLES} optionLabel={value => value === "line" ? t("usage.companion.styleLine") : t("usage.companion.styleStacked")} onChange={value => updateSettings({ chartStyle: value })} />
-        <SelectControl label={t("usage.companion.metric")} value={current.tokenMetric} options={TOKEN_METRICS} optionLabel={value => t(`usage.companion.metric${value[0]!.toUpperCase()}${value.slice(1)}` as never)} onChange={value => updateSettings({ tokenMetric: value })} />
+        <SelectControl label={t("usage.companion.metric")} value={current.tokenMetric} options={TOKEN_METRICS} optionLabel={value => t(TOKEN_METRIC_KEYS[value])} onChange={value => updateSettings({ tokenMetric: value })} />
         <SelectControl label={t("usage.companion.groupBy")} value={current.chartGrouping} options={GROUPINGS} optionLabel={value => value === "model" ? t("usage.companion.groupModel") : t("usage.companion.groupAccount")} onChange={value => updateSettings({ chartGrouping: value })} />
         <fieldset className="usage-companion-switches">
           <legend className="field-label">{t("usage.companion.popoverSections")}</legend>
-          {([
-            ["showToday", "today"],
-            ["showChart", "chart"],
-            ["showModels", "models"],
-            ["showCost", "cost"],
-            ["showAccounts", "accounts"],
-          ] as const).map(([key, label]) => (
+          {SECTION_OPTIONS.map(([key, label]) => (
             <div key={key} className="usage-companion-switch">
-              <span>{t(`usage.companion.section${label[0]!.toUpperCase()}${label.slice(1)}` as never)}</span>
-              <button type="button" className={`toggle ${current[key] ? "on" : ""}`} aria-label={t(`usage.companion.section${label[0]!.toUpperCase()}${label.slice(1)}` as never)} aria-pressed={current[key]} onClick={() => updateSettings({ [key]: !current[key] })}><span className="toggle-knob" /></button>
+              <span>{t(label)}</span>
+              <button type="button" className={`toggle ${current[key] ? "on" : ""}`} aria-label={t(label)} aria-pressed={current[key]} onClick={() => updateSettings({ [key]: !current[key] })}><span className="toggle-knob" /></button>
             </div>
           ))}
         </fieldset>
         <details className="usage-companion-advanced">
           <summary>{t("usage.companion.advanced")}</summary>
           <div className="usage-companion-advanced-body">
-            <SelectControl label={t("usage.companion.aggregation")} value={current.aggregation} options={AGGREGATIONS} optionLabel={value => t(`usage.companion.aggregation${value[0]!.toUpperCase()}${value.slice(1)}` as never)} onChange={value => updateSettings({ aggregation: value })} />
+            <SelectControl label={t("usage.companion.aggregation")} value={current.aggregation} options={AGGREGATIONS} optionLabel={value => t(AGGREGATION_KEYS[value])} onChange={value => updateSettings({ aggregation: value })} />
             <label className="usage-companion-control">
               <span className="field-label">{t("usage.companion.menuText")}</span>
               <input value={current.menuBarTemplate ?? ""} onChange={event => updateSettings({ menuBarTemplate: event.target.value })} maxLength={200} />

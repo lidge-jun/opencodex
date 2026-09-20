@@ -69,60 +69,257 @@ jobs:
             process.exit(1);
           }
           NODE
-  package-macos:
+  package-standalone:
     needs: validate-dispatch
-    runs-on: macos-latest
-    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            smoke: true
+          - os: macos-latest
+            target: bun-darwin-arm64
+            smoke: true
+          - os: macos-latest
+            target: bun-darwin-x64
+            smoke: false
+          - os: windows-latest
+            target: bun-windows-x64
+            smoke: true
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            smoke: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     permissions:
       contents: read
-    outputs:
-      archive_name: ${{ steps.package.outputs.archive_name }}
-      checksum_name: ${{ steps.package.outputs.checksum_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
 
-      - name: Package the macOS companion
-        id: package
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Build standalone binary
+        run: bun run build:standalone --target ${{ matrix.target }}
+
+      - name: Smoke test standalone binary
+        if: matrix.smoke && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="dist/standalone/${{ matrix.target }}/ocx"
+          "$binary" --version
+          OPENCODEX_HOME="$RUNNER_TEMP/ocx-home" "$binary" start --port 10177 >"$RUNNER_TEMP/ocx.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:10177/healthz && break || sleep 1; done
+          curl -fsS http://127.0.0.1:10177/healthz
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:10177/)" = 200
+
+      - name: Smoke test standalone binary (Windows)
+        if: matrix.smoke && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "dist/standalone/${{ matrix.target }}/ocx.exe"
+          & $binary --version
+          $env:OPENCODEX_HOME = Join-Path $env:RUNNER_TEMP "ocx-home"
+          $process = Start-Process -FilePath $binary -ArgumentList "start", "--port", "10177" -PassThru
+          try {
+            for ($i = 0; $i -lt 30; $i++) {
+              try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/healthz | Out-Null; break } catch { Start-Sleep -Seconds 1 }
+            }
+            Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/healthz | Select-Object -ExpandProperty Content
+            Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/ | Out-Null
+          } finally { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+
+      - name: Archive standalone release
+        shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-          UNIVERSAL: "1"
-          # A monotonic numeric CFBundleVersion. Preview versions carry a suffix that
-          # Apple does not accept in that field, so the script uses the numeric core
-          # plus this run number.
-          MACOS_BUILD_NUMBER: ${{ github.run_number }}
-          # NOTE: intentionally no MACOS_SIGN_IDENTITY here. The build script honours
-          # it, but an identity NAME alone cannot sign on a hosted runner — the
-          # certificate and private key are never imported into a keychain, so codesign
-          # fails with "no identity found". Real Developer ID signing needs a protected
-          # P12 import, a temporary keychain, notarytool credentials, and stapling, all
-          # as one security-reviewed change. Until then the asset is ad-hoc signed and
-          # the docs carry the Gatekeeper first-launch path.
-        run: bash scripts/package-macos-release.sh
+          STANDALONE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd "dist/standalone/$STANDALONE_TARGET"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
+          else
+            tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui
+          fi
+          cd ../../..
+          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          else sha256sum "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          fi
 
-      - name: Upload the release asset
+      - name: Upload standalone release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos-release
+          name: standalone-${{ matrix.target }}
+          path: |
+            dist/ocx-*.tar.gz
+            dist/ocx-*.zip
+            dist/ocx-*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  package-desktop:
+    needs: validate-dispatch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            bundles: app,dmg
+            sidecar-targets: macos
+            artifact-suffixes: macos.dmg,macos.app.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: msi
+            sidecar-targets: x86_64-pc-windows-msvc
+            artifact-suffixes: windows-x64.msi
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            sidecar-targets: x86_64-unknown-linux-gnu
+            artifact-suffixes: linux-x86_64.AppImage,linux-amd64.deb
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install project dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Prepare macOS sidecars
+        if: runner.os == 'macOS'
+        run: |
+          bun desktop/scripts/prepare-sidecar.ts --target aarch64-apple-darwin
+          bun desktop/scripts/prepare-sidecar.ts --target x86_64-apple-darwin
+
+      - name: Prepare sidecar
+        if: runner.os != 'macOS'
+        run: bun desktop/scripts/prepare-sidecar.ts --target ${{ matrix.sidecar-targets }}
+
+      - name: Build WidgetKit extension
+        if: runner.os == 'macOS'
+        run: bash desktop/scripts/build-widget.sh
+
+      # Release signing is intentionally secret-gated. Developer ID, notarization,
+      # and updater signatures require maintainer-owned credentials; builds without
+      # those secrets remain useful for local validation but are not release assets.
+      - name: Build desktop bundles
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Rename release assets
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DESKTOP_TARGET: ${{ matrix.target }}
+        run: |
+          bun desktop/scripts/collect-release-assets.ts \
+            --version "$RELEASE_VERSION" \
+            --target "$DESKTOP_TARGET" \
+            --out dist/release
+
+      - name: Upload desktop release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.target }}
           path: dist/release/
           if-no-files-found: error
           retention-days: 7
 
-  attach-macos:
+  attach-release:
     runs-on: ubuntu-latest
-    needs: [publish, package-macos]
+    needs: [publish, package-standalone, package-desktop]
     if: ${{ inputs.dry-run != true }}
+    env:
+      UPDATER_SIGNING_CONFIGURED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: Download the packaged asset
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Download standalone packaged assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: macos-release
+          pattern: standalone-*
+          merge-multiple: true
           path: dist/release
+
+      - name: Download desktop packaged assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: dist/release
+
+      # Generate latest.json only when the updater key is configured; then require
+      # signatures for all four updater platforms before publishing it.
+      - name: Generate updater manifest
+        if: env.UPDATER_SIGNING_CONFIGURED == 'true'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          bun desktop/scripts/updater-manifest.ts \
+            --version "$RELEASE_VERSION" \
+            --dir dist/release \
+            --repo lidge-jun/opencodex \
+            --out dist/release/latest.json \
+            --require-all
 
       - name: Verify the checksum before uploading
         run: |

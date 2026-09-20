@@ -312,14 +312,14 @@
       ]
     },
     {
-    "path": "adapters/compatibility-lab.md",
-    "tier": 4,
-    "title": "Compatibility Lab",
-    "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
-    "documents": [
-      "src/lab/",
-      "src/server/index.ts"
-    ]
+      "path": "adapters/compatibility-lab.md",
+      "tier": 4,
+      "title": "Compatibility Lab",
+      "scope": "Optional Lab evidence, automation, and its core-runtime isolation boundary.",
+      "documents": [
+        "src/lab/",
+        "src/server/index.ts"
+      ]
     },
     {
       "path": "gui-and-management-api.md",
@@ -358,6 +358,16 @@
         "src/cli/",
         "src/client/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "desktop-shell.md",
+      "tier": 6,
+      "title": "Desktop shell",
+      "scope": "Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence.",
+      "documents": [
+        "desktop/",
+        "src/server/management/companion-routes.ts"
       ]
     },
     {

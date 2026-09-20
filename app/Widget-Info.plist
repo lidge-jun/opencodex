@@ -4,7 +4,7 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>OpenCodexWidget</string>
-  <key>CFBundleIdentifier</key><string>com.opencodex.menubar.widget</string>
+  <key>CFBundleIdentifier</key><string>com.opencodex.desktop.widget</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>OpenCodex</string>
   <key>CFBundlePackageType</key><string>XPC!</string>

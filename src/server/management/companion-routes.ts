@@ -5,13 +5,14 @@ import {
   saveCompanionSettings,
 } from "../../companion/settings";
 import { jsonResponse } from "../auth-cors";
+import { openUrl } from "../../lib/open-url";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 
-let companionLastSeenAt: number | null = null;
+let companionPresence: { lastSeenAt: number; kind: "menuBar" | "desktop" } | null = null;
 
 export function resetCompanionPresenceForTests(): void {
-  companionLastSeenAt = null;
+  companionPresence = null;
 }
 
 function response(): Response {
@@ -20,14 +21,36 @@ function response(): Response {
     settings: loaded.settings,
     updatedAt: loaded.updatedAt,
     defaults: DEFAULT_COMPANION_SETTINGS,
-    companion: { lastSeenAt: companionLastSeenAt },
+    companion: companionPresence ?? { lastSeenAt: null },
     ...(loaded.corrupt ? { corrupt: true } : {}),
   });
 }
 
 export async function handleCompanionRoutes(ctx: ManagementContext): Promise<Response | null> {
+  if (ctx.url.pathname === "/api/companion/open-in-browser" && ctx.req.method === "POST") {
+    let body: unknown;
+    try {
+      body = await readManagementJsonBody(ctx.req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid path" }, 400, ctx.req, ctx.config);
+    }
+    const path = body && typeof body === "object" && !Array.isArray(body)
+      ? (body as { path?: unknown }).path
+      : undefined;
+    if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || path.length > 512) {
+      return jsonResponse({ error: "invalid path" }, 400, ctx.req, ctx.config);
+    }
+    const url = `http://127.0.0.1:${ctx.config.port}${path}`;
+    openUrl(url);
+    return jsonResponse({ ok: true, url }, 200, ctx.req, ctx.config);
+  }
   if (ctx.url.pathname === "/api/companion/settings" && ctx.req.method === "GET") {
-    if (ctx.req.headers.get("user-agent")?.startsWith("OpenCodexMenuBar/")) companionLastSeenAt = Date.now();
+    const userAgent = ctx.req.headers.get("user-agent") ?? "";
+    const kind = userAgent.startsWith("OpenCodexMenuBar/") ? "menuBar"
+      : userAgent.startsWith("OpenCodexDesktop/") ? "desktop"
+      : null;
+    if (kind) companionPresence = { lastSeenAt: Date.now(), kind };
     return response();
   }
   if (ctx.url.pathname !== "/api/companion/settings" || ctx.req.method !== "PUT") return null;

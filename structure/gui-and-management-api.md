@@ -766,3 +766,8 @@ is chosen; for a combo selector the warning lists the combo's target providers f
 and states that failover targets receive the conversation too. `GET /api/settings` returns
 the override or null; `PUT /api/settings` accepts a complete validated object or null to clear it.
 Save failure restores live settings and deletion provenance; the dashboard retains the draft for retry.
+
+`src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
+priority and standalone binaries resolving the copied directory beside `ocx`. Runtime package
+metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries
+do not read a source-tree `package.json`.

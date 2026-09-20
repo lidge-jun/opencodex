@@ -9,17 +9,27 @@ description: OpenCodex プロキシの状態、使用量、プロバイダーの
 プロキシとは別のアプリケーションです。`ocx` はこれまで通り動作し、メニューバーアプリは
 ローカルの管理 API に接続するクライアントとして動きます。
 
+## デスクトップアプリ (Tauri)
+
+同じダッシュボードを OpenCodex デスクトップアプリ内で実行できます。Usage コンパニオン
+パネルは OS に合ったインストール手順を表示し、デスクトップシェル内では **ブラウザーで開く**
+を選ぶと現在の画面を通常のブラウザーで開けます。
+
 ## インストール
 
-[リリースページ](https://github.com/lidge-jun/opencodex/releases)から
-`OpenCodex-<version>-macos-universal.zip` をダウンロードし、展開して `OpenCodex.app` を
-アプリケーションフォルダに移動します。
-
-ダウンロードを検証する場合、リリースごとにチェックサムが添付されています。
+基本のインストール方法は OpenCodex デスクトップアプリです。[リリースページ](https://github.com/lidge-jun/opencodex/releases)から、macOS では
+`OpenCodex-<version>-macos.dmg` をダウンロードし、DMG を開いて `OpenCodex.app` を
+アプリケーションフォルダへドラッグします。Windows では
+`OpenCodex-<version>-windows-x64.msi` を実行し、Linux では AppImage または
+`OpenCodex-<version>-linux-amd64.deb` を使います。
 
 ```bash
-shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
+chmod +x OpenCodex-<version>-linux-x86_64.AppImage
+sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 ```
+
+Windows SmartScreen や macOS Gatekeeper の警告が表示されることがあります。アプリは
+既存の `ocx` に接続し、見つからなければ同梱のサイドカーを起動します。
 
 ## 初回起動: Gatekeeper
 
@@ -134,11 +144,13 @@ macOS 13 以降、Xcode Command Line Tools、および [Bun](https://bun.sh) が
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun run build:macos
+bun run prepare-sidecar
+bun run prepare-widget
+bunx tauri build
 ```
 
-バンドルは `dist/macos/OpenCodex.app` に生成されます。Bun がない場合はスクリプトを直接
-実行できます: `bash scripts/build-macos-app.sh`。
+バンドルは Tauri のリリース出力に生成され、WidgetKit 拡張は
+`OpenCodex.app/Contents/PlugIns/` に含まれます。
 
 ユニバーサルバイナリ（`UNIVERSAL=1`）には完全な Xcode が必要です。Command Line Tools には
 現在のアーキテクチャ用の Swift 互換ライブラリしか含まれないため、その場合はリンカーエラーでは
@@ -148,7 +160,7 @@ bun run build:macos
 ではなく hardened runtime で署名できます。
 
 ```bash
-MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run build:macos
+MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run prepare-widget
 ```
 
 ## アンインストール

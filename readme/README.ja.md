@@ -101,10 +101,12 @@ Codex 認証用の **ChatGPT アカウントプール**も管理できます。C
 
 ### macOS メニューバーアプリ
 
+macOS、Windows、Linux 向けのデスクトップアプリを[リリースページ](https://github.com/lidge-jun/opencodex/releases)からダウンロードできます。
+
 ダッシュボードを開かずにプロキシの状態、使用量、プロバイダーのクォータを確認できるネイティブ
 コンパニオンです。ソースは [`app/`](../app)（Swift + AppKit、サードパーティ依存なし）にあります。
 [リリースページ](https://github.com/lidge-jun/opencodex/releases)からダウンロードするか、
-`bun run build:macos` でローカルビルドできます。
+`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` でローカルビルドできます。
 
 アプリは未公証のアドホック署名のため、初回起動時は右クリックして「開く」を選択してください。
 詳しくは [macOS メニューバーアプリガイド](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)をご覧ください。

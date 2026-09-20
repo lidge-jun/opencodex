@@ -500,6 +500,7 @@ describe("GitHub Actions hardening", () => {
       "bin/**",
       "bun.lock",
       "compose.yaml",
+      "desktop/**",
       "docker/**",
       "gui/**",
       "package.json",

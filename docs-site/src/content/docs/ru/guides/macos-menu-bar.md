@@ -9,17 +9,27 @@ description: Нативное приложение, показывающее с�
 Это отдельная программа. `ocx` работает как раньше, а приложение в строке меню —
 клиент, который обращается к локальному management API.
 
+## Настольное приложение (Tauri)
+
+Ту же панель можно открыть в настольном приложении OpenCodex. Панель компаньона показывает
+шаги установки для выбранной ОС, а пункт **Открыть в браузере** открывает текущий экран
+в обычном браузере, когда панель работает внутри desktop shell.
+
 ## Установка
 
-Скачайте `OpenCodex-<версия>-macos-universal.zip` со
-[страницы релизов](https://github.com/lidge-jun/opencodex/releases), распакуйте и
-переместите `OpenCodex.app` в папку «Программы».
-
-Если хотите проверить загрузку, к каждому релизу прилагается контрольная сумма:
+Основной способ установки — настольное приложение OpenCodex. На
+[странице релизов](https://github.com/lidge-jun/opencodex/releases) скачайте для macOS
+`OpenCodex-<версия>-macos.dmg`, откройте DMG и перетащите `OpenCodex.app` в «Программы».
+В Windows запустите `OpenCodex-<версия>-windows-x64.msi`, а в Linux используйте AppImage
+или `OpenCodex-<версия>-linux-amd64.deb`.
 
 ```bash
-shasum -a 256 -c OpenCodex-<версия>-macos-universal.zip.sha256
+chmod +x OpenCodex-<версия>-linux-x86_64.AppImage
+sudo apt install ./OpenCodex-<версия>-linux-amd64.deb
 ```
+
+Windows SmartScreen и macOS Gatekeeper могут показать предупреждение. Приложение подключается
+к существующему `ocx`, а если его нет — запускает встроенный sidecar.
 
 ## Первый запуск: Gatekeeper
 
@@ -136,11 +146,13 @@ xattr -d com.apple.quarantine /Applications/OpenCodex.app
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun run build:macos
+bun run prepare-sidecar
+bun run prepare-widget
+bunx tauri build
 ```
 
-Бандл появится в `dist/macos/OpenCodex.app`. Без Bun скрипт можно запустить напрямую:
-`bash scripts/build-macos-app.sh`.
+Бандл появится в выходных файлах Tauri, а расширение WidgetKit будет включено в
+`OpenCodex.app/Contents/PlugIns/`.
 
 Для универсального бинарника (`UNIVERSAL=1`) нужен полный Xcode: в Command Line Tools есть
 только библиотеки совместимости Swift для текущей архитектуры, и сборка сообщит об этом
@@ -150,7 +162,7 @@ bun run build:macos
 подписать с hardened runtime вместо ad-hoc:
 
 ```bash
-MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run build:macos
+MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run prepare-widget
 ```
 
 ## Удаление

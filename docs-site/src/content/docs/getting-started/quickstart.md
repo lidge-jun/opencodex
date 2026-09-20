@@ -5,6 +5,11 @@ description: Configure your first provider and route OpenAI Codex through openco
 
 This guide takes you from a fresh install to running Codex against a non-OpenAI model.
 
+## Standalone binary (no npm)
+
+You can also use a release archive containing the `ocx` binary and Bun runtime without npm.
+Extract it with its `gui/dist` directory beside the binary, then run `./ocx start`.
+
 ## 1. Run the setup wizard
 
 ```bash

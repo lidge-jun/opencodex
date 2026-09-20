@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCodex</title>
+    <style>
+      :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
+      body { display: grid; min-height: 100vh; place-items: center; margin: 0; background: #f5f5f7; color: #202124; }
+      main { width: min(34rem, calc(100vw - 3rem)); padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 8px 30px #0001; }
+      h1 { margin-top: 0; font-size: 1.4rem; }
+      #status { min-height: 2.5rem; color: #666; }
+      button { border: 0; border-radius: .5rem; padding: .6rem 1rem; background: #2563eb; color: white; cursor: pointer; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #1c1c1e; color: #f5f5f7; }
+        main { background: #2c2c2e; }
+        #status { color: #bbb; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>OpenCodex</h1>
+      <p id="status">Connecting to the OpenCodex proxy…</p>
+      <button id="retry" type="button">Retry</button>
+    </main>
+    <script src="./main.js"></script>
+  </body>
+</html>

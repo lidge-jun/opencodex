@@ -244,6 +244,7 @@ ocx codex-shim uninstall
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 安裝並控制 Windows 狀態列圖示。它在 Windows 登入時啟動並提供一鍵代理控制。`start` 與 `stop` 僅控制圖示；請用其選單控制代理。`--no-start` 適用於 `install`，並在不立即啟動它的情況下安裝 tray。
+已淘汰：OpenCodex 桌面應用程式在 Windows、macOS 與 Linux 提供系統匣；沒有桌面應用程式的安裝仍可使用 `ocx tray`。
 
 ## 儀表板
 

@@ -293,8 +293,8 @@ struct OpenCodexWidgetView: View {
             Image(systemName: failure == .missing ? "rectangle.on.rectangle" : "exclamationmark.triangle")
                 .font(.title2)
             Text(failure == .missing
-                 ? "Open the OpenCodex menu bar app to start sharing usage."
-                 : "Snapshot unreadable — refresh from the menu bar app.")
+                 ? "Open the OpenCodex desktop app to start sharing usage."
+                 : "Snapshot unreadable — refresh from the desktop app.")
                 .font(.caption)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

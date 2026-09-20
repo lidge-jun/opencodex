@@ -53,6 +53,7 @@ export interface CompanionSettingsResponse {
   corrupt?: boolean;
   companion?: {
     lastSeenAt: number | null;
+    kind?: "menuBar" | "desktop";
   };
 }
 

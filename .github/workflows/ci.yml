@@ -35,6 +35,7 @@ on:
       - "tests/**"
       - "scripts/**"
       - "app/**"
+      - "desktop/**"
       - "gui/**"
       - "assets/**"
       - ".gitattributes"
@@ -215,6 +216,7 @@ jobs:
               - 'tests/**'
               - 'scripts/**'
               - 'app/**'
+              - 'desktop/**'
               - 'gui/**'
               - 'assets/**'
               - '.gitattributes'
@@ -1149,12 +1151,12 @@ jobs:
   # `if: always()` is load-bearing. Without it, a failed or skipped dependency
   # skips this job too — and GitHub reports a skipped job as success, so the gate
   # would go green precisely when something went wrong.
-  macos-app:
-    name: macos app
+  widget:
+    name: macos widget + bundle
     needs: [changes, gates]
     if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1167,13 +1169,80 @@ jobs:
           bun-version: 1.3.14
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          cd desktop
+          bun install --frozen-lockfile
 
-      - name: Test macOS menu bar app
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
+      - name: Test MenuBarCore
         run: bun run test:macos
 
-      - name: Build macOS menu bar app
-        run: bun run build:macos
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Prepare desktop sidecar
+        run: bun desktop/scripts/prepare-sidecar.ts
+
+      - name: Build WidgetKit appex
+        run: bash desktop/scripts/build-widget.sh
+
+      - name: Build unsigned desktop app
+        working-directory: desktop
+        run: bunx tauri build --ci --bundles app
+
+      - name: Verify WidgetKit appex and desktop app
+        run: |
+          app=desktop/src-tauri/target/release/bundle/macos/OpenCodex.app
+          test -x "$app/Contents/MacOS/OpenCodex"
+          test -x "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget"
+          test -x "$app/Contents/MacOS/ocx"
+          codesign -dv "$app/Contents/PlugIns/OpenCodexWidget.appex"
+
+  desktop-shell:
+    name: desktop shell
+    needs: [changes, gates]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Prepare desktop check resources
+        run: |
+          set -euo pipefail
+          triple="$(rustc -vV | sed -n 's/^host: //p')"
+          mkdir -p desktop/src-tauri/binaries desktop/src-tauri/resources/gui/dist
+          : > "desktop/src-tauri/binaries/ocx-${triple}"
+          chmod +x "desktop/src-tauri/binaries/ocx-${triple}"
+          : > desktop/src-tauri/resources/gui/dist/.keep
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
 
   ci:
     name: ci
@@ -1182,7 +1251,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke, macos-app]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke, widget, desktop-shell]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1248,12 +1317,15 @@ jobs:
           GATED_JOBS="changes select-windows-runner test storage-policy api-usage gates"
           GATED_JOBS="$GATED_JOBS platform-macos keyring-smoke docker-smoke npm-global-smoke"
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
-          GATED_JOBS="$GATED_JOBS structure-gate macos-app"
+          GATED_JOBS="$GATED_JOBS structure-gate widget"
+          GATED_JOBS="$GATED_JOBS desktop-shell"
 
           expected_for() {
             case "$1" in
               changes|select-windows-runner) echo requested ;;
-              test|storage-policy|api-usage|gates|platform-macos|keyring-smoke|docker-smoke|macos-app)
+              test|storage-policy|api-usage|gates|platform-macos|keyring-smoke|docker-smoke|widget)
+                echo "$scoped" ;;
+              desktop-shell)
                 echo "$scoped" ;;
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;

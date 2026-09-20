@@ -33,9 +33,11 @@ native Anthropic passthrough branch that forwards without translation. The Live/
 different in kind — it resolves an OpenAI/ChatGPT relay and forwards to it directly, without the
 adapter bridge.
 
-`app/` is a second, optional surface: a native macOS menu bar companion. It is a client
-of the management API, not part of the proxy — it adds no endpoint and changes no
-routing. Treat it the way you treat `gui/`: it may consume what `src/` already exposes,
+`app/` contains the native macOS WidgetKit extension bundled into the Tauri desktop app.
+`MenuBarCore` is its snapshot model/formatting layer; the desktop shell writes the
+privacy-safe snapshot that the widget reads without network access. It is a client of
+the management API, not part of the proxy — it adds no endpoint and changes no routing.
+Treat it the way you treat `gui/`: it may consume what `src/` already exposes,
 and a change that requires a new endpoint is a change to the proxy first.
 Its persisted display contract is owned by `src/companion/`.
 

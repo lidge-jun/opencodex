@@ -1,9 +1,5 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { findCommand } from "./registry";
-
-const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
+import { packageVersion as readPackageVersion } from "../lib/package-version";
 
 /**
  * Version of the `ocx` bundle this process is running from.
@@ -13,9 +9,7 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
  * rather than throwing; callers must treat that as "cannot compare", not as a mismatch.
  */
 export function packageVersion(): string {
-  const raw = readFileSync(join(repoRoot, "package.json"), "utf8");
-  const parsed = JSON.parse(raw) as { version?: unknown };
-  return typeof parsed.version === "string" ? parsed.version : "unknown";
+  return readPackageVersion();
 }
 
 export function printVersion(): void {

@@ -57,7 +57,7 @@ public enum ProxyDiscovery {
     /// Reads `runtime-port.json`, falling back to the default port on any problem.
     ///
     /// Every failure mode — missing file, malformed JSON, out-of-range port — resolves to
-    /// the default rather than throwing. A menu bar app that refuses to start because a
+    /// the default rather than throwing. A desktop app that refuses to start because a
     /// cache file is unreadable would be worse than one that probes the usual port.
     public static func resolve(configDirectory directory: URL) -> ProxyEndpoint {
         let file = directory.appendingPathComponent("runtime-port.json")

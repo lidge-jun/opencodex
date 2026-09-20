@@ -98,10 +98,12 @@ round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레�
 
 ### macOS 메뉴 막대 앱
 
+macOS, Windows, Linux용 데스크톱 앱은 [릴리스 페이지](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하세요.
+
 대시보드를 열지 않고 프록시 상태, 사용량, 제공자 쿼터를 확인하는 네이티브 동반 앱입니다.
 소스는 [`app/`](../app)에 있으며 Swift + AppKit으로 작성되었고 서드파티 의존성이 없습니다.
 [릴리스 페이지](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하거나
-`bun run build:macos`로 직접 빌드할 수 있습니다.
+`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`로 직접 빌드할 수 있습니다.
 
 앱은 공증되지 않은 애드혹 서명이므로 처음 실행할 때 마우스 오른쪽 버튼을 클릭하고 열기를 선택하세요.
 자세한 내용은 [macOS 메뉴 막대 앱 가이드](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)를 참조하세요.

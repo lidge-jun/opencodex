@@ -127,7 +127,7 @@ public final class WidgetSnapshotStore: @unchecked Sendable {
     private var loggedFailures = Set<String>()
 
     public init(
-        widgetBundleID: String = "com.opencodex.menubar.widget",
+        widgetBundleID: String = "com.opencodex.desktop.widget",
         fileManager: FileManager = .default,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {

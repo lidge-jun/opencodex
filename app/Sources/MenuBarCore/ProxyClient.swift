@@ -275,7 +275,7 @@ public actor ProxyClient {
         request.httpMethod = method
         request.timeoutInterval = timeout ?? (method == "GET" ? 4 : 6)
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-        request.setValue("OpenCodexMenuBar/\(version)", forHTTPHeaderField: "User-Agent")
+        request.setValue("OpenCodexWidget/\(version)", forHTTPHeaderField: "User-Agent")
         if let credential = key ?? apiKey {
             request.setValue(credential, forHTTPHeaderField: "x-opencodex-api-key")
         }

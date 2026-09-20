@@ -9,16 +9,24 @@ per-provider quota pressure, without opening the dashboard.
 It is a separate application from the proxy. `ocx` keeps running as it always has; the
 companion is a read-mostly client that talks to the local management API.
 
+## Desktop app (Tauri)
+
+The same dashboard can run inside the OpenCodex desktop app. The Usage companion panel
+uses the OS selector to show the matching macOS, Windows, or Linux installation steps.
+While the dashboard is inside the desktop shell, choose **Open in browser** to open the
+current dashboard view in your normal browser.
+
 ## Install
 
-Download `OpenCodex-<version>-macos-universal.zip` from the
-[latest release](https://github.com/lidge-jun/opencodex/releases), unzip it, and move
-`OpenCodex.app` to your Applications folder.
-
-Verify the download if you like — every release ships a checksum beside it:
+Install the desktop app from the
+[latest release](https://github.com/lidge-jun/opencodex/releases). On macOS, download
+`OpenCodex-<version>-macos.dmg`, open it, and drag `OpenCodex.app` to Applications.
+Windows users can run `OpenCodex-<version>-windows-x64.msi`; Linux users can use the
+AppImage or `OpenCodex-<version>-linux-amd64.deb`.
 
 ```bash
-shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
+chmod +x OpenCodex-<version>-linux-x86_64.AppImage
+sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 ```
 
 ## First launch: Gatekeeper
@@ -104,7 +112,7 @@ Everything else — accounts, model configuration, storage — stays in the dash
 
 Add the widget from the desktop: right-click, choose **Edit Widgets**, then add
 **OpenCodex**. It shows proxy status, today's usage, quota pressure, and the same
-privacy-safe usage snapshot as the menu bar app. The widget refreshes when the app polls.
+privacy-safe usage snapshot as the desktop app. The widget refreshes when the app polls.
 It requires macOS 14 or later and reads only the privacy-safe snapshot written by the
 OpenCodex app; it does not receive API keys or raw account data.
 
@@ -138,11 +146,13 @@ Requires macOS 13 or later, the Xcode Command Line Tools, and [Bun](https://bun.
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun run build:macos
+bun run prepare-sidecar
+bun run prepare-widget
+bunx tauri build
 ```
 
-The bundle appears at `dist/macos/OpenCodex.app`. Without Bun you can run the script
-directly: `bash scripts/build-macos-app.sh`.
+The bundle appears in Tauri's release output, with the WidgetKit appex under
+`OpenCodex.app/Contents/PlugIns/`.
 
 Building a universal binary (`UNIVERSAL=1`) needs the full Xcode toolchain — Command
 Line Tools ships only current-architecture Swift compatibility libraries, and the build
@@ -152,7 +162,7 @@ If you have a Developer ID certificate in your keychain, set `MACOS_SIGN_IDENTIT
 sign with the hardened runtime instead of ad-hoc:
 
 ```bash
-MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run build:macos
+MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run prepare-widget
 ```
 
 ## Uninstall

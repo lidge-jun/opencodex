@@ -27,9 +27,8 @@ Bun-native TypeScript with no separate server compile step.
   seeds in `layout.json` place a conventionally named file until then.
   History: `devlog/_fin/260905_test_modularization_and_windows/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
-- `app/` — native macOS menu bar companion (Swift + AppKit, no third-party
-  dependencies). `MenuBarCore` is the testable transport/model layer,
-  `MenuBarUI` the AppKit views, `MenuBarApp` the entry point. Its tests are
+- `app/` — native macOS WidgetKit extension bundled into the Tauri desktop app;
+  `MenuBarCore` is its snapshot model/formatting layer. Its tests are
   executables, not XCTest bundles — Command Line Tools ships neither a usable
   XCTest module nor the swift-testing runtime.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
@@ -46,6 +45,7 @@ Bun-native TypeScript with no separate server compile step.
   gone, and on a new `src/` area nobody claimed.
 - `scripts/` — release and maintenance tooling; `scripts/release.ts` is the
   release authority.
+- `desktop/` — Tauri v2 desktop shell, bootstrap UI, and compiled proxy sidecar preparation.
 - `devlog/` — planning and investigation notes, tracked in this repository. See
   "The `devlog` directory" below for what may and may not go there.
 

@@ -283,7 +283,7 @@ enum TransportSuite {
             let url = StubProtocol.recorded.first?.url?.absoluteString ?? ""
             t.expect(url.contains("range=7d"), "expected range=7d in \(url)")
             t.expect(url.contains("/api/usage"), "expected /api/usage in \(url)")
-            t.equal(StubProtocol.recorded.first?.value(forHTTPHeaderField: "User-Agent"), "OpenCodexMenuBar/dev")
+            t.equal(StubProtocol.recorded.first?.value(forHTTPHeaderField: "User-Agent"), "OpenCodexWidget/dev")
         }
 
         t.test("requests: the provider patch sends exactly {\"disabled\":true}") {

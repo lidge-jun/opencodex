@@ -94,9 +94,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "tray",
     usage: "ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]",
-    summary: "Install and control the Windows status tray icon.",
+    summary: "Install and control the Windows status tray icon (deprecated in favor of the desktop app).",
     details: [
       "The tray starts at Windows login and provides one-click proxy controls.",
+      "Deprecated: the OpenCodex desktop app provides the tray on Windows, macOS, and Linux; `ocx tray` remains for installs without the desktop app.",
       "Tray start/stop controls the icon only; use its menu to start or stop the proxy.",
       "--no-start (install only) installs the tray without launching it immediately.",
     ],

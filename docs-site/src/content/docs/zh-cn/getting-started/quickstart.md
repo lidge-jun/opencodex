@@ -5,6 +5,11 @@ description: 配置你的第一个 provider，并在三条命令内让 OpenAI Co
 
 本指南将带你从全新安装，一路走到用一个非 OpenAI 模型运行 Codex。
 
+## 独立二进制文件（无需 npm）
+
+你也可以使用包含 Bun 运行时的发布压缩包中的 `ocx`，无需 npm。
+解压时将 `gui/dist` 目录保留在二进制文件旁边，然后运行 `./ocx start`。
+
 ## 1. 运行设置向导
 
 ```bash

@@ -105,10 +105,13 @@ ocx start                         # прокси + панель управлен
 
 ### Приложение macOS в строке меню
 
+Скачайте настольное приложение для macOS, Windows или Linux со
+[страницы релизов](https://github.com/lidge-jun/opencodex/releases).
+
 Нативный компаньон для состояния прокси, использования и квот провайдеров без открытия панели.
 Исходный код находится в [`app/`](../app) (Swift + AppKit, без сторонних зависимостей).
 Скачайте его со [страницы релизов](https://github.com/lidge-jun/opencodex/releases) или
-соберите локально командой `bun run build:macos`.
+соберите локально командой `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
 
 При первом запуске нажмите правой кнопкой мыши и выберите «Открыть»: приложение подписано ad hoc,
 но не нотариализовано. Подробности — в [руководстве по приложению macOS в строке меню](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/).

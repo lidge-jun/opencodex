@@ -5,7 +5,7 @@ import {
   UPSTREAM_NO_RESPONSE_CODE,
 } from "../../lib/upstream-retry";
 import type { RequestFailureCause, RequestFailureStage } from "../../lib/request-failure-model";
-import { readFileSync } from "node:fs";
+import { packageVersion } from "../../lib/package-version";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 export const UPGRADE_DEADLINE_MS = 10_000;
@@ -73,13 +73,7 @@ export function markCodexWsResponse(response: Response, observed: boolean): void
  * importing management-api from the transport layer would invert the
  * layering and pull the management surface into every WS exchange.
  */
-const OCX_VERSION = (() => {
-  try {
-    return JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version as string;
-  } catch {
-    return "0.0.0";
-  }
-})();
+const OCX_VERSION = packageVersion("0.0.0");
 
 /**
  * The durable form of the stage counters, carried out of the exchange on the

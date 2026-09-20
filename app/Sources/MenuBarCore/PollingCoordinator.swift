@@ -2,7 +2,7 @@ import Foundation
 
 /// Owns the refresh schedule and turns transport results into a `ProxySnapshot`.
 ///
-/// Polling is deliberately conservative. A menu bar app that hits a local server every
+/// Polling is deliberately conservative. A desktop app that hits a local server every
 /// five seconds forever is a battery complaint waiting to happen, so heavy aggregation
 /// endpoints are fetched only while the popover is open, and repeated failures back the
 /// liveness tick off rather than hammering a proxy the user has stopped on purpose.

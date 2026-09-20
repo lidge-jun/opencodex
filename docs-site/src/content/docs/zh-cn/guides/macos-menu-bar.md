@@ -7,16 +7,25 @@ description: 在菜单栏中查看 OpenCodex 代理状态、用量和各提供�
 
 它与代理是两个独立的程序。`ocx` 照常运行，菜单栏应用只是连接本地管理 API 的客户端。
 
+## 桌面应用（Tauri）
+
+同一个仪表板也可以在 OpenCodex 桌面应用中运行。用量面板会显示匹配操作系统的安装步骤；
+在桌面壳中选择**在浏览器中打开**，即可在普通浏览器中打开当前页面。
+
 ## 安装
 
-从[发布页面](https://github.com/lidge-jun/opencodex/releases)下载
-`OpenCodex-<version>-macos-universal.zip`，解压后把 `OpenCodex.app` 移到「应用程序」文件夹。
-
-如果需要校验下载文件，每个版本都附带校验和：
+推荐使用 OpenCodex 桌面应用安装。从[发布页面](https://github.com/lidge-jun/opencodex/releases)下载 macOS 的
+`OpenCodex-<version>-macos.dmg`，打开 DMG 后将 `OpenCodex.app` 拖到「应用程序」文件夹。
+Windows 运行 `OpenCodex-<version>-windows-x64.msi`，Linux 使用 AppImage 或
+`OpenCodex-<version>-linux-amd64.deb`。
 
 ```bash
-shasum -a 256 -c OpenCodex-<version>-macos-universal.zip.sha256
+chmod +x OpenCodex-<version>-linux-x86_64.AppImage
+sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 ```
+
+Windows SmartScreen 或 macOS Gatekeeper 可能显示警告。应用会连接现有的 `ocx` 代理；
+找不到代理时则启动内置 sidecar。
 
 ## 首次启动：Gatekeeper
 
@@ -117,11 +126,13 @@ xattr -d com.apple.quarantine /Applications/OpenCodex.app
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun run build:macos
+bun run prepare-sidecar
+bun run prepare-widget
+bunx tauri build
 ```
 
-程序包会生成在 `dist/macos/OpenCodex.app`。若没有 Bun，可以直接运行脚本：
-`bash scripts/build-macos-app.sh`。
+程序包会生成在 Tauri 的发布输出中，WidgetKit 扩展位于
+`OpenCodex.app/Contents/PlugIns/`。
 
 构建通用二进制（`UNIVERSAL=1`）需要完整的 Xcode。Command Line Tools 只包含当前架构的 Swift
 兼容库，此时构建会给出说明信息，而不是抛出链接器错误。
@@ -130,7 +141,7 @@ bun run build:macos
 替代 ad-hoc 签名：
 
 ```bash
-MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run build:macos
+MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run prepare-widget
 ```
 
 ## 卸载

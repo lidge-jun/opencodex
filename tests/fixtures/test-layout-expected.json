@@ -1,5 +1,9 @@
 {
-  "macos-build-script.test.ts": "gui",
+  "release-desktop-scripts.test.ts": "ci-workflows",
+  "gui-desktop-sidecar-script.test.ts": "gui",
+  "standalone-build-script.test.ts": "gui",
+  "standalone-service.test.ts": "service",
+  "standalone.test.ts": "lib",
   "server-combo-held-response.test.ts": "server",
   "key-attribution.test.ts": "usage",
   "provider-send-path-import.test.ts": "server",

@@ -9,6 +9,7 @@ import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isProtectedHomeUnderTest, isTestHomeGuardArmed } from "../lib/test-home-guard";
+import { isStandaloneBinary } from "../lib/standalone";
 
 /**
  * Written only by the launchd plist and the systemd unit. `OCX_SERVICE=1` cannot stand in
@@ -26,14 +27,18 @@ export const serviceSourceDir = dirname(import.meta.dir);
 
 export type ServiceBackend = "scheduler" | "native";
 
-export function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
+export function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string | null } {
   // Bake the bundled Bun (manager-owned global package directory, survives `ocx update`) rather than
   // a transient system Bun, so launchd/systemd/schtasks keep resolving even if a
   // standalone Bun is later removed. The CLI entry lives at src/cli/index.ts.
   //
   // Path and provenance come from ONE resolution so the marker can never describe a
   // different binary than the one actually baked.
-  return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(serviceSourceDir, "cli", "index.ts") };
+  return {
+    bun: runtime.path,
+    bunRuntimeSource: runtime.source,
+    cli: runtime.source === "standalone" || isStandaloneBinary() ? null : join(serviceSourceDir, "cli", "index.ts"),
+  };
 }
 
 /**
@@ -223,7 +228,7 @@ export interface ServiceInstallState {
   codexSqliteHome?: string;
   /** Baked at install; lets status flag paths gone stale after npm prefix/nvm moves. */
   bunPath?: string;
-  cliPath?: string;
+  cliPath?: string | null;
   /**
    * launchd and systemd. The stable `ocx` launcher the service definition actually invokes,
    * when one was found. Present means `bunPath`/`cliPath` are provenance for the install,

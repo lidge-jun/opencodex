@@ -269,6 +269,10 @@ typecheck and GUI build. `scripts/release.ts` accepts either an explicit version
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
 Release workflow dispatch. Docs publishing is separate from npm release publishing.
 
+The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
+`ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
+publishes SHA-256 sidecars for the attach job.
+
 Opening a release starts with the `dev` pre-move. Dispatch
 `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull request it opens,
 then promote and release. A no-op is valid when `dev` already outranks the target. `release.yml`
