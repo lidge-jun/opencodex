@@ -82,3 +82,5 @@ desktop/src-tauri/target/
 # on an older Bun, so a shadowing lockfile written by a newer Bun fails the job with "Unknown
 # lockfile version" before anything is built. The root lockfile is the only one this repo keeps.
 desktop/bun.lock
+# A red run disables production code while it works.
+.red-running
