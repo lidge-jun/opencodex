@@ -779,6 +779,40 @@ describe("usage log", () => {
     expect(usageLogPath()).toBe(join(testDir, "usage.jsonl"));
   });
 
+  test("rotates a full usage log and keeps disk growth bounded", () => {
+    const path = usageLogPath();
+    const fd = openSync(path, "w");
+    truncateSync(fd, 64 * 1024 * 1024);
+    closeSync(fd);
+
+    appendUsageEntry({
+      requestId: "after-rotation",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+    });
+
+    expect(statSync(`${path}.1`).size).toBe(64 * 1024 * 1024);
+    expect(readUsageEntries().map(entry => entry.requestId)).toEqual(["after-rotation"]);
+  }, STORE_BUDGET_MS); // same sparse >64 MiB fixture profile as the management-read test above.
+
+  test("does not persist an oversized usage row", () => {
+    appendUsageEntry({
+      requestId: "oversized",
+      timestamp: 1,
+      provider: "openai",
+      model: `gpt-${"x".repeat(64 * 1024)}`,
+      status: 400,
+      durationMs: 1,
+      usageStatus: "unreported",
+    });
+
+    expect(existsSync(usageLogPath())).toBe(false);
+  });
+
   test("appends secret-safe usage entries and reads them back", () => {
     appendUsageEntry({
       requestId: "ocx-1",

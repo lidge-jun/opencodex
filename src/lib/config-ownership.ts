@@ -76,6 +76,7 @@ const INITIAL_OWNED_PATHS = [
   "update-job.json",
   "usage-debug.jsonl",
   "usage.jsonl",
+  "usage.jsonl.1",
   "version.json",
   "winsw",
 ] as const;
