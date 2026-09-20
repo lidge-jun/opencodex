@@ -667,6 +667,47 @@ and continuation-state suppression as well as the refusal, and it stands down on
 `src/server/responses/run-turn-execution.ts` and `src/server/responses/adapter-delivery.ts` set the
 flag from `inboundWire` on the streaming, buffered, and JSON paths alike, so the three cannot drift.
 
+### Selection outlives the declaration check
+
+Declaration and selection are different questions, and the guard above answers only the first.
+`tool_choice: "none"`, a forced selector and an `allowed_tools` allow-list each narrow a catalog
+without removing a declaration, so a name can be declared and forbidden at the same time — and a
+guard that compares names against the catalog passes it.
+
+The gap is reachable because a repair can put such a call back.
+`createGrokResponsesSparseTerminalBlockRewrite` in `src/server/grok-responses-snapshot-repair.ts`
+rebuilds a terminal `output` the upstream never sent from the items it collected during the turn.
+`src/server/responses-request-tool-scope.ts` reads the boundary the request states, and the repair
+applies it to what it publishes: a client call outside the selection is left out of the
+reconstruction. The scope comes from the final outbound body, after every removal, rename and
+translation, so a catalog that ends up empty there authorizes no client call whatever the selector
+still says. An absent catalog states no boundary, exactly as it states none for the declaration
+guard.
+
+The refusal is narrow and it is visible. Only the offending item is dropped, so the assistant text
+that arrived in the same turn still reaches the client rather than being discarded with it. Because
+the turn no longer ended the way the upstream said it did, the reconstructed terminal is published
+as `response.incomplete` carrying `incomplete_details.reason: forbidden_tool_call`, not as a clean
+`response.completed` with a quietly shorter output. The repair edits nothing but the terminal it
+synthesizes; the raw stream remains the declaration guard's to police.
+
+The selection is kept honest on the way out as well. `src/adapters/xai-web-search.ts` omits an
+`auto`/`none` selector once normalization has left nothing for it to select, because xAI answers
+that request with a 400. A forced function selector is preserved: a selector this proxy cannot
+honor is a client input error, and `src/server/responses/passthrough-dispatch.ts` already answers
+it with one.
+
+Those two omissions are not the same edit, because the scope above is read from the body this
+normalization produces. `auto` selects from the catalog, so removing it from a request with an
+empty one states nothing new. `none` is a prohibition, and on a request whose catalog this
+normalizer emptied it is the only place the turn's client-call boundary is written down. Dropping
+the word alone would let the reconstruction hand back a call the caller ruled out, and nothing
+behind it would catch that: the repair runs on the grok client surface, while the declaration
+guard stands down whenever the provider's `authMode` is `forward` — which is what the xAI OAuth
+lane is. So the prohibition is restated as the explicit empty catalog, which carries the same
+deny-all, which the scope and the declaration guard both already read that way, and which this
+destination receives unchanged whenever a caller sends one itself.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in

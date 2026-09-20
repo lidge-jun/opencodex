@@ -515,7 +515,7 @@ export async function deliverPassthroughResponse(
           ? createGrokResponsesTimestampBlockRewrite()
           : undefined,
         grokClientCompatibilityEnabled
-          ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget)
+          ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget, nativeExchange.outboundRequestBody)
           : undefined,
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
