@@ -2891,7 +2891,7 @@ export const vi: Record<TKey, string> = {
   "remote.event.tool": "Công cụ từ xa",
   "remote.event.error": "Lỗi",
   "integrations.tab.factoryDroid": "Factory Droid",
-  "integrations.semantics.factoryDroid": "Quản lý các mô hình OpenCodex đang hoạt động trong settings.json của Factory Droid. Đồng bộ chỉ cập nhật các mục OpenCodex, tắt sẽ xóa chúng và hoàn tác khôi phục tệp trước đó.",
+  "integrations.semantics.factoryDroid": "Quản lý các mô hình OpenCodex đang hoạt động trong settings.json của Factory Droid. Đồng bộ chỉ cập nhật các mục OpenCodex. Khi tắt, các mục này sẽ bị xóa. Khi hoàn tác, tệp trước đó sẽ được khôi phục.",
   "api.clientConfig.clientFactoryDroid": "Factory Droid",
   "models.newPolicyGlobal": "Model mới mặc định bị tắt",
   "models.newPolicyProvider": "Chính sách model mới",

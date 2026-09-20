@@ -99,17 +99,30 @@ async function runCommand(command: string[], cwd: string, timeout: number): Prom
   const stdoutPromise = new Response(proc.stdout).text();
   const stderrPromise = new Response(proc.stderr).text();
   let timedOut = false;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const kill = (signal: "SIGTERM" | "SIGKILL") => {
+    try {
+      proc.kill(signal);
+    } catch {
+      // The process may exit between the timeout and the signal delivery.
+    }
+  };
   const timer = setTimeout(() => {
     timedOut = true;
-    proc.kill();
+    kill("SIGTERM");
+    forceKillTimer = setTimeout(() => kill("SIGKILL"), 1_000);
   }, timeout);
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    stdoutPromise,
-    stderrPromise,
-  ]);
-  clearTimeout(timer);
-  return { command, exitCode, stdout, stderr, durationMs: Date.now() - started, timedOut };
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      stdoutPromise,
+      stderrPromise,
+    ]);
+    return { command, exitCode, stdout, stderr, durationMs: Date.now() - started, timedOut };
+  } finally {
+    clearTimeout(timer);
+    if (forceKillTimer) clearTimeout(forceKillTimer);
+  }
 }
 
 async function writeEvidence(
@@ -180,6 +193,31 @@ function readRoundTrip(
   const result = parsed.find(event =>
     event.type === "tool_result" && event.id === call.id && event.isError === false);
   return { called: true, returned: result !== undefined, value: result?.value };
+}
+
+function isPngImagePayload(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== 2) return false;
+  const hasText = value.some(part => {
+    if (!part || typeof part !== "object" || Array.isArray(part)) return false;
+    const record = part as Record<string, unknown>;
+    return record.type === "text"
+      && typeof record.text === "string"
+      && record.text.trim().length > 0;
+  });
+  const hasImage = value.some(part => {
+    if (!part || typeof part !== "object" || Array.isArray(part)) return false;
+    const record = part as Record<string, unknown>;
+    const source = record.source;
+    if (record.type !== "image" || !source || typeof source !== "object" || Array.isArray(source)) {
+      return false;
+    }
+    const imageSource = source as Record<string, unknown>;
+    return imageSource.type === "base64"
+      && imageSource.media_type === "image/png"
+      && typeof imageSource.data === "string"
+      && imageSource.data.length > 0;
+  });
+  return hasText && hasImage;
 }
 
 function safeDirName(model: DroidModel): string {
@@ -429,7 +467,7 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
       ], repoRoot, timeoutMs);
       const parsed = events(result.stdout);
       const roundTrip = readRoundTrip(parsed, imagePath);
-      const imagePayload = roundTrip.value === "[object Object],[object Object]";
+      const imagePayload = isPngImagePayload(roundTrip.value);
       const evidence = await writeEvidence(modelDir, "image", result);
       const base = verdict(result, "IMAGE_OK: UI screenshot required");
       cases.image = {
