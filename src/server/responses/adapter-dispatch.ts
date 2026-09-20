@@ -17,8 +17,7 @@ import {
 } from "../request-log";
 import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { redactSecretString } from "../../lib/redact";
-import { extractPolicyRefusalText, isUpstreamPolicyRefusal } from "../../lib/errors";
-import { syntheticOpenAIChatRefusalResponse } from "../../adapters/openai-chat/policy-refusal";
+import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
@@ -1068,17 +1067,18 @@ export async function prepareAdapterExchange(
           ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
           : jsonContextOverflowResponse();
       }
-      if (isUpstreamPolicyRefusal(upstreamResponse.status, errorText)) {
-        // xAI (and similar) refuse some turns with HTTP 403 + a model-refusal
-        // sentence. Codex treats that as a transport failure, so the user
-        // message is never recorded and retries loop. Rewrite as a 200 Chat
-        // Completions refusal the openai-chat adapter already maps to
-        // content_filter / incomplete.
-        upstreamResponse = syntheticOpenAIChatRefusalResponse(
-          extractPolicyRefusalText(errorText),
-          clientRequestedStream,
-        );
-      } else {
+      const policyRefusal = rewriteUpstreamPolicyRefusal({
+        status: upstreamResponse.status,
+        errorText,
+        stream: clientRequestedStream,
+        modelId: parsed._responseModelId ?? parsed.modelId,
+        translatorBudget,
+      });
+      if (policyRefusal) {
+        // Codex-facing incomplete/content_filter, independent of openai-chat vs
+        // openai-responses. Same return shape as the 413 overflow helpers.
+        return policyRefusal;
+      }
       if (!isFixedCodexAccount(admissionState.authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
           req.headers,
@@ -1128,7 +1128,6 @@ export async function prepareAdapterExchange(
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
       );
-      }
     }
   }
 
