@@ -4,6 +4,7 @@ import { fixtureDigest, scenarioManifestDigest } from "../../src/lab/conformance
 import { jcsEqual, jcsStringify } from "../../src/lab/conformance/jcs";
 import { resolveJsonPointer } from "../../src/lab/conformance/json-pointer";
 import { runScenario } from "../../src/lab/conformance/executor";
+import { fixtureProviderConfig } from "../../src/lab/conformance/fixture-provider";
 import {
   discoverScenarios,
   expandScenario,
@@ -28,6 +29,14 @@ describe("CL-01 conformance harness infrastructure", () => {
     for (const caseRecord of authority.cases) {
       expect(validateFixtureDigests(caseRecord)).toEqual([]);
     }
+  });
+
+  test("the native Chat fixture exercises the safe undeclared developer-role default", () => {
+    const provider = fixtureProviderConfig("openai-chat");
+    expect(provider.baseUrl).toBe("https://api.openai.com/v1");
+    // The URL selects native-only request fields; it must not silently declare an optional role
+    // capability. The canonical request-mapping scenario therefore expects developer to fold.
+    expect(provider.foldDeveloperRoleToSystem).toBeUndefined();
   });
 
   test("discovers all eight CL-01 protocol suites with stable IDs", () => {
