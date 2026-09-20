@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,11 @@ import {
   type CodexAppServerProcessIo,
   type CodexAppServerProcessScan,
 } from "./app-server-processes";
+import {
+  acquireCodexCliUpdateLease,
+  releaseCodexCliUpdateLease,
+  type CodexCliUpdateLeaseIo,
+} from "./cli-update-lease";
 
 /**
  * Phase 2 of the Codex CLI update manager: a deterministic dry-run plan and an explicit
@@ -38,6 +43,18 @@ import {
 
 export const CODEX_CLI_PACKAGE = "@openai/codex";
 export const CODEX_CLI_UPDATE_SCHEMA_VERSION = 1 as const;
+
+/**
+ * The one registry this workflow is allowed to resolve, pack and install from.
+ *
+ * npm view/pack inherit the operator's npm configuration by default, so a project or
+ * user .npmrc — or an npm_config_* env var — can redirect "@openai/codex" to another
+ * registry whose version query, integrity query and tarball all agree with each
+ * other. Every npm call below pins this registry explicitly AND runs with the
+ * registry-affecting configuration isolated, so the pinned origin is the only source
+ * the evidence can come from.
+ */
+export const CODEX_CLI_REGISTRY = "https://registry.npmjs.org";
 
 /** Only the stable channel is exposed; a moving dist-tag is resolved before it is used. */
 export type CodexCliUpdateChannel = "latest";
@@ -95,7 +112,12 @@ export type CodexCliUpdateApplyStatus =
   | "ambiguous"
   | "refused";
 
-export type CodexCliUpdateApplyRefusal = CodexCliUpdateRefusal | "plan_stale" | "plan_unknown" | "integrity_mismatch";
+export type CodexCliUpdateApplyRefusal = CodexCliUpdateRefusal
+  | "plan_stale"
+  | "plan_unknown"
+  | "integrity_mismatch"
+  | "update_in_progress"
+  | "update_lease_unavailable";
 
 export interface CodexCliUpdateApplyResult {
   readonly schemaVersion: typeof CODEX_CLI_UPDATE_SCHEMA_VERSION;
@@ -128,6 +150,8 @@ export interface CodexCliUpdatePlanDeps {
 
 export interface CodexCliUpdateApplyDeps extends CodexCliUpdatePlanDeps {
   readonly runInstaller?: (version: string, expectedIntegrity: string | null) => CodexCliUpdateInstallerResult;
+  /** Lease seam: a temp lockPath plus fake liveness drives the exclusion tests. */
+  readonly leaseIo?: CodexCliUpdateLeaseIo;
 }
 
 const PLAN_ID_LENGTH = 32;
@@ -178,10 +202,84 @@ export function codexCliUpdatePlanId(bound: {
   return hash.digest("hex").slice(0, PLAN_ID_LENGTH);
 }
 
-function npmTarget(args: readonly string[]): { bin: string; args: string[]; options: { windowsVerbatimArguments?: boolean } } | null {
+interface NpmTarget {
+  readonly bin: string;
+  readonly args: string[];
+  readonly options: {
+    readonly windowsVerbatimArguments?: boolean;
+    readonly cwd?: string;
+    readonly env?: NodeJS.ProcessEnv;
+  };
+}
+
+function npmTarget(args: readonly string[]): NpmTarget | null {
   const invocation = npmInvocation(args);
   if (!invocation) return null;
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
+}
+
+/**
+ * The npm environment with every registry-affecting config channel removed.
+ *
+ * npm maps any npm_config_* env var into its configuration, so NPM_CONFIG_REGISTRY or
+ * npm_config_@openai:registry would defeat the pinned --registry flag (a scoped
+ * registry beats the default for that scope). They are all stripped. The settings
+ * this codebase intentionally supports survive untouched: the standard proxy
+ * variables npm itself honors (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, any case)
+ * and NODE_EXTRA_CA_CERTS, which npm's own Node runtime reads for TLS.
+ */
+function codexCliUpdateNpmEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase().startsWith("npm_config_")) delete env[key];
+  }
+  return env;
+}
+
+interface NpmConfigIsolation {
+  /** Controlled cwd: contains the sentinel package.json, so npm's project-config walk stops here. */
+  readonly dir: string;
+  /** Empty file substituted for both the user and the global npmrc. */
+  readonly npmrc: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+/**
+ * A directory npm cannot read hostile configuration through.
+ *
+ * npm resolves project config from the nearest ancestor containing package.json (or
+ * node_modules/.git), so a bare temp dir is NOT enough — the walk would continue into
+ * the operator's real ancestors. The sentinel package.json anchors the walk here,
+ * where no .npmrc exists. --userconfig/--globalconfig replace the two file configs,
+ * and the env filter removes the env-var channel. What remains is exactly the pinned
+ * --registry flag plus deliberately supported proxy/CA env.
+ */
+function createNpmConfigIsolation(dir?: string): NpmConfigIsolation {
+  const root = dir ?? mkdtempSync(join(tmpdir(), "ocx-codex-cli-meta-"));
+  writeFileSync(join(root, "package.json"), "{}\n");
+  const npmrc = join(root, "ocx-update.npmrc");
+  writeFileSync(npmrc, "");
+  return { dir: root, npmrc, env: codexCliUpdateNpmEnv() };
+}
+
+/** Registry-pinned, config-isolated argv for one npm call. */
+function isolatedNpmArgs(args: readonly string[], isolation: NpmConfigIsolation): readonly string[] {
+  return [
+    ...args,
+    "--registry=" + CODEX_CLI_REGISTRY,
+    "--userconfig=" + isolation.npmrc,
+    "--globalconfig=" + isolation.npmrc,
+  ];
+}
+
+function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolation): NpmTarget | null {
+  const target = npmTarget(isolatedNpmArgs(args, isolation));
+  if (!target) return null;
+  return {
+    bin: target.bin,
+    args: target.args,
+    options: { ...target.options, cwd: isolation.dir, env: isolation.env },
+  };
 }
 
 /**
@@ -196,41 +294,67 @@ export function resolveCodexCliUpdateTarget(
   channel: CodexCliUpdateChannel,
   spawn: typeof spawnSync = spawnSync,
 ): CodexCliUpdateTarget {
-  const versionTarget = npmTarget(["view", `${CODEX_CLI_PACKAGE}@${channel}`, "version"]);
-  if (!versionTarget) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
-  const versionRun = spawn(versionTarget.bin, versionTarget.args, {
-    encoding: "utf8",
-    timeout: REGISTRY_TIMEOUT_MS,
-    windowsHide: true,
-    ...versionTarget.options,
-  });
-  // status === null covers a timeout as well as a spawn failure.
-  if (versionRun.status !== 0) {
-    return Object.freeze({ kind: "unresolved" as const, reason: `registry version query failed (status ${versionRun.status ?? "timeout"})` });
-  }
-  const version = (versionRun.stdout ?? "").trim();
-  if (!parseStrictSemver(version)) {
-    return Object.freeze({ kind: "unresolved" as const, reason: "registry returned no exact version" });
-  }
+  // The pinned registry and the isolation directory together are the boundary: the
+  // version, the integrity token and the tarball URL all come from npmjs or the
+  // target is unresolved — a redirected answer can never be the evidence.
+  const isolation = createNpmConfigIsolation();
+  try {
+    const runView = (field: string, spec: string): SpawnSyncReturns<string> | null => {
+      const target = isolatedNpmTarget(["view", spec, field], isolation);
+      if (!target) return null;
+      return spawn(target.bin, target.args, {
+        encoding: "utf8",
+        timeout: REGISTRY_TIMEOUT_MS,
+        windowsHide: true,
+        ...target.options,
+      });
+    };
 
-  const integrityTarget = npmTarget(["view", `${CODEX_CLI_PACKAGE}@${version}`, "dist.integrity"]);
-  if (!integrityTarget) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
-  const integrityRun = spawn(integrityTarget.bin, integrityTarget.args, {
-    encoding: "utf8",
-    timeout: REGISTRY_TIMEOUT_MS,
-    windowsHide: true,
-    ...integrityTarget.options,
-  });
-  if (integrityRun.status !== 0) {
-    return Object.freeze({ kind: "unresolved" as const, reason: `registry integrity query failed (status ${integrityRun.status ?? "timeout"})` });
+    const versionRun = runView("version", `${CODEX_CLI_PACKAGE}@${channel}`);
+    if (!versionRun) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
+    // status === null covers a timeout as well as a spawn failure.
+    if (versionRun.status !== 0) {
+      return Object.freeze({ kind: "unresolved" as const, reason: `registry version query failed (status ${versionRun.status ?? "timeout"})` });
+    }
+    const version = (versionRun.stdout ?? "").trim();
+    if (!parseStrictSemver(version)) {
+      return Object.freeze({ kind: "unresolved" as const, reason: "registry returned no exact version" });
+    }
+
+    const integrityRun = runView("dist.integrity", `${CODEX_CLI_PACKAGE}@${version}`);
+    if (!integrityRun) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
+    if (integrityRun.status !== 0) {
+      return Object.freeze({ kind: "unresolved" as const, reason: `registry integrity query failed (status ${integrityRun.status ?? "timeout"})` });
+    }
+    // `dist.integrity` may arrive quoted or as a space-separated multi-hash list.
+    const tokens = (integrityRun.stdout ?? "").replace(/["']/g, "").trim().split(/\s+/).filter(Boolean);
+    const integrity = tokens.find(token => SHA512_INTEGRITY_RE.test(token));
+    if (!integrity) {
+      return Object.freeze({ kind: "unresolved" as const, reason: "registry returned no sha512 integrity token" });
+    }
+
+    // The digest binds the tarball's CONTENT; this binds its ORIGIN. A registry
+    // answer whose tarball lives outside the pinned registry is not the artifact
+    // the plan approved, even if its sha512 matched.
+    const tarballRun = runView("dist.tarball", `${CODEX_CLI_PACKAGE}@${version}`);
+    if (!tarballRun) return Object.freeze({ kind: "unresolved" as const, reason: "npm executable was not found on a trusted PATH entry" });
+    if (tarballRun.status !== 0) {
+      return Object.freeze({ kind: "unresolved" as const, reason: `registry tarball query failed (status ${tarballRun.status ?? "timeout"})` });
+    }
+    const tarball = (tarballRun.stdout ?? "").replace(/["']/g, "").trim();
+    let tarballOrigin: string | null = null;
+    try {
+      tarballOrigin = new URL(tarball).origin;
+    } catch {
+      tarballOrigin = null;
+    }
+    if (tarballOrigin !== CODEX_CLI_REGISTRY) {
+      return Object.freeze({ kind: "unresolved" as const, reason: "registry returned a tarball outside the official registry origin" });
+    }
+    return Object.freeze({ kind: "resolved" as const, version, integrity });
+  } finally {
+    rmSync(isolation.dir, { recursive: true, force: true });
   }
-  // `dist.integrity` may arrive quoted or as a space-separated multi-hash list.
-  const tokens = (integrityRun.stdout ?? "").replace(/["']/g, "").trim().split(/\s+/).filter(Boolean);
-  const integrity = tokens.find(token => SHA512_INTEGRITY_RE.test(token));
-  if (!integrity) {
-    return Object.freeze({ kind: "unresolved" as const, reason: "registry returned no sha512 integrity token" });
-  }
-  return Object.freeze({ kind: "resolved" as const, version, integrity });
 }
 
 /**
@@ -249,7 +373,11 @@ function defaultRunInstaller(version: string, expectedIntegrity: string | null):
   }
   const stage = mkdtempSync(join(tmpdir(), "ocx-codex-cli-update-"));
   try {
-    const pack = npmTarget(["pack", `${CODEX_CLI_PACKAGE}@${version}`, "--pack-destination", stage]);
+    // The same pinned registry + isolated config as the resolve: the pack must fetch
+    // from the origin the plan bound, and the install's dependency resolution must
+    // not consult a redirected registry either.
+    const isolation = createNpmConfigIsolation(stage);
+    const pack = isolatedNpmTarget(["pack", `${CODEX_CLI_PACKAGE}@${version}`, "--pack-destination", stage], isolation);
     if (!pack) return Object.freeze({ exitCode: null });
     const packRun = spawnSync(pack.bin, pack.args, {
       encoding: "utf8",
@@ -264,7 +392,7 @@ function defaultRunInstaller(version: string, expectedIntegrity: string | null):
     const tarball = join(stage, tarballs[0]!);
     const actual = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
     if (actual !== expectedIntegrity) return Object.freeze({ exitCode: null, integrityMismatch: true });
-    const install = npmTarget(["install", "-g", tarball]);
+    const install = isolatedNpmTarget(["install", "-g", tarball], isolation);
     if (!install) return Object.freeze({ exitCode: null });
     const run = spawnSync(install.bin, install.args, {
       encoding: "utf8",
@@ -422,6 +550,13 @@ function refusedApply(
  * approves the exact target that is about to be installed. The install itself is one
  * command against an exact version; the outcome is classified from a fresh inspection,
  * never from the installer exit code, and nothing is retried or rolled back automatically.
+ *
+ * The update lease is acquired BEFORE the recomputation: its process scan is the final
+ * scan this install will ever take, and a scan without the lease is a snapshot, not
+ * mutual exclusion. The lease is then held through the install and the readback, so a
+ * Codex startup that observes it cannot begin loading the package while it is being
+ * replaced — and a second apply of the same plan is refused rather than running a
+ * concurrent global install against the same prefix.
  */
 export async function applyCodexCliUpdatePlan(
   planId: string,
@@ -429,56 +564,71 @@ export async function applyCodexCliUpdatePlan(
 ): Promise<CodexCliUpdateApplyResult> {
   if (!PLAN_ID_RE.test(planId)) return refusedApply("plan_unknown", null);
 
-  const plan = await createCodexCliUpdatePlan(deps);
-  if (!plan.applicable || !plan.planId || !plan.targetVersion || !plan.installedVersion) {
-    return refusedApply(plan.refusal ?? "plan_unknown", plan);
+  const leaseIo = deps.leaseIo ?? {};
+  const acquisition = acquireCodexCliUpdateLease({ ...leaseIo, planId });
+  if (!acquisition.acquired) {
+    // Held by a live updater, or the lock could not be created at all — both refuse
+    // before any evidence is gathered. A lease that cannot be taken is not a softer
+    // "unknown": installing without it would reintroduce the race it exists to close.
+    return refusedApply(
+      acquisition.reason === "held" ? "update_in_progress" : "update_lease_unavailable",
+      null,
+    );
   }
-  // Any drift in ownership, installed version, location or target changes the id.
-  // Refuse rather than regenerate: the operator would otherwise approve
-  // one plan and install another.
-  if (plan.planId !== planId) return refusedApply("plan_stale", plan);
-
-  const targetVersion = plan.targetVersion;
-  const before = plan.installedVersion;
-  const installer = (deps.runInstaller ?? defaultRunInstaller)(targetVersion, plan.targetIntegrity);
-  // The fetched artifact failed the plan-bound digest; nothing was installed.
-  if (installer.integrityMismatch) return refusedApply("integrity_mismatch", plan);
-
-  const inspect = deps.inspect ?? inspectCodexCliInstall;
-  let readback: CodexCliInstallReport | null = null;
   try {
-    readback = await inspect(deps.inspectionDeps ?? {});
-  } catch {
-    readback = null;
+    const plan = await createCodexCliUpdatePlan(deps);
+    if (!plan.applicable || !plan.planId || !plan.targetVersion || !plan.installedVersion) {
+      return refusedApply(plan.refusal ?? "plan_unknown", plan);
+    }
+    // Any drift in ownership, installed version, location or target changes the id.
+    // Refuse rather than regenerate: the operator would otherwise approve
+    // one plan and install another.
+    if (plan.planId !== planId) return refusedApply("plan_stale", plan);
+
+    const targetVersion = plan.targetVersion;
+    const before = plan.installedVersion;
+    const installer = (deps.runInstaller ?? defaultRunInstaller)(targetVersion, plan.targetIntegrity);
+    // The fetched artifact failed the plan-bound digest; nothing was installed.
+    if (installer.integrityMismatch) return refusedApply("integrity_mismatch", plan);
+
+    const inspect = deps.inspect ?? inspectCodexCliInstall;
+    let readback: CodexCliInstallReport | null = null;
+    try {
+      readback = await inspect(deps.inspectionDeps ?? {});
+    } catch {
+      readback = null;
+    }
+
+    const after = readback
+      && readback.provenance === "npm-global"
+      && readback.location === plan.location
+      && readback.versionEvidence.kind === "package-manifest"
+      ? readback.packageVersion
+      : null;
+
+    const result = (status: CodexCliUpdateApplyStatus): CodexCliUpdateApplyResult => Object.freeze({
+      schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
+      status,
+      refusal: null,
+      planId: plan.planId,
+      targetVersion,
+      installedVersionBefore: before,
+      installedVersionAfter: after,
+      installerExitCode: installer.exitCode,
+    });
+
+    if (after !== targetVersion) {
+      // A failed readback, an unchanged version and a third version are all reported
+      // as-is. None of them is retried, and none of them is rolled back.
+      if (after !== null && after === before) return result("not_applied");
+      return result("ambiguous");
+    }
+
+    // A matched shim never reaches this point: the inspector reports a shim-owned
+    // candidate as standalone-unverified and the plan refuses `not_managed`, so an
+    // applied update never owned a shim npm could have replaced.
+    return result("applied");
+  } finally {
+    releaseCodexCliUpdateLease(leaseIo);
   }
-
-  const after = readback
-    && readback.provenance === "npm-global"
-    && readback.location === plan.location
-    && readback.versionEvidence.kind === "package-manifest"
-    ? readback.packageVersion
-    : null;
-
-  const result = (status: CodexCliUpdateApplyStatus): CodexCliUpdateApplyResult => Object.freeze({
-    schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
-    status,
-    refusal: null,
-    planId: plan.planId,
-    targetVersion,
-    installedVersionBefore: before,
-    installedVersionAfter: after,
-    installerExitCode: installer.exitCode,
-  });
-
-  if (after !== targetVersion) {
-    // A failed readback, an unchanged version and a third version are all reported
-    // as-is. None of them is retried, and none of them is rolled back.
-    if (after !== null && after === before) return result("not_applied");
-    return result("ambiguous");
-  }
-
-  // A matched shim never reaches this point: the inspector reports a shim-owned
-  // candidate as standalone-unverified and the plan refuses `not_managed`, so an
-  // applied update never owned a shim npm could have replaced.
-  return result("applied");
 }

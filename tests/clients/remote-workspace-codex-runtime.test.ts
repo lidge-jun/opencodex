@@ -1,12 +1,75 @@
 import { repoPath } from "../helpers/repo-root";
 import { expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { acquireCodexCliUpdateLease } from "../../src/codex/cli-update-lease";
 import {
   CodexRemoteWorkspaceRuntimeFactory,
   RemoteWorkspaceCoordinator,
   type RemoteWorkspaceSessionEvent,
   type RemoteWorkspaceTransport,
 } from "../../src/remote-control";
+
+function startOptions(coordinator: RemoteWorkspaceCoordinator) {
+  return {
+    sessionId: "session-lease",
+    deviceId: "device-2",
+    deviceName: "Computer 2",
+    rootId: "root-2",
+    rootLabel: "Project",
+    capabilities: ["workspace.read"],
+    tools: ["list_directory", "read_file"],
+    coordinator,
+    emit: () => {},
+  };
+}
+
+function leaseCoordinator(): RemoteWorkspaceCoordinator {
+  return new RemoteWorkspaceCoordinator({
+    isOnline: () => true,
+    async invoke() { return { ok: true }; },
+  });
+}
+
+test("a held Codex CLI update lease refuses the app-server start before spawn", async () => {
+  // The lease is the mutual exclusion the process scan cannot give: an app-server
+  // that starts while an apply holds it would load a half-replaced global install.
+  const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+  const lockPath = join(dir, "codex-cli-update.lock");
+  const held = acquireCodexCliUpdateLease({ lockPath, pid: 4_242, planId: "a".repeat(32) });
+  expect(held.acquired).toBe(true);
+
+  const factory = new CodexRemoteWorkspaceRuntimeFactory({
+    command: [process.execPath, repoPath("tests", "fake-codex-server.ts")],
+    updateLease: { lockPath, isAlive: () => true, timeoutMs: 0 },
+  });
+  await expect(factory.start(startOptions(leaseCoordinator())))
+    .rejects.toThrow("Codex CLI update is in progress");
+});
+
+test("the app-server start waits out the lease and proceeds once it clears", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+  const lockPath = join(dir, "codex-cli-update.lock");
+  const held = acquireCodexCliUpdateLease({ lockPath, pid: 4_242, planId: "a".repeat(32) });
+  expect(held.acquired).toBe(true);
+
+  // The owner is alive on the first observation and gone by the second — the tail
+  // of an install releasing, which a startup may wait out rather than refuse.
+  let livenessChecks = 0;
+  const factory = new CodexRemoteWorkspaceRuntimeFactory({
+    command: [process.execPath, repoPath("tests", "fake-codex-server.ts")],
+    env: { FAKE_CODEX_SCRIPT: JSON.stringify({ turns: [] }) },
+    updateLease: {
+      lockPath,
+      isAlive: () => livenessChecks++ === 0,
+      sleep: async () => {},
+      timeoutMs: 1_000,
+    },
+  });
+  const handle = await factory.start(startOptions(leaseCoordinator()));
+  await handle.stop();
+});
 
 test("Codex Remote Workspace runtime owns the model process on the Hub", async () => {
   const events: Array<{ type: RemoteWorkspaceSessionEvent["type"]; text: string }> = [];

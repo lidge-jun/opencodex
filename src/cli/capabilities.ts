@@ -791,6 +791,7 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "envelope",
     details: [
       "Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.",
+      "The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.",
       "Writes nothing and installs nothing. A refusal is a normal dry-run answer and still exits 0.",
       "The plan id is a digest of the evidence the decision rests on, not a stored job. There is no plan state on disk to expire, collide or clean up.",
       "An unreadable process table refuses rather than reading as no live session.",
@@ -808,7 +809,8 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "envelope",
     details: [
       "--plan is mandatory because the operator must approve a target they have read. The plan is recomputed from live evidence and refused unless the id still matches.",
-      "Packs the exact resolved @openai/codex version, verifies the tarball sha512 against the plan-bound integrity, and installs only that verified file; never stops, restarts or signals Codex, the app-server, the desktop app or the tray.",
+      "Resolves and packs only from the pinned official npm registry with project/user npm configuration isolated, verifies the tarball sha512 against the plan-bound integrity, and installs only that verified file; never stops, restarts or signals Codex, the app-server, the desktop app or the tray.",
+      "Holds one cross-process update lease from the final session scan through the install and readback; a concurrent apply is refused, and Codex startup paths that observe the lease wait or refuse rather than load a half-replaced install.",
       "The outcome is classified from a fresh inspection rather than the installer exit code, and is never retried or rolled back automatically.",
       "Repairs the shim only when this installation owned a matched shim before the update.",
     ],

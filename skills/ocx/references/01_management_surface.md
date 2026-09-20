@@ -421,6 +421,25 @@ JSON mode: `envelope`.
 - selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.
 - Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.
 
+### `ocx system codex-cli-update plan`
+
+Dry-run a Codex CLI update and print the plan id that authorizes applying it.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--channel` | string | Registry channel to resolve. Only the stable latest channel is offered. |
+| `--json` | boolean | Emit the plan as JSON. |
+
+JSON mode: `envelope`.
+
+- Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.
+- The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.
+- Writes nothing and installs nothing. A refusal is a normal dry-run answer and still exits 0.
+- The plan id is a digest of the evidence the decision rests on, not a stored job. There is no plan state on disk to expire, collide or clean up.
+- An unreadable process table refuses rather than reading as no live session.
+
 ### `ocx claude desktop status`
 
 Applied-vs-desired Claude Desktop state, including staleness, drift, and health.
@@ -824,6 +843,25 @@ JSON mode: `payload`.
 - `policy set` never enables implicitly: omitting `--enabled` keeps the stored value.
 - `policy run` forces a run regardless of schedule, so it needs `--yes`.
 
+### `ocx system codex-cli-update apply`
+
+Install the exact Codex CLI version bound into a plan id from a dry-run.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--plan` | string | Required: the plan id printed by a dry-run the operator read. |
+| `--json` | boolean | Emit the apply result as JSON. |
+
+JSON mode: `envelope`.
+
+- --plan is mandatory because the operator must approve a target they have read. The plan is recomputed from live evidence and refused unless the id still matches.
+- Resolves and packs only from the pinned official npm registry with project/user npm configuration isolated, verifies the tarball sha512 against the plan-bound integrity, and installs only that verified file; never stops, restarts or signals Codex, the app-server, the desktop app or the tray.
+- Holds one cross-process update lease from the final session scan through the install and readback; a concurrent apply is refused, and Codex startup paths that observe the lease wait or refuse rather than load a half-replaced install.
+- The outcome is classified from a fresh inspection rather than the installer exit code, and is never retried or rolled back automatically.
+- Repairs the shim only when this installation owned a matched shim before the update.
+
 ### `ocx system codex-restart`
 
 Restart the Codex desktop app and app-servers.
@@ -930,6 +968,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 50
-- of those, state-changing: 25
+- declared capabilities: 52
+- of those, state-changing: 26
 - head-resolved invocations: 2

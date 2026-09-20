@@ -1,9 +1,19 @@
 import { describe, expect, test } from "bun:test";
 
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { scanCodexAppServerProcesses } from "../../src/codex/app-server-processes";
 import type { CodexCliInstallReport } from "../../src/codex/cli-install-provenance";
 import {
+  acquireCodexCliUpdateLease,
+  observeCodexCliUpdateLease,
+  type CodexCliUpdateLeaseIo,
+} from "../../src/codex/cli-update-lease";
+import {
   applyCodexCliUpdatePlan,
+  CODEX_CLI_REGISTRY,
   codexCliUpdatePlanId,
   createCodexCliUpdatePlan,
   resolveCodexCliUpdateTarget,
@@ -378,6 +388,7 @@ describe("registry target resolution", () => {
     const target = resolveCodexCliUpdateTarget("latest", spawnStub([
       { status: 0, stdout: "1.4.2\n" },
       { status: 0, stdout: "'sha512-abc/DEF+123=' sha1-old\n" },
+      { status: 0, stdout: "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz\n" },
     ]));
     expect(target).toEqual({ kind: "resolved", version: "1.4.2", integrity: "sha512-abc/DEF+123=" });
   });
@@ -400,5 +411,255 @@ describe("registry target resolution", () => {
       { status: 0, stdout: "latest\n" },
     ]));
     expect(target.kind).toBe("unresolved");
+  });
+
+  test("a tarball outside the pinned registry origin is refused even with a valid digest", () => {
+    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+      { status: 0, stdout: "1.4.2\n" },
+      { status: 0, stdout: "sha512-abc/DEF+123=\n" },
+      { status: 0, stdout: "https://evil.invalid/@openai/codex/-/codex-1.4.2.tgz\n" },
+    ]));
+    expect(target.kind).toBe("unresolved");
+  });
+
+  test("a tarball answer that is not a URL at all is refused", () => {
+    const target = resolveCodexCliUpdateTarget("latest", spawnStub([
+      { status: 0, stdout: "1.4.2\n" },
+      { status: 0, stdout: "sha512-abc/DEF+123=\n" },
+      { status: 0, stdout: "not-a-url\n" },
+    ]));
+    expect(target.kind).toBe("unresolved");
+  });
+});
+
+describe("registry configuration isolation", () => {
+  interface CapturedCall {
+    bin: string;
+    args: string[];
+    options: Record<string, unknown>;
+    /** Snapshot taken while the call was live; the isolation dir is gone by return. */
+    cwdHadSentinel: boolean;
+    cwdHadNpmrc: boolean;
+  }
+
+  /** The npm argv, whether it reached spawn bare (POSIX) or inside a cmd /c line (Windows). */
+  function argvLine(call: CapturedCall): string {
+    return call.args.join(" ");
+  }
+
+  /** Which registry field this invocation queried, read off the argv line. */
+  function queriedField(call: CapturedCall): string {
+    const line = argvLine(call);
+    if (line.includes("dist.tarball")) return "dist.tarball";
+    if (line.includes("dist.integrity")) return "dist.integrity";
+    return "version";
+  }
+
+  function capturingSpawn(outputs: Record<string, string>): { calls: CapturedCall[]; spawn: never } {
+    const calls: CapturedCall[] = [];
+    const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+      const cwd = options.cwd as string;
+      const call: CapturedCall = {
+        bin,
+        args,
+        options,
+        cwdHadSentinel: existsSync(join(cwd, "package.json")),
+        cwdHadNpmrc: existsSync(join(cwd, "ocx-update.npmrc")),
+      };
+      calls.push(call);
+      const field = queriedField(call);
+      return { status: 0, stdout: outputs[field] ?? "", stderr: "" };
+    }) as never;
+    return { calls, spawn };
+  }
+
+  const RESOLVE_OUTPUTS = {
+    version: "1.4.2\n",
+    "dist.integrity": "sha512-abc/DEF+123=\n",
+    "dist.tarball": "https://registry.npmjs.org/@openai/codex/-/codex-1.4.2.tgz\n",
+  };
+
+  test("every query pins the official registry and substitutes a controlled npmrc", () => {
+    const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+    const target = resolveCodexCliUpdateTarget("latest", spawn);
+    expect(target.kind).toBe("resolved");
+    expect(calls.length).toBe(3);
+    for (const call of calls) {
+      expect(argvLine(call)).toContain("--registry=" + CODEX_CLI_REGISTRY);
+      // Both file configs are substituted with the controlled empty npmrc inside the
+      // isolation dir — a user ~/.npmrc or a global $PREFIX/etc/npmrc cannot answer.
+      expect(argvLine(call)).toContain("--userconfig=");
+      expect(argvLine(call)).toContain("--globalconfig=");
+      expect(argvLine(call)).toContain("ocx-update.npmrc");
+      expect(call.cwdHadSentinel).toBe(true);
+      expect(call.cwdHadNpmrc).toBe(true);
+    }
+    // The isolation directory is cleaned up after the resolve.
+    expect(existsSync(calls[0]!.options.cwd as string)).toBe(false);
+  });
+
+  test("a hostile npm_config_* env cannot reach the spawned npm", () => {
+    const prior = process.env.npm_config_registry;
+    const priorScoped = process.env["npm_config_@openai:registry"];
+    process.env.npm_config_registry = "https://evil.invalid";
+    process.env["npm_config_@openai:registry"] = "https://evil.invalid/";
+    try {
+      const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+      const target = resolveCodexCliUpdateTarget("latest", spawn);
+      expect(target.kind).toBe("resolved");
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        expect(Object.keys(env).filter(key => key.toLowerCase().startsWith("npm_config_"))).toEqual([]);
+      }
+    } finally {
+      if (prior === undefined) delete process.env.npm_config_registry;
+      else process.env.npm_config_registry = prior;
+      if (priorScoped === undefined) delete process.env["npm_config_@openai:registry"];
+      else process.env["npm_config_@openai:registry"] = priorScoped;
+    }
+  });
+
+  test("the controlled cwd never is the operator's project directory", () => {
+    // A project .npmrc in the launch directory would otherwise redirect the scope;
+    // the query must run from the sentinel-anchored isolation dir instead.
+    const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+    resolveCodexCliUpdateTarget("latest", spawn);
+    for (const call of calls) {
+      const cwd = call.options.cwd as string;
+      expect(cwd).not.toBe(process.cwd());
+      expect(cwd.startsWith(tmpdir())).toBe(true);
+    }
+  });
+});
+
+describe("Codex CLI update lease", () => {
+  function leaseIo(dir: string, pid: number, alive: ReadonlySet<number>): CodexCliUpdateLeaseIo {
+    return {
+      lockPath: join(dir, "codex-cli-update.lock"),
+      pid,
+      isAlive: candidate => alive.has(candidate),
+    };
+  }
+
+  function heldLease(dir: string, holderPid: number): CodexCliUpdateLeaseIo {
+    const io = leaseIo(dir, holderPid, new Set([holderPid]));
+    const acquisition = acquireCodexCliUpdateLease({ ...io, planId: "a".repeat(32) });
+    expect(acquisition.acquired).toBe(true);
+    return io;
+  }
+
+  test("a live holder refuses a second apply before any evidence is gathered", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const holder = heldLease(dir, 4_242);
+    const installs: string[] = [];
+    let inspected = 0;
+    const result = await applyCodexCliUpdatePlan("b".repeat(32), applyDeps({
+      leaseIo: { lockPath: holder.lockPath, isAlive: pid => pid === 4_242 },
+      inspect: async () => { inspected += 1; return report(); },
+    }, installs));
+    expect(result.status).toBe("refused");
+    expect(result.refusal).toBe("update_in_progress");
+    // The refusal happens before the plan is recomputed: no inspection, no install.
+    expect(inspected).toBe(0);
+    expect(installs).toEqual([]);
+  });
+
+  test("two concurrent applies cannot pass the same plan", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    const installs: string[] = [];
+    const plan = await applicablePlan();
+
+    // The first apply holds the lease while its inspection is still in flight.
+    let releaseInspection: (value: CodexCliInstallReport) => void = () => {};
+    const gate = new Promise<CodexCliInstallReport>(done => { releaseInspection = done; });
+    let firstCalls = 0;
+    const first = applyCodexCliUpdatePlan(plan.planId!, applyDeps({
+      leaseIo: { lockPath },
+      inspect: async () => {
+        firstCalls += 1;
+        return firstCalls === 1 ? await gate : report({ packageVersion: "1.1.0" });
+      },
+    }, installs));
+    // Let the first apply reach its gated inspection while holding the lease.
+    await new Promise(done => setTimeout(done, 10));
+
+    const second = await applyCodexCliUpdatePlan(plan.planId!, applyDeps({
+      leaseIo: { lockPath },
+    }, installs));
+    expect(second.status).toBe("refused");
+    expect(second.refusal).toBe("update_in_progress");
+
+    releaseInspection(report());
+    const firstResult = await first;
+    expect(firstResult.status).toBe("applied");
+    expect(installs).toEqual(["1.1.0"]);
+    // The holder released the lease when it finished.
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a dead holder's lease is reclaimed instead of blocking forever", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    // A holder that died without releasing: dead pid, stale or not.
+    const stale = acquireCodexCliUpdateLease({ lockPath, pid: 9_999, planId: "c".repeat(32) });
+    expect(stale.acquired).toBe(true);
+
+    const installs: string[] = [];
+    const plan = await applicablePlan();
+    let inspections = 0;
+    const result = await applyCodexCliUpdatePlan(plan.planId!, applyDeps({
+      leaseIo: { lockPath, isAlive: () => false },
+      inspect: async () => {
+        inspections += 1;
+        return inspections === 1 ? report() : report({ packageVersion: "1.1.0" });
+      },
+    }, installs));
+    expect(result.status).toBe("applied");
+    expect(installs).toEqual(["1.1.0"]);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a refused apply still releases the lease it took", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    const plan = await applicablePlan();
+    const result = await applyCodexCliUpdatePlan(plan.planId!, applyDeps({
+      leaseIo: { lockPath },
+      // Drift the target so the recomputed plan is refused as stale.
+      resolveTarget: () => Object.freeze({ kind: "resolved" as const, version: "9.9.9", integrity: "sha512-ZZZZ" }),
+    }));
+    expect(result.status).toBe("refused");
+    expect(result.refusal).toBe("plan_stale");
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a corrupt leftover lease cannot wedge every future update", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    writeFileSync(lockPath, "{not json");
+    const installs: string[] = [];
+    const plan = await applicablePlan();
+    let inspections = 0;
+    const result = await applyCodexCliUpdatePlan(plan.planId!, applyDeps({
+      leaseIo: { lockPath },
+      inspect: async () => {
+        inspections += 1;
+        return inspections === 1 ? report() : report({ packageVersion: "1.1.0" });
+      },
+    }, installs));
+    expect(result.status).toBe("applied");
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("startup observation reads a held lease and ignores a stale one", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    const held = acquireCodexCliUpdateLease({ lockPath, pid: 5_555 });
+    expect(held.acquired).toBe(true);
+    // Observation is read-only and liveness-bound: the same file is "held" while the
+    // owner lives and "free" once it is gone, without the observer mutating anything.
+    expect(observeCodexCliUpdateLease({ lockPath, isAlive: () => true }).held).toBe(true);
+    expect(observeCodexCliUpdateLease({ lockPath, isAlive: () => false }).held).toBe(false);
   });
 });

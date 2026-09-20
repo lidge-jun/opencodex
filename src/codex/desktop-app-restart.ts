@@ -36,6 +36,7 @@ import {
   releaseDesktopRestartLock,
   type DesktopRestartLockIo,
 } from "./desktop-app/lock";
+import { observeCodexCliUpdateLease, type CodexCliUpdateLeaseIo } from "./cli-update-lease";
 import { rootShells, type DesktopAppAdapter, type DesktopExec, type DesktopProcess } from "./desktop-app/types";
 import { darwinDesktopAppAdapter, darwinDefaultExec } from "./desktop-app/darwin";
 import { linuxDesktopAppAdapter, linuxDefaultExec } from "./desktop-app/linux";
@@ -77,6 +78,12 @@ export interface DesktopAppRestartIo {
    * after telling the operator it had been handed off.
    */
   allowHandoff?: boolean;
+  /**
+   * Codex CLI update lease seam. While an apply holds it, relaunching the desktop app
+   * would start app-servers against a global install that is being replaced, so the
+   * restart skips rather than racing it.
+   */
+  updateLease?: CodexCliUpdateLeaseIo;
 }
 
 export type DesktopAppRestartReason =
@@ -86,6 +93,7 @@ export type DesktopAppRestartReason =
   | "no_targets"
   | "self_ancestry"
   | "restart_in_flight"
+  | "update_in_progress"
   | "handoff_started"
   | "targets_survived"
   | "relaunch_failed";
@@ -214,6 +222,12 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   const exec = io.execFile ?? selected?.exec;
   if (!adapter || !exec) return skipped("unsupported_platform");
 
+  // Step -1. A Codex CLI update holds its lease across the install and readback; a
+  // relaunch under it would start app-servers against a half-replaced global
+  // install. Skip before touching the restart lock or signalling anything — the
+  // operator retries once the update finishes.
+  if (observeCodexCliUpdateLease(io.updateLease ?? {}).held) return skipped("update_in_progress");
+
   // Step 0. Two restarts at once are destructive rather than merely wasteful: the
   // first quits and relaunches, the second sees the freshly started shell as a target
   // and kills it. Own-pid reentrancy means the wp5 helper runs this same step and
@@ -337,4 +351,3 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
     if (!handedOff) releaseDesktopRestartLock(io.lock);
   }
 }
-

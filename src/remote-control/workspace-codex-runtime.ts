@@ -2,6 +2,10 @@ import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync 
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { resolveCodexRuntime } from "../codex/runtime";
+import {
+  waitForCodexCliUpdateLeaseRelease,
+  type CodexCliUpdateLeaseWaitIo,
+} from "../codex/cli-update-lease";
 import { remoteWorkspaceThreadStartParams } from "./workspace-coordinator";
 import { startRemoteWorkspaceToolBridge } from "./workspace-tool-bridge";
 import { truncateRemoteWorkspaceUtf8 } from "./workspace-utf8";
@@ -288,6 +292,12 @@ export interface CodexRemoteWorkspaceRuntimeOptions {
   command?: readonly string[];
   env?: Record<string, string | undefined>;
   version?: string;
+  /**
+   * Codex CLI update lease seam. Production reads the real lockfile; while an apply
+   * holds it, the npm-global Codex this spawn would load is being replaced, so the
+   * start waits briefly for the tail of the install and then refuses.
+   */
+  updateLease?: CodexCliUpdateLeaseWaitIo & { timeoutMs?: number };
 }
 
 export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntimeFactory {
@@ -308,6 +318,12 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
   }
 
   async start(options: Parameters<RemoteWorkspaceRuntimeFactory["start"]>[0]): Promise<RemoteWorkspaceRuntimeHandle> {
+    // The update lease is the mutual exclusion the process scan cannot give: without
+    // it an apply could be mid-install while this app-server loads the package.
+    const leaseFree = await waitForCodexCliUpdateLeaseRelease(this.options.updateLease ?? {});
+    if (!leaseFree) {
+      throw new Error("a Codex CLI update is in progress; refusing to start a Codex app-server mid-install");
+    }
     const command = this.options.command
       ? [...this.options.command]
       : [resolveCodexRuntime().runtime.command];

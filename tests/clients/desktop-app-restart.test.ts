@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import { acquireCodexCliUpdateLease } from "../../src/codex/cli-update-lease";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 
@@ -155,6 +156,24 @@ describe("Codex desktop app restart (#2292)", () => {
     expect(result).toEqual({
       attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "unsupported_platform",
     });
+    expect(calls).toEqual([]);
+  });
+
+  test("a held Codex CLI update lease skips the restart before probing anything", () => {
+    // Relaunching the desktop app mid-install would start app-servers against the
+    // half-replaced global package; the lease makes the restart defer instead.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    expect(acquireCodexCliUpdateLease({ lockPath, pid: 4_242 }).acquired).toBe(true);
+    const calls: Call[] = [];
+    const result = restartCodexDesktopApp({
+      ...scriptedIo({ discovery: DISCOVERY, calls }),
+      updateLease: { lockPath, isAlive: () => true },
+    });
+    expect(result).toEqual({
+      attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "update_in_progress",
+    });
+    // The lease check precedes discovery and the restart lock: nothing ran.
     expect(calls).toEqual([]);
   });
 
@@ -447,4 +466,3 @@ describe("#2557 a failed probe is not an absent app", () => {
     expect(script).not.toContain("SilentlyContinue' $root");
   });
 });
-
