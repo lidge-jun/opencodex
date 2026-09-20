@@ -14,7 +14,7 @@ import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
-import { AmbiguousSelectorError, parseSegment, selectIndex, type PathSegment } from "./merge";
+import { AmbiguousSelectorError, parseSegment, readPath, selectIndex, type PathSegment } from "./merge";
 import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
 import {
   protectedContributionFingerprint,
@@ -75,37 +75,14 @@ function assertNever(segment: never): never {
   throw new Error(`unknown path segment ${JSON.stringify(segment)}`);
 }
 
-/** The element a selector names, or `undefined` when none matches. */
-function selectElement(items: readonly unknown[], segment: PathSegment & { kind: "select" }): unknown {
-  return items[selectIndex(items, segment.field, segment.value)];
-}
-
 /**
- * Same segment grammar as `setPath`: a plain key reads through a record, a
- * `[field=value]` selector reads through an array. Because the classifier and
- * the writer share this one function, status and mutation cannot disagree
- * about which element is ours.
+ * The path reader lives with the path grammar, in `merge`, and is re-exported
+ * here because the classifier was its original home and every caller imports
+ * it from this module. One implementation is the point: a reader that resolved
+ * a selector differently from the writer would report one element as ours and
+ * then rewrite another.
  */
-export function readPath(doc: unknown, path: readonly string[]): unknown {
-  let cursor: unknown = doc;
-  for (const raw of path) {
-    const segment = parseSegment(raw);
-    switch (segment.kind) {
-      case "key":
-        if (!isPlainRecord(cursor)) return undefined;
-        cursor = cursor[segment.key];
-        break;
-      case "select":
-        if (!Array.isArray(cursor)) return undefined;
-        cursor = selectElement(cursor, segment);
-        break;
-      default:
-        return assertNever(segment);
-    }
-    if (cursor === undefined) return undefined;
-  }
-  return cursor;
-}
+export { readPath };
 
 /** Does the document carry any fragment we would write? */
 export function hasOurFragments(doc: unknown, contribution: ManagedContribution): boolean {
@@ -147,7 +124,7 @@ export function blockedContainerPath(
       case "key":
         return (value as Record<string, unknown>)[segment.key];
       case "select":
-        return selectElement(value as readonly unknown[], segment);
+        return (value as readonly unknown[])[selectIndex(value as readonly unknown[], segment.criteria)];
       default:
         return assertNever(segment);
     }
