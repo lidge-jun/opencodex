@@ -36,6 +36,7 @@ export type IntegrationRefusalReason =
   | "conflict"
   | "unsafe"
   | "non_loopback"
+  | "superseded_store"
   | "drift_requires_confirm"
   | "snapshot_expired"
   | "write_failed";
@@ -61,6 +62,14 @@ export interface IntegrationStatus {
   appliedAt?: string;
   lastOpId?: string;
   reason?: IntegrationReason;
+  /**
+   * The store this client reads instead of `configPath`, when one exists.
+   *
+   * Independent of `state`: the block can be current in a file the client
+   * stopped opening, which is the one case where a green badge alone misleads.
+   * Same role as `raycast`, whose plan can make a written file inert.
+   */
+  supersededBy?: string;
   snapshotCount: number;
   retentionDegraded: boolean;
   /** Aside's explicit account-backed profile scope and desired sync state. */
@@ -194,6 +203,7 @@ const REFUSAL_REASONS: ReadonlySet<string> = new Set<IntegrationRefusalReason>([
   "conflict",
   "unsafe",
   "non_loopback",
+  "superseded_store",
   "drift_requires_confirm",
   "snapshot_expired",
   "write_failed",

@@ -497,6 +497,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "Alias of ocx integration client <sub> --client zcode.",
       "enable writes the managed provider.opencodex block into ~/.zcode/v2/config.json; disable removes only that block.",
+      "ZCode 3.14 moved its providers to ~/.zcode/v2/provider_config.json; where that file exists, enable is refused because the write cannot reach the client.",
       "ZCode reads its config at startup — restart ZCode after enable/disable.",
       "Select OpenCodex Proxy/<provider>/<model> from ZCode's model picker.",
     ],
