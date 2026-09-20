@@ -148,7 +148,7 @@ function validateKeyName(
 }
 
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, principal, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/accounts/events" && req.method === "GET") {
     const { accountSelectionStream } = await import("./account-selection-stream");
@@ -172,6 +172,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // Meta Muse login imports a credential from the user's macOS Keychain and
+    // persists it in OpenCodex. A raw management token proves administrative
+    // access, not that a person acknowledged that credential move and its ToS
+    // risk. The dashboard warning therefore needs this matching server-side gate;
+    // headers are not evidence because an admin-token holder can forge them.
+    if (provider === "meta-muse" && principal !== "gui-session") {
+      return jsonResponse({
+        error: "Meta Muse import requires acknowledgement in the OpenCodex dashboard.",
+        code: "oauth_consent_required",
+      }, 403);
+    }
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
     const accountId = body.accountId?.trim();

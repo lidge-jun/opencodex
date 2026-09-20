@@ -84,6 +84,35 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     expect(isPublicOAuthProvider("github-copilot")).toBe(true);
   });
 
+  test("Meta Muse import requires a consent-bearing GUI session", async () => {
+    const cfg = config();
+    const request = () => new Request("http://localhost/api/oauth/login", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://localhost",
+        "x-opencodex-gui-origin": "http://localhost",
+        "x-opencodex-csrf-token": "forgeable-without-a-session",
+      },
+      // A missing account makes a correctly admitted request stop before the
+      // platform-specific import, while still proving it passed the consent gate.
+      body: JSON.stringify({ provider: "meta-muse", accountId: "missing-slot" }),
+    });
+
+    for (const principal of [undefined, "admin-token", "gui-pair-capability"] as const) {
+      const response = await handleManagementAPI(request(), new URL(request().url), cfg, {}, principal);
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toEqual({
+        error: "Meta Muse import requires acknowledgement in the OpenCodex dashboard.",
+        code: "oauth_consent_required",
+      });
+    }
+
+    const admitted = await handleManagementAPI(request(), new URL(request().url), cfg, {}, "gui-session");
+    expect(admitted?.status).toBe(404);
+    expect(await admitted?.json()).toEqual({ error: "Unknown account for reauth" });
+  });
+
   test("generic management OAuth endpoints reject chatgpt before touching login state", async () => {
     const cfg = config();
     const requests = [
