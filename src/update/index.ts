@@ -9,6 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { readPid, readRuntimePort } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
+import type { ServiceOwnership } from "../service/state";
+import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallFromPath } from "./install-detection.mjs";
@@ -382,6 +384,15 @@ export async function runUpdate(): Promise<void> {
     const { isServiceInstalled } = await import("../service");
     serviceWasInstalled = isServiceInstalled();
   } catch { /* best-effort */ }
+  // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
+  // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
+  let recordedOwnership: ServiceOwnership | null = null;
+  try {
+    const { serviceOwnership } = await import("../service");
+    recordedOwnership = serviceOwnership();
+  } catch { /* best-effort: an unreadable record leaves the ordinary path in place */ }
+  const runtimePlan = planUpdateRuntimeHandling({ ownership: recordedOwnership, serviceInstalled: serviceWasInstalled });
+  if (runtimePlan.notice) console.log(runtimePlan.notice);
   let trayWasInstalled = false;
   let trayWasRunning = false;
   if (process.platform === "win32") {
@@ -429,7 +440,7 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
   let stopAttempted = false;
-  if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()) {
+  if (runtimePlan.stopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
     stopAttempted = true;
     console.log("⏹  Stopping the running proxy before updating...");
     const stopStdio = updateChildStdio();
@@ -588,7 +599,7 @@ export async function runUpdate(): Promise<void> {
     // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
-    if (serviceWasInstalled) {
+    if (runtimePlan.refreshService) {
       console.log("🔁 Refreshing the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
       const { reclaimListenPort } = await import("../server/port-reclaim");
@@ -665,14 +676,14 @@ export async function runUpdate(): Promise<void> {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
       }
-    } else {
+    } else if (runtimePlan.stopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
     }
   } else {
     if (stopAttempted && trayWasRunning && postUpdateLauncherUsable) {
       spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true });
     }
-    if (stopAttempted && serviceWasInstalled && postUpdateLauncherUsable) {
+    if (stopAttempted && runtimePlan.refreshService && postUpdateLauncherUsable) {
       const service = spawnSync(process.execPath, [postUpdateLauncher, "service", "repair"], {
         stdio: "inherit",
         windowsHide: true,

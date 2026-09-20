@@ -12,6 +12,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
+import { parseRecordedOwnership, planUpdateRuntimeHandling } from "../src/update/runtime-ownership.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -258,6 +259,14 @@ function runPackageManagerSelfUpdate(manager) {
   // unloads it, so a successful update must refresh and restart it afterwards.
   const serviceStatePath = join(configDir(), "service-state.json");
   const serviceWasInstalled = existsSync(serviceStatePath);
+  // What this update may do to the runtime. The same rule the Bun updater applies, from the
+  // same module: a desktop takeover vetoes both the stop and the service refresh below.
+  let recordedOwnership = null;
+  try {
+    recordedOwnership = parseRecordedOwnership(serviceWasInstalled ? readFileSync(serviceStatePath, "utf8") : null);
+  } catch { /* unreadable record leaves the ordinary path in place */ }
+  const runtimePlan = planUpdateRuntimeHandling({ ownership: recordedOwnership, serviceInstalled: serviceWasInstalled });
+  if (runtimePlan.notice) console.log(runtimePlan.notice);
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
@@ -462,11 +471,14 @@ function runPackageManagerSelfUpdate(manager) {
     existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
 
   function recoverStoppedRuntimeAfterFailure() {
+    // Nothing was stopped under a foreign owner, so there is nothing to recover — and
+    // starting a proxy here would put a second one beside the runtime the app is managing.
+    if (!runtimePlan.stopRuntime) return;
     if (!postUpdateLauncherUsable) {
       console.error("opencodex: no verified active launcher remains for automatic recovery; reinstall opencodex manually.");
       return;
     }
-    if (serviceWasInstalled) {
+    if (runtimePlan.refreshService) {
       console.warn("opencodex: update failed after stopping the proxy — restoring the previous background service.");
       refreshBackgroundServiceOrStartDirect();
     } else if (hasRuntimeState) {
@@ -482,7 +494,7 @@ function runPackageManagerSelfUpdate(manager) {
   // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
   // whether the obligation is safe to finish.
   const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
-  if (serviceWasInstalled || hasRuntimeState || hasPendingTeardown) {
+  if (runtimePlan.stopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
     const stillHasRuntimeState =
@@ -637,10 +649,10 @@ function runPackageManagerSelfUpdate(manager) {
     }
     // The stop above unloaded any managed service; refresh via the freshly-installed
     // launcher so the new files write the baked paths and the service restarts.
-    if (serviceWasInstalled) {
+    if (runtimePlan.refreshService) {
       console.log("Refreshing the background service with the updated files...");
       refreshBackgroundServiceOrStartDirect();
-    } else {
+    } else if (runtimePlan.stopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
     }
     process.exit(0);
