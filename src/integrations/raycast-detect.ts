@@ -75,6 +75,8 @@ export function realRaycastDetectDeps(runtime: RealRaycastDetectRuntime = {}): R
           stderr: "pipe",
           timeout: DEFAULTS_TIMEOUT_MS,
         });
+        // A timed-out or signal-killed probe reports exitCode === null; that
+        // and any non-zero exit mean the preference was not read.
         if (result.exitCode !== 0) return null;
         return result.stdout.toString().trim();
       } catch {
