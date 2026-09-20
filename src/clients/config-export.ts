@@ -35,6 +35,18 @@ export { OPENCODE_PROVIDER_ID, OPENCODE_CONFIG_SCHEMA, OPENCODE_API_KEY_ENV, OPE
 export { normalizeExportModels } from "./config-export/model-metadata";
 export type { OmpModelEntry, OmpProviderBlock, OmpGeneratedConfig } from "./config-export/omp";
 export type { ZcodeModelEntry, ZcodeProviderBlock, ZcodeGeneratedConfig } from "./config-export/zcode";
+export type { ZcodeStoreProviderRule, ZcodeStoreModelRule } from "./config-export/zcode-store";
+export {
+  ZCODE_STORE_SCHEMA_VERSION,
+  ZCODE_STORE_PROVIDER_GROUP,
+  ZCODE_STORE_API_TYPE,
+  ZCODE_STORE_PROVIDER_NAME,
+  ZCODE_STORE_PROVIDER_RULES_PATH,
+  ZCODE_STORE_MODEL_RULES_PATH,
+  buildZcodeStoreProviderRule,
+  buildZcodeStoreContribution,
+  zcodeStoreSchemaEstablished,
+} from "./config-export/zcode-store";
 export type { DshReasoningEffort, DshWireReasoningEffort, DshModelEntry, DshProviderBlock, DshGeneratedConfig } from "./config-export/dsh";
 export type { McodeProviderBlock, McodeModelEntry, McodeGeneratedConfig } from "./config-export/mcode";
 export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProviderEntry, RaycastGeneratedConfig } from "./config-export/raycast";
