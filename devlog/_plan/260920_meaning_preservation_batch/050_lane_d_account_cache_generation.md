@@ -108,6 +108,56 @@ stay open for the coordinator.
   reports tokens.
 - Also fixed: a trailing blank line flagged by `git diff --check`.
 
+## Exact-head CI at 55b512d2 and its dispositions
+
+Run 35492856534 failed `gates`, `test 1/4`, `test 4/4` and `macos 1/2`. Three
+distinct causes, none of them a flake:
+
+- `gates` reported five typecheck errors. Two were mine and trivial:
+  `cache-diagnostic.ts` narrowed `draft.promptCacheKey` through optional
+  chaining and then read it again unguarded. Fixed by binding the inbound key
+  once.
+- The other three were the interesting ones, and they are the union class this
+  batch keeps hitting. `catalog/effort.ts` and `catalog/build-entries.ts` cast
+  a partially populated ladder to `Array<{ effort?: string }>` and then push a
+  canonical `CODEX_REASONING_LEVELS` rung into it, which also carries
+  `description`. That has always been a type error; it was invisible because
+  `reasoning-effort.ts` → `providers/reasoning-metadata.ts` →
+  `providers/key-store.ts` → the `../config` barrel formed an import cycle,
+  and inside it the rung type degraded so the excess-property check never ran.
+  Carried #5145 breaks that cycle on purpose — its new `api-key-resolve.ts` is
+  a leaf module written so reasoning-metadata can import it without the barrel
+  — so the latent error surfaced on this branch first. Neither file is in this
+  lane's scope and neither is touched by its diff; the fix is the remedy
+  `AGENTS.md` prescribes for a restated shape: `reasoning-effort.ts` now
+  exports `CodexReasoningLevel`, and the three casts derive
+  `Array<Partial<CodexReasoningLevel>>` from it instead of restating a
+  narrower literal. Any lane that breaks this cycle would have hit the same
+  wall.
+- `test 4/4` (`production adapter contract rejects omitted translator budgets
+  at typecheck`) spawns tsc over the project and asserts the valid fixture
+  exits zero. It was downstream of the same five errors and needs no change of
+  its own.
+- `test 1/4` (`Cursor catalog discovery cooldown > second refresh during
+  cooldown does not re-invoke discovery`) was a real regression from this
+  lane. Scoping only the roster reads to the credential left the failure
+  cooldown provider-wide, so the branch had to require a credential-scoped
+  stale entry before honouring it — and a discovery that fails before caching
+  anything has no stale entry, which reopened the timeout storm #54 closed.
+  The fix moves the scope to where the observation actually belongs: a
+  discovery failure now records the credential that observed it, and
+  `isModelsFetchCoolingDown` suppresses only that credential. A failure
+  recorded without an identity stays credential-agnostic and suppresses
+  everyone, so plain-endpoint providers and the existing Qoder branch keep
+  their current behaviour unchanged. This is the same thesis as the rest of the
+  bundle: one account's 401 or 404 is not evidence about another account's
+  catalog. `cursor-roster-account-scope.test.ts` already pins both halves.
+- `macos 1/2` carried the same shard failures as the Linux shards.
+
+The branch is now aligned on `dev` at `447ac22ca6` (lanes B and E landed).
+Lane E's `run-turn-queue.ts` and `admission-model-scope.ts` do not overlap
+this lane's surface; the merge was clean.
+
 ## Verification
 
 Per batch rules, no local suites, individual tests, typecheck, build,

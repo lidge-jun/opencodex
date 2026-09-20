@@ -81,7 +81,17 @@ function deleteCachedProvider(provider: string): number {
  * the full fetch timeout on every catalog poll (issue #54: UI stalls behind corporate proxies). */
 export const MODELS_FETCH_FAILURE_COOLDOWN_MS = 30_000;
 
-const failureAt = new Map<string, number>();
+interface DiscoveryFailure {
+  at: number;
+  /**
+   * Credential the failure was observed under, for entitlement-specific rosters. Absent means
+   * the failure is credential-agnostic (a plain `/models` endpoint) and suppresses every
+   * caller, which is the original #54 behaviour.
+   */
+  authorityIdentity?: string;
+}
+
+const failureAt = new Map<string, DiscoveryFailure>();
 const discoveryStatus = new Map<string, ProviderModelDiscoveryStatus>();
 /**
  * How many models the last successful discovery actually returned, before any configured-alias
@@ -92,8 +102,12 @@ const discoveryStatus = new Map<string, ProviderModelDiscoveryStatus>();
 const liveModelCounts = new Map<string, number>();
 let lastReconciledGeneration = 0;
 
-export function markModelsFetchFailure(provider: string, now = Date.now()): void {
-  failureAt.set(provider, now);
+export function markModelsFetchFailure(
+  provider: string,
+  now = Date.now(),
+  authorityIdentity?: string,
+): void {
+  failureAt.set(provider, { at: now, ...(authorityIdentity ? { authorityIdentity } : {}) });
 }
 
 /** `liveModelCount` is required so a caller that forgets to pass it fails typecheck instead of
@@ -148,9 +162,25 @@ export function getProviderLiveModelCount(provider: string): number | undefined 
   return liveModelCounts.get(provider);
 }
 
-export function isModelsFetchCoolingDown(provider: string, cooldownMs = MODELS_FETCH_FAILURE_COOLDOWN_MS, now = Date.now()): boolean {
-  const at = failureAt.get(provider);
-  return at !== undefined && now - at < cooldownMs;
+/**
+ * Whether a failed discovery still suppresses the next one.
+ *
+ * `authorityIdentity` scopes the suppression to the credential that actually observed the
+ * failure. A roster that upstream filters per account is evidence about that account, and
+ * one account's 401 or 404 must not decide that a different account has no catalog. A
+ * failure recorded without an identity stays credential-agnostic and suppresses everyone,
+ * so the plain-endpoint providers keep the timeout protection #54 added.
+ */
+export function isModelsFetchCoolingDown(
+  provider: string,
+  cooldownMs = MODELS_FETCH_FAILURE_COOLDOWN_MS,
+  now = Date.now(),
+  authorityIdentity?: string,
+): boolean {
+  const failure = failureAt.get(provider);
+  if (failure === undefined || now - failure.at >= cooldownMs) return false;
+  if (failure.authorityIdentity === undefined || authorityIdentity === undefined) return true;
+  return failure.authorityIdentity === authorityIdentity;
 }
 
 /** Fresh cached models for a provider, or null when absent/stale (caller should re-fetch). */

@@ -300,10 +300,12 @@ export async function fetchProviderModelsWithAuth(
         "authoritative",
       );
     }
-    const scopedStaleDevin = getStaleCached(name, authorityIdentity);
-    if (isModelsFetchCoolingDown(name) && scopedStaleDevin) {
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity)) {
+      const cooling = getStaleCached(name, authorityIdentity);
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, scopedStaleDevin)),
+        withConfiguredRetention(
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
+        ),
         "degraded",
       );
     }
@@ -348,7 +350,7 @@ export async function fetchProviderModelsWithAuth(
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
     }
     const stale = getStaleCached(name, authorityIdentity);
@@ -374,11 +376,11 @@ export async function fetchProviderModelsWithAuth(
         "authoritative",
       );
     }
-    const scopedStaleCursor = getStaleCached(name, authorityIdentity);
-    if (isModelsFetchCoolingDown(name) && scopedStaleCursor) {
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity)) {
+      const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
-          applyConfigHintsToCachedModels(name, prov, scopedStaleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias),
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
         ),
         "degraded",
       );
@@ -415,7 +417,7 @@ export async function fetchProviderModelsWithAuth(
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(
         `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,

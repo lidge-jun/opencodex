@@ -203,8 +203,9 @@ export function observeOutbound(
     const record = outboundBody && typeof outboundBody === "object" && !Array.isArray(outboundBody)
       ? outboundBody as Record<string, unknown> : {};
     const outbound = taggedPresence(record.prompt_cache_key, "cache-debug:prompt-cache-key", source);
-    if (outbound.present && outbound.tag === draft.promptCacheKey?.inbound?.tag) {
-      outbound.source = draft.promptCacheKey.inbound.source;
+    const inboundKey = draft.promptCacheKey?.inbound;
+    if (outbound.present && inboundKey && outbound.tag === inboundKey.tag) {
+      outbound.source = inboundKey.source;
     }
     (draft.promptCacheKey ??= {}).outbound = outbound;
     (draft.session ??= {}).outboundHeader = sessionPresence(headers);
