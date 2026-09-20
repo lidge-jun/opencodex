@@ -36,6 +36,8 @@ on:
       - "scripts/**"
       - "gui/**"
       - "assets/**"
+      - ".github/scripts/**"
+      - ".github/workflows/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -43,10 +45,6 @@ on:
       - "tsconfig.json"
       - "README.md"
       - "LICENSE"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/enforce-pr-target.yml"
-      - ".github/workflows/stale-needs-info.yml"
   workflow_dispatch:
     inputs:
       lane:
@@ -215,6 +213,8 @@ jobs:
               - 'scripts/**'
               - 'gui/**'
               - 'assets/**'
+              - '.github/scripts/**'
+              - '.github/workflows/**'
               - '.gitattributes'
               - '.npmignore'
               - 'package.json'
@@ -222,10 +222,6 @@ jobs:
               - 'tsconfig.json'
               - 'README.md'
               - 'LICENSE'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/release.yml'
-              - '.github/workflows/enforce-pr-target.yml'
-              - '.github/workflows/stale-needs-info.yml'
             gui:
               - 'gui/**'
             # The docs site is built by nothing else on a pull request. `ci` above
