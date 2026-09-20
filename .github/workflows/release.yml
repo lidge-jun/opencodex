@@ -236,9 +236,61 @@ jobs:
         if: runner.os != 'macOS'
         run: bun desktop/scripts/prepare-sidecar.ts --target ${{ matrix.sidecar-targets }}
 
+      # The signing certificate has to be in a keychain before the widget is signed, and the
+      # Tauri build step creates its own keychain only when it runs — which is after this. That
+      # ordering is why every release so far shipped an ad-hoc signed extension inside a
+      # Developer ID signed, notarized host: build-widget.sh saw no MACOS_SIGN_IDENTITY and took
+      # its unsigned branch, and the bundler does not re-sign anything under PlugIns.
+      - name: Import the release signing certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_CERTIFICATE}" ]; then
+            echo "No signing certificate is configured, so the extension will be ad-hoc signed."
+            echo "This build is usable for local validation and is not a release asset."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/opencodex-signing.keychain-db"
+          keychain_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          certificate="$RUNNER_TEMP/opencodex-signing.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychain -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          shred -u "$certificate" 2>/dev/null || rm -P "$certificate"
+          echo "OPENCODEX_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
       - name: Build WidgetKit extension
         if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: bash desktop/scripts/build-widget.sh
+
+      - name: Verify the extension carries the release signature
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          appex=desktop/src-tauri/widget/OpenCodexWidget.appex
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "No team configured; skipping the signature assertion for this non-release build."
+            exit 0
+          fi
+          codesign --verify --strict --deep "$appex"
+          description="$(codesign -dvvv "$appex" 2>&1)"
+          echo "$description"
+          echo "$description" | grep -q "TeamIdentifier=$APPLE_TEAM_ID"
+          echo "$description" | grep -q "flags=.*runtime"
+          echo "$description" | grep -q "Timestamp="
 
       # Release signing is intentionally secret-gated. Developer ID, notarization,
       # and updater signatures require maintainer-owned credentials; builds without
@@ -273,6 +325,15 @@ jobs:
           name: desktop-${{ matrix.target }}
           path: dist/release/
           if-no-files-found: error
+
+      # always(), because a keychain holding the release identity must not survive a failed job
+      # on a runner image that could be reused.
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -n "${OPENCODEX_SIGNING_KEYCHAIN:-}" ] && [ -f "${OPENCODEX_SIGNING_KEYCHAIN}" ]; then
+            security delete-keychain "${OPENCODEX_SIGNING_KEYCHAIN}"
+          fi
           retention-days: 7
 
   attach-release:

@@ -15,10 +15,12 @@ let package = Package(
             dependencies: ["MenuBarCore"],
             path: "Sources/OpenCodexWidget",
             linkerSettings: [
-                // Widget extensions must enter through NSExtensionMain or chronod tears down
-                // the process before the WidgetBundle connects.
+                // The entry stays the Swift one so main.swift runs and calls
+                // OpenCodexWidgetBundle.main(); that call is what connects the bundle to the
+                // extension host. Forcing the entry to _NSExtensionMain instead skips it, and
+                // NSExtensionMain then looks for an NSExtensionPrincipalClass a SwiftUI widget
+                // does not declare, so the extension registers and offers nothing.
                 .linkedFramework("Foundation"),
-                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"]),
             ]
         ),
         // An executable rather than a .testTarget: Xcode Command Line Tools ships
