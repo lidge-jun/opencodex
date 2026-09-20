@@ -125,6 +125,16 @@ Function-call wrappers around freeform bodies are restored by
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
 
+For a verified code-mode catalog, `src/responses/code-mode-shell-input.ts` recognizes a
+structured `cmd` or `command` object submitted under `exec` and the canonical `input` wrapper.
+Only known shell options and one command field are accepted, and any command that parses as
+JavaScript remains unchanged, including ambiguous single identifiers. The existing helper
+compiler serializes the recognized arguments into `tools.exec_command(...)` and emits its result
+through `text(...)`; the proxy executes nothing. JSON, native Responses and adapter-event SSE
+use the same completion rule. Possible shell-object previews stay held until completion so raw
+JSON or shell text cannot precede the compiled JavaScript. Ordinary JavaScript stays progressive.
+`tests/responses/responses-code-mode-shell-compile.test.ts` covers those paths and boundaries.
+
 Progressive preview for those wrappers is decoded by
 `src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
 function-call restoration, over the classification in `src/responses/freeform-wrapper-scan.ts`.

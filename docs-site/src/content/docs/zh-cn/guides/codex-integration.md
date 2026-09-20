@@ -202,6 +202,12 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 结果仍包含宿主的某条失败消息，opencodex 会追加一行提示，指出对应规则。此变更不会重写模型的
 代码或补丁文本。
 
+如果路由模型误把 `{"cmd":"git status --short"}` 这样的 shell 参数对象传给 code-mode `exec`，
+opencodex 会在确认工具目录为 code mode 且内容无歧义时，将它转换为调用
+`tools.exec_command(...)` 并通过 `text(...)` 返回结果的 JavaScript。shell 选项会保留，
+命令执行与权限检查仍由 Codex 处理。合法的 JavaScript 后备字段、歧义对象和其他工具命名空间
+不会被转换；这项兼容修复不会绕过提供方限流，也不改变配置的重试策略。
+
 所选 provider 必须支持 function/tool calling。不支持 tool call 的 text-only provider 无法使用 `exec`、
 Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不变。
 

@@ -43,6 +43,9 @@ Chat models sometimes return a freeform call body under a common alternate field
 body in a Markdown fence. Restoration in `src/responses/apply-patch-envelope.ts` is deliberately
 narrow: only bare `exec` and `apply_patch` accept one recognized alternate field or one complete
 outer fence, while ambiguous wrappers and provider-owned freeform grammars remain byte-exact.
+Structured shell arguments mistakenly sent to code-mode `exec` follow the shared
+[Responses restoration contract](../transports/responses.md#responses-httpsse), including preview
+holding and preservation of valid JavaScript fallback fields.
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
 the originating call. Its wire-ID map retains the original ID privately so replacement or

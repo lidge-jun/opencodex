@@ -586,6 +586,14 @@ Codex. Native custom calls and converted function calls use the same completion 
 patch previews are held while their executable form is unresolved. JavaScript that merely
 contains patch text and unrelated native custom payloads stay unchanged.
 
+A routed model can also mistakenly send a shell-argument object such as
+`{"cmd":"git status --short"}` to code-mode `exec`. For a verified code-mode catalog,
+opencodex converts an unambiguous shell object into `tools.exec_command(...)` JavaScript
+and forwards its output through `text(...)`. Shell options are preserved, and Codex still
+executes and authorizes the command. Valid JavaScript fallback fields, ambiguous objects,
+and unrelated tool namespaces are not converted. This compatibility repair does not bypass
+provider rate limits or change the configured retry policy.
+
 Routed code-mode turns are also told the host's rules for the nested helpers before the first
 call: `tools.apply_patch` takes one string that opens and closes with the bare patch marker lines,
 the isolate has no `import`, and long-running commands are polled through `write_stdin`. When a
