@@ -7,7 +7,12 @@ import { createClineIO } from "../../src/integrations/cline-io";
 import { parseClineDocument } from "../../src/integrations/cline-document";
 import { parseConfig } from "../../src/integrations/config-io";
 import { INTEGRATION_CLIENTS, INTEGRATION_CLIENT_IDS, type IntegrationClientId } from "../../src/integrations/registry";
-import { previewIntegration } from "../../src/integrations/mutation-plan";
+import {
+  MANAGED_PATH_TEMPLATES,
+  PLAN_UNBOUND_FINGERPRINT,
+  orderPlanChanges,
+  previewIntegration,
+} from "../../src/integrations/mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { readIntegrationState, readPath } from "../../src/integrations/state";
 import { applyIntegration, disableIntegration, restoreIntegration } from "../../src/integrations/writer";
@@ -159,6 +164,38 @@ describe("the client registries cannot drift apart", () => {
       reason: mutation.reason,
       message: mutation.message,
     })).toBe(true);
+  });
+
+  test("every managed path the server can publish is one the dashboard accepts", async () => {
+    const guiIntegrations = await import("../../gui/src/pages/integrations/integration-api");
+    /*
+     * The parser keeps its own set of managed schema paths, by hand, for the
+     * same reason it keeps its own client list. A template the server can put in
+     * a plan and the parser has never heard of is not a cosmetic mismatch: the
+     * dashboard answers `invalid_integration_preview_response` and the page
+     * shows nothing. Crossing every template rather than one plan is what makes
+     * a client that writes a second file visible here the day it is added.
+     */
+    for (const clientId of INTEGRATION_CLIENT_IDS) {
+      const changes = orderPlanChanges(MANAGED_PATH_TEMPLATES[clientId].map(template => ({
+        kind: "add" as const,
+        path: template.join("."),
+      })));
+      expect(changes.length, clientId).toBe(MANAGED_PATH_TEMPLATES[clientId].length);
+      const parsed = guiIntegrations.parseIntegrationMutationPlan({
+        version: 1,
+        clientId,
+        operation: "apply",
+        state: "absent",
+        foreignEdit: "none",
+        changes: changes.map(change => ({ ...change })),
+        fingerprint: PLAN_UNBOUND_FINGERPRINT,
+        canApply: true,
+        willChange: true,
+      });
+      expect(parsed.changes.map(change => change.path), clientId)
+        .toEqual(changes.map(change => change.path));
+    }
   });
 
   test("source preservation and cross-process locking are registry capabilities", () => {

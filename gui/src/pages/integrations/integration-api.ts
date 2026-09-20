@@ -238,6 +238,10 @@ const PLAN_SCHEMA_PATHS = new Set([
   "providers.[id=opencodex]",
   "settings.providers.opencodex",
   "catalog.providers.opencodex",
+  // ZCode reads its providers from a second file; a plan for it publishes that
+  // file's templates, and a path missing here is rejected as an invalid preview.
+  "config.providerConfigRules.providerRules.[providerId=opencodex]",
+  "config.modelConfigRules.providerModelRules.*",
 ]);
 const PLAN_CHANGE_LIMIT = 256;
 
