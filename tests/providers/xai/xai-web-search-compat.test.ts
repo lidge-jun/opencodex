@@ -79,7 +79,7 @@ describe("xAI Responses web-search compatibility", () => {
     expect(body.input).toEqual([
       { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] },
     ]);
-    expect(body.tool_choice).toBe("none");
+    expect(body).not.toHaveProperty("tool_choice");
   });
 
   test("keeps public xAI search declarations live when the private access flag is absent", () => {

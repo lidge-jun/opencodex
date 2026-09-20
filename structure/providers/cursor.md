@@ -106,6 +106,16 @@ does not expose authoritative cache_read_tokens.
 
 > Decision record: [ADR-0054](../decisions/ADR-0054-cursor-conversation-checkpoint-reuse.md)
 
+## External tool continuations
+
+`src/adapters/cursor/protobuf-request.ts` repeats the latest nonblank user request in the active
+external-model tool continuation so root pruning cannot replace its scope with an older goal.
+Grok 4.6 code-mode continuations treat completed `text()`/`notify()` output as observations and
+instruct the model to produce the requested answer without re-emitting intermediate output.
+On an envelope-echo corrective retry, tool evidence uses the user wire role with an explicit
+system instruction to treat it as data; truncation and argument restoration preserve that role.
+These are adapter guidance and replay repairs, not a guarantee of identical provider answers.
+
 ## Cursor root replay budgets
 
 `src/adapters/cursor/protobuf-request.ts` bounds the replayed root set at 192 blobs and 512 KiB, and
@@ -122,6 +132,11 @@ the equal-share pass elides a trailing run, recovery drops an elided sibling to 
 the freed bytes become spare. It requires the share to land in a narrow window where the clipped
 invocation line survives but `output:` does not; outside that window the clipped-line lookup declines
 the root first.
+If carried checkpoint roots exceed either aggregate limit, the builder retries once with a full
+replay of available raw history; the same limits and final overflow error still apply.
+Token estimation includes retained external root blobs, including checkpoint-carried roots.
+Missing or invalid UTF-8 blobs are skipped with bounded provider diagnostics; estimating does not
+alter blob-retention metrics.
 Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
 `composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
 an invocation line. Coverage lives in

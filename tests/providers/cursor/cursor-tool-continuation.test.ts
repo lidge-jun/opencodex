@@ -359,3 +359,20 @@ describe("Cursor Grok exec continuation output boundary", () => {
     expect(decodeRoots(bytes).flatMap((root: any) => Array.isArray(root.content) ? root.content.map((part: any) => part.text ?? "") : [root.content]).join("\n")).toContain(result.content);
   });
 });
+
+test("corrective replay preserves the wire role while widening clipped arguments", () => {
+  const args = { contents: "A".repeat(4600) };
+  const bytes = encodeCursorRunRequest({
+    modelId: "cursor-grok-4.6-high", conversationId: "role-restoration", system: ["Use tool evidence."],
+    messages: [{ role: "tool", content: "saved" }], echoRetryContinuationText: "Do not repeat the envelope.",
+    rawMessages: [
+      { role: "user", content: "Write once.", timestamp: 1 },
+      { role: "assistant", model: "cursor/grok-4.6", timestamp: 2, content: [{ type: "toolCall", id: "save", name: "write_file", arguments: args }] },
+      { role: "toolResult", toolCallId: "save", toolName: "write_file", content: "saved", isError: false, timestamp: 3 },
+    ],
+  });
+  const root = decodeRoots(bytes).find(item => JSON.stringify(item).includes("invoked:")) as { role: string; content: { text: string }[] };
+  expect(root.role).toBe("user");
+  expect(root.content[0]!.text).toContain(JSON.stringify(args));
+  expect(root.content[0]!.text).not.toContain("arguments truncated");
+});

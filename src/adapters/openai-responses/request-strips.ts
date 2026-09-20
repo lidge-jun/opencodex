@@ -188,11 +188,7 @@ export function stripItemIdsWhenUnstored(body: unknown, requireCustomCallIds = f
           || typeof item.input !== "string"
         ) return item;
         const digest = createHash("sha256")
-          .update(item.call_id)
-          .update("\0")
-          .update(item.name)
-          .update("\0")
-          .update(item.input)
+          .update(JSON.stringify([item.call_id, item.name, item.input]))
           .digest("hex")
           .slice(0, 40);
         changed = true;

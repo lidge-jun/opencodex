@@ -105,7 +105,6 @@ export const CURSOR_GROK_CODE_MODE_CONTINUATION_GUIDANCE =
   + "Use the observations to perform the next required action or produce the user's requested final answer. "
   + "Do not prefix the final answer with intermediate raw tool output unless the user explicitly requests that raw output.";
 
-
 /** Runtime timezone for protobuf RequestContextEnv (dynamic, never hardcoded). */
 function runtimeTimeZone(): string {
   try {
@@ -758,23 +757,17 @@ function rootPromptMessages(
 }
 
 function contentText(message: OcxMessage): string {
-  try {
-    if (!message || typeof message !== "object") return "";
-    if (message.role === "toolResult") return toolResultToText(message);
-    if (typeof message.content === "string") return message.content;
-    if (!Array.isArray(message.content)) return "";
-    return message.content
-      .map(part => {
-        if (!part || typeof part !== "object") return undefined;
-        if (part.type === "text" || part.type === "document") return part.text;
-        if (part.type === "thinking") return part.thinking;
-        return undefined;
-      })
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("\n");
-  } catch {
-    return "";
-  }
+  if (message.role === "toolResult") return toolResultToText(message);
+  if (typeof message.content === "string") return message.content;
+  return message.content
+    .map(part => {
+      if (part.type === "text" || part.type === "document") return part.text;
+      if (part.type === "thinking") return part.thinking;
+      if (part.type === "image") return undefined;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n");
 }
 
 function latestUserRequestText(rawMessages: CursorRunRequest["rawMessages"]): string {
@@ -782,7 +775,7 @@ function latestUserRequestText(rawMessages: CursorRunRequest["rawMessages"]): st
   try {
     const latestUser = rawMessages.findLast(message => message?.role === "user");
     if (!latestUser) return "";
-    return contentText(latestUser).trim();
+    return contentText(latestUser);
   } catch {
     debugProviderDiagnostic("cursor", "current-user-request-unreadable", {
       rawMessages: rawMessages.length,
@@ -1108,9 +1101,9 @@ function restoreClippedInvocationArguments(
     // string form of `replace` expands those into the surrounding match instead of inserting them.
     const widened = entry.text.replace(clippedLine, () => `\ninvoked: ${name} with ${full}`);
     const candidate = rootBlobCandidate(
-      toolResultRootPayload(widened),
+      toolResultRootPayload(widened, entry.toolResultRole),
       "toolResult",
-      { messageIndex: entry.messageIndex, text: widened },
+      { messageIndex: entry.messageIndex, text: widened, toolResultRole: entry.toolResultRole },
     );
     const cost = candidate.byteLength - entry.byteLength;
     if (cost <= 0 || cost > spare) continue;
@@ -1578,7 +1571,7 @@ function buildPreparedCursorRunRequest(
       : text;
   if (lastRawIsToolResult && isCursorExternalWireModel(request.modelId)) {
     const currentRequest = latestUserRequestText(request.rawMessages);
-    if (currentRequest) {
+    if (currentRequest.trim()) {
       actionText += '\n\n' + CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE + '\n\n[Current user request]\n' + currentRequest;
     }
     // Image preparation bounds these labels and keeps them in attachment order. The

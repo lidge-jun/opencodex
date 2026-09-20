@@ -515,7 +515,7 @@ export function cursorBlobTextForEstimate(blobId: Uint8Array): string | null {
   try {
     const entry = blobs.get(key(blobId));
     if (!entry) return null;
-    return new TextDecoder().decode(entry.data);
+    return new TextDecoder("utf-8", { fatal: true }).decode(entry.data);
   } catch {
     debugProviderDiagnostic("cursor", "blob-estimate-unreadable", {
       bytes: blobId.byteLength,

@@ -470,6 +470,7 @@
   "cursor-arg-normalize.test.ts": "providers/cursor",
   "cursor-blob-integrity.test.ts": "providers/cursor",
   "cursor-blob.test.ts": "providers/cursor",
+  "cursor-request-compat.test.ts": "providers/cursor",
   "cursor-call-id.test.ts": "providers/cursor",
   "cursor-cancel-provenance.test.ts": "providers/cursor",
   "cursor-catalog.test.ts": "providers/cursor",
@@ -1443,6 +1444,11 @@
   "claude-intercept-proxy.test.ts": "claude-integration",
   "claude-intercept-settings.test.ts": "claude-integration",
   "claude-desktop-first-party.test.ts": "claude-integration",
+<<<<<<< HEAD
   "claude-desktop-mode-explanation.test.ts": "claude-integration",
   "claude-intercept-integration.test.ts": "server"
+=======
+  "claude-intercept-integration.test.ts": "server",
+  "responses-xai-request-compat.test.ts": "responses"
+>>>>>>> 4a4303e33 (fix(adapters): close Grok continuation and normalized tool catalog gaps)
 }
