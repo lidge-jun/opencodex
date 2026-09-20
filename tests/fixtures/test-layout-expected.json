@@ -1439,5 +1439,6 @@
   "claude-intercept-proxy.test.ts": "claude-integration",
   "claude-intercept-settings.test.ts": "claude-integration",
   "claude-desktop-first-party.test.ts": "claude-integration",
+  "claude-desktop-mode-explanation.test.ts": "claude-integration",
   "claude-intercept-integration.test.ts": "server"
 }

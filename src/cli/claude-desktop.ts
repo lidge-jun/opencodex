@@ -18,6 +18,7 @@ import {
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
 import {
   applyDesktopFirstParty,
+  isClaudeDesktopMode,
   recordClaudeDesktopMode,
   removeDesktopFirstParty,
   resolveClaudeDesktopApplyMode,
@@ -197,6 +198,44 @@ export function parseDesktopApplyArgs(
 }
 
 /**
+ * Why a gateway apply happened when the help text calls first-party the default.
+ *
+ * `resolveClaudeDesktopMode` keeps an existing install where it is: an explicit
+ * `claudeCode.desktopMode` wins, and a stored gateway apply marker keeps gateway. Both rules are
+ * right — a working Desktop install must not flip underneath its user because a default moved.
+ * Together they mean an existing gateway user never arrives at first-party without discovering
+ * `--first-party` unaided, while `ocx claude desktop --help` tells them first-party is "(default)".
+ *
+ * The fix is not to change the resolution. It is to say, at the moment of the apply, that the
+ * other mode exists and what selects it. Returns null when the user asked for gateway explicitly,
+ * because they already know, and when first-party is simply unavailable here — a connected client
+ * or a disabled intercept cannot run it, so offering it would be advice that fails.
+ */
+export function gatewayModeExplanation(input: {
+  requestedExplicitly: boolean;
+  config: Pick<OcxConfig, "claudeCode" | "runtimeRole">;
+  connection?: ClientConnectionState;
+}): string[] {
+  if (input.requestedExplicitly) return [];
+  const connection = input.connection ?? readClientConnectionState();
+  if (connection.kind === "connected") return [];
+  // Only a stored preference is worth explaining. Without one, gateway was chosen because
+  // first-party cannot run here, and naming an unavailable alternative is advice that fails.
+  const savedMode = input.config.claudeCode?.desktopMode;
+  const hasSavedGateway = isClaudeDesktopMode(savedMode) && savedMode === "gateway";
+  const hasApplyMarker = input.config.claudeCode?.desktopProfile?.appliedFingerprint !== undefined;
+  if (!hasSavedGateway && !hasApplyMarker) return [];
+  const reason = hasSavedGateway
+    ? "this machine has claudeCode.desktopMode saved as gateway"
+    : "this machine carries a previous gateway apply";
+  return [
+    `Applied the gateway profile because ${reason}; an existing install is never switched for you.`,
+    "First-party keeps Desktop on your claude.ai account and routes only the Code tab through the local proxy:",
+    "  ocx claude desktop apply --first-party",
+  ];
+}
+
+/**
  * First-party apply: settings.json env only. The intercept pair the env points at runs inside
  * the hub process, so this is a local-hub operation — a connected client machine cannot reach
  * a loopback proxy on the hub and is refused rather than left with a dead `HTTPS_PROXY`.
@@ -361,6 +400,12 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
         console.log("Desktop 앱 설정은 그대로이며, Code 탭의 Claude Code만 로컬 프록시를 거칩니다.");
       } else {
         console.log(`Claude Desktop gateway 설정을 적용했습니다: ${result.path}`);
+        for (const line of gatewayModeExplanation({
+          requestedExplicitly: applyFlags.some(flag => flag !== "--first-party"),
+          config: loadConfig(),
+        })) {
+          console.log(line);
+        }
       }
       // The write landed; only the bookkeeping marker did not. Saying nothing
       // would leave the saved-vs-applied display wrong with no explanation.
