@@ -44,13 +44,14 @@ export async function consumeComboFailure(
   try {
     const body = await readBoundedResponseBody(response, {
       signal,
-      // Match shouldRetryCodexPoolAccountQuota before treating a 5xx body as quota evidence.
-      fatalUtf8: response.status >= 500 && response.status < 600,
+      // Quota evidence requires valid UTF-8, while other classifications still use the
+      // bounded replacement-decoded text (notably cyber-policy failures, which must stop).
+      reportUtf8Validity: response.status >= 500 && response.status < 600,
     });
     usage = usageFromComboFailureText(body.text);
     if (
       response.status >= 500 && response.status < 600
-      && body.displaySafe && !body.truncated
+      && body.displaySafe && !body.truncated && body.utf8Valid === true
     ) {
       const quotaMessage = codexQuotaFailureMessage(body.text);
       quotaConfirmedByBody = quotaMessage !== undefined

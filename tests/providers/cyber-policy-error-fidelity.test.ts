@@ -180,6 +180,19 @@ describe("cyber_policy error fidelity", () => {
     });
   });
 
+  test("malformed UTF-8 does not erase a cyber-policy stop", async () => {
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode(JSON.stringify(CYBER_ERROR_BODY)),
+      0xff,
+    ]);
+    const failure = await consumeComboFailure(new Response(bytes, { status: 502 }));
+    expect(failure.response.status).toBe(400);
+    expect(failure.upstreamCode).toBe(CYBER_POLICY_ERROR_CODE);
+    expect(comboFailureDecision(502, failure.classificationText, {
+      code: failure.upstreamCode,
+    })).toBe("stop");
+  });
+
   test("drops Codex reset headers as well as Retry-After for a cyber-policy failure", async () => {
     const upstream = new Response(JSON.stringify(CYBER_ERROR_BODY), {
       status: 429,

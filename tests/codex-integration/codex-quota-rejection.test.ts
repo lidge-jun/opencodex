@@ -187,7 +187,7 @@ describe("Codex pre-stream quota rejection classification", () => {
       expect(failure.classificationText).toContain("The usage limit has been reached");
     } else {
       expect(failure.resetAt).toBeUndefined();
-      expect(failure.classificationText).toBe("Provider error 503");
+      expect(failure.classificationText).toContain("The usage limit has been reached");
     }
     expect(response.bodyUsed).toBe(true);
   });
