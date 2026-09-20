@@ -133,6 +133,18 @@ const LABELS: Record<Locale, Record<LogGuardOperationLabelKey, string>> = {
     "error.auto_vacuum_not_incremental": "Cơ sở dữ liệu nhật ký Codex này không được định cấu hình cho tính năng incremental vacuum, do đó không thể thu hồi dung lượng nếu không xây dựng lại hoàn toàn.",
     "error.integrity_check_failed": "Cơ sở dữ liệu nhật ký Codex không vượt qua được kiểm tra tính toàn vẹn. Không có dung lượng nào được thu hồi.",
   },
+  "pt-BR": {
+    applying: "Aplicando alteração do Log Guard…",
+    "error.generic": "Não foi possível atualizar o armazenamento de logs do Codex.",
+    "error.codex_running": "Feche o Codex antes de alterar o armazenamento de logs do Codex.",
+    "error.process_enumeration_failed": "Não foi possível verificar se o Codex foi finalizado. A operação do Log Guard não foi iniciada.",
+    "error.busy": "O banco de dados de logs do Codex está ocupado. Feche o Codex e tente novamente.",
+    "error.unsupported_schema": "Este esquema de logs do Codex não é suportado para esta operação.",
+    "error.unsafe_path": "O caminho do banco de dados de logs do Codex falhou na verificação de segurança.",
+    "error.database_error": "Não foi possível atualizar o banco de dados de logs do Codex.",
+    "error.auto_vacuum_not_incremental": "Este banco de dados de logs do Codex não está configurado para vacuum incremental; o espaço não pode ser recuperado sem uma recriação completa.",
+    "error.integrity_check_failed": "O banco de dados de logs do Codex falhou na verificação de integridade. Nenhum espaço foi recuperado.",
+  },
 };
 
 export function logGuardOperationLabel(locale: Locale, key: LogGuardOperationLabelKey): string {
