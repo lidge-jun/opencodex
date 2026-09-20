@@ -5,6 +5,8 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "build:local": "bun scripts/build-local.ts",
+    "icons": "bun scripts/generate-icons.ts",
+    "icons:check": "bun scripts/generate-icons.ts --check",
     "prepare-sidecar": "bun scripts/prepare-sidecar.ts",
     "prepare-widget": "bash scripts/build-widget.sh"
   },
