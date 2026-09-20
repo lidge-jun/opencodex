@@ -2,6 +2,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
 import { dictationConfigError } from "../config/dictation";
+import { voiceConfigValueError } from "../config/voice-target";
+import type { OcxProviderConfig } from "../types";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
@@ -166,7 +168,14 @@ function visionReasoningError(value: unknown): string | null {
 }
 
 function validateCandidate(value: unknown): ReturnType<typeof validateConfigCandidate> {
-  const error = visionReasoningError(value) ?? dictationConfigError(value);
+  const providers = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>).providers as Record<string, OcxProviderConfig> | undefined
+    : undefined;
+  const block = (key: "transcription" | "speech"): unknown =>
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+  const error = visionReasoningError(value)
+    ?? dictationConfigError(value)
+    ?? voiceConfigValueError(block("transcription"), providers, "transcription");
   return error ? { ok: false, error } : validateConfigCandidate(value);
 }
 

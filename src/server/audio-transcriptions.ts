@@ -5,6 +5,8 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { resolveAudioUpstream, TRANSCRIPTION_MODEL } from "./audio-upstream";
+import { resolveVoiceHeaders, selectVoiceBackend, voiceProviderEndpointError } from "../config/voice-target";
+import { resolveDictationActiveModelId } from "./audio-dictation";
 import { readBodyCapped } from "./live";
 import type { RequestLogContext } from "./request-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
@@ -87,6 +89,24 @@ async function transcribeAdmitted(
   const input = await parseTranscription(req, operation.signal);
   if (input instanceof Response) return input;
   if (operation.signal.aborted) return formatErrorResponse(499, "client_closed_request", "Audio request canceled");
+
+  // A configured custom backend short-circuits the ChatGPT relay entirely: no account
+  // resolution, no upstream credential, no model-name policy. The file goes to the configured
+  // endpoint as ordinary OpenAI-shaped multipart.
+  const backend = selectVoiceBackend(config.providers, config.transcription, resolveDictationActiveModelId(req.headers), "transcription");
+  if (backend.kind === "invalid") {
+    return formatErrorResponse(502, "configuration_error", backend.error);
+  }
+  if (backend.kind === "custom") {
+    const endpointError = voiceProviderEndpointError(backend.providerName, backend.provider, "transcription");
+    if (endpointError) return formatErrorResponse(502, "configuration_error", endpointError);
+    return transcribeViaProvider(input, backend.providerName, {
+      url: backend.provider.transcriptionUrl!,
+      headers: backend.provider.transcriptionHeaders,
+      model: backend.provider.transcriptionModel,
+    }, operation);
+  }
+
   const relay = await resolveAudioUpstream(req.headers, config, log, { admission, model: input.model, lease: operation.lease, signal: operation.signal });
   if (relay instanceof Response) return relay;
   const signal = signalWithTimeout(AUDIO_TIMEOUT_MS, operation.signal);
@@ -156,6 +176,66 @@ async function transcribeAdmitted(
       signal.cleanup();
       exit();
     }
+  }
+}
+
+/**
+ * Relay one transcription to a custom provider endpoint.
+ *
+ * Deliberately thin. The provider speaks OpenAI's own transcription shape, so there is nothing to
+ * translate — the value here is that no ChatGPT account, token or model allowlist is consulted,
+ * which is the whole point of pointing dictation at a local engine.
+ */
+async function transcribeViaProvider(
+  input: TranscriptionInput,
+  providerName: string,
+  target: { url: string; headers?: Record<string, string>; model?: string },
+  operation: { signal: AbortSignal; didExpire: () => boolean },
+): Promise<Response> {
+  const signal = signalWithTimeout(AUDIO_TIMEOUT_MS, operation.signal);
+  const exit = sidecarEnter("audio-transcription");
+  try {
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(resolveVoiceHeaders(target.headers))) headers.set(name, value);
+    const form = new FormData();
+    form.append("file", input.file, "audio" + (/\.[a-z0-9]{1,8}$/i.exec(input.file.name)?.[0] ?? ".wav"));
+    if (input.prompt !== undefined) form.append("prompt", input.prompt);
+    if (input.language !== undefined) form.append("language", input.language);
+    // `input.model` is deliberately dropped — see `transcriptionModel`.
+    if (target.model !== undefined) form.append("model", target.model);
+    form.append("response_format", "json");
+
+    const upstream = await fetch(target.url, { method: "POST", headers, body: form, signal: signal.signal, redirect: "manual" });
+    const detach = cancelBodyOnAbort(upstream.body, signal.signal);
+    let body: ArrayBuffer | Response;
+    try {
+      body = await readBodyCapped(upstream.body, AUDIO_RESPONSE_MAX_BYTES, () => "Audio upstream response too large", signal.signal);
+    } finally {
+      detach();
+    }
+    if (body instanceof Response) return body;
+    if (!upstream.ok) {
+      const status = upstream.status >= 400 && upstream.status <= 599 ? upstream.status : 502;
+      return formatErrorResponse(status, "upstream_error", `Transcription provider "${providerName}" returned HTTP ${upstream.status}`);
+    }
+    let payload: unknown;
+    try { payload = JSON.parse(new TextDecoder().decode(body)); } catch {
+      return formatErrorResponse(502, "upstream_error", `Transcription provider "${providerName}" returned invalid JSON`);
+    }
+    if (!payload || typeof payload !== "object" || !("text" in payload) || typeof payload.text !== "string") {
+      return formatErrorResponse(502, "upstream_error", `Transcription provider "${providerName}" response is missing text`);
+    }
+    return input.format === "text"
+      ? new Response(payload.text, { headers: { "content-type": "text/plain; charset=utf-8" } })
+      : Response.json({ text: payload.text });
+  } catch {
+    if (operation.signal.aborted) return formatErrorResponse(499, "client_closed_request", "Audio request canceled");
+    const timedOut = signal.signal.aborted;
+    return formatErrorResponse(timedOut ? 504 : 502, "upstream_error",
+      timedOut ? `Transcription provider "${providerName}" timed out` : `Transcription provider "${providerName}" connection failed`);
+  } finally {
+    signal.cleanup();
+    exit();
   }
 }
 
