@@ -1630,6 +1630,7 @@
     "ci-scope-reduction.test.ts": "ci-workflows",
     "ci-structure-gate.test.ts": "ci-workflows",
     "responses-code-mode-patch-compile.test.ts": "responses",
+    "responses-code-mode-shell-compile.test.ts": "responses",
     "gui-codex-usage-score-parity.test.ts": "gui",
     "gui-tray-vibrancy-surface.test.ts": "gui",
     "web-search-sidecar-429.test.ts": "web-search",
