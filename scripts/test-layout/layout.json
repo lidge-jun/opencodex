@@ -1585,7 +1585,8 @@
     "devin-output-budget.test.ts": "providers",
     "api-key-model-scope.test.ts": "server",
     "docs-provider-discovery-limits.test.ts": "ci-workflows",
-    "api-key-scope-images.test.ts": "server"
+    "api-key-scope-images.test.ts": "server",
+    "api-key-scope-audio.test.ts": "server"
   },
   "migrated": [
     "adapters",
