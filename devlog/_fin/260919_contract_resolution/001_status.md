@@ -1,6 +1,6 @@
 # Campaign status
 
-Status: ACTIVE for the authorized regression and release follow-up. All sixteen original implementation issues are now closed. Final dashboard #5197 landed as `ed44e04a933f6d4d62d2e049bf7606f08d347b06`; #5118 was closed after ancestry/tree checks and current source/fixture evidence. The owner explicitly requested immediate integration while macOS verification remained unfinished, and that timing exception is recorded on the PR. No full-platform pass is claimed for that incomplete run. Complete hosted regression, main/preview promotion, release publication and post-publication verification remain outstanding. Two non-blocking review observations are retained for follow-up. The heartbeat remains active.
+Status: IMPLEMENTATION COMPLETE. The active regression and release follow-up is tracked in [its separate open unit](../../_plan/260920_regression_release/000_scope.md). All sixteen original implementation issues are now closed. Final dashboard #5197 landed as `ed44e04a933f6d4d62d2e049bf7606f08d347b06`; #5118 was closed after ancestry/tree checks and current source/fixture evidence. The owner explicitly requested immediate integration while macOS verification remained unfinished, and that timing exception is recorded on the PR. No full-platform pass is claimed for that incomplete run. Complete hosted regression, main/preview promotion, release publication and post-publication verification remain outstanding. Two non-blocking review observations are retained for follow-up. The heartbeat remains active.
 
 ## Owners
 
