@@ -149,4 +149,31 @@ describe("request failure attribution", () => {
   test("a local refusal is attributed to this proxy rather than to upstream", () => {
     expect(deriveRequestFailureCause({ status: 502, locallyAnswered: true })).toBe("local-refusal");
   });
+
+  test("a cause the finalizer proved outranks the status table", () => {
+    // The key-account rotation seals the previous attempt because a named recovery rejected it.
+    // That argument is evidence; reconstructing the cause from 502 would lose it.
+    expect(deriveRequestFailureCause({ status: 502, causeHint: "credential-rejected" }))
+      .toBe("credential-rejected");
+    // A client cancel is a fact about the caller and still outranks the hint.
+    expect(deriveRequestFailureCause({ status: 499, causeHint: "credential-rejected" }))
+      .toBe("client-cancelled");
+  });
+
+  test("only the last recovery refines a 400, and only on its own status", () => {
+    // The attempt recovered from a rejected ciphertext and then hit a rejected parameter.
+    expect(deriveRequestFailureCause({
+      status: 400,
+      recoveryKinds: ["opaque-blob-rejection", "reasoning-effort-downgrade"],
+    })).toBe("parameter-rejected");
+    // A recovery for a different status never refines this one.
+    expect(deriveRequestFailureCause({ status: 400, recoveryKinds: ["oauth-401"] }))
+      .toBe("payload-rejected");
+  });
+
+  test("a relayed side effect raises the stage above observed output", () => {
+    expect(deriveRequestFailureStage({ status: 502, outputObserved: true })).toBe("semantic-output");
+    expect(deriveRequestFailureStage({ status: 502, outputObserved: true, sideEffectObserved: true }))
+      .toBe("side-effect");
+  });
 });

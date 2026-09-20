@@ -168,6 +168,37 @@ export const RESEND_PERMISSIONS = Object.freeze([
 export type ResendPermission = typeof RESEND_PERMISSIONS[number];
 
 /**
+ * What an attempt actually delivered, as five bounded counts (#3983).
+ *
+ * #3983 wanted these signals and emitted one debug line per event to get them. That is a second
+ * durable record: `emitDebugLine` writes the in-process ring AND stderr, and stderr is redirected
+ * to the service log under both launchd and systemd, so an installed service ends up with a
+ * per-event history beside the ledger, carrying its own retention, sequencing and identity. It
+ * also fingerprinted each payload under a process-global random key, which makes every repeated
+ * prompt fragment, tool name and error message correlatable for the process lifetime.
+ *
+ * Counts answer the same questions -- a missing terminal, adapter-to-client loss, empty output,
+ * partial output size -- and cannot carry content at all. They ride the attempt, so they inherit
+ * the ledger's normalization, masking and retention rather than acquiring their own.
+ *
+ * Counted where the event is DELIVERED, not where it is read. An adapter event the client never
+ * received is exactly the discrepancy worth seeing, and counting both ends at the reader would
+ * make the two numbers equal by construction.
+ */
+export interface AttemptDeliverySummary {
+  /** Events this attempt's adapter produced. */
+  adapterEvents: number;
+  /** Frames that reached the client transport, after a successful enqueue. */
+  relayedEvents: number;
+  /** UTF-8 bytes of output-bearing delta actually relayed. Never the content itself. */
+  semanticBytes: number;
+  /** Externally visible effects relayed: a tool call or a search call starting. */
+  sideEffectEvents: number;
+  /** Terminal frames relayed. Zero on a delivered stream is the missing-terminal signal. */
+  terminalEvents: number;
+}
+
+/**
  * What one logical request spent upstream, decomposed by how much of it is explained.
  *
  * The counting half of the durable spend record, without the routing detail that sits beside it.

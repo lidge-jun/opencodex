@@ -35,8 +35,21 @@ export interface RequestFailureFacts extends RequestOutcomeFacts {
   readonly sideEffectObserved?: boolean | undefined;
   /** True when this proxy answered the turn itself and issued no upstream request. */
   readonly locallyAnswered?: boolean | undefined;
-  /** Recovery kinds recorded on the attempt that ended the request. */
+  /**
+   * Recovery kinds recorded on the attempt that ended the request, in the order they happened.
+   * Only the LAST one is ever consulted, and only under the narrow rule below.
+   */
   readonly recoveryKinds?: readonly AttemptRecoveryKind[] | undefined;
+  /**
+   * A cause the CALLER proved, which the status alone cannot reconstruct.
+   *
+   * Set only by a finalizer that is sealing an attempt it knows the rejection for -- the
+   * key-account rotation seals the previous attempt because a named recovery rejected it, and
+   * that argument is direct evidence rather than an inference from history. It outranks the
+   * status table and is outranked by a client cancel, which is a fact about the caller and not
+   * about the origin.
+   */
+  readonly causeHint?: RequestFailureCause | undefined;
 }
 
 /**
@@ -62,14 +75,21 @@ export function deriveRequestFailureStage(facts: RequestFailureFacts): RequestFa
 }
 
 /**
- * Recovery kinds whose cause survives as the FINAL cause when the request ends on the status that
- * recovery was made for.
+ * The two recovery kinds that name a 4xx the status alone cannot tell apart.
  *
  * `causeForRecoveryKind` answers why a recovery was ATTEMPTED, which is usually a different
- * question from why the request finally failed -- a request that recovered from a 401 and then
- * died on a 500 failed for the 500. The two kinds below are the exception: each names a rejection
- * the status alone cannot distinguish from an ordinary bad request, so when the request also ends
- * on that status the recovery kind is the only evidence of which 4xx it was.
+ * question from why the request finally failed -- one that recovered from a 401 and then died on
+ * a 500 failed for the 500. So the rule here is deliberately narrow on three axes at once: only
+ * these two kinds, only when they are the LAST recovery this attempt recorded, and only when the
+ * attempt then ended on the very status that recovery was made for. Everything else falls
+ * through to the status table.
+ *
+ * The residual: a ciphertext recovery that SUCCEEDED, followed by an unrelated 400 on the same
+ * attempt, still reads as `ciphertext-refusal`, because a successful recovery does not currently
+ * clear its own evidence. Closing that belongs in the recovery path rather than here -- it is
+ * recorded in this lane's devlog as the next step -- and the rule is kept meanwhile because
+ * without it a rejected ciphertext, a rejected reasoning parameter and a rejected payload are one
+ * undifferentiated answer, which is three different remedies collapsed into one.
  */
 const STATUS_CONFIRMED_RECOVERY_KINDS: Readonly<Partial<Record<AttemptRecoveryKind, number>>> = Object.freeze({
   "opaque-blob-rejection": 400,
@@ -79,11 +99,10 @@ const STATUS_CONFIRMED_RECOVERY_KINDS: Readonly<Partial<Record<AttemptRecoveryKi
 function refinedFourHundredCause(
   facts: RequestFailureFacts,
 ): RequestFailureCause | undefined {
-  for (const kind of facts.recoveryKinds ?? []) {
-    const confirmedStatus = STATUS_CONFIRMED_RECOVERY_KINDS[kind];
-    if (confirmedStatus !== undefined && confirmedStatus === facts.status) return causeForRecoveryKind(kind);
-  }
-  return undefined;
+  const last = facts.recoveryKinds?.at(-1);
+  if (last === undefined) return undefined;
+  const confirmedStatus = STATUS_CONFIRMED_RECOVERY_KINDS[last];
+  return confirmedStatus === facts.status ? causeForRecoveryKind(last) : undefined;
 }
 
 /**
@@ -104,6 +123,8 @@ export function deriveRequestFailureCause(facts: RequestFailureFacts): RequestFa
   if (outcome === "completed" || outcome === "incomplete") return undefined;
   if (outcome === "aborted") return "client-cancelled";
   if (facts.locallyAnswered === true) return "local-refusal";
+  // A cause the finalizer proved outranks anything reconstructed from the status.
+  if (facts.causeHint !== undefined) return facts.causeHint;
 
   const status = facts.status;
   // A 2xx head that carried a failed terminal: the origin ran the turn and said it failed. With

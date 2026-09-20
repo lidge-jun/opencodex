@@ -59,6 +59,8 @@ import {
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import { deriveRequestFailureAttribution } from "../lib/request-failure-attribution";
+import { causeForRecoveryKind } from "../lib/request-failure-model";
+import { debugAttemptDeliverySummary } from "../lib/debug";
 import {
   appendUsageDebug,
   isUsageDebugEnabled,
@@ -1399,7 +1401,18 @@ export function addFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
+    // The REQUEST's output observation, not the final attempt's.
+    //
+    // A request that relayed output on its first attempt and then failed over has committed
+    // that output to the caller whatever the last attempt saw, so the logical row and the
+    // attempt that ended it carry the same answer. Reading the attempt-local value here would
+    // produce a MORE permissive resend verdict for exactly that case, and a permission
+    // decision has to fail in the safe direction.
     outputObserved: logCtx.firstOutputMs !== undefined,
+    // The one fact that can raise a stage above `semantic-output`, and the reason it is
+    // counted at the transport rather than at the adapter: an emitted tool call the client
+    // never received has committed nothing, and a resend for it is still safe (#3983).
+    sideEffectObserved: (logCtx.activeAttempt?.deliverySummary?.sideEffectEvents ?? 0) > 0,
     locallyAnswered: logCtx.localTerminalReason !== undefined,
     recoveryKinds: logCtx.activeAttempt?.recoveryKinds ?? [],
   });
@@ -1428,6 +1441,10 @@ export function addFinalRequestLog(
     ...(attempt.recoveryWithheld?.length ? { recoveryWithheld: [...attempt.recoveryWithheld] } : {}),
     ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
     ...(attempt.tierOutcome ? { tierOutcome: { ...attempt.tierOutcome } } : {}),
+    // Detached, like every mutable field beside it: the live summary keeps counting if the
+    // stream is still draining, and a shared reference would let a finalized row change after
+    // it was written.
+    ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
   }));
   const isCombo = logCtx.comboId !== undefined && (attempts?.length ?? 0) > 0;
   const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
@@ -1539,6 +1556,8 @@ export function addFinalRequestLog(
     ...(attribution?.stage ? { failureStage: attribution.stage } : {}),
     ...(attribution?.cause ? { failureCause: attribution.cause } : {}),
   });
+  // Formatted from the finalized snapshot, so the ring shows exactly what the ledger holds.
+  for (const attempt of attempts ?? []) debugAttemptDeliverySummary(requestId, attempt);
   if (isUsageDebugEnabled()) {
     appendUsageDebug({
       ts: Date.now(),
@@ -1785,8 +1804,21 @@ export function noteProviderAttemptSend(
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
       : recovery === "key-401" ? 401 : recovery?.includes("429") ? 429 : 502,
     Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
+    // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
+    // is direct evidence here rather than an inference from history. Without this the sealed
+    // attempt would reach the ledger with no attribution at all: the finalization seam below
+    // only ever sees the last attempt of the request.
+    const sealedAttribution = deriveRequestFailureAttribution({
+      status: attempt.status,
+      outputObserved: attempt.firstOutputMs !== undefined,
+      sideEffectObserved: (attempt.deliverySummary?.sideEffectEvents ?? 0) > 0,
+      ...(recovery ? { causeHint: causeForRecoveryKind(recovery) } : {}),
+    });
+    if (sealedAttribution?.stage) attempt.failureStage = sealedAttribution.stage;
+    if (sealedAttribution?.cause) attempt.failureCause = sealedAttribution.cause;
     const completed = { ...attempt, recoveryKinds: [...attempt.recoveryKinds],
       ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
+      ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
       ...(attempt.tierOutcome ? { tierOutcome: { ...attempt.tierOutcome } } : {}) };
     const attempts = logCtx.attempts ??= [attempt];
     const index = attempts.indexOf(attempt);

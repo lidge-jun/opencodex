@@ -7,6 +7,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
 import {
   isRequestCloseReason,
   isRequestTerminalStatus,
@@ -25,6 +26,7 @@ import {
   REQUEST_FAILURE_STAGES,
   type AttemptRecoveryKind,
   type AttemptRecoveryWithheld,
+  type AttemptDeliverySummary,
   type RequestFailureCause,
   type RequestFailureStage,
   type RequestSpendTotals,
@@ -183,6 +185,11 @@ export interface PersistedUsageAttempt {
    * account identifiers.
    */
   codexWsStage?: CodexWsStageRecord;
+  /**
+   * What this attempt delivered, as five bounded counts (#3983). Absent on attempts whose
+   * transport does not pass through the Responses bridge and on pre-instrumentation rows.
+   */
+  deliverySummary?: AttemptDeliverySummary;
   /**
    * How far this attempt's exchange got and why it failed, in the shared vocabulary (#2366).
    *
@@ -659,6 +666,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   const codexWsStage = "codexWsStage" in attempt
     ? normalizeCodexWsStageRecord(attempt.codexWsStage)
     : undefined;
+  const deliverySummary = "deliverySummary" in attempt
+    ? normalizeAttemptDeliverySummary(attempt.deliverySummary)
+    : undefined;
   const recoveryKinds = Array.isArray(attempt.recoveryKinds)
     ? [...new Set(attempt.recoveryKinds.filter(
       (value): value is AttemptRecoveryKind => typeof value === "string"
@@ -727,6 +737,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
     ...(codexWsStage ? { codexWsStage } : {}),
+    ...(deliverySummary ? { deliverySummary } : {}),
     ...normalizeRequestFailureAttribution(attempt),
   };
 }
