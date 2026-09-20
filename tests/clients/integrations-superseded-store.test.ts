@@ -27,6 +27,11 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * only wrong part was the report, so these cases are about what the operation
  * SAYS as much as what it writes.
  *
+ * These are the cases where the store cannot be written: it holds no document
+ * whose schema has been observed, or it is not there at all. Writing the store
+ * is the sibling file; this one is what happens when that is impossible, which
+ * is why the refusal has to stay correct rather than become dead code.
+ *
  * Every path here comes from the registry resolvers rather than a literal, so a
  * change to where either file lives moves the fixture with the source instead
  * of leaving it green against a location nobody uses.

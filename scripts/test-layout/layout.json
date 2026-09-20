@@ -840,6 +840,7 @@
     "injection-model-api.test.ts": "codex-integration",
     "input-admission.test.ts": "server",
     "install-scripts.test.ts": "ci-workflows",
+    "integrations-current-store.test.ts": "clients",
     "integrations-invariants.test.ts": "gui",
     "integrations-journal.test.ts": "clients",
     "integrations-merge.test.ts": "clients",
