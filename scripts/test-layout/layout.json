@@ -1019,6 +1019,7 @@
     "oauth-login-summary.test.ts": "oauth",
     "oauth-manual-code.test.ts": "oauth",
     "oauth-open-browser-choice.test.ts": "oauth",
+    "oauth-open-url-result.test.ts": "oauth",
     "oauth-provider-reconcile.test.ts": "oauth",
     "oauth-public-surface.test.ts": "oauth",
     "oauth-reauth-bind.test.ts": "oauth",

@@ -615,7 +615,7 @@ const commandRunners: Record<string, CommandRunner> = {
         const guiUrl = selectDefaultGuiUrl(config, live, deps.probeHostname);
         console.log(`Opening ${guiUrl}`);
         const { openUrl } = await import("../lib/open-url");
-        openUrl(guiUrl);
+        void openUrl(guiUrl);
         return 0;
       },
     });
