@@ -11,7 +11,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MODEL_NOT_ALLOWED_FOR_KEY } from "../../src/server/admission-model-scope";
+import { MODEL_NOT_ALLOWED_FOR_KEY, UNNAMED_DESTINATION_MODEL } from "../../src/server/admission-model-scope";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import { LIVE_AUDIO_MODEL } from "../../src/server/audio-upstream";
 import { handleLive, resolveLiveSidebandUpgrade } from "../../src/server/live";
@@ -127,7 +127,7 @@ test("a multipart call-create states its model in the session field", async () =
   expect(upstreamCalls).toEqual([]);
 });
 
-test("a session that names no model resolves to the default voice model", async () => {
+test("a call-create that names no model has no destination a model list can allow", async () => {
   const response = await handleLive(
     jsonCallCreate(),
     config({ allowedModels: ["something-else"] }),
@@ -136,7 +136,20 @@ test("a session that names no model resolves to the default voice model", async 
     SCOPED,
   );
   expect(response.status).toBe(403);
-  expect((await denial(response)).model).toBe(LIVE_AUDIO_MODEL);
+  expect((await denial(response)).model).toBe(UNNAMED_DESTINATION_MODEL);
+  expect(upstreamCalls).toEqual([]);
+});
+
+test("a provider-only scope still creates a call that names no model", async () => {
+  const response = await handleLive(
+    jsonCallCreate(),
+    config({ allowedProviders: ["openai-apikey"] }),
+    logContext(),
+    undefined,
+    SCOPED,
+  );
+  expect(response.status).toBe(200);
+  expect(upstreamCalls).toHaveLength(1);
 });
 
 test("a provider outside the scope cannot serve a voice call", async () => {
@@ -179,10 +192,27 @@ test("a standalone realtime socket is judged on the model in its query", async (
   expect((await denial(resolved as Response)).model).toBe(OTHER_LIVE_MODEL);
 });
 
-test("joining an existing call carries the default voice model", async () => {
+test("a native join names no model, so a model list cannot admit it", async () => {
+  // This compatibility path records nothing about the calls it relays, so the
+  // model a join attaches to is unknowable here. Admitting it against an
+  // assumed default would let a key scoped to that default ride a call created
+  // for another model.
   const resolved = await resolveLiveSidebandUpgrade(
     new Request("http://localhost/v1/live/call-abc", { headers: { "x-opencodex-api-key": SCOPED_KEY } }),
     config({ allowedModels: [LIVE_AUDIO_MODEL] }),
+    logContext(),
+    { style: "frameless-path", callId: "call-abc" },
+    undefined,
+    SCOPED,
+  );
+  expect(resolved).toBeInstanceOf(Response);
+  expect((resolved as Response).status).toBe(403);
+});
+
+test("a provider-only scope still joins an existing call", async () => {
+  const resolved = await resolveLiveSidebandUpgrade(
+    new Request("http://localhost/v1/live/call-abc", { headers: { "x-opencodex-api-key": SCOPED_KEY } }),
+    config({ allowedProviders: ["openai-apikey"] }),
     logContext(),
     { style: "frameless-path", callId: "call-abc" },
     undefined,

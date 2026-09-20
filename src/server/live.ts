@@ -46,7 +46,6 @@ import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential, type DataPlaneAdmission } from "./auth-cors";
 import { admissionScopeDenial } from "./admission-model-scope";
-import { LIVE_AUDIO_MODEL } from "./audio-upstream";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
@@ -558,22 +557,24 @@ async function readRequestBodyCapped(req: Request, maxBytes: number): Promise<Ar
  * This path has no router to resolve a destination, so the model is read where
  * the client states it — the call-create session, or a standalone socket's own
  * query — and the provider is whichever OpenAI upstream this relay settles on.
+ * `model` is undefined when nobody stated one: a call-create that sends no
+ * session model, or a join onto a call this compatibility path never recorded.
  */
 export interface LiveScopeDestination {
   admission?: DataPlaneAdmission;
-  model: string;
+  model: string | undefined;
 }
 
 /**
- * The live model a call-create body names, or the default this relay would get.
+ * The live model a call-create body names, or undefined when it names none.
  *
  * Both inbound shapes carry it at `session.model` — JSON directly, multipart in
- * the `session` field — and the body is relayed upstream unchanged, so the
- * string is the destination rather than a selector the proxy rewrites. A body
- * that states nothing readable resolves to the default, which is the model the
- * upstream would then run.
+ * the `session` field — and this path relays the body upstream unchanged, so
+ * the string is the destination rather than a selector the proxy rewrites. A
+ * body that states nothing readable leaves the model to the upstream, which is
+ * a destination no model list can describe.
  */
-export async function liveCallCreateModel(body: ArrayBuffer, contentType: string): Promise<string> {
+export async function liveCallCreateModel(body: ArrayBuffer, contentType: string): Promise<string | undefined> {
   try {
     let session: unknown;
     if (contentType.toLowerCase().includes("multipart/form-data")) {
@@ -584,23 +585,26 @@ export async function liveCallCreateModel(body: ArrayBuffer, contentType: string
       session = (JSON.parse(new TextDecoder().decode(body)) as { session?: unknown } | null)?.session;
     }
     const model = (session as { model?: unknown } | null | undefined)?.model;
-    return typeof model === "string" && model.trim() ? model.trim() : LIVE_AUDIO_MODEL;
+    return typeof model === "string" && model.trim() ? model.trim() : undefined;
   } catch {
-    return LIVE_AUDIO_MODEL;
+    return undefined;
   }
 }
 
 /**
- * The model a sideband upgrade is for. A standalone session names it in its own
- * query; a join onto an existing call names nothing, because the call it
- * attaches to stated its model at create time.
+ * The model a sideband upgrade is for, or undefined when the request names none.
+ *
+ * A standalone session states it in the query it forwards. A join names nothing
+ * of its own: the call it attaches to chose a model at create time, and only a
+ * recorded binding can say which. This compatibility path keeps no such record,
+ * so a native join is undefined here and the external path in `audio-live.ts`
+ * supplies the model its binding stored.
  */
-export function liveSidebandModel(target: LiveSidebandTarget): string {
+export function liveSidebandModel(target: LiveSidebandTarget): string | undefined {
   if (target.style === "realtime-standalone" || target.style === "frameless-standalone") {
-    const model = new URLSearchParams(target.query).get("model")?.trim();
-    if (model) return model;
+    return new URLSearchParams(target.query).get("model")?.trim() || undefined;
   }
-  return LIVE_AUDIO_MODEL;
+  return undefined;
 }
 
 /**
@@ -678,12 +682,14 @@ export async function resolveLiveRelay(
 
   // Client protocol headers first so provider/auth headers below always win on conflict.
   const headers: Record<string, string> = clientProtocolHeaders(req.headers);
-  const scopedModel = destination?.model ?? LIVE_AUDIO_MODEL;
+  const scopedModel = destination?.model;
   if (forward) {
     const { provider } = forward;
-    // The upstream is settled here, and voice bills it for the session model the
-    // caller stated. Refuse before any of it is sent, and give back the probe
-    // lease the resolution took.
+    // The upstream is settled here and voice bills it for whatever model this
+    // request carries. Refuse before any of it is sent, and give back the probe
+    // lease the resolution took. A join states no model and this path keeps no
+    // record of the call it attaches to, so a key with a model list is refused
+    // there rather than admitted against an assumed default.
     const denial = admissionScopeDenial(config, destination?.admission, scopedModel, {
       providerName: forward.providerName,
       modelId: scopedModel,

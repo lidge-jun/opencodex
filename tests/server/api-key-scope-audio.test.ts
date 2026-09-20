@@ -195,6 +195,48 @@ test("a standalone realtime socket is judged on the model in its own query", asy
   expect((await denial(response)).model).toBe(OTHER_LIVE_MODEL);
 });
 
+test("a Realtime standalone socket is judged on its query too, not the default", async () => {
+  // The Frameless branch rewrites its query and was the only one read. A
+  // Realtime standalone socket forwards `model=` untouched, so reading the
+  // default here admitted a model the caller was never allowed to run.
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const resolved = await resolveExternalLiveSocket(
+    client(cfg),
+    cfg,
+    logContext(),
+    { style: "realtime-standalone", query: "intent=quicksilver&model=" + OTHER_LIVE_MODEL },
+    { lease: lease(), bindings: new LiveCallBindings() },
+  );
+  expect(resolved).toBeInstanceOf(Response);
+  expect((resolved as Response).status).toBe(403);
+  expect((await denial(resolved as Response)).model).toBe(OTHER_LIVE_MODEL);
+});
+
+test("rejoining a call is judged on the model that call settled on", async () => {
+  const cfg = config({ allowedModels: [LIVE_AUDIO_MODEL] });
+  const audio = client(cfg);
+  const bindings = new LiveCallBindings();
+  const alias = bindings.create({
+    owner: audio.owner,
+    upstreamCallId: "call-upstream",
+    joinStyle: "frameless-path",
+    providerName: "openai-apikey",
+    model: OTHER_LIVE_MODEL,
+    callerOwned: false,
+  });
+  expect(alias).not.toBeNull();
+  const resolved = await resolveExternalLiveSocket(
+    audio,
+    cfg,
+    logContext(),
+    { style: "frameless-path", callId: alias as string },
+    { lease: lease(), bindings },
+  );
+  expect(resolved).toBeInstanceOf(Response);
+  expect((resolved as Response).status).toBe(403);
+  expect((await denial(resolved as Response)).model).toBe(OTHER_LIVE_MODEL);
+});
+
 test("a key with no scope keeps every audio destination", async () => {
   const cfg = config({ allowedProviders: ["some-other-provider"] });
   const response = await handleAudioTranscriptions(
@@ -206,4 +248,3 @@ test("a key with no scope keeps every audio destination", async () => {
   expect(response.status).toBe(200);
   expect(upstreamCalls).toHaveLength(1);
 });
-

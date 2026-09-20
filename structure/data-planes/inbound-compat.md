@@ -30,11 +30,17 @@ keep credentials and audio content out of redirects, request logs and durable st
 
 `src/server/audio-upstream.ts` is also where a configured key's model and provider scope is
 applied, once for every audio surface that resolves through it: the model it is handed is the one
-the upstream will run — the transcription model, the live session model, or the model a standalone
-socket names in its own query — and a refused forward request releases its probe lease. The native
-voice path in `src/server/live.ts` applies the same predicate, reading the model from the
-call-create session or the socket query and the provider from the upstream it settles on. Coverage
-lives in `tests/server/api-key-scope-audio.test.ts` and `tests/server/api-key-scope-live.test.ts`.
+the upstream will run — the transcription model, the live session model, the model a standalone
+socket names in its own query, or the model a bound call settled on when the same key created it —
+and a refused forward request releases its probe lease. `LiveCallBinding` records that model for
+exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
+
+The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
+records nothing about the calls it relays, so a join, and a call-create that sends no session
+model, name no destination at all; a key carrying a model list is refused there rather than
+admitted against an assumed default, while a provider-only scope and an unscoped key are
+unchanged. Coverage lives in `tests/server/api-key-scope-audio.test.ts` and
+`tests/server/api-key-scope-live.test.ts`.
 
 ## Streaming audio
 
