@@ -141,6 +141,8 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | --- | --- | --- |
 | `adapter` | `string` | One of `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (or alias `azure`), `codebuddy`, `qoder`. |
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; collision-safe key presets preserve an older same-named custom destination. |
+| `proxy?` | `string \| null` | Per-provider egress route. Omit it to inherit the global proxy decision; use `"direct"` or `null` to force direct egress; or provide an absolute `http://`, `https://`, `socks5://`, or `socks5h://` proxy URL. An empty string is rejected. |
+| `noProxy?` | `string \| string[]` | Destinations this provider reaches directly, using `NO_PROXY` host-pattern syntax. A match bypasses both this provider's own proxy and an inherited global proxy. |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. Provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay. Queue waits do not consume the upstream response-header timeout. HTTP, Responses WebSocket, and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. |
 | `upstreamHttpVersion?` | `"auto" \| "http1.1" \| "h1" \| "http2" \| "h2"` | Pin the HTTP version used for upstream requests to this provider. Defaults to `auto`, which lets Bun negotiate. An explicit pin requires an HTTPS target and fails locally when it cannot be honored. Set `http1.1` when a provider's HTTP/2 SSE stream stalls instead of delivering events — the symptom is a long-running streaming request that produces nothing and eventually times out. For Cursor, `http1.1`/`h1` selects its `RunSSE` + `BidiAppend` compatibility transport for inference and also pins live model discovery. Management `POST`/`PATCH` accept `null` to clear it back to `auto`. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
@@ -201,6 +203,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `noStructuredOutputModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects `response_format`. Only an exact requested-model match omits the field; structured-output translation stays enabled for every other `openai-chat` model. |
 | `noJsonSchemaModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects a `json_schema` `response_format` but still accepts `json_object`. Such a request is downgraded to `json_object` instead of being dropped, so a caller asking for JSON still gets JSON. `noStructuredOutputModels` wins when a model is on both lists. The `opencode go`, `opencode zen`, and `opencode free` presets ship this for their DeepSeek routes. |
+| `foldDeveloperRoleToSystem?` | `boolean` | Whether an `openai-chat` destination accepts the `developer` role. Unset means nothing has been recorded about this destination, so the message is sent as `system`; `true` records an upstream that rejects the role; `false` records one that accepts it, and the role is forwarded. The message keeps its position in the conversation in every case — only the role changes. A destination that rejects the role answers `400 role 'developer' is not allowed` and the turn never starts, which is why the unrecorded state is the folded one. |
 | `omitReasoningEffortWithToolsModels?` | `string[]` | Exact `openai-chat` model IDs that accept a reasoning-effort field on an ordinary turn but reject it once function tools are present. The model keeps its advertised effort ladder; OpenCodex omits the wire field for tool-bearing requests only and the upstream default applies. Narrower than `noReasoningModels`, which strips reasoning from every request and costs the model its picker entirely. |
 | `parallelToolCalls?` | `boolean` | Toggle parallel tool calls. OpenAI Chat defaults on; non-chat adapters advertise only on explicit `true`. |
 | `terminalContinuationGuard?` | `boolean` | Opt in an `openai-chat` provider to one bounded internal re-ask when an actionable turn announces work, then cleanly stops without a tool call. Defaults to `false`; explicit `false` behaves like omission. Combo attempts and routed compaction turns are excluded, and non-`openai-chat` adapters ignore this option. |
@@ -246,6 +249,66 @@ that model's pinned native capabilities. Full native identity still requires the
 nonempty incompatible list falls back to the native default as a single choice. Defaults must
 belong to the final list. This changes the catalog projection, not stored configuration.
 See [custom native catalog examples](/guides/codex-app-models/).
+
+### Per-provider egress
+
+Set `proxy` on a provider when that upstream needs a different exit from the process-wide proxy:
+
+- Omit `proxy` to inherit the global proxy and `NO_PROXY` decision.
+- Set `proxy` to `"direct"` or `null` to force this provider to connect directly, even when a global proxy is set.
+- Set `proxy` to an absolute `http://` or `https://` URL to use that HTTP proxy for this provider.
+- Set `proxy` to an absolute `socks5://` or `socks5h://` URL to use that SOCKS5 proxy for this provider.
+
+An empty or whitespace-only string is rejected on purpose. A cleared field must not silently change
+from “inherit the global proxy” to “force direct”; remove the field to inherit, or write `"direct"`
+to choose direct egress explicitly.
+
+`noProxy` accepts a comma-separated string or an array of strings in `NO_PROXY` syntax. It is
+evaluated for each request. A matching destination goes direct whether the provider would otherwise
+use its own `proxy` or inherit a global proxy.
+
+#### What the route covers
+
+The route is applied to routed inference, provider discovery and connection tests, and API-key
+quota probes. Some transports cannot carry it, and OpenCodex says so rather than pretending
+otherwise:
+
+- **OAuth token exchange and refresh** keep using the process-wide proxy. These reach fixed vendor
+  endpoints from code that holds no provider configuration, so a provider pinned to its own proxy
+  or to `"direct"` still refreshes its credentials by the global route. OAuth-backed quota probes
+  and API-key validation probes behave the same way.
+- **The Responses WebSocket fast lane** selects its proxy when it dials and cannot carry a
+  per-provider route, so a provider that declares one serves those turns over HTTP/SSE instead and
+  logs a one-time notice.
+- **Cursor's default HTTP/2 transport**, the **CodeBuddy and Qoder subprocess providers** (their
+  child environment omits proxy variables), and the **Compatibility Lab** pinned sender do not
+  apply it.
+- Endpoints that do not route a model — image generation and edits, audio transcription, live and
+  realtime calls, and unqualified `/v1/alpha/search` — have no provider route to apply.
+
+A provider configured with a custom `fetch` executor is refused rather than silently sent by the
+executor's own route.
+
+This example keeps a global proxy for ordinary traffic, sends one provider through a regional HTTP
+proxy, and pins another provider to a direct connection:
+
+```json
+{
+  "proxy": "http://global-proxy.example:8080",
+  "providers": {
+    "regional-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://regional-api.example/v1",
+      "proxy": "http://regional-proxy.example:3128"
+    },
+    "direct-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://direct-api.example/v1",
+      "proxy": "direct"
+    }
+  }
+}
+```
 
 ### Operator-pinned reasoning effort
 

@@ -25,7 +25,7 @@ ve bu sağlayıcıyı opencodex'e yönlendirir:
 ```toml
 # kök anahtarlar, ilk tablodan önce
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # yalnızca fastMode ayarlandığında; ayarlanmadığında [features] tablosu eklenmez
@@ -134,7 +134,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # dosyanın sonuna eklenir
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"

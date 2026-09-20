@@ -70,3 +70,10 @@ go/
 
 # Rust native helpers keep their reproducible sources and lockfile in git, never local artifacts.
 native/**/target/
+dist/macos/
+dist/release/
+desktop/src-tauri/binaries/
+desktop/src-tauri/resources/
+desktop/src-tauri/widget/
+desktop/src-tauri/gen/
+desktop/src-tauri/target/

@@ -182,7 +182,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 95개 들어 있습니다. 키 방식 79개, OAuth 12개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 96개 들어 있습니다. 키 방식 80개, OAuth 12개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -344,6 +344,15 @@ discovery를 256 KiB와 raw 행 256개로 제한합니다. agent 전용 및 dedi
 제외하고 discovery를 128 KiB와 raw 행 128개로 제한합니다. 기본 Project의 공유 endpoint를 사용합니다.
 Project ID가 포함된 URL과 dedicated deployment는 custom provider로 설정하세요. API 키는
 [Scaleway console](https://console.scaleway.com/generative-api)에서 생성합니다.
+
+**Featherless 검색:** 이 프리셋은 고정된 OpenAI 호환 host에 인증하고, 상위에서 chat과 현재 plan으로
+필터링된 인기 모델 100개만 요청합니다. 이후 registry 규칙은 각 행이 plan 사용 가능 여부, Hugging Face
+gate 없음, `features.tool_use: true`를 스스로 보고하지 않으면 fail closed로 제외하고, discovery를
+128 KiB와 raw 행 100개로 제한합니다. 덕분에 수만 개 규모의 catalog를 통째로 내려받거나 캐시하지
+않습니다. `/v1/models`는 인증 없이도 호출할 수 있다고 문서화되어 있어 전달한 키가 유효한지 증명하지
+못합니다. chat 요청에는 설정된 Bearer key를 그대로 사용합니다. Featherless 약관은 개인 plan을 대화형
+및 프로토타이핑 용도로 제한하며, 임의의 애플리케이션에는 Scale plan이 필요합니다. 키는
+[Featherless dashboard](https://featherless.ai/account/api-keys)에서 생성합니다.
 
 **Novita 검색:** 키 기반 프리셋은 `openai-chat` adapter를 사용하며 Bearer key를 Novita의 고정
 OpenAI 호환 host에만 보냅니다. 공개 model list에서 `model_type: chat`과 `chat/completions` endpoint를

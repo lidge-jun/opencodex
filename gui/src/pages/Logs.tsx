@@ -28,6 +28,13 @@ import {
   validCachedRouteDecision,
 } from "./log-route-decision";
 import { mergeLogDelta, parseLogPollResponse } from "./log-poll";
+import type { AttemptRecoveryKind, RequestSpendTotals } from "../../../src/usage/telemetry-contract";
+import {
+  classifyRequestOutcome,
+  requestPhysicalSends,
+  requestUnresolvedSends,
+  type RequestOutcomeClass,
+} from "../../../src/usage/request-outcome";
 
 function logsCacheKey(apiBase: string): string {
   return `ocx.logs.list.v1:${apiBase}`;
@@ -101,21 +108,6 @@ interface LogDisplayMetrics {
   cost: CostResult;
 }
 
-/**
- * Recovery kinds recorded on a log attempt; rendered as localized labels in the logs
- * detail dialog instead of raw wire values.
- */
-type AttemptRecoveryKind =
-  | "transient-5xx"
-  | "connection-reset"
-  | "oauth-401"
-  | "key-429"
-  | "rate-limit-429"
-  | "anthropic-oauth-429"
-  | "image-413"
-  | "empty-completion"
-  | "console-go-upload-retry";
-
 interface LogAttempt {
   ordinal: number;
   provider: string;
@@ -172,6 +164,15 @@ export interface LogEntry {
   durationMs: number;
   errorCode?: string;
   upstreamError?: string;
+  /**
+   * Semantic terminal facts. `/api/logs` has always carried these -- `requestLogDto` spreads the
+   * whole durable entry -- but this page declared neither, so it classified every request by its
+   * numeric HTTP status alone and reported an incomplete 200 as a plain success.
+   */
+  terminalStatus?: string;
+  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
+  /** Upstream spend for the whole logical request, aggregated across attempts and combo children. */
+  spend?: RequestSpendTotals;
   usageStatus?: LogUsageStatus;
   usage?: UsageBreakdown;
   totalTokens?: number;
@@ -298,17 +299,27 @@ const ESTIMATE_REASON_KEYS = {
 /**
  * i18n keys for every {@link AttemptRecoveryKind}, so the logs detail dialog renders a
  * localized label instead of the raw wire value (e.g. `rate-limit-429`).
+ *
+ * The union is now the durable roster rather than a copy of it. The copy had drifted to nine of
+ * thirteen members, so `key-401`, `oauth-account-429`, `opaque-blob-rejection` and
+ * `reasoning-effort-downgrade` all reached the operator as "Unknown recovery reason" -- four real
+ * causes rendered as an absence of information. `satisfies Record<AttemptRecoveryKind, string>` is
+ * what now makes the next added kind a typecheck failure here instead of a silent blank.
  */
 const RECOVERY_KIND_KEYS = {
   "transient-5xx": "logs.detail.attempt.recovery.transient5xx",
   "connection-reset": "logs.detail.attempt.recovery.connectionReset",
   "oauth-401": "logs.detail.attempt.recovery.oauth401",
+  "key-401": "logs.detail.attempt.recovery.key401",
   "key-429": "logs.detail.attempt.recovery.key429",
   "rate-limit-429": "logs.detail.attempt.recovery.rateLimit429",
   "anthropic-oauth-429": "logs.detail.attempt.recovery.anthropicOauth429",
+  "oauth-account-429": "logs.detail.attempt.recovery.oauthAccount429",
   "image-413": "logs.detail.attempt.recovery.image413",
   "empty-completion": "logs.detail.attempt.recovery.emptyCompletion",
   "console-go-upload-retry": "logs.detail.attempt.recovery.consoleGoUpload",
+  "opaque-blob-rejection": "logs.detail.attempt.recovery.opaqueBlobRejection",
+  "reasoning-effort-downgrade": "logs.detail.attempt.recovery.reasoningEffortDowngrade",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
 /** Map a metric-unavailable reason to its i18n key. */
@@ -332,6 +343,25 @@ function recoveryKindKey(kind: AttemptRecoveryKind) {
 
 function verificationKey(status: MatchedPriceInfo["status"]): "logs.detail.verification.verified" | "logs.detail.verification.derived" {
   return status === "verified" ? "logs.detail.verification.verified" : "logs.detail.verification.derived";
+}
+
+/** i18n key for each shared outcome class, total by construction. */
+const OUTCOME_KEYS = {
+  completed: "logs.detail.outcome.completed",
+  failed: "logs.detail.outcome.failed",
+  incomplete: "logs.detail.outcome.incomplete",
+  aborted: "logs.detail.outcome.aborted",
+} as const satisfies Record<RequestOutcomeClass, string>;
+
+/**
+ * How this request ended, using the same classifier the Prometheus exporter uses.
+ *
+ * Calling the shared function rather than reimplementing the precedence is the point: the numeric
+ * status beside it can be 200 while the answer was never delivered, and reading the status first
+ * is exactly the disagreement this removes.
+ */
+function outcomeKey(entry: Pick<LogEntry, "status" | "terminalStatus" | "closeReason">) {
+  return OUTCOME_KEYS[classifyRequestOutcome(entry)];
 }
 
 function statusColor(status: number): string {
@@ -971,6 +1001,18 @@ function LogDetailDialog({
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
           <div className="log-detail-grid">
             <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag, serverTimeZone)}</span>
+            <span className="muted">{t("logs.detail.outcome.label")}</span>
+            <span>{t(outcomeKey(detail))}</span>
+            {detail.spend && (
+              <>
+                <span className="muted">{t("logs.detail.sends.label")}</span>
+                <span className="mono">
+                  {requestPhysicalSends(detail.spend)}
+                  {requestUnresolvedSends(detail.spend) > 0
+                    && ` (${t("logs.detail.sends.unresolved")}: ${requestUnresolvedSends(detail.spend)})`}
+                </span>
+              </>
+            )}
             <span className="muted">{t("logs.col.request")}</span>
             <span className="log-detail-request-row">
               <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>

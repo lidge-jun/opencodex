@@ -15,9 +15,9 @@ import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
   isCodexModelEntitlementSnapshotCurrent,
-  resolveCodexModelEntitlements,
   type CodexModelEntitlementSnapshot,
 } from "../model-entitlements";
+import { resolveAdmittedCodexModelEntitlements } from "../model-entitlement-admission";
 import { isAccountNeedsReauth } from "../account-runtime-state";
 import { codexRuntimeStatePath } from "../runtime";
 import {
@@ -601,7 +601,7 @@ export async function syncCatalogModels(
       comboOmissions,
       providerModelOutcomes,
     }),
-    resolveCodexModelEntitlements(config),
+    resolveAdmittedCodexModelEntitlements(config),
   ]);
   const committed = withCatalogWriteSerialization(owningCodexHome, permit => {
     // Desired state can flip OFF during the provider await above. The catalog

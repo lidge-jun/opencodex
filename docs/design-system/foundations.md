@@ -24,7 +24,7 @@
 
 ### Font families
 
-- `--font-ui`: 일반 UI, 제목, 본문, 버튼, 입력. Pretendard/Noto Sans KR/Apple SD Gothic Neo/Malgun Gothic을 포함해 한글 fallback을 보장한다.
+- `--font-ui`: 일반 UI, 제목, 본문, 버튼, 입력. 제품 서체를 우선하고, 그 뒤에는 시스템 UI 폰트를 영문도 지원하는 한글 fallback보다 먼저 선언한다. 그래야 한글 fallback이 시스템 UI 폰트의 영문·숫자 글리프까지 대신 표시하지 않는다. 한글은 앞선 서체의 지원 여부에 따라 시스템의 언어별 fallback 또는 뒤에 선언된 한글 글꼴로 표시한다.
 - `--font-code`: 모델 ID, URL, 버전, 토큰 수, 로그, 코드. 숫자는 tabular 형태로 정렬한다.
 
 외부 CDN 폰트를 사용하지 않는다. 프록시 관리 화면은 오프라인에서도 열려야 하고, 폰트

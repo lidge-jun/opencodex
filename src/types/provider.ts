@@ -389,6 +389,35 @@ export interface OcxProviderConfig {
    */
   allowPrivateNetwork?: boolean;
   /**
+   * Outbound egress for THIS provider, overriding the process-wide `proxy` decision.
+   *
+   * The global `proxy` is one value for every upstream, so it cannot express the split
+   * operators actually need: reach one gateway through a regional proxy while another stays
+   * direct on the local network (#2894). Accepted values:
+   *
+   * - absent — inherit the global proxy decision. Unchanged behaviour.
+   * - `"direct"` or `null` — never use the global proxy for this provider.
+   * - `"http://…"` / `"https://…"` — this provider's own HTTP(S) proxy.
+   * - `"socks5://…"` / `"socks5h://…"` — this provider's own SOCKS5 proxy.
+   *
+   * An empty string is rejected rather than read as DIRECT: a cleared dashboard field must not
+   * silently switch a provider from inheriting the global proxy to refusing it. A malformed
+   * value is rejected at configuration time and again at request time; it never degrades to
+   * either neighbour, because both degradations look like success at the call site.
+   *
+   * Not every transport can carry this. `structure/transports/inventory.md` records which
+   * request paths honour it and which still follow the process-wide value only.
+   */
+  proxy?: string | null;
+  /**
+   * Destinations this provider reaches without a proxy, in `NO_PROXY` syntax.
+   *
+   * Applied to whichever route `proxy` resolved to, so it carves an exemption out of this
+   * provider's own proxy AND out of an inherited global one. That second case is how a
+   * provider exempts a single host without owning a proxy of its own.
+   */
+  noProxy?: string | string[];
+  /**
    * Pin the HTTP version used for upstream provider requests. Bun's fetch negotiates
    * HTTP/2 via TLS ALPN by default; some Cloudflare-fronted SSE endpoints hang on
    * HTTP/2 streaming responses (issue #1668). "http1.1" / "h1" forces HTTP/1.1,
@@ -816,6 +845,19 @@ export interface OcxProviderConfig {
    * incomplete JSON, missing arguments, and empty streams remain truncation errors.
    */
   openaiChatEofTolerance?: boolean;
+  /**
+   * Opt-in: fold a `developer` message into a `system` message instead of forwarding the role.
+   *
+   * `developer` is part of the Chat Completions message role set, so forwarding it is the
+   * default. The role used to be decided by testing the base URL host against
+   * `api.openai.com`, which assumed every OpenAI-compatible gateway rejects a standard role
+   * until proven otherwise — including gateways that proxy OpenAI itself — and quietly gave the
+   * instruction `system` precedence instead (#5213). This flag exists for a destination that
+   * genuinely rejects the role, so the conversion is a recorded decision about that destination
+   * rather than an inference from its hostname. Position is unaffected either way: the message
+   * keeps its slot in the conversation.
+   */
+  foldDeveloperRoleToSystem?: boolean;
   /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown

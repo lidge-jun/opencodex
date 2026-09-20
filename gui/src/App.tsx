@@ -24,6 +24,7 @@ import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
+import { isDesktopShell, isExternalLink } from "./lib/desktop-shell";
 
 type Theme = "light" | "dark" | "system";
 
@@ -170,6 +171,23 @@ export default function App() {
       window.removeEventListener("hashchange", dismissNav);
       window.removeEventListener("popstate", dismissNav);
     };
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktopShell()) return;
+    const interceptExternalLinks = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      const href = anchor.href;
+      if (!isExternalLink(href)) return;
+      event.preventDefault();
+      // Rust denies external HTTP(S) navigation and opens it in the system browser.
+      window.location.assign(href);
+    };
+    document.addEventListener("click", interceptExternalLinks, true);
+    return () => document.removeEventListener("click", interceptExternalLinks, true);
   }, []);
 
   useEffect(() => {

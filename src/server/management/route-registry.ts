@@ -240,6 +240,12 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/storage/trash", module: "server/management/logs-usage-routes", mutates: false },
   { method: "GET", path: "/api/storage/trash/restore/test-stream", module: "server/management/logs-usage-routes", mutates: false, exempt: { reason: "test-seam", why: "Opt-in streaming seam declared at src/storage/restore-job.ts:34." } },
   { method: "GET", path: "/api/usage", module: "server/management/logs-usage-routes", mutates: false },
+  // server/management/usage-timeline-routes
+  { method: "GET", path: "/api/usage/timeline", module: "server/management/usage-timeline-routes", mutates: false },
+  // server/management/companion-routes
+  { method: "POST", path: "/api/companion/open-in-browser", module: "server/management/companion-routes", mutates: true, exempt: { reason: "session-only", why: "Dashboard-only navigation helper; the GUI session opens its current view in the system browser, and there is no standalone CLI operation to drive." } },
+  { method: "GET", path: "/api/companion/settings", module: "server/management/companion-routes", mutates: false },
+  { method: "PUT", path: "/api/companion/settings", module: "server/management/companion-routes", mutates: true },
   { method: "POST", path: "/api/storage/cleanup", module: "server/management/logs-usage-routes", mutates: true },
   { method: "POST", path: "/api/storage/cleanup-policy/run", module: "server/management/logs-usage-routes", mutates: true },
   { method: "POST", path: "/api/storage/cleanup/preview", module: "server/management/logs-usage-routes", mutates: true },

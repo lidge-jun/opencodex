@@ -1026,3 +1026,25 @@ export const OPPER_TEXT_ONLY_MODELS = ["deepseek-v4-pro", "kimi-k3"];
 export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
+
+export const STEPFUN_MODELS = [
+  "step-5-preview",
+  "step-3.5-flash",
+  "step-3.7-flash",
+];
+
+export const STEPFUN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "step-5-preview": 1_000_000,
+  "step-3.5-flash": 256_000,
+  "step-3.7-flash": 256_000,
+};
+
+export const STEPFUN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "step-5-preview": ["text", "image"],
+  "step-3.5-flash": ["text"],
+  "step-3.7-flash": ["text", "image"],
+};
+
+export const STEPFUN_NO_VISION_MODELS = ["step-3.5-flash"];
+
+export const STEPFUN_REASONING_EFFORTS = ["low", "medium", "high"];

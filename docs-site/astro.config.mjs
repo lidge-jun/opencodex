@@ -96,6 +96,8 @@ export default defineConfig({
             { label: "Codex App Model Picker", translations: { fr: "Sélecteur de modèles de Codex App", ko: "Codex App 모델 선택기", "zh-CN": "Codex App 模型选择器", "zh-TW": "Codex App 模型選擇器", ru: "Выбор модели в Codex App", ja: "Codex App モデルピッカー", tr: "Codex App Model Seçici" }, slug: "guides/codex-app-models" },
             { label: "Codex Prompt Layers", translations: { fr: "Couches d'invite Codex", ko: "Codex 프롬프트 레이어", "zh-CN": "Codex 提示词层", "zh-TW": "Codex 提示詞層", ru: "Слои промпта Codex", ja: "Codex プロンプトレイヤー", tr: "Codex İstem Katmanları" }, slug: "guides/codex-prompt" },
             { label: "Native Context Compatibility", translations: { ko: "네이티브 컨텍스트 호환성" }, slug: "guides/codex-native-context" },
+            { label: "macOS Menu Bar App", translations: { fr: "Application barre de menus macOS", ko: "macOS 메뉴바 앱", "zh-CN": "macOS 菜单栏应用", "zh-TW": "macOS 選單列 App", ru: "Приложение в строке меню macOS", ja: "macOS メニューバーアプリ", tr: "macOS Menü Çubuğu Uygulaması" }, slug: "guides/macos-menu-bar" },
+            { label: "Desktop App", translations: { fr: "Application de bureau", ko: "데스크톱 앱", "zh-CN": "桌面应用", "zh-TW": "桌面 App", ru: "Настольное приложение", ja: "デスクトップアプリ", tr: "Masaüstü Uygulaması" }, slug: "guides/desktop-app" },
             { label: "Model Ordering", translations: { fr: "Ordre des modèles", ko: "모델 정렬에 관하여", "zh-CN": "模型排序", "zh-TW": "模型排序", ru: "Сортировка моделей", ja: "モデルの並び順", tr: "Model Sıralaması" }, slug: "guides/model-ordering" },
             { label: "Combos", translations: { fr: "Combinaisons", ko: "콤보", "zh-CN": "组合", "zh-TW": "組合", ru: "Комбо", ja: "コンボ", tr: "Kombolar" }, slug: "guides/combos" },
             { label: "Claude Code", translations: { fr: "Claude Code", ko: "Claude Code", "zh-CN": "Claude Code", "zh-TW": "Claude Code", ru: "Claude Code", ja: "Claude Code", tr: "Claude Code" }, slug: "guides/claude-code" },
@@ -164,6 +166,7 @@ export default defineConfig({
           items: [
             { label: "Windows Memory Growth", translations: { fr: "Augmentation de la mémoire sous Windows", ko: "Windows 메모리 증가", "zh-CN": "Windows 内存增长", "zh-TW": "Windows 記憶體增長", ru: "Рост памяти в Windows", ja: "Windows メモリ増加", tr: "Windows Bellek Artışı" }, slug: "troubleshooting/windows-memory" },
             { label: "Disk Usage from Temp Files", translations: { fr: "Espace disque et fichiers temporaires", ko: "임시 파일 디스크 사용량", "zh-CN": "临时文件磁盘占用", "zh-TW": "暫存檔磁碟用量", ru: "Использование диска временными файлами", ja: "一時ファイルのディスク使用量", tr: "Geçici Dosya Disk Kullanımı" }, slug: "troubleshooting/disk-usage-temp-files" },
+            { label: "Codex Cannot Sign In or Load", translations: { fr: "Codex ne peut pas se connecter", ko: "Codex 로그인 불가", "zh-CN": "Codex 无法登录", "zh-TW": "Codex 無法登入", ru: "Codex не может войти", ja: "Codex にサインインできない", tr: "Codex Oturum Açamıyor" }, slug: "troubleshooting/codex-cannot-sign-in" },
           ],
         },
         { label: "Contributing", translations: { fr: "Contribuer", ko: "기여하기", "zh-CN": "贡献", "zh-TW": "貢獻", ru: "Как внести вклад", ja: "コントリビュート", tr: "Katkıda Bulunma" }, slug: "contributing" },

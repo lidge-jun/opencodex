@@ -63,7 +63,7 @@ import {
   pendingTeardownsAreExactly,
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
-import { collectStatus, hubStatusLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
+import { collectStatus, deadProxyRoutingAdviceLines, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
@@ -597,11 +597,11 @@ async function handleStart(options: { block?: boolean } = {}) {
       try {
         const { fetchAllModels } = await import("../server/management-api");
         const { desktopVisibleNativeSlugs } = await import("../codex/catalog");
-        const { resolveCodexModelEntitlements } = await import("../codex/model-entitlements");
+        const { resolveAdmittedCodexModelEntitlements } = await import("../codex/model-entitlement-admission");
         const { buildDesktopDiscoveryInputs } = await import("../claude/desktop-discovery-inputs");
         const [models, modelEntitlements] = await Promise.all([
           fetchAllModels(config),
-          resolveCodexModelEntitlements(config, { clientVersion: null }),
+          resolveAdmittedCodexModelEntitlements(config, { clientVersion: null }),
         ]);
         const inputs = buildDesktopDiscoveryInputs({
           config, models, modelEntitlements,
@@ -1586,6 +1586,14 @@ async function handleStatus() {
     console.log(installed
       ? "     Restart with 'ocx start', or refresh the installed service: 'ocx service repair'."
       : "     Restart with 'ocx start', or install the persistent service: 'ocx service install'.");
+    // Restarting is only half the choice. A user who cannot sign in to Codex at all needs the
+    // way out that does not require this proxy to come back (#5261).
+    for (const line of deadProxyRoutingAdviceLines({
+      proxyUp: false,
+      routingKind: status.json.startup.routingKind,
+    })) {
+      console.log(`     ${line}`);
+    }
   }
   console.log(`   Dashboard: ${status.json.dashboard.url}${local}`);
   console.log(`   Config: ${status.json.paths.config}${local}`);
@@ -1606,6 +1614,12 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}${local}`);
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}${local}`);
   console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
+  // Independent of whether the proxy is up: a catalog pointer whose file is gone stops Codex
+  // loading its config at all, and presents as the same blank wall as dead routing (#5261).
+  // Tagged `(local)` on its header like every other local-state line, so a connected client
+  // cannot read a finding about its own Codex home as something the hub reported.
+  missingCodexCatalogLines(detectMissingCodexCatalogPath())
+    .forEach((line, index) => console.log(`   ${line}${index === 0 ? local : ""}`));
   if (status.json.startup.routingKind === "native") {
     let retainedProviderTable = false;
     try {

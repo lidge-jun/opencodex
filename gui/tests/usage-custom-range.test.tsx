@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Usage from "../src/pages/Usage";
 
@@ -80,6 +81,65 @@ function report(gate: RequestGate, marker: string, date = "2020-09-15") {
     providers: [], historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
   };
 }
+
+test("Usage model table renders cache breakdown and marks unavailable telemetry", async () => {
+  await mount();
+  const data = report(requests[0], "cache-model");
+  data.models = [
+    {
+      ...data.models[0]!,
+      model: "cache-model",
+      totalTokens: 1_120,
+      inputTokens: 1_000,
+      outputTokens: 120,
+      cachedInputTokens: 600,
+      cacheReadInputTokens: 600,
+      cacheCreationInputTokens: 100,
+      cacheHitRate: 0.6,
+      cacheObservedInputTokens: 1_000,
+    },
+    {
+      ...data.models[0]!,
+      model: "partial-cache-model",
+      totalTokens: 1_000,
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cachedInputTokens: 450,
+      cacheReadInputTokens: 450,
+      cacheCreationInputTokens: 0,
+      cacheHitRate: 0.9,
+      cacheObservedInputTokens: 500,
+    },
+    {
+      ...data.models[0]!,
+      model: "unknown-cache-model",
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+    },
+  ];
+  await act(async () => { requests[0]!.resolve(Response.json(data)); });
+
+  const table = container.querySelector<HTMLElement>("#usage-section-models table");
+  expect(table).not.toBeNull();
+  // Header labels come from the catalog the page renders, so a copy change stays a
+  // one-place edit and this case keeps asserting the column ORDER it cares about --
+  // the five cache columns sitting between Measured and Tokens.
+  expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
+    "logs.col.model", "logs.col.provider", "usage.col.requests", "usage.col.measured",
+    "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.cacheHits",
+    "usage.col.cacheWrites", "usage.col.cacheHitRate", "usage.col.tokens",
+    "usage.col.apiListPrice", "usage.col.share",
+  ].map(key => en[key as keyof typeof en]));
+  const rows = table!.querySelectorAll("tbody tr");
+  expect(rows).toHaveLength(3);
+  const measured = [...rows[0]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  expect(measured?.slice(4, 9)).toEqual(["1000", "120", "600", "100", "60%"]);
+  const partial = [...rows[1]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  expect(partial?.slice(6, 9)).toEqual(["450", "0", "—"]);
+  const unavailable = [...rows[2]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  expect(unavailable?.slice(6, 9)).toEqual(["—", "—", "—"]);
+});
 
 async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });

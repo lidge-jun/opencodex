@@ -198,3 +198,8 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 The service loads the optional `compactionRouting` block from persisted configuration.
 [Responses ingress](../transports/responses.md#compaction-routing-overrides) applies it to individual compaction
 requests whose trigger the block names.
+
+Standalone binaries use `src/lib/standalone.ts` to detect the Bun `$bunfs` runtime and
+`src/service/state.ts` to compose durable service commands as `<execPath> start`, without a
+source-tree CLI path. The copied `gui/dist` directory is located by `src/server/gui-static.ts`;
+`OPENCODEX_GUI_DIST` remains an explicit override.

@@ -9,18 +9,27 @@ Native Codex Spark-specific request exceptions are absent. General Lite and name
 remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including
 other providers whose models happen to share a name fragment.
 
-## OpenCode Go chronological instructions
+## Chronological in-conversation instructions
 
-For the registry-recognized OpenCode Go Chat destination and exact model
-`deepseek-v4.1-flash`, `src/adapters/openai-chat.ts` keeps text-only timeline
-developer messages in place as system messages. Appending a reminder therefore
-does not hoist new text into the leading system prompt and rewrite the existing
-serialized message prefix. Pending tool results still precede deferred reminders.
-The base system prompt, vision conversion and native OpenAI developer roles retain
-their existing behavior; other Chat destinations and models retain leading-system
-folding. This is independent of the Claude trailing-notice stabilization option
-and does not guarantee upstream cache hits. Regression coverage is in
-`tests/adapters/openai/openai-chat-system-order.test.ts`.
+`src/adapters/openai-chat/messages.ts` keeps a text-only timeline developer message in the
+slot it arrived in, on every Chat destination and model. Appending a reminder therefore does
+not hoist new text into the leading system prompt and rewrite the existing serialized message
+prefix, and a mid-conversation instruction no longer moves ahead of the turns it was written
+to follow. Pending tool results still precede deferred reminders. This was previously scoped
+to the registry-recognized OpenCode Go destination and the exact model
+`deepseek-v4.1-flash`, which made prompt-prefix stability read as a property of that one
+destination. The base system prompt, vision conversion and native OpenAI developer roles
+retain their existing behavior. This is independent of the Claude trailing-notice
+stabilization option and does not guarantee upstream cache hits. Regression coverage is in
+`tests/adapters/openai/openai-chat-system-order.test.ts` and
+`tests/adapters/openai/openai-chat-developer-position.test.ts`.
+
+The role that slot carries is a separate decision. `developer` is part of the Chat Completions
+message role set and is forwarded as itself on every destination. A destination that genuinely
+rejects the role sets `foldDeveloperRoleToSystem`, which converts it in place and still never
+moves the message. The role was previously decided by testing the base URL host against
+`api.openai.com`, so every OpenAI-compatible gateway was assumed not to support a standard role
+until proven otherwise, and the instruction silently lost `developer` precedence.
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
@@ -418,8 +427,9 @@ The final registered adapter also checks the original input under the
 [untranslated-media contract](../adapters/registry.md#untranslated-input-media). Audio/file
 attachments cannot succeed merely because the normalized representation retained a text
 marker: translated adapters refuse them, while native Responses retains the original body.
-Chat conversion rejects recognized audio/file parts before projection; the native Chat wire
-is unchanged. No audio/file transport or automatic URL fetch is added, and no client filename,
+Chat conversion rejects recognized audio/file parts before projection, except a user-content
+file part whose inline base64 bytes now have a lossless carrier; the native Chat wire is
+unchanged. No audio transport and no automatic URL fetch is added, and no client filename,
 payload, URL or metadata is included in the new error messages.
 
 The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as

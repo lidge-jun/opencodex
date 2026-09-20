@@ -106,7 +106,7 @@ async function handleOAuthLogin(name: string): Promise<void> {
       onAuth: ({ url, instructions }) => {
         console.log(`\n🔐 Opening browser for ${name} login...\n${url}\n`);
         if (instructions) console.log(instructions);
-        openUrl(url);
+        void openUrl(url);
       },
       onProgress: (m) => console.log(`   ${m}`),
       onManualCodeInput: () =>
@@ -201,7 +201,7 @@ async function handleKeyLogin(name: string): Promise<void> {
     process.exit(1);
   }
   console.log(`\n🔑 ${def.label} — opening ${def.dashboardUrl} so you can create/copy an API key...`);
-  openUrl(def.dashboardUrl);
+  void openUrl(def.dashboardUrl);
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const key = (await new Promise<string>((res) => rl.question(`Paste your ${def.label} API key: `, res))).trim();
   // Template URL with placeholders needs resolution before saving.

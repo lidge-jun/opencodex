@@ -69,7 +69,21 @@ interface LoginStart {
   flowId?: string;
   instructions?: string;
   deviceCode?: string;
+  /** Whether the host actually opened a browser. Absent from older proxies. */
+  browserLaunch?: "started" | "failed" | "skipped";
 }
+
+/**
+ * Said only when the host could not open a browser (#5261).
+ *
+ * Without it, a failed launch is indistinguishable from a successful one: the URL is printed
+ * either way, so the user waits at a terminal that looks like it is working. Names the fixed
+ * callback port because that is the part people cannot guess — ChatGPT supplies the redirect
+ * URI, so the flow cannot move to a free port, and `--device` is the way around it.
+ */
+export const BROWSER_LAUNCH_FAILED_HINT =
+  "⚠️  No browser could be opened here — open the URL above yourself."
+  + "\n   If nothing on this machine can reach http://localhost:1455, rerun with --device instead.";
 
 /** `-` means "read it from stdin", the documented way to pass a code silently. */
 const STDIN_SENTINEL = "-";
@@ -145,6 +159,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
         start.url ? `Open this URL to sign in:\n${start.url}` : "",
         start.deviceCode ? `Device code: ${start.deviceCode}` : "",
         start.instructions ?? "",
+        start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
         start.flowId ? `Flow: ${start.flowId}` : "",
       ].filter(line => line !== "").join("\n");
       if (block) writeStdoutFully(`${block}\n`);

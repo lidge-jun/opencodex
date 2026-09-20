@@ -49,6 +49,19 @@ ocx --version
 opencodex --version
 ```
 
+## Standalone binary (no npm)
+
+Release downloads also include a standalone `ocx` binary for supported macOS, Linux, and Windows
+targets. It includes the Bun runtime and dashboard, so npm, Node, and a separate Bun installation
+are not required. Download the archive for your platform, extract it, and run:
+
+```bash
+./ocx --version
+./ocx start
+```
+
+The extracted `gui/dist` directory must stay beside the binary so `GET /` can serve the dashboard.
+
 ### Release channels
 
 The stable `latest` channel already includes GPT-5.6 Sol/Terra/Luna catalog support for ChatGPT,

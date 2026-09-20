@@ -12,6 +12,18 @@ import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routi
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
 import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
+import {
+  ATTEMPT_RECOVERY_KIND_ROSTER,
+  ATTEMPT_RECOVERY_WITHHELD_ROSTER,
+  type AttemptRecoveryKind,
+  type AttemptRecoveryWithheld,
+  type RequestSpendTotals,
+} from "./telemetry-contract";
+
+// Re-exported so every existing importer keeps its path. The declarations moved to a leaf the
+// dashboard can import without pulling node:fs and the config barrel into the browser build.
+export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER };
+export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestSpendTotals };
 
 export interface PersistedClaudeCompatibilityLog {
   decision: "shadow";
@@ -57,45 +69,6 @@ export function isCodexUsageAccountLogLabel(value: unknown): value is UsageAccou
 export function isCodexPoolAccountLogLabel(value: unknown): value is "main" | `p${string}` {
   return value === "main" || (typeof value === "string" && CODEX_ACCOUNT_LOG_LABEL_RE.test(value));
 }
-
-/**
- * Recovery kinds recorded per attempt in the usage log; the GUI renders localized labels
- * for these wire values.
- */
-export type AttemptRecoveryKind =
-  | "transient-5xx"
-  | "connection-reset"
-  | "oauth-401"
-  | "key-401"
-  | "key-429"
-  | "rate-limit-429"
-  | "anthropic-oauth-429"
-  | "oauth-account-429"
-  | "image-413"
-  | "console-go-upload-retry"
-  | "opaque-blob-rejection"
-  | "empty-completion"
-  | "reasoning-effort-downgrade";
-
-/**
- * Why a recovery this request was otherwise willing to make did not happen.
- *
- * Recorded separately from `recoveryKinds` and from `sendCount`, because the question it
- * answers is different from either. A log showing one physical send and no recovery kind used
- * to be ambiguous: it could mean nothing was eligible, or that something was eligible and the
- * send budget withheld it. Those need opposite follow-ups, and the second one was invisible
- * (#5044).
- *
- * `sendCount` deliberately does not move for these. A refused attempt is not a physical send,
- * and inflating the count to signal the refusal would corrupt the one number that means
- * "requests this proxy actually made".
- *
- * Bounded vocabulary on purpose: it is a wire value a maintainer reads, never a credential, an
- * account id, an upstream body, prompt content, or exception text.
- */
-export type AttemptRecoveryWithheld =
-  | "retry-send-budget"
-  | "rotation-send-budget";
 
 /** Request-time upstream credential class, never a credential or account identifier. */
 export type UsageCredentialSource = "grok-oauth" | "xai-api-key";
@@ -210,19 +183,7 @@ export interface PersistedUsageAttempt {
  * operator needs is the total that reached upstream carrying the full prompt. These fields are
  * that total, decomposed by how much of it is explained.
  */
-export interface PersistedRequestSpend {
-  /** Physical upstream sends summed across every attempt of this logical request, combo children included. */
-  sends: number;
-  /** Sends whose attempt reached a terminal status, so the spend has a known outcome. */
-  settled: number;
-  /**
-   * Sends charged with no terminal outcome behind them: an attempt abandoned mid-flight, or a
-   * budget charge no attempt row ever accounted for. Never folded into `settled` — an unexplained
-   * send is the exact quantity this record exists to make visible.
-   */
-  unresolved: number;
-  /** Model sends the request execution budget charged. Absent when no budget was attached. */
-  reserved?: number;
+export interface PersistedRequestSpend extends RequestSpendTotals {
   /** Budget profile that produced `reserved`, so a count can be read against the policy it obeyed. */
   policyVersion?: string;
   /**
@@ -497,25 +458,8 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
   };
 }
 
-const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
-  "transient-5xx",
-  "connection-reset",
-  "oauth-401",
-  "key-401",
-  "key-429",
-  "rate-limit-429",
-  "anthropic-oauth-429",
-  "oauth-account-429",
-  "image-413",
-  "console-go-upload-retry",
-  "opaque-blob-rejection",
-  "empty-completion",
-  "reasoning-effort-downgrade",
-]);
-const ATTEMPT_RECOVERY_WITHHELD = new Set<AttemptRecoveryWithheld>([
-  "retry-send-budget",
-  "rotation-send-budget",
-]);
+const ATTEMPT_RECOVERY_KINDS: ReadonlySet<AttemptRecoveryKind> = new Set(ATTEMPT_RECOVERY_KIND_ROSTER);
+const ATTEMPT_RECOVERY_WITHHELD: ReadonlySet<AttemptRecoveryWithheld> = new Set(ATTEMPT_RECOVERY_WITHHELD_ROSTER);
 const USAGE_STATUSES = new Set<UsageStatus>([
   "reported",
   "unreported",

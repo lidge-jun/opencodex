@@ -1,6 +1,5 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../codex/catalog";
 import {
@@ -71,6 +70,8 @@ import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
+import { handleUsageTimelineRoutes } from "./management/usage-timeline-routes";
+import { handleCompanionRoutes } from "./management/companion-routes";
 import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -84,15 +85,11 @@ import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-typ
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
+import { packageVersion } from "../lib/package-version";
 
 // installed npm version instead of a stale hardcode.
-export const VERSION = (() => {
-  try {
-    return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
-  } catch {
-    return "0.0.0";
-  }
-})();
+const MANAGEMENT_VERSION_FALLBACK = "0.0.0";
+export const VERSION = packageVersion(MANAGEMENT_VERSION_FALLBACK);
 
 const managementConvergenceBindings = new WeakMap<object, Readonly<{
   factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
@@ -266,7 +263,7 @@ export async function handleManagementAPI(
     } catch { /* best-effort */ }
   }
   const ctx: ManagementContext = { req, url, config, deps, version: VERSION, principal, sessionControl, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
-  let routed: Response | null;
+  let routed: Response | null | undefined;
   try {
     routed = handleSessionRoutes(ctx)
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
@@ -291,6 +288,8 @@ export async function handleManagementAPI(
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
+      ?? (await handleUsageTimelineRoutes(ctx))
+      ?? (await handleCompanionRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);

@@ -30,9 +30,10 @@ OAuth refresh coordination follows the [refresh-lock identity contract](catalog.
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](providers/cursor.md#cursor-native-exec).
 
-Chat request serialization owns the destination-scoped
-[OpenCode Go instruction ordering](providers/chat-compat.md#opencode-go-chronological-instructions);
-it requires no runtime lifecycle change or new configuration option.
+Chat request serialization owns
+[chronological instruction ordering](providers/chat-compat.md#chronological-in-conversation-instructions)
+and the developer wire role; it requires no runtime lifecycle change, and its one
+configuration option is a per-provider role opt-out.
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
@@ -213,6 +214,27 @@ surface with a management credential.
 The hub-management socket is enabled only by `runtimeRole: "hub"` plus
 `hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except
 GUI, session bootstrap/exchange, and `/api/*`.
+
+### Claude intercept pair
+
+At the end of the startup transaction, `startServer` also starts the optional Claude intercept pair
+through `src/server/index/claude-intercept-lifecycle.ts` (fire-and-forget start, `ownsListener` for
+the ingress decision, `stop` joined into the listener shutdown) from `src/claude/intercept/runtime.ts`: a loopback HTTP CONNECT proxy (`src/claude/intercept/connect-proxy.ts`)
+and a loopback TLS listener (`src/claude/intercept/listener.ts`) that presents a leaf for
+`api.anthropic.com` signed by a per-install authority (`src/claude/intercept/local-ca.ts`, persisted
+under `<OPENCODEX_HOME>/claude-intercept/` with a 0600 key; never installed into an OS trust store).
+Claude Code reaches the pair through `HTTPS_PROXY` plus `NODE_EXTRA_CA_CERTS` in its settings env
+(`src/claude/intercept/settings.ts`), so no `ANTHROPIC_BASE_URL` rewrite is involved and the client
+still believes it talks to Anthropic. The proxy splices `CONNECT api.anthropic.com:443` onto the TLS
+listener, relays every other CONNECT target blind, and refuses plain proxied HTTP and loopback targets.
+The TLS listener rewrites `POST /v1/messages` and `POST /v1/messages/count_tokens` onto a loopback
+origin and dispatches them to the same route table under the `claude-intercept` ingress, which takes
+the loopback request policy; every other path on the intercepted host is relayed verbatim to the
+configured Anthropic upstream. The pair is on by default on a hub (`claudeCode.intercept.enabled`),
+its proxy port defaults to the public port + 100 (`claudeCode.intercept.port`), and a bind failure
+degrades to a startup warning rather than a startup failure; stop joins both sockets. A server asked
+for an ephemeral public port (`startServer(0)`, the shape every in-process test fixture uses) has no
+stable port to derive from, so the pair stays off unless `claudeCode.intercept.port` is explicit.
 
 Auxiliary listener bind failures carry the listener key and effective address through `AuxiliaryListenerBindError` in `src/server/ports.ts`. `src/cli/index.ts` reports them without retrying the public port. Startup still rolls back every earlier socket synchronously.
 

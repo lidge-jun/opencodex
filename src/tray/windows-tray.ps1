@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory = $true)][string]$OpenCodexHome,
   # Provenance of $BunPath, chosen when the tray entry was built. Optional so an
   # already-installed launcher command from an older version still starts.
-  [ValidateSet("", "override", "bundled", "process")][string]$BunRuntimeSource = "",
+  [ValidateSet("", "override", "bundled", "process", "standalone")][string]$BunRuntimeSource = "",
   [ValidateSet("Run", "Stop")][string]$Mode = "Run",
   [int]$HostPid = 0
 )
