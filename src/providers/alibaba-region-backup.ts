@@ -1,10 +1,12 @@
-import { copyFileSync, existsSync, linkSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, readFileSync, rmSync } from "node:fs";
 import { getConfigPath } from "../config";
+import { hardenSecretPath } from "../lib/windows-secret-acl";
 
 export interface AlibabaBackupIO {
   exists: (path: string) => boolean;
   read: (path: string) => Buffer;
   copy: (source: string, destination: string) => void;
+  harden: (path: string) => void;
   /** Publish with no-replace semantics: fails with EEXIST if the destination exists. */
   publishNoReplace: (temp: string, destination: string) => void;
   remove: (path: string) => void;
@@ -14,6 +16,10 @@ const DEFAULT_IO: AlibabaBackupIO = {
   exists: existsSync,
   read: path => readFileSync(path),
   copy: (source, destination) => copyFileSync(source, destination),
+  harden: path => {
+    try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
+    if (process.platform === "win32") hardenSecretPath(path, { required: true });
+  },
   publishNoReplace: linkSync,
   remove: path => rmSync(path, { force: true }),
 };
@@ -57,6 +63,9 @@ export function backupConfigBeforeAlibabaRegionMigration(
   const temp = `${backup}.${process.pid}.tmp`;
   try {
     io.copy(configPath, temp);
+    // The snapshot contains credentials. Harden it before publication so the
+    // stable backup path is never exposed with inherited permissions or ACLs.
+    io.harden(temp);
     // Verify before publishing: a short copy must never become the snapshot.
     if (!io.read(temp).equals(source)) {
       throw new AlibabaBackupIntegrityError(`failed to write a complete backup to ${temp}`);

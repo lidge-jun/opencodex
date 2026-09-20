@@ -103,7 +103,8 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
  * JSONL record: direction, frame kind, byte length, and whether the payload contains U+FFFD.
  * Privacy: no frame content is written, including excerpts around replacement characters.
  * For binary frames, U+FFFD may also be introduced by UTF-8 decoding; the flag alone does not
- * identify the source of corruption. Disabled entirely when the env var is unset.
+ * identify the source of corruption. The log is created with owner-only permissions and is
+ * disabled entirely when the env var is unset.
  */
 export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
 export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
@@ -134,7 +135,7 @@ export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
       bytes,
       fffd,
     };
-    appendFileSync(logPath, `${JSON.stringify(record)}\n`);
+    appendFileSync(logPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
   } catch {
     // Frame forensics must never break the relay.
   }
@@ -168,7 +169,7 @@ export function logLiveSidebandStage(
     const record: Record<string, unknown> = { ts: new Date().toISOString(), stage };
     if (detail?.status !== undefined) record.status = detail.status;
     if (detail?.code !== undefined) record.code = detail.code;
-    appendFileSync(logPath, JSON.stringify(record) + "\n");
+    appendFileSync(logPath, JSON.stringify(record) + "\n", { mode: 0o600 });
   } catch {
     // Diagnostics must never break the relay.
   }

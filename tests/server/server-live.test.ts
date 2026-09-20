@@ -3,7 +3,7 @@
  * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
@@ -1334,6 +1334,7 @@ test("sideband frame log preserves delivery without recording damaged or clean t
       expect(JSON.stringify(line)).not.toContain("clean-frame");
       expect(JSON.stringify(line)).not.toContain(FFFD_TEXT);
     }
+    if (process.platform !== "win32") expect(statSync(frameLogPath).mode & 0o777).toBe(0o600);
 
     client.close();
   } finally {
