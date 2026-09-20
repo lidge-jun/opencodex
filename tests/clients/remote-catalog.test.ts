@@ -250,6 +250,42 @@ describe("remote Desktop snapshot consumer", () => {
 });
 
 describe("remote catalog adversarial consumer", () => {
+  test("enforces a total deadline even while catalog bytes keep arriving", async () => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"models":['));
+        timer = setInterval(() => controller.enqueue(new Uint8Array([0x20])), 5);
+      },
+      cancel() {
+        cancelled = true;
+        clearInterval(timer);
+      },
+    });
+
+    const startedAt = performance.now();
+    await expect(downloadClientCatalog("https://hub.example.test", "ocx_data_test", {
+      timeoutMs: 20,
+      fetchImpl: async () => new Response(body, { headers: JSON_HEADERS }),
+    })).rejects.toMatchObject({ code: "unreachable" });
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+    expect(cancelled).toBe(true);
+  });
+
+  test("cancels an HTTP error body before rejecting", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([0x20])); },
+      cancel() { cancelled = true; },
+    });
+
+    await expect(downloadClientCatalog("https://hub.example.test", "ocx_data_test", {
+      fetchImpl: async () => new Response(body, { status: 500 }),
+    })).rejects.toMatchObject({ code: "catalog_http_500" });
+    expect(cancelled).toBe(true);
+  });
+
   test("allows a catalog download to exceed five seconds while bytes keep arriving", async () => {
     const chunks = ['{"models":[', '{"slug":"provider/model"}', ']}'];
     const server = Bun.serve({
