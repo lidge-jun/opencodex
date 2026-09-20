@@ -146,7 +146,12 @@ export async function handleResponsesWithPolicyFallback(
     } : {}),
     onRequestBodyParsed: body => {
       options.onRequestBodyParsed?.(body);
-      if (body && typeof body === "object" && !Array.isArray(body)) rawBody = body as Record<string, unknown>;
+      if (rawBody === null && body && typeof body === "object" && !Array.isArray(body)) {
+        // Recovery and other core preparation may mutate the parsed body in place. Keep an
+        // immutable snapshot of the original wire body so a retry cannot serialize those
+        // mutations while losing object-identity metadata attached by the first attempt.
+        rawBody = structuredClone(body as Record<string, unknown>);
+      }
     },
     onStoredPool401ReplayDispatched: () => {
       storedPool401ReplayDispatched = true;
