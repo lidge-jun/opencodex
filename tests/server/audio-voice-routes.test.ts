@@ -6,6 +6,7 @@ import {
   voiceProviderEndpointError,
 } from "../../src/config/voice-target";
 import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS } from "../../src/server/audio-speech";
+import { handleAudioTranscriptions } from "../../src/server/audio-transcriptions";
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -336,6 +337,107 @@ describe("speech request validation", () => {
   for (const row of ROWS) {
     test(`refuses ${row.why}`, async () => {
       const response = await handleAudioSpeech(row.request, SPEECH_CONFIGURED, LOG, ADMISSION);
+      expect(response.status).toBe(row.status ?? 400);
+      expect(await response.text()).toContain(row.expect);
+    });
+  }
+});
+
+describe("transcription request validation", () => {
+  /**
+   * One row per refusal in `parseTranscription`, driven through the exported
+   * handler rather than the private parser — a test that reaches past the
+   * handler proves the parser works and says nothing about whether the
+   * handler calls it.
+   *
+   * Four of these are 413 rather than 400: the request is well formed and too
+   * big, which is a different thing for a client to act on. The speech table
+   * assumed a single status and was wrong the same way.
+   */
+  function clip(bytes = 8): File {
+    return new File([new Uint8Array(bytes)], "clip.wav", { type: "audio/wav" });
+  }
+
+  function upload(build: (form: FormData) => void, headers: Record<string, string> = {}): Request {
+    const form = new FormData();
+    build(form);
+    return new Request("http://127.0.0.1/v1/audio/transcriptions", { method: "POST", body: form, headers });
+  }
+
+  const ROWS: Array<{ why: string; request: Request; expect: string; status?: number }> = [
+    {
+      why: "a body that is not multipart",
+      request: new Request("http://127.0.0.1/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      expect: "Expected multipart/form-data",
+    },
+    {
+      why: "a compressed body",
+      request: upload(f => { f.append("file", clip()); f.append("model", "gpt-4o-transcribe"); },
+        { "content-encoding": "gzip" }),
+      expect: "Compressed audio request bodies are not supported",
+    },
+    {
+      why: "a field the OpenAI shape does not define",
+      request: upload(f => { f.append("file", clip()); f.append("surprise", "1"); }),
+      expect: "Unsupported transcription field",
+    },
+    {
+      why: "no file part at all",
+      request: upload(f => { f.append("model", "gpt-4o-transcribe"); }),
+      expect: "A nonempty audio file is required",
+    },
+    {
+      why: "an empty file",
+      request: upload(f => { f.append("file", clip(0)); f.append("model", "gpt-4o-transcribe"); }),
+      expect: "A nonempty audio file is required",
+    },
+    {
+      why: "a text field past the 16 KiB cap",
+      request: upload(f => {
+        f.append("file", clip());
+        f.append("model", "gpt-4o-transcribe");
+        f.append("prompt", "x".repeat(17_000));
+      }),
+      expect: "no larger than 16 KiB",
+      status: 413,
+    },
+    {
+      why: "a model the route does not serve",
+      request: upload(f => { f.append("file", clip()); f.append("model", "whisper-9"); }),
+      expect: "Unsupported transcription model",
+    },
+    {
+      why: "no model at all",
+      request: upload(f => { f.append("file", clip()); }),
+      expect: "Unsupported transcription model",
+    },
+    {
+      why: "a response_format that is neither json nor text",
+      request: upload(f => {
+        f.append("file", clip());
+        f.append("model", "gpt-4o-transcribe");
+        f.append("response_format", "srt");
+      }),
+      expect: "response_format must be json or text",
+    },
+    {
+      why: "a language tag that is not BCP-47 shaped",
+      request: upload(f => {
+        f.append("file", clip());
+        f.append("model", "gpt-4o-transcribe");
+        f.append("language", "English");
+      }),
+      expect: "Invalid transcription language",
+    },
+  ];
+
+  for (const row of ROWS) {
+    test(`refuses ${row.why}`, async () => {
+      const response = await handleAudioTranscriptions(row.request, config(), LOG, ADMISSION);
       expect(response.status).toBe(row.status ?? 400);
       expect(await response.text()).toContain(row.expect);
     });
