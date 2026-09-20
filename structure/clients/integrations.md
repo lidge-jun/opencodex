@@ -6,6 +6,8 @@ The client-integration subsystem writes one generated OpenCodex provider contrib
 third-party client's existing config without taking ownership of the rest of that file. Its core
 promise is reversibility: apply snapshots first, writes atomically, records exactly what it owns,
 and refuses refresh, disable, or restore when the current file cannot be classified safely.
+Managed client targets are inspected without following a final symbolic link, and their atomic
+replacement addresses the named directory entry rather than resolving that link again at commit.
 
 Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.
@@ -280,3 +282,6 @@ existing explicit confirmation. The journal endpoint evaluates Undo against the 
 Recovery reads commit history and ownership through strict store methods. Unreadable or malformed
 metadata is uncertainty, never evidence that a transaction did not commit. Pending records validate
 complete ownership, exact Cline paths and result fingerprints before either native file is replaced.
+Native pair writes replace the named directory entries without following final symlinks. A symlink
+present at validation is refused, and one exchanged into place during a mutation is refused rather
+than redirecting OpenCodex's write outside Cline's settings directory.

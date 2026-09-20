@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
+import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, schemeMatchedProxyFor } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -186,13 +186,23 @@ async function providerOutboundRequest(
     return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
-  const proxyConfigured = outboundProxyConfigured();
-  // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
-  // below reason about the same value. `null` here means "no proxy fetch would actually use",
-  // even if some other proxy variable is set.
+  // Snapshot the proxy fetch would actually use once, before the DNS await, so admission
+  // and transport below reason about the same value. `null` here means "no proxy fetch
+  // would actually use", even if some other proxy variable is set.
   const effectiveProxy = effectiveProxyFor(parsed);
+  // The request leaves the DNS-pinned transport only when a proxy will actually carry it:
+  // a proxy variable fetch would use for this URL that NO_PROXY does not exempt.
+  // A scheme-mismatched or unusable variable, a NO_PROXY match, or an ALL_PROXY
+  // this target's scheme cannot use must not downgrade pinning or admit
+  // proxy-only DNS answers.
+  const proxyApplies = effectiveProxy !== null && !noProxyMatches(parsed);
   const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
-  const allowMihomoIpv6FakeIp = (effectiveProxy !== null && !noProxyMatches(parsed))
+  // The IPv6 fake-IP gate keeps its stricter documented condition — a
+  // scheme-matched variable or a SOCKS5 ALL_PROXY, never a non-SOCKS
+  // ALL_PROXY — even when proxyApplies admits one for the transport
+  // decision, because admission binds the fetch to this value explicitly.
+  const bindingProxy = schemeMatchedProxyFor(parsed);
+  const allowMihomoIpv6FakeIp = (bindingProxy !== null && !noProxyMatches(parsed))
     || transparentFakeIpException(url, parsed, isCanonicalUrl, name);
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
@@ -216,7 +226,7 @@ async function providerOutboundRequest(
       // proof is on the final request URL — not the provider name — because an
       // OAuth/forward name matches any baseUrl by design while the bearer is
       // pinned to the registry destination independently.
-      allowBenchmarkAddresses: (proxyConfigured && !noProxyMatches(parsed))
+      allowBenchmarkAddresses: proxyApplies
         || transparentFakeIpException(url, parsed, isCanonicalUrl, name),
       // Mihomo IPv6 fake-IP (fdfe:dcba:9876::/48) answers are admitted either when bound
       // to a scheme-matched proxy (#3462) or under the TUN transparency exception for a
@@ -229,21 +239,21 @@ async function providerOutboundRequest(
     if (!dnsResolutionFailed) {
       throw new ProviderOutboundPolicyError(error instanceof Error ? error.message : "provider destination was blocked");
     }
-    if (!proxyConfigured) throw error;
+    if (!proxyApplies) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
     return configuredOutboundFetch(url, { ...init, method, redirect: "manual" });
   }
   // A canonical TUN exception with no scheme-matched proxy must retain the
   // validated address, even when an unrelated HTTP_PROXY/ALL_PROXY is present.
-  if (proxyConfigured && !resolved.privateNetwork && (effectiveProxy !== null || !allowMihomoIpv6FakeIp)) {
+  if (proxyApplies && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
     // When the Mihomo exception could have admitted an answer, pin the transport to the
     // proxy the admission assumed instead of letting fetch re-infer it from the environment.
-    const proxy = (allowMihomoIpv6FakeIp && effectiveProxy) ? effectiveProxy : undefined;
+    const proxy = (allowMihomoIpv6FakeIp && bindingProxy) ? bindingProxy : undefined;
     return configuredOutboundFetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
-  if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
+  if (proxyApplies && resolved.privateNetwork) {
     const hostname = normalizeProxyHostname(parsed.hostname);
     throw new Error(
       `provider URL resolves to a private-network destination; add ${hostname} to NO_PROXY before using allowPrivateNetwork with an outbound proxy`,

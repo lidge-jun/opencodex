@@ -1570,7 +1570,9 @@
     "web-search-sidecar-429.test.ts": "web-search",
     "management-google-tool-schema-policy.test.ts": "server",
     "codex-shim-destroyed-probe.test.ts": "codex-integration",
-    "client-runtime.test.ts": "clients"
+    "client-runtime.test.ts": "clients",
+    "devin-output-budget.test.ts": "providers",
+    "api-key-model-scope.test.ts": "server"
   },
   "migrated": [
     "adapters",

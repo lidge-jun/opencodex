@@ -252,6 +252,37 @@ describe("codebuddy runTurn streams a headless turn", () => {
     expect(JSON.stringify(events)).not.toContain("secret-command");
   });
 
+  test("the projected history ceiling follows the model context window", async () => {
+    const stdout = [
+      enc.encode('{"type":"system","subtype":"init"}\n'),
+      enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":7,"output_tokens":2}}\n'),
+    ];
+    const history = Array.from({ length: 5 }, (_, index) => ({
+      role: "user" as const,
+      content: "EARLY-MARKER-" + String(index) + " " + "a".repeat(50_000),
+      timestamp: index,
+    }));
+    const messages = [...history, { role: "user", content: "final request", timestamp: 5 }];
+
+    const wide = fakeChild(stdout);
+    const wideAdapter = createCodeBuddyAdapter(
+      provider({ modelContextWindows: { "glm-5.3": 1_000_000 } }),
+      { spawn: () => wide as unknown as ChildProcess, which: () => "/usr/bin/codebuddy", killGraceMs: 20 },
+    );
+    await run(wideAdapter, parsed({ context: { messages } }));
+    expect(wide.written.join("")).toContain("EARLY-MARKER-0");
+    expect(wide.written.join("")).not.toContain("truncated for length");
+
+    const flat = fakeChild(stdout);
+    const flatAdapter = createCodeBuddyAdapter(
+      provider(),
+      { spawn: () => flat as unknown as ChildProcess, which: () => "/usr/bin/codebuddy", killGraceMs: 20 },
+    );
+    await run(flatAdapter, parsed({ context: { messages } }));
+    expect(flat.written.join("")).not.toContain("EARLY-MARKER-0");
+    expect(flat.written.join("")).toContain("truncated for length");
+  });
+
   test.each(["Bash", "exec", "shell", "apply_patch"])("refuses a bare %s DSML invoke", name => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));

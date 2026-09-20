@@ -1273,6 +1273,29 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
 // existing rows through enrichProviderFromRegistry, which is fill-only and
 // preserves explicit saved values.
 
+/**
+ * Output-budget fields an OAuth preset may refresh but must never erase.
+ *
+ * These stay on the reconcile list so a preset that does declare a budget still
+ * refreshes the saved row. What changes is the other branch: when the preset
+ * declares nothing, the operator's value survives instead of being deleted.
+ *
+ * Without that, the fields behaved as if they could not be configured at all.
+ * No OAuth preset seeds either one, so the delete branch was the only branch
+ * these two ever took, and a hand-edited `defaultMaxOutputTokens` was gone
+ * before the first turn of the next startup — leaving the adapter's own
+ * fallback as the only reachable output cap (#5190).
+ *
+ * Scoped to the output budget on purpose. The input side (`contextWindow`,
+ * `modelContextWindows`) describes what the account's models are, which the
+ * preset and live discovery do own; an output budget is a spend decision the
+ * operator makes.
+ */
+const OAUTH_PRESERVE_WHEN_PRESET_UNSET: ReadonlySet<keyof OcxProviderConfig> = new Set([
+  "defaultMaxOutputTokens",
+  "modelMaxOutputTokens",
+]);
+
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
 const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;
 
@@ -1312,7 +1335,7 @@ function applyOAuthPresetCatalog(
     if (JSON.stringify(provider[field]) === JSON.stringify(preset[field])) continue;
     if (preset[field] !== undefined) {
       provider[field] = cloneProviderField(preset[field]) as never;
-    } else {
+    } else if (!OAUTH_PRESERVE_WHEN_PRESET_UNSET.has(field)) {
       delete provider[field];
     }
   }

@@ -64,7 +64,8 @@ owner-only state and is validated before a record is returned. `src/config.ts` r
 symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
 
 Replacing config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
-process-wide temp sequence, symlink target resolution, real-home test guard, owner manifest,
+process-wide temp sequence, symlink target resolution, no-follow directory-entry replacement for
+externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut.
 

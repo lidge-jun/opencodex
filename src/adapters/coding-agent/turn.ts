@@ -1,8 +1,9 @@
 import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { commandInvocation } from "../../lib/win-exec";
+import { modelRecordValue } from "../../reasoning-effort";
 import type { IncomingMeta } from "../base";
-import { buildConversationInput, CodingAgentProtocolError, mapStreamMessageToEvents, readJsonLines, type StreamParseState } from "./protocol";
+import { buildConversationInput, CodingAgentProtocolError, mapStreamMessageToEvents, projectedHistoryCharLimit, readJsonLines, type StreamParseState } from "./protocol";
 import { resolveCodingAgentBinary, resolveProfileByBaseUrl, type CodingAgentProviderProfile, type WhichFn } from "./profile";
 
 /** Injectable spawn for tests; production uses node:child_process. */
@@ -264,7 +265,14 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     const stdin = child.stdin;
     if (stdin) {
       stdin.on("error", () => { /* EPIPE if the CLI exits early; surfaced via close/stderr */ });
-      for (const line of buildConversationInput(parsed)) stdin.write(`${line}\n`);
+      // The projected history scales with the model context window on the routed provider row
+      // (catalog and config metadata merged): a 1M-token model keeps 3M characters of replay
+      // where the flat cap cut it near 50k-130k tokens of content. Absent metadata keeps the
+      // flat cap.
+      const historyCharLimit = projectedHistoryCharLimit(
+        modelRecordValue(provider.modelContextWindows, parsed.modelId) ?? provider.contextWindow,
+      );
+      for (const line of buildConversationInput(parsed, { maxHistoryChars: historyCharLimit })) stdin.write(`${line}\n`);
       stdin.end();
     }
     const stdout = child.stdout;
