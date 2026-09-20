@@ -125,4 +125,37 @@ describe("attempt delivery summary", () => {
     expect(serialized).not.toContain("private");
     expect(Object.values(target.deliverySummary!).every(value => typeof value === "number")).toBe(true);
   });
+
+  test("a buffered response does not read as total relay loss", () => {
+    const target: AttemptDeliveryTarget = {};
+    const recorder = bindAttemptDeliveryRecorder({}, () => target);
+    for (let index = 0; index < 4; index += 1) recorder.noteAdapterEvent();
+    // Nothing calls the per-frame recorder on a non-streaming turn: the whole answer arrives as
+    // one body. Left at zero, every buffered request would raise the adapter-to-client loss
+    // signal these counters exist for.
+    recorder.noteBufferedDelivery({
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "hello" }] },
+        { type: "function_call", name: "lookup", arguments: "{}" },
+      ],
+    });
+    expect(target.deliverySummary).toEqual({
+      adapterEvents: 4,
+      relayedEvents: 4,
+      semanticBytes: 7,
+      sideEffectEvents: 1,
+      terminalEvents: 1,
+    });
+  });
+
+  test("a buffered body contributes counts and never its text", () => {
+    const target: AttemptDeliveryTarget = {};
+    const recorder = bindAttemptDeliveryRecorder({}, () => target);
+    recorder.noteAdapterEvent();
+    recorder.noteBufferedDelivery({
+      output: [{ type: "message", content: [{ type: "output_text", text: "a private answer" }] }],
+    });
+    expect(JSON.stringify(target.deliverySummary)).not.toContain("private");
+    expect(target.deliverySummary!.semanticBytes).toBe(16);
+  });
 });

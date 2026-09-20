@@ -24,6 +24,7 @@ import {
   ATTEMPT_RECOVERY_WITHHELD_ROSTER,
   REQUEST_FAILURE_CAUSES,
   REQUEST_FAILURE_STAGES,
+  REQUEST_TRANSPORT_PHASES,
   type AttemptRecoveryKind,
   type AttemptRecoveryWithheld,
   type AttemptDeliverySummary,
@@ -434,12 +435,10 @@ export function isKnownInboundProtocol(value: unknown): value is NonNullable<Per
   return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
-const KNOWN_TRANSPORT_PHASES = new Set<NonNullable<PersistedUsageEntry["transportPhase"]>>([
-  "pre_headers", "mid_stream", "terminal_sse",
-]);
+const KNOWN_TRANSPORT_PHASES: ReadonlySet<string> = new Set(REQUEST_TRANSPORT_PHASES);
 
 export function isKnownTransportPhase(value: unknown): value is NonNullable<PersistedUsageEntry["transportPhase"]> {
-  return typeof value === "string" && KNOWN_TRANSPORT_PHASES.has(value as NonNullable<PersistedUsageEntry["transportPhase"]>);
+  return typeof value === "string" && KNOWN_TRANSPORT_PHASES.has(value);
 }
 
 const KNOWN_TERMINAL_SOURCES = new Set<NonNullable<PersistedUsageEntry["terminalSource"]>>([

@@ -13,10 +13,18 @@ import {
   stageCommitment,
 } from "../../src/lib/request-failure-model";
 import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract";
-import { REQUEST_OUTCOME_CLASSES, classifyRequestOutcome } from "../../src/usage/request-outcome";
+import {
+  REQUEST_CLOSE_REASONS,
+  REQUEST_OUTCOME_CLASSES,
+  REQUEST_TERMINAL_STATUSES,
+  classifyRequestOutcome,
+} from "../../src/usage/request-outcome";
+import { REQUEST_TRANSPORT_PHASES } from "../../src/usage/telemetry-contract";
 
 /**
  * The fact space this derivation is total over.
+ *
+ * Holds INV-ATTRIBUTION-01 from structure/overview.md.
  *
  * Every axis is read from the module that declares it rather than restated, so a member added to
  * a roster widens this cross product instead of leaving a case nobody wrote. The status list is
@@ -25,9 +33,12 @@ import { REQUEST_OUTCOME_CLASSES, classifyRequestOutcome } from "../../src/usage
  * boundary values (`0`, no head at all, and `499`) that decide a branch on their own.
  */
 const STATUSES = [0, 101, 200, 400, 401, 403, 413, 429, 451, 499, 500, 502, 503] as const;
-const TERMINAL_STATUSES = [undefined, "completed", "failed", "incomplete"] as const;
-const CLOSE_REASONS = [undefined, "terminal", "client_cancel", "non_stream", "body_stall", "body_overflow"] as const;
-const TRANSPORT_PHASES = [undefined, "pre_headers", "mid_stream", "terminal_sse"] as const;
+// Read from the modules that declare them, so a member added later widens this space instead of
+// leaving a case nobody wrote. Restating them is what let the recovery roster drift to nine of
+// thirteen while every test stayed green.
+const TERMINAL_STATUSES = [undefined, ...REQUEST_TERMINAL_STATUSES] as const;
+const CLOSE_REASONS = [undefined, ...REQUEST_CLOSE_REASONS] as const;
+const TRANSPORT_PHASES = [undefined, ...REQUEST_TRANSPORT_PHASES] as const;
 
 function* factSpace(): Generator<RequestFailureFacts> {
   for (const status of STATUSES) {

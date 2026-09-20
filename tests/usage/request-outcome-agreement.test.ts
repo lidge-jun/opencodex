@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import {
   REQUEST_OUTCOME_CLASSES,
+  REQUEST_CLOSE_REASONS,
+  REQUEST_TERMINAL_STATUSES,
   classifyRequestOutcome,
   requestPhysicalSends,
   requestSettledSends,
@@ -34,11 +36,13 @@ function sampleValue(snapshot: string, series: string): number {
   return line === undefined ? Number.NaN : Number(line.slice(series.length + 1));
 }
 
-/** Every combination a terminal can arrive in, built from the declared vocabularies. */
-const TERMINAL_STATUSES = [undefined, "completed", "failed", "incomplete"] as const;
-const CLOSE_REASONS = [
-  undefined, "terminal", "client_cancel", "non_stream", "body_stall", "body_overflow",
-] as const;
+/**
+ * Every combination a terminal can arrive in, read from the modules that declare them rather
+ * than written out. A restated list is how a member added later leaves this cross product green
+ * without ever being exercised.
+ */
+const TERMINAL_STATUSES = [undefined, ...REQUEST_TERMINAL_STATUSES] as const;
+const CLOSE_REASONS = [undefined, ...REQUEST_CLOSE_REASONS] as const;
 const STATUSES = [101, 200, 204, 399, 400, 429, 499, 500, 502] as const;
 
 describe("terminal classification is stated once", () => {

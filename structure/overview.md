@@ -145,10 +145,14 @@ still cover the rule, which is a judgement only review makes.
   automatically permits a resend, and a cause whose upstream execution state is unknown is not made
   replayable by having budget left. A refusal names which of the three refusals it is. The decision is
   derived from per-stage and per-cause facts rather than written out as a stage-by-cause matrix, so a
-  new member cannot leave a stale cell. `src/lib/request-failure-attribution.ts` derives the pair from
-  closed recorder facts and never from `errorCode` or `upstreamError`, which are open strings; the
-  resend verdict is computed at read time and never persisted.
-  Enforced by `tests/lib/failure-stage-model.test.ts` and `tests/lib/failure-attribution.test.ts`.
+  new member cannot leave a stale cell.
+  Enforced by `tests/lib/failure-stage-model.test.ts`.
+- **INV-ATTRIBUTION-01** — `src/lib/request-failure-attribution.ts` derives the persisted failure
+  stage and cause from closed recorder facts only, never from `errorCode` or `upstreamError`, which
+  are assembled partly from upstream text. An unknown upstream execution state is attributed to a
+  cause that refuses an automatic resend rather than to one that permits it, and the resend verdict
+  the pair implies is computed at read time and never persisted.
+  Enforced by `tests/lib/failure-attribution.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

@@ -168,6 +168,21 @@ export const RESEND_PERMISSIONS = Object.freeze([
 export type ResendPermission = typeof RESEND_PERMISSIONS[number];
 
 /**
+ * Where a terminal or failure was observed on the wire.
+ *
+ * Declared here because three modules read it as a closed set -- the durable row's validator,
+ * the failure attribution and the failure fingerprint -- and a fourth restatement in a test is
+ * how a member added later leaves an "exhaustive" cross product green without exercising it.
+ */
+export const REQUEST_TRANSPORT_PHASES = Object.freeze([
+  "pre_headers",
+  "mid_stream",
+  "terminal_sse",
+] as const);
+
+export type RequestTransportPhase = typeof REQUEST_TRANSPORT_PHASES[number];
+
+/**
  * What an attempt actually delivered, as five bounded counts (#3983).
  *
  * #3983 wanted these signals and emitted one debug line per event to get them. That is a second

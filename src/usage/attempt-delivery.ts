@@ -24,6 +24,7 @@ export interface RelayedEventObservation {
 export interface AttemptDeliveryRecorder {
   noteAdapterEvent(): void;
   noteRelayedEvent(observation?: RelayedEventObservation): void;
+  noteBufferedDelivery(body: Record<string, unknown>): void;
 }
 
 export function createAttemptDeliverySummary(): AttemptDeliverySummary {
@@ -88,6 +89,38 @@ export function classifyRelayedResponseEvent(
   return observation;
 }
 
+/**
+ * What one buffered response body delivered.
+ *
+ * A non-streaming turn has no frames: the whole answer reaches the client as one JSON body. Read
+ * naively that looks like total relay loss -- adapter events counted, nothing relayed -- which is
+ * precisely the signal these counters exist to raise, so a buffered response would raise it on
+ * every request and make it worthless. Everything the adapter produced DID reach the client here;
+ * it arrived in one piece. So the relayed total is set to the adapter total rather than left at
+ * zero, and the semantic facts are read from the body that was built.
+ *
+ * Fields are read defensively and by name. Keying this on the adapter event union would make a
+ * member added later a merge-time exhaustiveness failure in a counter that does not need one.
+ */
+function observeBufferedBody(body: Record<string, unknown>): { semanticBytes: number; sideEffects: number } {
+  const output = Array.isArray(body.output) ? body.output : [];
+  let semanticBytes = 0;
+  let sideEffects = 0;
+  for (const entry of output) {
+    if (entry === null || typeof entry !== "object") continue;
+    const item = entry as Record<string, unknown>;
+    if (typeof item.type === "string" && SIDE_EFFECT_ITEM_TYPES.has(item.type)) sideEffects += 1;
+    if (typeof item.arguments === "string") semanticBytes += Buffer.byteLength(item.arguments, "utf8");
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (part === null || typeof part !== "object") continue;
+      const text = (part as Record<string, unknown>).text;
+      if (typeof text === "string") semanticBytes += Buffer.byteLength(text, "utf8");
+    }
+  }
+  return { semanticBytes, sideEffects };
+}
+
 const recordersByScope = new WeakMap<object, AttemptDeliveryRecorder>();
 
 /**
@@ -119,6 +152,15 @@ export function bindAttemptDeliveryRecorder(
       if (observation?.semanticBytes) summary.semanticBytes = bump(summary.semanticBytes, observation.semanticBytes);
       if (observation?.sideEffect) summary.sideEffectEvents = bump(summary.sideEffectEvents, 1);
       if (observation?.terminal) summary.terminalEvents = bump(summary.terminalEvents, 1);
+    },
+    noteBufferedDelivery(body): void {
+      const summary = summaryFor();
+      if (!summary) return;
+      const observed = observeBufferedBody(body);
+      summary.relayedEvents = Math.max(summary.relayedEvents, summary.adapterEvents);
+      summary.semanticBytes = bump(summary.semanticBytes, observed.semanticBytes);
+      summary.sideEffectEvents = bump(summary.sideEffectEvents, observed.sideEffects);
+      summary.terminalEvents = bump(summary.terminalEvents, 1);
     },
   };
   recordersByScope.set(scope, recorder);

@@ -7,6 +7,7 @@ import type {
   OcxUsage,
 } from "../types";
 import { coerceIntegerToolArguments } from "../lib/tool-argument-integers";
+import { attemptDeliveryRecorder } from "../usage/attempt-delivery";
 import {
   adapterFailureFromMessage,
   classifyError,
@@ -51,7 +52,14 @@ export function buildResponseJSON(
 ): Record<string, unknown> {
   // Default-budget safety net: a caller that omits the budget gets a bounded
   // default (disposed with the call), never the unbounded append path.
-  if (options?.translatorBudget) return buildResponseJSONWithBudget(events, modelId, options);
+  if (options?.translatorBudget) {
+    const body = buildResponseJSONWithBudget(events, modelId, options);
+    // A buffered turn delivers its whole answer as one body, so nothing calls the per-frame
+    // recorder on the SSE bridge. Without this the attempt would persist adapter events with
+    // zero relayed ones, which is the loss signal -- raised on every non-streaming request.
+    attemptDeliveryRecorder(options.translatorBudget)?.noteBufferedDelivery(body);
+    return body;
+  }
   const budget = createTranslatorBudget();
   try {
     return buildResponseJSONWithBudget(events, modelId, { ...options, translatorBudget: budget });
