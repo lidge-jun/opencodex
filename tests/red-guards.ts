@@ -209,4 +209,20 @@ export const GUARDS: Guard[] = [
     expect: "a provider that exists but lacks the route's endpoint names the endpoint",
     suite: VOICE,
   },
+  {
+    name: "route headers must be strings",
+    file: "src/config/voice-target.ts",
+    from: "    if (!isRecord(headers) || Object.values(headers).some(value => typeof value !== \"string\")) {",
+    to: "    if (false) {",
+    expect: "headers that are not strings are refused, naming the field",
+    suite: VOICE,
+  },
+  {
+    name: "route protocols must be an array of strings",
+    file: "src/config/voice-target.ts",
+    from: "      if (!Array.isArray(protocols) || !protocols.every(protocol => typeof protocol === \"string\")) {",
+    to: "      if (false) {",
+    expect: "protocols that are not an array of strings are refused",
+    suite: VOICE,
+  },
 ];

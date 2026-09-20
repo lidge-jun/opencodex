@@ -75,6 +75,28 @@ describe("voice target resolution", () => {
     expect(voiceProviderEndpointError("pocket", PROVIDERS.pocket, "transcription")).toContain("transcriptionUrl");
   });
 
+  test("headers that are not strings are refused, naming the field", () => {
+    const provider = { ...PROVIDERS.pocket, speechHeaders: { authorization: 7 } };
+    const error = voiceProviderEndpointError("pocket", provider as never, "speech");
+    expect(error).toContain("speechHeaders");
+    expect(error).toContain("object of strings");
+  });
+
+  test("protocols that are not an array of strings are refused", () => {
+    // `dictationProtocols` is the only per-route field with no test anywhere
+    // on this branch, and the one that reaches a WebSocket handshake — a
+    // number in that list becomes a subprotocol header the far side rejects.
+    const provider = { ...PROVIDERS.handy, dictationUrl: "ws://h/s", dictationProtocols: ["ok", 7] };
+    const error = voiceProviderEndpointError("handy", provider as never, "dictation");
+    expect(error).toContain("dictationProtocols");
+    expect(error).toContain("array of strings");
+  });
+
+  test("well-formed headers and protocols are accepted", () => {
+    const provider = { ...PROVIDERS.handy, dictationUrl: "ws://h/s", dictationProtocols: ["a"] };
+    expect(voiceProviderEndpointError("handy", provider as never, "dictation")).toBeNull();
+  });
+
   test("a provider with no voice endpoint at all is refused", () => {
     expect(voiceProviderEndpointError("bare", PROVIDERS.bare, "transcription")).toContain("transcriptionUrl");
   });
