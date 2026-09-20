@@ -220,6 +220,12 @@ describe("widget extension signing", () => {
   };
   const steps = workflow.jobs?.["package-desktop"]?.steps ?? [];
   const indexOfStep = (name: string) => steps.findIndex(step => step.name === name);
+  // Located by what a step does, not by what it is called. The first version of this file keyed
+  // on step names, and #5339 renamed the certificate import while this branch was open: the
+  // rename survived the merge, the assertion did not, and `dev` went red on a test whose subject
+  // was still correct.
+  const indexOfStepRunning = (fragment: string) =>
+    steps.findIndex(step => typeof step.run === "string" && step.run.includes(fragment));
 
   test("the release build hands the widget a signing identity and forbids an ad-hoc fallback", () => {
     const build = steps.find(step => step.name === "Build WidgetKit extension");
@@ -233,16 +239,16 @@ describe("widget extension signing", () => {
   test("the certificate is importable before the widget is signed and is removed afterwards", () => {
     // codesign resolves an identity through the keychain search list, and Tauri does not build
     // its own keychain until the bundling step, which is after this one.
-    const importStep = indexOfStep("Import the Apple signing certificate for the widget");
+    const importStep = indexOfStepRunning("security create-keychain");
     const buildStep = indexOfStep("Build WidgetKit extension");
     expect(importStep).toBeGreaterThanOrEqual(0);
     expect(buildStep).toBeGreaterThan(importStep);
 
-    const cleanup = steps.find(step => step.name === "Remove the widget signing keychain");
+    const cleanup = steps[indexOfStepRunning("security delete-keychain")];
     expect(cleanup?.if).toContain("always()");
-    expect(cleanup?.run).toContain("security delete-keychain");
-    // The decoded p12 must not outlive the import.
-    expect(steps[importStep]?.run).toContain("rm -f \"$certificate\"");
+    // The decoded p12 must not outlive the import, including when a later command fails.
+    expect(steps[importStep]?.run).toContain("trap ");
+    expect(steps[importStep]?.run).toContain("$certificate");
   });
 
   test("the script selects binaries by Mach-O magic bytes rather than by name", () => {
