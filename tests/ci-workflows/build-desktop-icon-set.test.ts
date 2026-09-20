@@ -50,6 +50,9 @@ function declaredIcoSizes(source: string): number[] {
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+/** Truecolour with alpha, the only colour type a Tauri window icon is allowed to be. */
+const RGBA = 6;
+
 function isPng(bytes: Buffer): boolean {
   return bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
 }
@@ -81,6 +84,19 @@ describe("desktop icon set", () => {
       if (width !== size || height !== size) wrong.push(`${name}: ${width}x${height} != ${size}`);
     }
     expect(wrong).toEqual([]);
+  });
+
+  /**
+   * The backdrop is opaque, and librsvg drops the alpha channel when nothing in a render is
+   * transparent. That is a valid PNG and a broken icon: `tauri::generate_context!` refuses a
+   * window icon that is not RGBA, so the desktop app stops compiling with "icon ... is not RGBA"
+   * — a failure that only a real bundle build reaches. The generator re-encodes, and this is what
+   * notices if that ever stops happening.
+   */
+  test("every committed raster keeps the alpha channel Tauri requires", () => {
+    const names = [...pngs.keys(), join("tray", "icon.png")];
+    const flat = names.filter(name => readFileSync(join(ICONS_DIR, name))[25] !== RGBA);
+    expect(flat, "these rasters lost their alpha channel").toEqual([]);
   });
 
   test("icon.ico carries exactly the sizes the generator packs, each a real PNG of that size", () => {
