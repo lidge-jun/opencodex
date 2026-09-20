@@ -16,7 +16,9 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/ocx"],
+    "externalBin": [
+      "binaries/ocx"
+    ],
     "resources": {
       "resources/gui/dist": "gui/dist"
     },
@@ -60,7 +62,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcxRDdFOTFGNUFGNUQ4RjkKUldUNTJQVmFIK25YY2Z1RGdOUlJtcDZzNWprUG1FakVySHU4aExMc0pDeWlqblgyTE56SUp3NDkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDNzZCMDg0NkVCRUJGODEKUldTQnY3NXVoTEIyckhRUXJMOXJRUDR0aHQ2L3pLVHVweXFSc1lzS24vWDNiSUJ5MXJIZmpyb2sK",
       "endpoints": [
         "https://github.com/lidge-jun/opencodex/releases/latest/download/latest.json"
       ]
