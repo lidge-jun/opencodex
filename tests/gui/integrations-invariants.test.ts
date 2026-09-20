@@ -134,7 +134,7 @@ describe("the client registries cannot drift apart", () => {
 
     // And a refusal, so the reason vocabulary crosses too rather than only the
     // shape of a plan that can apply.
-    const storePath = INTEGRATION_CLIENTS.zcode.supersededBy!(TEST_ENV, home);
+    const storePath = INTEGRATION_CLIENTS.zcode.currentStore!.path(TEST_ENV, home);
     mkdirSync(dirname(storePath), { recursive: true });
     writeFileSync(storePath, "{}\n");
     const refused = previewIntegration(input, { operation: "apply" });

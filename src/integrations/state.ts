@@ -11,6 +11,7 @@
 import { createClineIO } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
 import { ClientPathError, EXPORT_CLIENTS, opencodeProxyBaseUrl, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import type { ConfigFormat } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
@@ -25,10 +26,10 @@ import {
 import {
   INTEGRATION_CLIENTS,
   resolveIntegrationPaths,
-  supersededStorePath,
   unresolvedPathHintFor,
   type IntegrationClientId,
 } from "./registry";
+import { resolveIntegrationTarget, type IntegrationTarget } from "./target";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 
 export type IntegrationState = "absent" | "current" | "stale" | "conflict" | "unsafe";
@@ -52,7 +53,12 @@ export interface IntegrationStatus {
   lastOpId?: string;
   reason?: StateReason;
   /**
-   * The store this client reads instead of `configPath`, when one exists.
+   * The store this client reads instead of `configPath`.
+   *
+   * Present only when the integration is NOT writing that store: either our
+   * block is still in the config file, or the store is not a document whose
+   * shape has been observed. Where the store is written, `configPath` names it
+   * and there is nothing to report beside the state.
    *
    * Orthogonal to `state`, which answers "what is on disk, and did we put it
    * there?" — and answers it correctly here: the block can be byte-for-byte
@@ -273,6 +279,14 @@ export function classifyIntegration(input: {
    */
   configPath?: string;
   clientId?: IntegrationClientId;
+  /**
+   * Text format of the file being classified, which is not always the client's
+   * config format: a client that moved its providers keeps a second document
+   * whose format is declared with the store. Only the comment-capability of the
+   * format is read here, and reading the wrong one would decide a sibling edit
+   * the wrong way.
+   */
+  format?: ConfigFormat;
 }): { state: IntegrationState; reason?: StateReason } {
   if (input.fileText !== null && !input.fileIsRegular) {
     return { state: "unsafe", reason: "not-regular-file" };
@@ -381,7 +395,7 @@ export function classifyIntegration(input: {
      * stands and re-owns the file. This also lets disable proceed on a
      * drifted file — removal still touches only the recorded fragment paths.
      */
-    if (EXPORT_CLIENTS[clientId].format !== "json") {
+    if ((input.format ?? EXPORT_CLIENTS[clientId].format) !== "json") {
       return { state: "conflict", reason: "foreign-edit" };
     }
     return { state: "stale" };
@@ -479,7 +493,6 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   retryPendingPrunesOnce(store);
   let io = input.io ?? store.io();
   const spec = INTEGRATION_CLIENTS[input.clientId];
-  const exportSpec = EXPORT_CLIENTS[input.clientId];
   const retention = retentionOf(input.clientId, store);
   /*
    * Resolution can refuse — a relative OPENCLAW_* selector names a file whose
@@ -487,16 +500,25 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
    * every client for its state, so letting that escape would answer 500 for
    * the whole Integrations page because one client is misconfigured.
    */
-  let configPath: string;
   let installed: boolean;
-  let supersededBy: string | null;
+  let effective: IntegrationTarget;
+  let record: OwnershipRecord | null;
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
     const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home);
-    configPath = paths.configPath;
     installed = io.statKind(paths.detectDir) === "dir";
-    supersededBy = supersededStorePath(input.clientId, path => io.statKind(path), input.env, input.home);
+    if (input.clientId === "cline") io = createClineIO(io, paths.configPath, store);
+    /*
+     * The record is one of the inputs the target is chosen from, so it is read
+     * here rather than after the file. The status this function reports is about
+     * whichever file the next mutation would act on; reading a different one
+     * would let the badge and the switch disagree.
+     */
+    record = store.readRecords()[input.clientId] ?? null;
+    effective = resolveIntegrationTarget({
+      clientId: input.clientId, configPath: paths.configPath, io, record, env: input.env, home: input.home,
+    });
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
     /*
@@ -521,30 +543,32 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     };
   }
 
-  if (input.clientId === "cline") io = createClineIO(io, configPath, store);
-  const target = loadTarget(io, configPath);
-  if (!target.ok) {
+  const configPath = effective.configPath;
+  const loaded = loadTarget(io, configPath);
+  if (!loaded.ok) {
     return {
       clientId: input.clientId,
       state: "unsafe",
       installed,
       configPath,
-      reason: target.why === "read-failed" ? "unparseable" : "not-regular-file",
+      reason: loaded.why === "read-failed" ? "unparseable" : "not-regular-file",
       ...retention,
     };
   }
 
-  const parsed = input.clientId === "cline" ? parseClineDocument(target.before) : parseConfig(target.before, exportSpec.format);
-  const contribution = exportSpec.buildContribution(exportContextOf(input));
-  const record = store.readRecords()[input.clientId] ?? null;
+  const parsed = input.clientId === "cline"
+    ? parseClineDocument(loaded.before)
+    : parseConfig(loaded.before, effective.format);
+  const contribution = effective.buildContribution(exportContextOf(input));
   const { state, reason } = classifyIntegration({
-    fileText: target.before,
+    fileText: loaded.before,
     fileIsRegular: true,
     parsed,
     record,
     contribution,
     configPath,
     clientId: input.clientId,
+    format: effective.format,
   });
 
   return {
@@ -553,7 +577,13 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     installed,
     configPath,
     ...(reason ? { reason } : {}),
-    ...(supersededBy ? { supersededBy } : {}),
+    /*
+     * Only when the client reads a DIFFERENT file than the one this status is
+     * about. A store we are writing needs no notice; the path already names it.
+     */
+    ...(effective.ineffective && effective.ineffective.store !== configPath
+      ? { supersededBy: effective.ineffective.store }
+      : {}),
     ...(record ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
     ...retention,
   };

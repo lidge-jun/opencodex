@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ClientPathError, type ExportModel } from "../../src/clients/config-export";
 import { previewIntegration } from "../../src/integrations/mutation-plan";
-import { INTEGRATION_CLIENTS, supersededStorePath } from "../../src/integrations/registry";
+import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { resolveIntegrationTarget } from "../../src/integrations/target";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { readIntegrationState } from "../../src/integrations/state";
 import {
@@ -69,7 +70,7 @@ function installZcode(): string {
 
 /** The file whose presence means the client stopped reading its config file. */
 function storePath(env: NodeJS.ProcessEnv = TEST_ENV): string {
-  return spec().supersededBy!(env, home);
+  return spec().currentStore!.path(env, home);
 }
 
 function createStore(contents = "{}\n"): string {
@@ -165,7 +166,16 @@ describe("a client that moved its provider store", () => {
     // A directory at that path is not a provider list the client loaded, and
     // refusing over it would block an apply that would have worked.
     mkdirSync(storePath(), { recursive: true });
-    expect(supersededStorePath("zcode", path => (existsSync(path) ? "dir" : "missing"), TEST_ENV, home)).toBeNull();
+    const resolved = resolveIntegrationTarget({
+      clientId: "zcode",
+      configPath: spec().configPath(TEST_ENV, home),
+      io: store.io(),
+      record: null,
+      env: TEST_ENV,
+      home,
+    });
+    expect(resolved.superseded).toBeNull();
+    expect(resolved.configPath).toBe(spec().configPath(TEST_ENV, home));
     expect(applyIntegration(input()).ok).toBe(true);
   });
 
@@ -191,6 +201,6 @@ describe("a client that moved its provider store", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toContain(relocated);
     // The default location is empty, so only the override could have produced this.
-    expect(existsSync(spec().supersededBy!(TEST_ENV, home))).toBe(false);
+    expect(existsSync(spec().currentStore!.path(TEST_ENV, home))).toBe(false);
   });
 });

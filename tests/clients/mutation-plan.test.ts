@@ -89,7 +89,7 @@ const BASE: PlanFingerprintInput = {
   detectDir: "/home/example/.cline",
   installKind: "dir",
   admissionBlocked: false,
-  supersededStore: null,
+  ineffectiveWrite: null,
   before: "{}",
   contribution: CONTRIBUTION,
   record: RECORD,
@@ -205,7 +205,10 @@ describe("integration plan fingerprint", () => {
       // A client that creates its new provider store while a confirmation is
       // outstanding changes whether the write can reach it at all, and leaves
       // the file, the record and the contribution untouched while doing it.
-      { ...BASE, supersededStore: "/home/example/.client/store.json" },
+      { ...BASE, ineffectiveWrite: "unestablished-schema\u0000/home/example/.client/store.json" },
+      // The same location with a different reason is a different answer: a store
+      // whose schema stops being one we recognise moves nothing on disk.
+      { ...BASE, ineffectiveWrite: "owned-config-file\u0000/home/example/.client/store.json" },
       // Different bytes, and absent distinguished from empty: restoring over a missing file and
       // over an empty one are different operations.
       { ...BASE, before: "{ }" },
@@ -291,7 +294,7 @@ describe("integration mutation plan", () => {
     // Installation outranks a conflict the file would otherwise report.
     expect(buildMutationPlan({ ...conflicted, installKind: "missing" }).refusalReason).toBe("not_installed");
     expect(buildMutationPlan({ ...conflicted, admissionBlocked: true }).refusalReason).toBe("non_loopback");
-    expect(buildMutationPlan({ ...conflicted, supersededStore: "/home/example/.client/store.json" }).refusalReason)
+    expect(buildMutationPlan({ ...conflicted, ineffectiveWrite: "owned-config-file\u0000/store.json" }).refusalReason)
       .toBe("superseded_store");
     // And a conflict outranks the classifier's unsafe, which apply reports last.
     expect(buildMutationPlan(conflicted).refusalReason).toBe("conflict");
@@ -310,7 +313,7 @@ describe("integration mutation plan", () => {
     expect(buildMutationPlan({ ...disable, admissionBlocked: true }).canApply).toBe(true);
     // Removing bytes this project wrote to this file stays possible after the
     // client stops reading it; refusing would strand the block forever.
-    expect(buildMutationPlan({ ...disable, supersededStore: "/home/example/.client/store.json" }).canApply).toBe(true);
+    expect(buildMutationPlan({ ...disable, ineffectiveWrite: "owned-config-file\u0000/store.json" }).canApply).toBe(true);
     expect(buildMutationPlan({ ...disable, classified: { state: "conflict", reason: "foreign-edit" } }).refusalReason)
       .toBe("conflict");
   });
