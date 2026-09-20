@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,11 @@ import {
 } from "../../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import {
+  setAsyncWindowsPrincipalRunnerForTests,
+  setWindowsPrincipalRunnerForTests,
+} from "../../src/lib/windows-user-principal";
 import { getDefaultConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -18,6 +23,24 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 let home = "";
 let configDir = "";
 let trustedSystem32 = "";
+
+// This file fakes the trusted System32 directory, which also shadows the icacls.exe /
+// powershell.exe resolution startServer's spend-ledger acquisition hardens through — a
+// real lookup resolves inside the fake directory and dies EACLIDENTITY before the probe
+// runs. Stub both runners so the harden stays hermetic; the seams are inert for the tests
+// that never start a server.
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+const TEST_IDENTITY = { success: true, exitCode: 0, timedOut: false, stdout: "S-1-5-21-1-2-3-1001\nocx-test\n" };
+setIcaclsRunnerForTests(() => ICACLS_OK);
+setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+setWindowsPrincipalRunnerForTests(() => TEST_IDENTITY);
+setAsyncWindowsPrincipalRunnerForTests(async () => TEST_IDENTITY);
+afterAll(() => {
+  setWindowsPrincipalRunnerForTests(null);
+  setAsyncWindowsPrincipalRunnerForTests(null);
+  setIcaclsRunnerForTests(null);
+  setAsyncIcaclsRunnerForTests(null);
+});
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-probe-hardening-"));
