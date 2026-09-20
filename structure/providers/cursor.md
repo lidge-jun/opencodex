@@ -123,8 +123,8 @@ the freed bytes become spare. It requires the share to land in a narrow window w
 invocation line survives but `output:` does not; outside that window the clipped-line lookup declines
 the root first.
 Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
-`composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
-an invocation line. Coverage lives in
+`composer-2.5` and `composer-2.5-fast`, not only external wire models, so the restoration reaches
+every replay that carries an invocation line. Coverage lives in
 `tests/providers/cursor/cursor-tool-result-invocation.test.ts`.
 
 ## Cursor executable tool schema ownership

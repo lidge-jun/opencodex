@@ -270,15 +270,20 @@ export function isCursorExternalWireModel(modelId: string): boolean {
  * Observed on live Cursor Connect traffic (2026-08-20): `composer-2.5` (the
  * standard, non-fast build) resumes a tool-result turn with server-side native
  * tool calls (read/grep/exec) instead of answering, or completes with zero text
- * (empty `content` + `stop`). `composer-2.5-fast` answers correctly on the same
- * resumeAction path, so only the affected id is listed here. Sending the same
- * continuation as an explicit user message (external path) makes the model
- * answer reliably.
+ * (empty `content` + `stop`). Sending the same continuation as an explicit user
+ * message (external path) makes the model answer reliably.
+ *
+ * `composer-2.5-fast` was left on resumeAction after that same capture because
+ * it answered on that path then. A later live proxy log (2026-09-21) shows
+ * `cursor/composer-2.5-fast completed with no output text and no tool call` on
+ * the Chat Completions → Responses bridge used by OpenAI-compatible clients
+ * (GJC executor). That is the same empty-stop shape, so the fast id uses the
+ * external continuation path too.
  */
 export function cursorNeedsExternalToolContinuation(modelId: string): boolean {
   if (isCursorExternalWireModel(modelId)) return true;
   const wire = cursorCodexToWireModelId(modelId).trim().toLowerCase();
-  return wire === "composer-2.5";
+  return wire === "composer-2.5" || wire === "composer-2.5-fast";
 }
 
 function stripCursorEffortSuffix(wireModelId: string): string {
