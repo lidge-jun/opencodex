@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { detectRaycast, type RaycastDetectDeps } from "../../src/integrations/raycast-detect";
+import {
+  detectRaycast,
+  realRaycastDetectDeps,
+  type RaycastDetectDeps,
+} from "../../src/integrations/raycast-detect";
 
 /**
  * Stubbed deps only. The real detector spawns `defaults` and reads the
@@ -29,6 +33,21 @@ function fakeDeps(
 }
 
 describe("detectRaycast", () => {
+  test("the macOS preference probe uses the system binary with a bounded runtime", () => {
+    let invocation: { command: string[]; timeout?: number } | undefined;
+    const spawnSync = ((command: string[], options: { timeout?: number }) => {
+      invocation = { command, timeout: options.timeout };
+      return { exitCode: 0, stdout: Buffer.from("1") };
+    }) as typeof Bun.spawnSync;
+
+    const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
+    expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBe("1");
+    expect(invocation).toEqual({
+      command: ["/usr/bin/defaults", "read", "com.raycast.macos.v1", "subscriptions_active"],
+      timeout: 2_000,
+    });
+  });
+
   test("darwin: a Pro subscription, the app bundle and the revealed ai folder", () => {
     const deps = fakeDeps("darwin", ["/Applications/Raycast.app", "/home/u/.config/raycast/ai"], { defaultValue: "1" });
     expect(detectRaycast(deps)).toEqual({
