@@ -59,10 +59,27 @@ export function parseRecordedOwnership(raw) {
  * Both returned flags are VETOES, not commands: each updater already has its own reasons to
  * stop the proxy and to refresh the service, and this plan can only take them away.
  *
- * @param {{ ownership: { owner: string, installId: string, consentGeneration: number } | null, serviceInstalled: boolean }} input
+ * THE LIMIT OF THIS RULE. It reads the recorded claim, not the live process. If the app was
+ * deleted and the user then starts an npm proxy by hand, the stale claim still vetoes the
+ * stop and the update replaces package files under a live server. Proving WHICH runtime is
+ * answering needs the identity the bundled CLI's resolve contract will carry; until then the
+ * notice tells the user how to clear the marker.
+ *
+ * @param {{ ownership: { owner: string, installId: string, consentGeneration: number } | null, ownershipUnknown?: boolean, serviceInstalled: boolean }} input
  * @returns {{ stopRuntime: boolean, refreshService: boolean, notice: string | null }}
  */
-export function planUpdateRuntimeHandling({ ownership, serviceInstalled }) {
+export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false, serviceInstalled }) {
+  // Unreadable, malformed or contradictory is not "nobody owns it". Reading it that way is
+  // how a permissions error reactivates the npm launcher over a consented takeover.
+  if (ownershipUnknown) {
+    return {
+      stopRuntime: false,
+      refreshService: false,
+      notice: "⚠️  The background runtime's recorded owner could not be determined, so it was "
+        + "left running and the service registration was not touched. "
+        + "Run 'ocx service install' to re-register the service and take the runtime back.",
+    };
+  }
   // Any owner that is not this CLI. Reading it this way rather than testing for "desktop"
   // keeps a third kind of owner from silently falling into the branch that touches the npm
   // registration.
@@ -72,7 +89,8 @@ export function planUpdateRuntimeHandling({ ownership, serviceInstalled }) {
       refreshService: false,
       notice: `🖥️  The desktop app owns the background runtime (install ${ownership.installId}, `
         + `consent generation ${ownership.consentGeneration}). It was left running, and the `
-        + "service registration was neither re-enabled nor restarted.",
+        + "service registration was neither re-enabled nor restarted. "
+        + "If the desktop app is gone, run 'ocx service install' to take the runtime back.",
     };
   }
   return { stopRuntime: true, refreshService: serviceInstalled, notice: null };

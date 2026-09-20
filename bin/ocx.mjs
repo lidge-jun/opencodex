@@ -261,11 +261,25 @@ function runPackageManagerSelfUpdate(manager) {
   const serviceWasInstalled = existsSync(serviceStatePath);
   // What this update may do to the runtime. The same rule the Bun updater applies, from the
   // same module: a desktop takeover vetoes both the stop and the service refresh below.
-  let recordedOwnership = null;
-  try {
-    recordedOwnership = parseRecordedOwnership(serviceWasInstalled ? readFileSync(serviceStatePath, "utf8") : null);
-  } catch { /* unreadable record leaves the ordinary path in place */ }
-  const runtimePlan = planUpdateRuntimeHandling({ ownership: recordedOwnership, serviceInstalled: serviceWasInstalled });
+  const readOwnership = () => {
+    if (!existsSync(serviceStatePath)) return { ownership: null, ownershipUnknown: false };
+    try {
+      const raw = readFileSync(serviceStatePath, "utf8");
+      // Fails CLOSED on a record that exists but does not parse: unreadable and malformed
+      // are not "nobody owns it", and reading them that way reactivates the npm launcher
+      // over a takeover the user consented to.
+      if (!raw.trim()) return { ownership: null, ownershipUnknown: true };
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { return { ownership: null, ownershipUnknown: true }; }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ownership: null, ownershipUnknown: true };
+      if (parsed.ownership === undefined) return { ownership: null, ownershipUnknown: false };
+      const ownership = parseRecordedOwnership(raw);
+      return ownership ? { ownership, ownershipUnknown: false } : { ownership: null, ownershipUnknown: true };
+    } catch {
+      return { ownership: null, ownershipUnknown: true };
+    }
+  };
+  const runtimePlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
@@ -430,6 +444,14 @@ function runPackageManagerSelfUpdate(manager) {
         }
       }
       if (needDirectStart) {
+        // Re-read rather than reuse the plan from before the package install: the app can
+        // claim the runtime during an update that takes minutes, and the refusal that repair
+        // just returned is indistinguishable from any other failure at this layer.
+        const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true });
+        if (!nowOwned.stopRuntime) {
+          console.warn(nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
+          return;
+        }
         // Repair normally avoids elevation for a healthy registration, but a stale Windows
         // scheduler definition can require it. It can also fail — or exit 0 while leaving
         // a non-viable manager. Fall back to a direct detached proxy start so the

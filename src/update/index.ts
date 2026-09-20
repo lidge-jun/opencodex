@@ -320,6 +320,24 @@ export function checkUpdatePackageIntegrity(
 }
 
 /**
+ * The recorded runtime owner, in the shape the shared update rule reads.
+ *
+ * Fails CLOSED. A resolution this process could not obtain is not evidence that nobody owns
+ * the runtime, and treating it as such is how an unreadable record reactivates the npm
+ * launcher over a takeover the user consented to.
+ */
+async function resolvedRuntimeOwnership(): Promise<{ ownership: ServiceOwnership | null; ownershipUnknown: boolean }> {
+  try {
+    const { resolveServiceOwnership } = await import("../service");
+    const resolution = resolveServiceOwnership();
+    if (resolution.kind === "owned") return { ownership: resolution.ownership, ownershipUnknown: false };
+    return { ownership: null, ownershipUnknown: resolution.kind === "unknown" };
+  } catch {
+    return { ownership: null, ownershipUnknown: true };
+  }
+}
+
+/**
  * `ocx update` fallback for source checkouts and Bun global installs. npm and pnpm global installs
  * are updated in the Node bin launcher before Bun starts, so Windows does not replace the running
  * Bun binary.
@@ -386,12 +404,10 @@ export async function runUpdate(): Promise<void> {
   } catch { /* best-effort */ }
   // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
   // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
-  let recordedOwnership: ServiceOwnership | null = null;
-  try {
-    const { serviceOwnership } = await import("../service");
-    recordedOwnership = serviceOwnership();
-  } catch { /* best-effort: an unreadable record leaves the ordinary path in place */ }
-  const runtimePlan = planUpdateRuntimeHandling({ ownership: recordedOwnership, serviceInstalled: serviceWasInstalled });
+  const runtimePlan = planUpdateRuntimeHandling({
+    ...(await resolvedRuntimeOwnership()),
+    serviceInstalled: serviceWasInstalled,
+  });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
   let trayWasInstalled = false;
   let trayWasRunning = false;
@@ -649,6 +665,17 @@ export async function runUpdate(): Promise<void> {
               ? `   Run 'ocx service repair', then 'ocx start --port ${capturedListen.port}'.`
               : `   Run 'ocx service repair' to see the reason, then 'ocx start --port ${capturedListen.port}'.`);
           } else {
+            // Re-read rather than reuse the plan from before the package install: the app can
+            // claim the runtime during an update that takes minutes, and the refusal the
+            // repair above just returned is indistinguishable from any other failure here.
+            const nowOwned = planUpdateRuntimeHandling({
+              ...(await resolvedRuntimeOwnership()),
+              serviceInstalled: true,
+            });
+            if (!nowOwned.stopRuntime) {
+              console.warn(nowOwned.notice ?? "⚠️  The background runtime is owned elsewhere; not starting a second proxy.");
+              return;
+            }
             console.warn(
               serviceRefreshed
                 ? "⚠️  Service refresh left a non-viable manager (stale or missing assets) — starting the proxy directly instead."

@@ -7,6 +7,7 @@ export declare function parseRecordedOwnership(raw: string | null | undefined): 
 
 export declare function planUpdateRuntimeHandling(input: {
   ownership: { owner: string; installId: string; consentGeneration: number } | null;
+  ownershipUnknown?: boolean;
   serviceInstalled: boolean;
 }): {
   stopRuntime: boolean;
