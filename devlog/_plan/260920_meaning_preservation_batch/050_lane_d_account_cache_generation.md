@@ -179,6 +179,31 @@ introduced by the carried #4793 columns:
 
 ## Verification
 
+### The macOS sideband failure was shard composition, not the relay
+
+`macos 2/2` then failed twice on `sideband GET /v1/live/{callId} relays the exact frame
+ceiling bidirectionally`, and it is worth being precise about why, because retrying it would
+not have helped and neither would touching its deadline.
+
+The case relays a 50 MiB WebSocket frame end to end against a hard 15s deadline. It is not in
+`SERIAL_FULL_SUITE_FILES`, so it runs inside `bun test --shard=N/2` sharing one process with
+the rest of that half. On `dev` at `043aa435f` it lands in shard 1 and its echo leg alone
+takes **7.4s of the 15s budget**. This branch adds three test files in unrelated directories,
+Bun repartitioned the halves, `tests/server/server-live.test.ts` moved to shard 2, and the
+echo leg went past 15s on both attempts while the peer never received the frame
+(`recv=13 progress=5 moving=no`). Nothing in this lane's diff touches the sideband relay, the
+live route or WebSocket handling, and the delta between the run that passed every shard and
+the run that failed this one is three GUI test files and a devlog page.
+
+So the test has been passing by accident: its result was a property of which half it drew.
+The remedy is the mechanism the repository already has for this exact category —
+`SERIAL_FULL_SUITE_FILES`, described in its own guard as quarantining *load-sensitive* files
+into one-worker lanes. Adding `server/server-live.test.ts` there keeps the 15s deadline, keeps
+the assertion, and keeps macOS in the matrix; it only stops the case from sharing a process.
+It also takes the landmine out of the path of the next lane that adds a test file anywhere in
+the tree. If the coordinator would rather own that change centrally, it is one line in
+[scripts/test.ts](../../../scripts/test.ts) and can be lifted out of this branch.
+
 Per batch rules, no local suites, individual tests, typecheck, build,
 install or live `ocx` execution. Verification is static source review plus
 exact-head hosted CI.
