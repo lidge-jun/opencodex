@@ -147,6 +147,17 @@ matters when `truncate` has also failed, and the temp is owner-only. It predates
 affects every atomic config write, including secret-bearing ones, so fixing it is a change to a
 security-adjacent path that belongs in its own lane rather than inside a telemetry branch.
 
+## The file-size ratchet caught this branch once
+
+`src/server/request-log.ts` carries the whole request-logging surface and was 1,962 lines against
+the repository's 2,000-line seed threshold. The attribution wiring pushed it to 2,015, and
+`file-size ratchet: repository` reported `NEW_OVERSIZED` on the first exact-head run. The remedy is
+the one AGENTS.md gives — a move, never a number — so the two places a stage and cause are decided
+and written moved to `src/server/request-log-failure-attribution.ts`, leaving the file at 1,979.
+
+Worth recording for the next lane that touches this file: 21 lines of headroom is not much, and
+the cap only ever moves down.
+
 ## Verification
 
 Static source review plus exact-head hosted CI, and three adversarial reviews at high effort

@@ -58,8 +58,7 @@ import {
   type UsageStatus,
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
-import { deriveRequestFailureAttribution } from "../lib/request-failure-attribution";
-import { causeForRecoveryKind } from "../lib/request-failure-model";
+import { attributeFinalRequest, attributeSealedAttempt } from "./request-log-failure-attribution";
 import { debugAttemptDeliverySummary } from "../lib/debug";
 import {
   appendUsageDebug,
@@ -1405,45 +1404,18 @@ export function addFinalRequestLog(
     if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
     else delete logCtx.activeAttempt.errorCode;
   }
-  // Derived once, here, because this is the one seam every request passes exactly once however
-  // it ended. Deriving it at each transport's own exit would give the same request a different
-  // attribution per transport, which is the disagreement the shared terminal classifier already
-  // removed once. It runs BEFORE the attempt snapshot below, so the row that reaches disk and
-  // the live attempt object carry the same pair rather than one of them being stamped too late.
-  //
-  // Every input is a closed value. `errorCode` and `upstreamError` are deliberately not read:
-  // both are assembled partly from upstream text, so a classification keyed on them varies by
-  // provider and locale, and a grouping key built from them cannot promise it carries no content.
-  const attribution = deriveRequestFailureAttribution({
+  // Derived and stamped in a sibling module, before the attempt snapshot below. Every input is
+  // a closed value; the open error strings are deliberately not among them.
+  const attribution = attributeFinalRequest({
     status: effectiveStatus,
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
-    ...(logCtx.activeAttempt?.streamAborted === true ? { streamAborted: true } : {}),
-    // The REQUEST's output observation, not the final attempt's.
-    //
-    // A request that relayed output on its first attempt and then failed over has committed
-    // that output to the caller whatever the last attempt saw, so the logical row and the
-    // attempt that ended it carry the same answer. Reading the attempt-local value here would
-    // produce a MORE permissive resend verdict for exactly that case, and a permission
-    // decision has to fail in the safe direction.
     outputObserved: logCtx.firstOutputMs !== undefined,
-    // The one fact that can raise a stage above `semantic-output`, and the reason it is
-    // counted at the transport rather than at the adapter: an emitted tool call the client
-    // never received has committed nothing, and a resend for it is still safe (#3983).
-    sideEffectObserved: (logCtx.activeAttempt?.deliverySummary?.sideEffectEvents ?? 0) > 0,
     locallyAnswered: logCtx.localTerminalReason !== undefined,
-    recoveryKinds: logCtx.activeAttempt?.recoveryKinds ?? [],
+    ...(logCtx.activeAttempt ? { attempt: logCtx.activeAttempt } : {}),
   });
-  // The final row and the attempt that ended it describe the same exchange, so they carry the
-  // same pair rather than each deriving one from a different slice of the facts.
-  if (logCtx.activeAttempt) {
-    if (attribution?.stage) logCtx.activeAttempt.failureStage = attribution.stage;
-    else delete logCtx.activeAttempt.failureStage;
-    if (attribution?.cause) logCtx.activeAttempt.failureCause = attribution.cause;
-    else delete logCtx.activeAttempt.failureCause;
-  }
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
   // earlier send of this request as unresolved spend rather than handing its tokens back.
@@ -1482,7 +1454,7 @@ export function addFinalRequestLog(
     ...(closeReason ? { closeReason } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
     ...(spend ? { spendSends: spend.sends } : {}),
-    ...(attribution?.cause ? { failureCause: attribution.cause } : {}),
+    ...(attribution.failureCause ? { failureCause: attribution.failureCause } : {}),
   });
   const cacheProvenance = classifyCacheTelemetryProvenance(loggedUsage, {
     wireParsed: logCtx.usageWireParsed === true,
@@ -1573,8 +1545,7 @@ export function addFinalRequestLog(
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
-    ...(attribution?.stage ? { failureStage: attribution.stage } : {}),
-    ...(attribution?.cause ? { failureCause: attribution.cause } : {}),
+    ...attribution,
   });
   // Formatted from the finalized snapshot, so the ring shows exactly what the ledger holds.
   for (const attempt of attempts ?? []) debugAttemptDeliverySummary(requestId, attempt);
@@ -1828,14 +1799,7 @@ export function noteProviderAttemptSend(
     // is direct evidence here rather than an inference from history. Without this the sealed
     // attempt would reach the ledger with no attribution at all: the finalization seam below
     // only ever sees the last attempt of the request.
-    const sealedAttribution = deriveRequestFailureAttribution({
-      status: attempt.status,
-      outputObserved: attempt.firstOutputMs !== undefined,
-      sideEffectObserved: (attempt.deliverySummary?.sideEffectEvents ?? 0) > 0,
-      ...(recovery ? { causeHint: causeForRecoveryKind(recovery) } : {}),
-    });
-    if (sealedAttribution?.stage) attempt.failureStage = sealedAttribution.stage;
-    if (sealedAttribution?.cause) attempt.failureCause = sealedAttribution.cause;
+    attributeSealedAttempt(attempt, recovery);
     const completed = { ...attempt, recoveryKinds: [...attempt.recoveryKinds],
       ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
       ...(attempt.deliverySummary ? { deliverySummary: { ...attempt.deliverySummary } } : {}),
