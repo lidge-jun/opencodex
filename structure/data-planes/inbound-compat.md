@@ -110,6 +110,21 @@ or storage semantics retain the existing Chat -> Responses -> Chat bridge.
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
 aliasing as native Responses; see [`responses.md`](../transports/responses.md).
 
+On that bridge, `src/chat/inbound.ts` decides where a `system` or `developer` message lands by
+where the caller wrote it. A leading block, before any conversational item exists, becomes
+`instructions`. One that arrives after the conversation has started becomes a chronological
+`role:"developer"` input item instead, the same representation `src/claude/inbound.ts` mints for a
+mid-conversation instruction, so the slot the caller chose survives to the adapter that preserves
+it. The role is `developer` rather than `system` because the native ChatGPT backend refuses a
+`system` item inside `input` and canonical forwarding folds a message-shaped `system` item back
+onto `instructions`. An instruction that arrives between a tool call and its result is held until
+the batch drains, or until the next user or assistant turn, so the pair the Kiro, Anthropic and
+Google mappers require to stay adjacent is never split. Placement on the wire is then owned by
+[chronological in-conversation instructions](../providers/chat-compat.md#chronological-in-conversation-instructions),
+which also decides which role that slot carries. Regression coverage is in
+`tests/responses/chat-inbound-developer-position.test.ts`, which compares the final upstream body
+on the native Chat route, a combo route and the Responses endpoint.
+
 The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
 upstream failures, never successful partial completions. Provider-controlled structured error
