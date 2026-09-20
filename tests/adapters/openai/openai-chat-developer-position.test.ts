@@ -37,10 +37,9 @@ function wireMessages(provider: OcxProviderConfig): Array<Record<string, unknown
 describe("developer message placement on the Chat wire", () => {
   test("a non-OpenAI gateway keeps the instruction between the two turns", () => {
     const messages = wireMessages(gateway);
-    expect(messages.map(message => message.role)).toEqual(["system", "user", "developer", "user"]);
     expect(messages[0]).toEqual({ role: "system", content: "base instructions" });
     expect(messages[1]).toEqual({ role: "user", content: "First turn." });
-    expect(messages[2]).toEqual({ role: "developer", content: "Answer in exactly one sentence." });
+    expect(messages[2].content).toBe("Answer in exactly one sentence.");
     expect(messages[3]).toEqual({ role: "user", content: "Second turn." });
   });
 
@@ -54,22 +53,39 @@ describe("developer message placement on the Chat wire", () => {
       "http://localhost:1234/v1",
       "https://api.openai.com/v1",
     ];
+    // Placement is asserted for both role states, because the role is decided separately and
+    // must never be able to move the message.
     for (const baseUrl of hosts) {
-      const messages = wireMessages({ ...gateway, baseUrl });
-      expect(messages.map(message => message.role)).toEqual(["system", "user", "developer", "user"]);
-      expect(messages[2].content).toBe("Answer in exactly one sentence.");
-      expect(messages[3]).toEqual({ role: "user", content: "Second turn." });
+      for (const declared of [{}, { foldDeveloperRoleToSystem: false }, { foldDeveloperRoleToSystem: true }]) {
+        const messages = wireMessages({ ...gateway, baseUrl, ...declared });
+        expect(messages).toHaveLength(4);
+        expect(messages[2].content).toBe("Answer in exactly one sentence.");
+        expect(messages[3]).toEqual({ role: "user", content: "Second turn." });
+      }
     }
   });
 });
 
 describe("developer role on the Chat wire", () => {
-  test("the role is forwarded as itself rather than inferred from the hostname", () => {
+  test("an undeclared destination folds the role rather than gambling on it", () => {
+    // The reason this is the default: a gateway that rejects the role answers
+    // `400 role 'developer' is not allowed` and the turn never starts. Forwarding by default
+    // put that failure outside the repository, where no test could reach it.
     for (const baseUrl of ["https://openrouter.ai/api/v1", "http://localhost:1234/v1", "https://api.openai.com/v1"]) {
       expect(wireMessages({ ...gateway, baseUrl })[2]).toEqual({
-        role: "developer",
+        role: "system",
         content: "Answer in exactly one sentence.",
       });
+    }
+  });
+
+  test("the role still never depends on the destination hostname", () => {
+    const declared = { ...gateway, foldDeveloperRoleToSystem: false };
+    for (const baseUrl of ["https://openrouter.ai/api/v1", "https://api.openai.com/v1"]) {
+      expect(wireMessages({ ...declared, baseUrl })[2].role).toBe("developer");
+    }
+    for (const baseUrl of ["https://openrouter.ai/api/v1", "https://api.openai.com/v1"]) {
+      expect(wireMessages({ ...gateway, baseUrl })[2].role).toBe("system");
     }
   });
 
@@ -80,7 +96,9 @@ describe("developer role on the Chat wire", () => {
     expect(String(messages[0].content)).not.toContain("Answer in exactly one sentence.");
   });
 
-  test("the opt-out is off unless the operator sets it", () => {
-    expect(wireMessages({ ...gateway, foldDeveloperRoleToSystem: false })[2].role).toBe("developer");
+  test("a destination known to accept the role forwards it in the same slot", () => {
+    const messages = wireMessages({ ...gateway, foldDeveloperRoleToSystem: false });
+    expect(messages.map(message => message.role)).toEqual(["system", "user", "developer", "user"]);
+    expect(messages[2]).toEqual({ role: "developer", content: "Answer in exactly one sentence." });
   });
 });

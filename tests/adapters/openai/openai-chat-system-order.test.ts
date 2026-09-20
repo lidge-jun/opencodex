@@ -8,6 +8,10 @@ const provider: OcxProviderConfig = {
   adapter: "openai-chat",
   baseUrl: "http://localhost:1234/v1",
   apiKey: "local",
+  // These cases assert where a reminder sits, not which role carries it. The wire role folds
+  // to `system` unless a destination is recorded as accepting `developer`, so the destination
+  // is declared here to keep the ordering assertions reading the role they are about.
+  foldDeveloperRoleToSystem: false,
 };
 
 function buildMessages(context: OcxParsedRequest["context"]): Array<Record<string, unknown>> {
@@ -114,6 +118,7 @@ describe("chronological in-conversation system messages", () => {
     adapter: "openai-chat",
     baseUrl: "https://opencode.ai/zen/go/v1",
     preserveReasoningContentModels: [model],
+    foldDeveloperRoleToSystem: false,
   };
   const history = [
     { role: "user", content: "Inspect the synthetic project." },
