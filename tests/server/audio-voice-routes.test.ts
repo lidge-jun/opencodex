@@ -85,13 +85,32 @@ describe("voice target resolution", () => {
     expect(selectVoiceBackend(PROVIDERS, block, undefined, "speech")).toMatchObject({ providerName: "handy" });
   });
 
-  test("config validation names the offending field", () => {
+  // One behaviour per test. As a single test with six assertions, every guard
+  // in tests/red.ts named the same test, so any of the six failing counted as
+  // proof for all of them.
+  test("a valid block and an absent one are both accepted", () => {
     expect(voiceConfigValueError({ provider: "pocket" }, PROVIDERS, "speech")).toBeNull();
-    expect(voiceConfigValueError({ provider: "handy" }, PROVIDERS, "speech")).toContain("speech.provider");
-    expect(voiceConfigValueError({ byModel: { m: "bare" } }, PROVIDERS, "speech")).toContain("speech.byModel.m");
-    expect(voiceConfigValueError({ nope: 1 }, PROVIDERS, "speech")).toContain("unknown key");
-    expect(voiceConfigValueError("string", PROVIDERS, "speech")).toContain("must be an object");
     expect(voiceConfigValueError(undefined, PROVIDERS, "speech")).toBeNull();
+  });
+
+  test("a provider that cannot serve the route names the field", () => {
+    expect(voiceConfigValueError({ provider: "handy" }, PROVIDERS, "speech")).toContain("speech.provider");
+  });
+
+  test("a byModel override names the model it came from", () => {
+    expect(voiceConfigValueError({ byModel: { m: "bare" } }, PROVIDERS, "speech")).toContain("speech.byModel.m");
+  });
+
+  test("an unknown key in a route block is refused", () => {
+    expect(voiceConfigValueError({ nope: 1 }, PROVIDERS, "speech")).toContain("unknown key");
+  });
+
+  test("a route block that is not an object is refused", () => {
+    expect(voiceConfigValueError("string", PROVIDERS, "speech")).toContain("must be an object");
+  });
+
+  test("a byModel map that is not an object is refused", () => {
+    expect(voiceConfigValueError({ byModel: "nope" }, PROVIDERS, "speech")).toContain("byModel: must be an object");
   });
 });
 

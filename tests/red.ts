@@ -79,6 +79,38 @@ const GUARDS: Guard[] = [
     expect: "every loopback /v1 route is classified for inbound body admission",
     suite: "tests/server/server-request-body-size.test.ts",
   },
+  {
+    name: "an unknown key in a route block is refused",
+    file: "src/config/voice-target.ts",
+    from: `  if (unknown) return \`schema_invalid: \${route.label}.\${unknown}: unknown key\`;`,
+    to: "",
+    expect: "an unknown key in a route block is refused",
+    suite: VOICE,
+  },
+  {
+    name: "a route block that is not an object is refused",
+    file: "src/config/voice-target.ts",
+    from: `  if (!isRecord(value)) return \`schema_invalid: \${route.label}: must be an object\`;`,
+    to: "",
+    expect: "a route block that is not an object is refused",
+    suite: VOICE,
+  },
+  {
+    name: "a byModel map that is not an object is refused",
+    file: "src/config/voice-target.ts",
+    from: `    if (!isRecord(byModel)) return \`schema_invalid: \${route.label}.byModel: must be an object\`;`,
+    to: "",
+    expect: "a byModel map that is not an object is refused",
+    suite: VOICE,
+  },
+  {
+    name: "a provider with no endpoint for the route is named",
+    file: "src/config/voice-target.ts",
+    from: "  if (typeof url !== \"string\" || url.trim() === \"\") {",
+    to: "  if (false) {",
+    expect: "a provider with no voice endpoint at all is refused",
+    suite: VOICE,
+  },
 ];
 
 async function runSuite(suite: string): Promise<{ ok: boolean; output: string }> {

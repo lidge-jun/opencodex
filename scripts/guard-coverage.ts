@@ -59,10 +59,24 @@ type RedEntry = { file: string; from: string };
 const redEntries: RedEntry[] = [];
 for (const block of redSource.split(/\n  \{\n/).slice(1)) {
   const file = block.match(/file:\s*"([^"]+)"/)?.[1];
-  const from = block.match(/from:\s*(?:`([\s\S]*?)`|'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/);
+  // The template-literal arm has to skip escaped backticks: a non-greedy
+  // `([\s\S]*?)` stops at the first \` inside the entry and truncates it,
+  // which showed up as four entries the tool could not locate.
+  const from = block.match(
+    /from:\s*(?:`((?:[^`\\]|\\.)*)`|'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/,
+  );
   if (!file || !from) continue;
   const raw = from[1] ?? from[2] ?? from[3] ?? "";
-  redEntries.push({ file, from: raw.replace(/\\n/g, "\n").replace(/\\`/g, "`") });
+  // The same escapes a template literal needs: bun unescapes these when red.ts
+  // runs, and this file reads them as text, so it has to do the same. Missing
+  // `\$` and `\"` made four entries unlocatable — caught by the floor rather
+  // than silently scored as covering nothing.
+  const source = raw
+    .replace(/\\n/g, "\n")
+    .replace(/\\`/g, "`")
+    .replace(/\\\$/g, "$")
+    .replace(/\\"/g, '"');
+  redEntries.push({ file, from: source });
 }
 
 /** The guard's own block, by brace matching. A guard that opens no block
@@ -109,8 +123,27 @@ if (blind.length || redEntries.length < 4 || unlocated.length) {
   process.exit(2);
 }
 
-const sites: Site[] = [];
-for (const file of FILES) sites.push(...refusals(file, await Bun.file(file).text()));
+/**
+ * Refusals that belong to the request lifecycle rather than to this branch:
+ * the same client-disconnect, draining, timeout and upstream-failure handling
+ * every route in the proxy has. Guarding them here would test the framework.
+ *
+ * Waived with a reason, not hidden — a denominator that mixes these with the
+ * branch's own input validation makes the figure read worse than the
+ * situation, and worse figures get ignored.
+ */
+const WAIVED: Record<string, string> = {
+  "499": "client disconnect — lifecycle, shared by every route",
+  "503": "server draining — lifecycle, shared by every route",
+  "408": "request timeout — lifecycle, shared by every route",
+  "504": "upstream timeout — lifecycle, shared by every route",
+  "502": "upstream failure — lifecycle, shared by every route",
+};
+
+const allSites: Site[] = [];
+for (const file of FILES) allSites.push(...refusals(file, await Bun.file(file).text()));
+const waived = allSites.filter(site => WAIVED[site.kind]);
+const sites = allSites.filter(site => !WAIVED[site.kind]);
 
 const uncovered = sites.filter(site => !covered.get(site.file)?.has(site.line));
 for (const site of uncovered) {
@@ -118,5 +151,6 @@ for (const site of uncovered) {
 }
 console.log(
   `\n${sites.length - uncovered.length}/${sites.length} refusal sites have a red.ts guard` +
-  `\n${uncovered.length} are a worklist, not a failure — a site may well be tested without one.`,
+  `\n${uncovered.length} are a worklist, not a failure — a site may well be tested without one.` +
+  `\n${waived.length} waived as request lifecycle (${Object.keys(WAIVED).join(", ")}).`,
 );
