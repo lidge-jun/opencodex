@@ -165,6 +165,21 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly alternateTargetSends: number;
   readonly targetTransitions: number;
   readonly lastTargetKey: string | undefined;
+  /**
+   * Spend one operator-granted replacement for an AMBIGUOUS failure of this logical request,
+   * up to `limit`. False once the request has none left.
+   *
+   * It lives on the budget rather than beside the policy that grants it because it has to be
+   * shared exactly where the physical-send ledger is shared. A combo child derives its own
+   * budget from the parent's ledger, and two counters would let a request whose parent leg
+   * reset before the head and whose child leg reset after it replace an unknown-state send
+   * twice. It is NOT a send budget: an authorised replacement still has to fit inside
+   * `remainingBaseSends` like every other send.
+   *
+   * Optional so a hand-written stub that satisfies the shape test keeps typechecking; a caller
+   * that cannot reach it has no operator override, which is the fail-closed answer.
+   */
+  claimAmbiguousResend?(limit: number): boolean;
 }
 
 const RESERVE_FUNDED_CLASSES: ReadonlySet<SendClass> = new Set<SendClass>([
@@ -192,6 +207,12 @@ let logicalRequestSeq = 0;
 interface SharedSendLedger {
   spent: number;
   pendingExternalSends: number;
+  /**
+   * Replacements this logical request has already spent on ambiguous failures. Beside `spent`
+   * for the same reason `pendingExternalSends` is: a derived scope that shared one without the
+   * other would hand the request a second grant.
+   */
+  ambiguousResendsClaimed: number;
   readonly observer?: RequestSendObserver;
 }
 
@@ -238,6 +259,12 @@ function createRequestExecutionBudgetWithLedger(
     remainingBaseSends(cap: number): number {
       const capped = Number.isFinite(cap) ? Math.trunc(cap) : 0;
       return Math.max(0, Math.min(capped, policy.baseSendAllowance - counter.spent));
+    },
+    claimAmbiguousResend(limit: number): boolean {
+      const ceiling = Number.isFinite(limit) ? Math.trunc(limit) : 0;
+      if (counter.ambiguousResendsClaimed >= ceiling) return false;
+      counter.ambiguousResendsClaimed += 1;
+      return true;
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
@@ -336,6 +363,7 @@ export function createRequestExecutionBudget(
   return createRequestExecutionBudgetWithLedger(policy, logicalRequestId, {
     spent: 0,
     pendingExternalSends: 0,
+    ambiguousResendsClaimed: 0,
     ...(observer ? { observer } : {}),
   });
 }
@@ -370,11 +398,14 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
   const existing = sharedSendLedgers.get(parent);
   if (existing) return existing;
   let pendingExternalSends = 0;
+  let ambiguousResendsClaimed = 0;
   return {
     get spent(): number { return parent.used; },
     set spent(next: number) { parent.used = next; },
     get pendingExternalSends(): number { return pendingExternalSends; },
     set pendingExternalSends(next: number) { pendingExternalSends = next; },
+    get ambiguousResendsClaimed(): number { return ambiguousResendsClaimed; },
+    set ambiguousResendsClaimed(next: number) { ambiguousResendsClaimed = next; },
   };
 }
 
