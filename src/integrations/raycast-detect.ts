@@ -44,10 +44,19 @@ export interface RaycastDetectDeps {
  */
 const RAYCAST_DEFAULTS_DOMAIN = "com.raycast.macos.v1";
 const RAYCAST_SUBSCRIPTION_KEY = "subscriptions_active";
+const DEFAULTS_PATH = "/usr/bin/defaults";
+const DEFAULTS_TIMEOUT_MS = 2_000;
 
-export function realRaycastDetectDeps(): RaycastDetectDeps {
+interface RealRaycastDetectRuntime {
+  platform?: string;
+  spawnSync?: typeof Bun.spawnSync;
+}
+
+export function realRaycastDetectDeps(runtime: RealRaycastDetectRuntime = {}): RaycastDetectDeps {
+  const platform = runtime.platform ?? process.platform;
+  const spawnSync = runtime.spawnSync ?? Bun.spawnSync;
   return {
-    platform: process.platform,
+    platform,
     homedir: homedir(),
     env: process.env,
     exists: path => {
@@ -59,9 +68,13 @@ export function realRaycastDetectDeps(): RaycastDetectDeps {
     },
     readDefault: (domain, key) => {
       // `defaults` is macOS-only; elsewhere the plan is simply unknown.
-      if (process.platform !== "darwin") return null;
+      if (platform !== "darwin") return null;
       try {
-        const result = Bun.spawnSync(["defaults", "read", domain, key], { stdout: "pipe", stderr: "pipe" });
+        const result = spawnSync([DEFAULTS_PATH, "read", domain, key], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: DEFAULTS_TIMEOUT_MS,
+        });
         if (result.exitCode !== 0) return null;
         return result.stdout.toString().trim();
       } catch {
