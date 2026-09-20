@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  cursorAgentBundlePath,
   loadCursorEffortTable,
   parseCursorEffortTable,
   resetCursorEffortTableCacheForTests,
@@ -65,15 +68,13 @@ describe("Cursor installed-bundle effort table", () => {
   test("activates the static fallback for missing installs, missing literals, and malformed regexes", () => {
     const missingStat: CursorEffortTableDeps = {
       platform: "darwin",
-      stat: () => null,
-      readText: () => { throw new Error("readText must not run without a stat"); },
+      readBundle: () => null,
     };
     expect(loadCursorEffortTable(INSTALL, missingStat)).toBeNull();
 
     const loadSource = (source: string, mtimeMs: number) => loadCursorEffortTable(INSTALL, {
       platform: "darwin",
-      stat: () => ({ mtimeMs, size: source.length }),
-      readText: () => source,
+      readBundle: () => ({ mtimeMs, size: source.length, text: source }),
     });
     expect(loadSource("function unrelated(){}", 1)).toBeNull();
     expect(loadSource(FIXTURE.replace("/^claude-opus-5$/u", "/[/u"), 2)).toBeNull();
@@ -102,10 +103,12 @@ describe("Cursor installed-bundle effort table", () => {
     let reads = 0;
     const deps: CursorEffortTableDeps = {
       platform: "darwin",
-      stat: () => ({ mtimeMs, size: FIXTURE.length }),
-      readText: () => {
+      readBundle: (_path, cached) => {
+        if (cached?.mtimeMs === mtimeMs && cached.size === FIXTURE.length) {
+          return { ...cached, text: null };
+        }
         reads += 1;
-        return FIXTURE;
+        return { mtimeMs, size: FIXTURE.length, text: FIXTURE };
       },
     };
     expect(loadCursorEffortTable(INSTALL, deps)?.families).toHaveLength(16);
@@ -114,5 +117,24 @@ describe("Cursor installed-bundle effort table", () => {
     mtimeMs = 2;
     expect(loadCursorEffortTable(INSTALL, deps)?.families).toHaveLength(16);
     expect(reads).toBe(2);
+  });
+
+  test("rejects symlinks and special files without blocking", () => {
+    if (process.platform === "win32") return;
+    const root = `${tmpdir()}/ocx-cursor-bundle-${process.pid}-${Date.now()}`;
+    const install = { ...INSTALL, path: root };
+    const bundlePath = cursorAgentBundlePath(install, process.platform);
+    const target = `${root}/target.js`;
+    mkdirSync(bundlePath.slice(0, bundlePath.lastIndexOf("/")), { recursive: true });
+    writeFileSync(target, FIXTURE);
+    try {
+      symlinkSync(target, bundlePath);
+      expect(loadCursorEffortTable(install)).toBeNull();
+      rmSync(bundlePath);
+      execFileSync("mkfifo", [bundlePath]);
+      expect(loadCursorEffortTable(install)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

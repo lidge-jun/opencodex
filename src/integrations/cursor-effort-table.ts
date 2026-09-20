@@ -8,7 +8,7 @@
  * instead of a hand-copied mirror. Read-only, size-bounded, cached by (path, mtime, size);
  * any parse failure yields null so the caller falls back to the static mirror.
  */
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { CursorInstall } from "./cursor-detect";
 
@@ -111,32 +111,62 @@ function splitStrings(list: string): string[] {
 
 export interface CursorEffortTableDeps {
   platform: string;
-  stat(path: string): { mtimeMs: number; size: number } | null;
-  readText(path: string): string | null;
+  readBundle(path: string, cached?: { mtimeMs: number; size: number }): { mtimeMs: number; size: number; text: string | null } | null;
 }
 
 export function realCursorEffortTableDeps(): CursorEffortTableDeps {
   return {
     platform: process.platform,
-    stat: path => { try { const s = statSync(path); return { mtimeMs: s.mtimeMs, size: s.size }; } catch { return null; } },
-    readText: path => { try { return readFileSync(path, "utf8"); } catch { return null; } },
+    readBundle: readCursorBundle,
   };
 }
 
-let cache: { key: string; table: CursorEffortTable | null } | null = null;
+function readCursorBundle(path: string, cached?: { mtimeMs: number; size: number }): { mtimeMs: number; size: number; text: string | null } | null {
+  let fd: number | null = null;
+  try {
+    // O_NOFOLLOW binds the validation and read to the same regular file. O_NONBLOCK
+    // keeps opening a substituted special file from stalling before fstat rejects it.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > BUNDLE_MAX_BYTES) return null;
+    if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return { mtimeMs: stat.mtimeMs, size: stat.size, text: null };
+    }
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    while (size <= BUNDLE_MAX_BYTES) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, BUNDLE_MAX_BYTES + 1 - size));
+      const bytesRead = readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      size += bytesRead;
+    }
+    if (size > BUNDLE_MAX_BYTES) return null;
+    return { mtimeMs: stat.mtimeMs, size, text: Buffer.concat(chunks, size).toString("utf8") };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+let cache: { key: string; path: string; mtimeMs: number; size: number; table: CursorEffortTable | null } | null = null;
 
 /** Table from the Private Inference install, else null (caller falls back to the static mirror). */
 export function loadCursorEffortTable(install: CursorInstall | undefined, deps: CursorEffortTableDeps = realCursorEffortTableDeps()): CursorEffortTable | null {
   if (!install) return null;
   const bundlePath = cursorAgentBundlePath(install, deps.platform);
-  const st = deps.stat(bundlePath);
-  if (!st || st.size > BUNDLE_MAX_BYTES) return null;
-  const key = `${bundlePath}|${st.mtimeMs}|${st.size}`;
+  const cachedMetadata = cache?.path === bundlePath
+    ? { mtimeMs: cache.mtimeMs, size: cache.size }
+    : undefined;
+  const bundle = deps.readBundle(bundlePath, cachedMetadata);
+  if (!bundle) return null;
+  const key = `${bundlePath}|${bundle.mtimeMs}|${bundle.size}`;
   if (cache?.key === key) return cache.table;
-  const text = deps.readText(bundlePath);
-  const parsed = text ? parseCursorEffortTable(text) : null;
+  const parsed = bundle.text ? parseCursorEffortTable(bundle.text) : null;
   const table = parsed ? { ...parsed, version: install.version, bundlePath } : null;
-  cache = { key, table };
+  cache = { key, path: bundlePath, mtimeMs: bundle.mtimeMs, size: bundle.size, table };
   return table;
 }
 
