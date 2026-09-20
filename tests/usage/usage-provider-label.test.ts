@@ -25,9 +25,15 @@ describe("baseProviderLabel", () => {
     expect(baseProviderLabel("anthropic-pabc123")).toBe("anthropic");
   });
 
-  test("strips the legacy -main suffix so historical main-account rows aggregate", () => {
+  test("keeps configured provider names ending in -main distinct", () => {
+    expect(baseProviderLabel("openrouter-main")).toBe("openrouter-main");
+    expect(baseProviderLabel("azure-main")).toBe("azure-main");
+  });
+
+  test("strips the legacy -main suffix from the known Codex provider labels", () => {
     expect(baseProviderLabel("openai-main")).toBe("openai");
-    expect(baseProviderLabel("codex-main")).toBe("codex");
+    expect(baseProviderLabel("chatgpt-main")).toBe("openai");
+    expect(baseProviderLabel("openai-multi-main")).toBe("openai");
   });
 
   test("keeps suffixes that do not match the pool log-label shape", () => {

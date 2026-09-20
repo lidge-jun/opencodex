@@ -1186,6 +1186,16 @@ describe("summarizeUsage", () => {
     ]);
   });
 
+  test("keeps configured providers ending in -main in distinct usage rows", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: FIXED_NOW - 1, provider: "openrouter", model: "shared-model", usageStatus: "reported", usage: { inputTokens: 4, outputTokens: 1 }, totalTokens: 5 }),
+      entry({ ts: FIXED_NOW - 2, provider: "openrouter-main", model: "shared-model", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3 }),
+    ];
+    const sum = summarizeUsage(entries, "30d", FIXED_NOW);
+    expect(sum.providers.map(provider => provider.provider).sort()).toEqual(["openrouter", "openrouter-main"]);
+    expect(sum.models.map(model => model.provider).sort()).toEqual(["openrouter", "openrouter-main"]);
+  });
+
   test("keeps one logical combo request while attributing both physical attempts", () => {
     const combo = entry({
       ts: FIXED_NOW - 1,
