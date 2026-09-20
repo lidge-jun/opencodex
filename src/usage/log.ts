@@ -7,6 +7,12 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import {
+  isRequestCloseReason,
+  isRequestTerminalStatus,
+  type RequestCloseReason,
+  type RequestTerminalStatus,
+} from "./request-outcome";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -304,8 +310,13 @@ export interface PersistedUsageEntry {
   // Failure diagnostics (devlog/_plan/260716_claudecode_hardening/030): persisted for
   // status>=400 or non-completed terminals so incidents survive the in-memory ring buffer.
   errorCode?: string;
-  terminalStatus?: string;
-  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
+  /**
+   * Closed, like `closeReason` beside it has always been. It was `string` while it was only
+   * rendered; it is a grouping-key slot now, and the value is assembled from an upstream
+   * terminal frame, so an open type here is the one way upstream text could reach that key.
+   */
+  terminalStatus?: RequestTerminalStatus;
+  closeReason?: RequestCloseReason;
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
   /** Where the terminal/failure was observed; absent on historic rows. */
@@ -888,8 +899,11 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(affinityReason ? { affinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
-    ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
-    ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
+    // Validated rather than copied on truthiness, like the inbound protocol and transport phase
+    // above. Harmless while these were only rendered; not harmless once the terminal status is
+    // a grouping-key slot, because the string is assembled from an upstream frame.
+    ...(isRequestTerminalStatus(entry.terminalStatus) ? { terminalStatus: entry.terminalStatus } : {}),
+    ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
