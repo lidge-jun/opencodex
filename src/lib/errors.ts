@@ -172,14 +172,39 @@ const POLICY_REFUSAL_PHRASES = [
   "i am unable to help with that request",
 ] as const;
 
-export function isUpstreamPolicyRefusalMessage(text: string): boolean {
-  const lower = text.toLowerCase();
-  if (isSubscriptionGateMessage(lower)) return false;
-  if (lower.includes("not allowed to use this model")) return false;
-  if (lower.includes("not allowed to use this operation")) return false;
-  return POLICY_REFUSAL_PHRASES.some(phrase => lower.includes(phrase));
+function hasModelAccessCue(text: string): boolean {
+  return (
+    text.includes("not allowed to use this model")
+    || text.includes("not allowed to use this operation")
+  );
 }
 
+/** Lowercase, collapse whitespace, and strip trailing .!? so an exact phrase match is stable. */
+function normalizePolicyRefusalSentence(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.!?]+$/g, "")
+    .trim();
+}
+
+/**
+ * True only when the extracted error sentence is exactly a known model-refusal
+ * phrase. JSON / "Provider error 403:" wrappers are unwrapped first. Extra
+ * plan, credit, entitlement, or model-access wording keeps the error path.
+ */
+export function isUpstreamPolicyRefusalMessage(text: string): boolean {
+  const extracted = extractPolicyRefusalText(text);
+  const originalLower = text.toLowerCase();
+  const extractedLower = extracted.toLowerCase();
+  if (isSubscriptionGateMessage(originalLower) || isSubscriptionGateMessage(extractedLower)) return false;
+  if (hasModelAccessCue(originalLower) || hasModelAccessCue(extractedLower)) return false;
+  const normalized = normalizePolicyRefusalSentence(extracted);
+  return (POLICY_REFUSAL_PHRASES as readonly string[]).includes(normalized);
+}
+
+/** HTTP 403 plus {@link isUpstreamPolicyRefusalMessage}; other statuses never rewrite. */
 export function isUpstreamPolicyRefusal(status: number, text: string): boolean {
   return status === 403 && isUpstreamPolicyRefusalMessage(text);
 }

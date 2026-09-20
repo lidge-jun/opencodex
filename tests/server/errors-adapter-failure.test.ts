@@ -133,6 +133,15 @@ describe("xAI policy-refusal 403", () => {
     expect(isUpstreamPolicyRefusal(403, "You have run out of credits or need a Grok subscription.")).toBe(false);
     expect(isUpstreamPolicyRefusal(403, "The account is not allowed to use this model")).toBe(false);
     expect(isUpstreamPolicyRefusal(403, "forbidden")).toBe(false);
+    expect(isUpstreamPolicyRefusal(403, "I can't help with that request!!!")).toBe(true);
+    expect(isUpstreamPolicyRefusal(
+      403,
+      "I can't help with that request. You need a Grok subscription.",
+    )).toBe(false);
+    expect(isUpstreamPolicyRefusal(
+      403,
+      "Please retry later; I can't help with that request in this context.",
+    )).toBe(false);
   });
 
   test("extracts the refusal sentence from JSON and prefixed bodies", () => {
