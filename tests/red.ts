@@ -71,6 +71,14 @@ const GUARDS: Guard[] = [
     expect: "a provider carrying route headers no longer reports none",
     suite: VOICE,
   },
+  {
+    name: "the speech route is classified for inbound body admission",
+    file: "src/server/inbound-body-admission.ts",
+    from: `  "/v1/audio/speech",`,
+    to: "",
+    expect: "every loopback /v1 route is classified for inbound body admission",
+    suite: "tests/server/server-request-body-size.test.ts",
+  },
 ];
 
 async function runSuite(suite: string): Promise<{ ok: boolean; output: string }> {

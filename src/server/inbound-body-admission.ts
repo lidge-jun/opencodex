@@ -37,6 +37,9 @@ export const CONFIGURABLE_JSON_BODY_ROUTES: ReadonlySet<string> = new Set([
 export const UNGATED_LOOPBACK_ROUTES: ReadonlySet<string> = new Set([
   "/v1/audio/transcriptions",
   "/v1/audio/transcriptions/stream",
+  // Reads its JSON under SPEECH_REQUEST_MAX_BYTES (1 MiB), not
+  // maxInboundBodyBytes — the same reason the other audio routes sit here.
+  "/v1/audio/speech",
   "/v1/models",
   "/v1/realtime",
   "/v1/realtime/calls",
