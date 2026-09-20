@@ -515,16 +515,14 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       // still unreadable to a browser dashboard -- which made exposing it pointless.
       return withCors(workflowDecisionRefusalResponse(workflow, undefined, refusalLog), req, policy);
     }
-    const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
+    if (workflow?.admitted) lease.attach(workflow.lease);
     let response: Response;
     try {
       response = await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes, () => work(lease), refusalLog);
     } catch (error) {
-      releaseWorkflow();
       lease.release();
       throw error;
     }
-    releaseWorkflow();
     if (!lease.isTransferred()) {
       lease.release();
     }

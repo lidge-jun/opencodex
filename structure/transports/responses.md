@@ -69,6 +69,8 @@ repository state. Consequently, the active-turn and session-lane gates are concu
 limits, the translator budget is a live retained-byte limit, the response-state caps are cache
 retention limits, and the stall watchdog is a silence limit. None is a cumulative continuation or
 semantic no-progress budget.
+Active-turn admission owns workflow admission, so both remain held until a streaming body finishes
+or is cancelled.
 
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
 
