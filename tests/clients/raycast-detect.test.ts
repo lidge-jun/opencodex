@@ -74,6 +74,14 @@ describe("detectRaycast", () => {
     expect(detectRaycast(fakeDeps("darwin", [], { defaultValue: "" })).plan).toBe("unknown");
   });
 
+  test("darwin: a timed-out or killed defaults probe is unknown, not a false positive", () => {
+    // Bun reports exitCode === null when the 2s timeout kills the process.
+    const spawnSync = (() => ({ exitCode: null, stdout: Buffer.from("") })) as typeof Bun.spawnSync;
+    const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
+    expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBeNull();
+    expect(detectRaycast(deps).plan).toBe("unknown");
+  });
+
   test("win32: LOCALAPPDATA\\Programs\\Raycast is the install path and the plan is unknown", () => {
     const local = "C:\\Users\\u\\AppData\\Local";
     const deps = fakeDeps("win32", [`${local}\\Programs\\Raycast`, "C:\\Users\\u\\.config\\raycast\\ai"], {
