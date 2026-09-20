@@ -148,6 +148,13 @@ export function isOpencodexHealthz(body: HealthzIdentity | null): boolean {
   return body.status === "ok" && typeof body.version === "string" && typeof body.uptime === "number";
 }
 
+/** A bounded version string safe to carry beyond the untrusted health response. */
+export function isHealthzVersion(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length <= 64
+    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value);
+}
+
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */
 export async function proxyIdentityAt(
   port: number,
@@ -176,8 +183,9 @@ export async function proxyIdentityAt(
       if (!isOpencodexHealthz(body)) return null;
       const pid = typeof body?.pid === "number" ? body.pid : null;
       if (opts.expectedPid !== undefined && pid !== null && pid !== opts.expectedPid) return null;
-      // Guarded the same way `pid` is: a non-string version is absent, not coerced.
-      const version = typeof body?.version === "string" ? body.version : undefined;
+      // Whoever holds the port controls this response. Only carry bounded semver text into
+      // diagnostics; dropping anything else prevents terminal controls reaching human output.
+      const version = isHealthzVersion(body?.version) ? body.version : undefined;
       // Same guard for the role, for the same reason: absent on a standalone/hub proxy and on
       // a legacy body, and never coerced from a non-string.
       const role = typeof body?.role === "string" ? body.role : undefined;
