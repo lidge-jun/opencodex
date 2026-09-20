@@ -337,6 +337,7 @@
     "chat-inbound-reasoning-none.test.ts": "responses",
     "chat-inbound-reasoning-replay.test.ts": "responses",
     "chat-json-sse-fallback.test.ts": "responses",
+    "chat-native-developer-role.test.ts": "responses",
     "chat-native-image-normalization.test.ts": "responses",
     "chat-refusal.test.ts": "responses",
     "chat-refusal-scope.test.ts": "responses",
@@ -1624,6 +1625,7 @@
     "management-provider-reset-replay.test.ts": "server",
     "responses-reset-replay.test.ts": "responses",
     "ambiguous-resend-gate.test.ts": "lib",
+    "docs-developer-role-policy.test.ts": "ci-workflows",
     "ambiguous-resend-composition.test.ts": "lib"
   },
   "migrated": [
