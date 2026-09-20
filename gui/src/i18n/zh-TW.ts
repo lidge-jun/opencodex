@@ -265,7 +265,7 @@ export const zhTW: Record<TKey, string> = {
   "compactionRouting.dataNotice": "涵蓋的壓縮請求會將整個對話傳送給所選模型的供應商進行摘要，即使對話正在其他供應商上執行。",
   "compactionRouting.autoNotice": "自動壓縮會自行觸發，因此長對話可能在你沒有主動要求的情況下被傳送給該供應商。",
   "compactionRouting.providerWarning": "啟用此設定後，每個涵蓋的壓縮請求都會將完整對話內容傳送給 {provider} 進行摘要。",
-  "compactionRouting.comboWarning": "啟用此設定後，每個涵蓋的壓縮請求都會將完整對話內容傳送給組合 {combo} 的每個目標（{providers}），包括容錯移轉目標，以進行摘要。",
+  "compactionRouting.comboWarning": "啟用此設定後，每個涵蓋的壓縮請求都會將完整對話內容傳送給組合 {combo} 以進行摘要。該組合會依序嘗試其目標（{providers}），並使用第一個回應的目標，因此其中任一個都可能收到該對話。",
   "compactionRouting.comboProvidersUnknown": "其已設定的目標供應商",
   "compactionRouting.loadFailed": "無法載入壓縮設定。",
   "compactionRouting.saved": "壓縮設定已儲存。",

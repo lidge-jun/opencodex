@@ -375,7 +375,7 @@ export const ja: Record<TKey, string> = {
   "compactionRouting.dataNotice": "適用対象の圧縮リクエストは、会話が別のプロバイダーで動いていても、会話全体を選択したモデルのプロバイダーへ送信して要約します。",
   "compactionRouting.autoNotice": "自動圧縮はユーザーが求めなくても実行されるため、長い会話が知らないうちにそのプロバイダーへ送信されることがあります。",
   "compactionRouting.providerWarning": "この設定では、適用対象の圧縮リクエストのたびに会話の全内容が要約のために {provider} へ送信されます。",
-  "compactionRouting.comboWarning": "この設定では、適用対象の圧縮リクエストのたびに会話の全内容が、フェイルオーバー先を含むコンボ {combo} のすべてのターゲット（{providers}）へ要約のために送信されます。",
+  "compactionRouting.comboWarning": "この設定では、適用対象の圧縮リクエストのたびに会話の全内容が要約のためコンボ {combo} へ送信されます。コンボはターゲット（{providers}）を順に試し、最初に応答したものを使うため、そのいずれもが会話を受け取る可能性があります。",
   "compactionRouting.comboProvidersUnknown": "設定済みのターゲットプロバイダー",
   "compactionRouting.loadFailed": "圧縮設定を読み込めませんでした。",
   "compactionRouting.saved": "圧縮設定を保存しました。",

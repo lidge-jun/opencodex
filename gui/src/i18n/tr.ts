@@ -376,7 +376,7 @@ export const tr: Record<TKey, string> = {
   "compactionRouting.dataNotice": "Kapsama giren bir özetleme isteği, konuşma başka bir sağlayıcıda yürütülse bile konuşmanın tamamını özetlenmek üzere seçilen modelin sağlayıcısına gönderir.",
   "compactionRouting.autoNotice": "Otomatik özetleme kendiliğinden çalışır; bu nedenle uzun bir konuşma siz istemeden o sağlayıcıya gidebilir.",
   "compactionRouting.providerWarning": "Bu ayarla kapsama giren her özetleme isteği, konuşmanın tüm içeriğini özetlenmek üzere {provider} sağlayıcısına gönderir.",
-  "compactionRouting.comboWarning": "Bu ayarla kapsama giren her özetleme isteği, konuşmanın tüm içeriğini yedek hedefler dahil {combo} kombosunun her hedefine ({providers}) özetlenmek üzere gönderir.",
+  "compactionRouting.comboWarning": "Bu ayarla kapsama giren her özetleme isteği, konuşmanın tüm içeriğini özetlenmek üzere {combo} kombosuna gönderir. Kombo hedeflerini ({providers}) sırayla dener ve yanıt veren ilkini kullanır; dolayısıyla bunlardan herhangi biri konuşmayı alabilir.",
   "compactionRouting.comboProvidersUnknown": "yapılandırılmış hedef sağlayıcıları",
   "compactionRouting.loadFailed": "Özetleme ayarları yüklenemedi.",
   "compactionRouting.saved": "Özetleme ayarları kaydedildi.",

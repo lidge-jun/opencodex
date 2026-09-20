@@ -368,7 +368,7 @@ export const vi: Record<TKey, string> = {
   "compactionRouting.dataNotice": "Yêu cầu nén thuộc phạm vi áp dụng sẽ gửi toàn bộ cuộc trò chuyện đến nhà cung cấp của model đã chọn để tóm tắt, ngay cả khi cuộc trò chuyện đang chạy ở nhà cung cấp khác.",
   "compactionRouting.autoNotice": "Nén tự động tự chạy, nên một cuộc trò chuyện dài có thể được gửi đến nhà cung cấp đó mà bạn không yêu cầu.",
   "compactionRouting.providerWarning": "Với thiết lập này, mỗi yêu cầu nén thuộc phạm vi áp dụng sẽ gửi toàn bộ nội dung cuộc trò chuyện đến {provider} để tóm tắt.",
-  "compactionRouting.comboWarning": "Với thiết lập này, mỗi yêu cầu nén thuộc phạm vi áp dụng sẽ gửi toàn bộ nội dung cuộc trò chuyện đến mọi đích của combo {combo} ({providers}), bao gồm cả đích dự phòng, để tóm tắt.",
+  "compactionRouting.comboWarning": "Với thiết lập này, mỗi yêu cầu nén thuộc phạm vi áp dụng sẽ gửi toàn bộ nội dung cuộc trò chuyện đến combo {combo} để tóm tắt. Combo thử lần lượt các đích ({providers}) và dùng đích trả lời đầu tiên, nên bất kỳ đích nào cũng có thể nhận cuộc trò chuyện.",
   "compactionRouting.comboProvidersUnknown": "các nhà cung cấp đích đã cấu hình của nó",
   "compactionRouting.loadFailed": "Không thể tải cài đặt nén.",
   "compactionRouting.saved": "Đã lưu cài đặt nén.",

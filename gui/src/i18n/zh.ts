@@ -370,7 +370,7 @@ export const zh: Record<TKey, string> = {
   "compactionRouting.dataNotice": "被覆盖的压缩请求会将整个对话发送给所选模型的提供商进行摘要，即使对话正在其他提供商上运行。",
   "compactionRouting.autoNotice": "自动压缩会自行触发，因此长对话可能在你没有主动要求的情况下被发送给该提供商。",
   "compactionRouting.providerWarning": "启用此设置后，每个被覆盖的压缩请求都会将完整对话内容发送给 {provider} 进行摘要。",
-  "compactionRouting.comboWarning": "启用此设置后，每个被覆盖的压缩请求都会将完整对话内容发送给组合 {combo} 的每个目标（{providers}），包括故障转移目标，以进行摘要。",
+  "compactionRouting.comboWarning": "启用此设置后，每个被覆盖的压缩请求都会将完整对话内容发送给组合 {combo} 以进行摘要。该组合会按顺序尝试其目标（{providers}），并使用第一个响应的目标，因此其中任意一个都可能收到该对话。",
   "compactionRouting.comboProvidersUnknown": "其已配置的目标提供商",
   "compactionRouting.loadFailed": "无法加载压缩设置。",
   "compactionRouting.saved": "压缩设置已保存。",

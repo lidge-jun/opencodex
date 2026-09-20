@@ -366,7 +366,7 @@ export const de: Record<TKey, string> = {
   "compactionRouting.dataNotice": "Eine abgedeckte Komprimierungsanfrage sendet das gesamte Gespräch zur Zusammenfassung an den Anbieter des gewählten Modells, auch wenn das Gespräch bei einem anderen Anbieter läuft.",
   "compactionRouting.autoNotice": "Automatische Komprimierung läuft von selbst, daher kann ein langes Gespräch an diesen Anbieter gehen, ohne dass du es angefordert hast.",
   "compactionRouting.providerWarning": "Mit dieser Einstellung sendet jede abgedeckte Komprimierungsanfrage den vollständigen Gesprächsinhalt zur Zusammenfassung an {provider}.",
-  "compactionRouting.comboWarning": "Mit dieser Einstellung sendet jede abgedeckte Komprimierungsanfrage den vollständigen Gesprächsinhalt zur Zusammenfassung an jedes Ziel der Combo {combo} ({providers}), einschließlich Failover-Zielen.",
+  "compactionRouting.comboWarning": "Mit dieser Einstellung sendet jede abgedeckte Komprimierungsanfrage den vollständigen Gesprächsinhalt zur Zusammenfassung an die Combo {combo}. Die Combo versucht ihre Ziele ({providers}) der Reihe nach und verwendet das erste, das antwortet, sodass jedes davon das Gespräch erhalten kann.",
   "compactionRouting.comboProvidersUnknown": "ihre konfigurierten Zielanbieter",
   "compactionRouting.loadFailed": "Komprimierungseinstellungen konnten nicht geladen werden.",
   "compactionRouting.saved": "Komprimierungseinstellungen gespeichert.",

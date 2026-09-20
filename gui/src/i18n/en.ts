@@ -384,7 +384,7 @@ export const en = {
   "compactionRouting.dataNotice": "A covered compaction request sends the entire conversation to the selected model's provider for summarization, even when the conversation runs on another provider.",
   "compactionRouting.autoNotice": "Automatic compaction runs on its own, so a long conversation can be sent to that provider without you asking for it.",
   "compactionRouting.providerWarning": "With this setting, every covered compaction request sends the full conversation contents to {provider} for summarization.",
-  "compactionRouting.comboWarning": "With this setting, every covered compaction request sends the full conversation contents to every target of combo {combo} ({providers}), including failover targets, for summarization.",
+  "compactionRouting.comboWarning": "With this setting, every covered compaction request sends the full conversation contents to combo {combo} for summarization. The combo attempts its targets ({providers}) in order and uses the first that answers, so any one of them can receive the conversation.",
   "compactionRouting.comboProvidersUnknown": "its configured target providers",
   "compactionRouting.loadFailed": "Could not load compaction settings.",
   "compactionRouting.saved": "Compaction settings saved.",

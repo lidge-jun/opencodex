@@ -370,7 +370,7 @@ export const ko: Record<TKey, string> = {
   "compactionRouting.dataNotice": "적용 대상 압축 요청은 대화가 다른 프로바이더에서 실행 중이더라도 전체 대화를 선택한 모델의 프로바이더로 보내 요약합니다.",
   "compactionRouting.autoNotice": "자동 압축은 사용자가 요청하지 않아도 실행되므로, 긴 대화가 예고 없이 해당 프로바이더로 전송될 수 있습니다.",
   "compactionRouting.providerWarning": "이 설정을 사용하면 적용 대상 압축 요청마다 전체 대화 내용이 요약을 위해 {provider}로 전송됩니다.",
-  "compactionRouting.comboWarning": "이 설정을 사용하면 적용 대상 압축 요청마다 전체 대화 내용이 장애 조치 대상을 포함한 콤보 {combo}의 모든 대상({providers})으로 요약을 위해 전송됩니다.",
+  "compactionRouting.comboWarning": "이 설정을 사용하면 적용 대상 압축 요청마다 전체 대화 내용이 요약을 위해 콤보 {combo}로 전송됩니다. 콤보는 대상({providers})을 순서대로 시도해 먼저 응답한 하나를 사용하므로, 그중 어느 것이든 대화를 받을 수 있습니다.",
   "compactionRouting.comboProvidersUnknown": "구성된 대상 프로바이더",
   "compactionRouting.loadFailed": "압축 설정을 불러올 수 없습니다.",
   "compactionRouting.saved": "압축 설정을 저장했습니다.",

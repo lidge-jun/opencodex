@@ -374,7 +374,7 @@ export const fr: Record<TKey, string> = {
   "compactionRouting.dataNotice": "Une requête de compaction couverte envoie toute la conversation au fournisseur du modèle choisi pour la résumer, même si la conversation s’exécute chez un autre fournisseur.",
   "compactionRouting.autoNotice": "La compaction automatique se déclenche d’elle-même : une longue conversation peut donc partir chez ce fournisseur sans que vous l’ayez demandé.",
   "compactionRouting.providerWarning": "Avec ce réglage, chaque requête de compaction couverte envoie l’intégralité du contenu de la conversation à {provider} pour la résumer.",
-  "compactionRouting.comboWarning": "Avec ce réglage, chaque requête de compaction couverte envoie l’intégralité du contenu de la conversation à chaque cible du combo {combo} ({providers}), y compris les cibles de bascule, pour le résumer.",
+  "compactionRouting.comboWarning": "Avec ce réglage, chaque requête de compaction couverte envoie l’intégralité du contenu de la conversation au combo {combo} pour le résumer. Le combo essaie ses cibles ({providers}) dans l’ordre et retient la première qui répond, donc n’importe laquelle peut recevoir la conversation.",
   "compactionRouting.comboProvidersUnknown": "ses fournisseurs cibles configurés",
   "compactionRouting.loadFailed": "Impossible de charger les paramètres de compaction.",
   "compactionRouting.saved": "Paramètres de compaction enregistrés.",
