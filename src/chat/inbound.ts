@@ -167,7 +167,27 @@ function pushSystemText(parts: string[], content: unknown): void {
   if (text) parts.push(text);
 }
 
-function toolCallsToItems(toolCalls: unknown, input: Rec[], knownNameByCallId: Map<string, string>): void {
+/**
+ * A mid-conversation instruction, as the input item the rest of the pipeline already reads.
+ *
+ * The role is `developer` rather than `system` for two reasons that both bite. The native
+ * ChatGPT backend refuses a `role:"system"` item inside `input`, and canonical forwarding
+ * folds every message-shaped `system` item back onto `instructions`
+ * (src/adapters/openai-responses/canonical-forward.ts), which would undo the placement one hop
+ * later. `developer` is first-class in responsesRequestSchema, survives parseRequest as a
+ * chronological conversation message, and is exactly what src/claude/inbound.ts already emits
+ * for the same shape.
+ */
+function developerInstructionItem(text: string): Rec {
+  return { type: "message", role: "developer", content: [{ type: "input_text", text }] };
+}
+
+function toolCallsToItems(
+  toolCalls: unknown,
+  input: Rec[],
+  knownNameByCallId: Map<string, string>,
+  awaitingToolResult: Set<string>,
+): void {
   if (!Array.isArray(toolCalls)) return;
   for (const raw of toolCalls) {
     if (!isRec(raw)) continue;
@@ -187,6 +207,7 @@ function toolCallsToItems(toolCalls: unknown, input: Rec[], knownNameByCallId: M
     if (!name) throw new ChatCompletionsRequestError("tool_calls entries require function.name");
     knownNameByCallId.set(callId, name);
     input.push({ type: "function_call", call_id: callId, name, arguments: args });
+    awaitingToolResult.add(callId);
   }
 }
 
@@ -368,21 +389,54 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
   // Recover replace-style tool calls incrementally instead of rebuilding the
   // call-id index from the entire translated transcript for every message.
   const knownNameByCallId = new Map<string, string>();
+  // Tool calls whose result has not arrived yet. Several adapters need a call and its output
+  // to stay adjacent — Kiro refuses an interrupted pair (src/adapters/kiro/payload.ts) and the
+  // Anthropic and Google mappers synthesize a missing result — so an instruction that arrives
+  // inside an open batch waits for the batch to drain instead of splitting it.
+  const awaitingToolResult = new Set<string>();
+  const heldInstructions: string[] = [];
+  const releaseHeldInstructions = (): void => {
+    if (heldInstructions.length === 0) return;
+    input.push(developerInstructionItem(heldInstructions.join("\n\n")));
+    heldInstructions.length = 0;
+  };
+  // A user or assistant turn ends any open tool batch, so held text rejoins the timeline
+  // before that turn rather than drifting past it.
+  const beginConversationTurn = (): void => {
+    releaseHeldInstructions();
+    awaitingToolResult.clear();
+  };
 
   for (const msg of raw.messages) {
     if (!isRec(msg)) continue;
     const role = typeof msg.role === "string" ? msg.role : "";
     switch (role) {
       case "system":
-      case "developer":
-        pushSystemText(systemParts, msg.content);
+      case "developer": {
+        // A leading block is this request's instructions and keeps that treatment: it is the
+        // prompt head, and hoisting it is what the upstream prefix cache wants.
+        if (input.length === 0) {
+          pushSystemText(systemParts, msg.content);
+          break;
+        }
+        // Past the first turn the slot carries meaning. `U1 -> A1 -> D2 -> U2` says D2 applies
+        // to U2 and not to U1, and folding it into `instructions` moved it ahead of both while
+        // rewriting the prompt head on every turn that carried one. The outbound adapter has
+        // preserved this slot since #4161; the position was already gone by the time it ran.
+        const text = contentToText(msg.content).trim();
+        if (!text) break;
+        if (awaitingToolResult.size > 0) heldInstructions.push(text);
+        else input.push(developerInstructionItem(text));
         break;
+      }
       case "user": {
+        beginConversationTurn();
         const blocks = userContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "user", content: blocks });
         break;
       }
       case "assistant": {
+        beginConversationTurn();
         // A reasoning item precedes the assistant message it belongs to: the
         // Responses assistant item schema admits only output content blocks, so there
         // is no attachment point on the message itself, and the parser buffers a
@@ -405,7 +459,9 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         }
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
-        if (msg.tool_calls !== undefined) toolCallsToItems(msg.tool_calls, input, knownNameByCallId);
+        if (msg.tool_calls !== undefined) {
+          toolCallsToItems(msg.tool_calls, input, knownNameByCallId, awaitingToolResult);
+        }
         break;
       }
       case "function": {
@@ -428,12 +484,15 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
           ? blocks.filter(part => part.type === "input_text" || part.type === "input_image")
           : contentToText(msg.content);
         input.push({ type: "function_call_output", call_id: callId, output });
+        awaitingToolResult.delete(callId);
+        if (awaitingToolResult.size === 0) releaseHeldInstructions();
         break;
       }
       default:
         break;
     }
   }
+  releaseHeldInstructions();
 
   if (input.length === 0 && systemParts.length === 0) {
     throw new ChatCompletionsRequestError("messages must include at least one user/assistant/tool turn");
