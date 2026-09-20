@@ -163,6 +163,21 @@ l'opération la plus récente de chaque client afin de conserver le point d'annu
 
 Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de recharge, les alias et les échecs de routage.
 
+### Couches de prompt Codex
+
+| Méthode et chemin | Objectif | Erreurs notables |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | Lire l'instantané des couches de prompt : couches, variantes de base, sélection et état de drift | — |
+| `GET /api/codex-prompt/text` | Sonder le texte du prompt visible par le modèle via `codex debug prompt-input` | Fail-soft : une sonde indisponible se dégrade en statut dans le corps, pas en erreur HTTP |
+| `PUT /api/codex-prompt/toggle` | Activer ou désactiver une couche commutable | 400 corps invalide ou couche inconnue ; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Remplacer l'ensemble des couches personnalisées | 400 corps invalide, `invalid_characters`, `body_too_large` quand une couche UTF-8 normalisée dépasse 65 536 octets, `composed_too_large` au-delà de 131 072 octets ; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Sélectionner le prompt de base par défaut ou une variante enregistrée | 400 corps invalide, `unknown_layer` pour un id qui ne correspond à aucune variante enregistrée ; 409 `stale_revision`, `developer_instructions_not_owned` quand la base actuelle est externe |
+| `PUT /api/codex-prompt/base` | Créer (`id` omis ou `id: null`), modifier ou supprimer (`delete: true`) une variante de base. Un `id` fourni est réservé à la modification et doit référencer une variante enregistrée. `body` est normalisé (tabulations expansées, CR/CRLF convertis en LF) avant d'être mesuré ou stocké | 400 corps invalide, `unknown_layer` pour l'id `default` ou un id qui ne correspond à aucune variante enregistrée, `body_too_large` quand le corps UTF-8 normalisé dépasse 65 536 octets ; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | Importer `developer_instructions` de `config.toml` comme couche personnalisée | 400 corps invalide, `invalid_characters`, `body_too_large`, `composed_too_large` ; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | Réparer le drift entre `config.toml` et la projection possédée | 400 corps invalide ; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+Voir [Couches de prompt Codex](/fr/guides/codex-prompt/) pour le modèle de couches et les clés écrites par chacune.
+
 ### Configuration, démarrage, synchronisation et mises à jour
 
 | Méthode et chemin | Objectif | Erreurs notables |

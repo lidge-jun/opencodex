@@ -162,6 +162,21 @@ GUI-сессия в стиле loopback не выпускается.
 
 О стратегиях целей, cooldown, alias и routing-failure см. [Combos](/guides/combos/).
 
+### Слои промпта Codex
+
+| Метод и путь | Назначение | Особые ошибки |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | Прочитать снимок слоёв промпта: слои, базовые варианты, выбор и состояние drift | — |
+| `GET /api/codex-prompt/text` | Проверить текст промпта, видимый модели, через `codex debug prompt-input` | Fail-soft: недоступный probe деградирует до статуса в теле, а не HTTP-ошибки |
+| `PUT /api/codex-prompt/toggle` | Включить или выключить один переключаемый слой | 400 invalid body или unknown layer; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Заменить набор пользовательских слоёв | 400 invalid body, `invalid_characters`, `body_too_large`, когда нормализованный UTF-8 слой превышает 65 536 байт, `composed_too_large` свыше 131 072 байт; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Выбрать базовый промпт по умолчанию или один сохранённый вариант | 400 invalid body, `unknown_layer` для id, не совпадающего ни с одним сохранённым вариантом; 409 `stale_revision`, `developer_instructions_not_owned`, когда текущий base внешний |
+| `PUT /api/codex-prompt/base` | Создать (`id` опущен или `id: null`), изменить или удалить (`delete: true`) один базовый вариант. Указанный `id` предназначен только для редактирования и должен ссылаться на сохранённый вариант. `body` нормализуется (табуляции раскрываются, CR/CRLF сворачиваются в LF) до измерения или сохранения | 400 invalid body, `unknown_layer` для id `default` или id, не совпадающего ни с одним сохранённым вариантом, `body_too_large`, когда нормализованное UTF-8 тело превышает 65 536 байт; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | Импортировать `developer_instructions` из `config.toml` как пользовательский слой | 400 invalid body, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | Устранить drift между `config.toml` и принадлежащей projection | 400 invalid body; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+О модели слоёв и ключах, которые записывает каждый слой, см. [Слои промпта Codex](/guides/codex-prompt/).
+
 ### Конфигурация, startup, sync и updates
 
 | Метод и путь | Назначение | Особые ошибки |

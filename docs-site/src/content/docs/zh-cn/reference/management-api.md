@@ -136,6 +136,21 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 关于目标策略、冷却、别名和路由失败，请参见 [Combos](/guides/combos/)。
 
+### Codex 提示词层
+
+| 方法和路径 | 用途 | 典型错误 |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | 读取提示词层快照：层、基础变体、选择和 drift 状态 | — |
+| `GET /api/codex-prompt/text` | 通过 `codex debug prompt-input` 探测模型可见的提示词文本 | 故障弱化：不可用的探测降级为正文中的状态，而非 HTTP 错误 |
+| `PUT /api/codex-prompt/toggle` | 启用或禁用一个可切换的层 | 400 无效正文或未知层；409 `stale_revision`、`layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | 替换自定义层集合 | 400 无效正文、`invalid_characters`、规范化 UTF-8 层超过 65,536 字节时 `body_too_large`、超过 131,072 字节时 `composed_too_large`；409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | 选择默认基础提示词或一个已保存的变体 | 400 无效正文、与任何已保存变体都不匹配的 id 返回 `unknown_layer`；409 `stale_revision`、当前基础提示词为外部时 `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | 创建（省略 `id` 或 `id: null`）、编辑或删除（`delete: true`）一个基础变体。提供的 `id` 仅用于编辑，必须引用已保存的变体。`body` 在测量或存储前会被规范化（制表符展开，CR/CRLF 折叠为 LF） | 400 无效正文、`default` id 或与任何已保存变体都不匹配的 id 返回 `unknown_layer`、规范化 UTF-8 正文超过 65,536 字节时 `body_too_large`；409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | 将 `config.toml` 中的 `developer_instructions` 导入为自定义层 | 400 无效正文、`invalid_characters`、`body_too_large`、`composed_too_large`；409 `config_unreadable`、`nothing_to_adopt`、`adopt_unsupported_form`、`stale_revision` |
+| `POST /api/codex-prompt/repair` | 修复 `config.toml` 与受管 projection 之间的 drift | 400 无效正文；409 `config_unreadable`、`nothing_to_repair`、`repair_unsupported`、`stale_revision` |
+
+有关层模型和每个层写入的键，请参见 [Codex 提示词层](/guides/codex-prompt/)。
+
 ### 配置、启动、同步和更新
 
 | 方法和路径 | 用途 | 典型错误 |

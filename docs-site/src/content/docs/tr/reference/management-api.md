@@ -167,6 +167,21 @@ her istemcinin en yeni işlemi sunucu tarafında korunur.
 Hedef stratejileri, soğuma süreleri, takma adlar ve yönlendirme hataları için
 [Kombolar](/tr/guides/combos/) sayfasına bakın.
 
+### Codex istem katmanları
+
+| Yöntem ve yol | Amaç | Dikkate değer hatalar |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | İstem katmanı anlık görüntüsünü okuyun: katmanlar, temel varyantlar, seçim ve drift durumu | — |
+| `GET /api/codex-prompt/text` | `codex debug prompt-input` üzerinden modele görünen istem metnini yoklayın | Fail-soft: kullanılamayan yoklama HTTP hatası yerine gövdede bir duruma düşer |
+| `PUT /api/codex-prompt/toggle` | Değiştirilebilir bir katmanı etkinleştirin veya devre dışı bırakın | 400 geçersiz gövde veya bilinmeyen katman; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Özel katman kümesini değiştirin | 400 geçersiz gövde, `invalid_characters`, normalleştirilmiş UTF-8 katmanı 65.536 baytı aşarsa `body_too_large`, 131.072 baytı aşarsa `composed_too_large`; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Varsayılan temel istemi veya kayıtlı bir varyantı seçin | 400 geçersiz gövde, kayıtlı varyantla eşleşmeyen bir id için `unknown_layer`; 409 `stale_revision`, mevcut temel istem harici olduğunda `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | Bir temel varyantı oluşturun (`id` atlandı veya `id: null`), düzenleyin veya silin (`delete: true`). Sağlanan `id` yalnızca düzenleme içindir ve kayıtlı bir varyanta başvurmalıdır. `body` ölçülmeden veya saklanmadan önce normalleştirilir (sekmeler genişletilir, CR/CRLF LF'e katlanır) | 400 geçersiz gövde, `default` id veya kayıtlı varyantla eşleşmeyen bir id için `unknown_layer`, normalleştirilmiş UTF-8 gövdesi 65.536 baytı aşarsa `body_too_large`; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | `config.toml` içindeki `developer_instructions` değerini özel katman olarak içe aktarın | 400 geçersiz gövde, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | `config.toml` ile sahip olunan projeksiyon arasındaki drift'i onarın | 400 geçersiz gövde; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+Katman modeli ve her katmanın yazdığı anahtarlar için [Codex İstem Katmanları](/tr/guides/codex-prompt/) sayfasına bakın.
+
 ### Yapılandırma, başlangıç, senkronizasyon ve güncellemeler
 
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |
