@@ -54,9 +54,29 @@ const MAX_MARKER_LENGTH = Math.max(...ALL_MARKERS.map(marker => marker.length));
  * refuse the turn. A stem running to the end of the buffer still counts: more text may be
  * arriving, and reading it as prose is the one reading that could release the block body.
  */
-function reminderOpensHere(lowered: string, at: number): boolean {
-  const after = lowered[at + REMINDER_OPEN.length];
+function reminderOpensHere(text: string, at: number): boolean {
+  const after = text[at + REMINDER_OPEN.length];
   return after === undefined || /[\s/>]/.test(after);
+}
+
+/**
+ * Find an ASCII marker without transforming `text`.
+ *
+ * Marker offsets must remain offsets into the original string. Unicode lowercasing can expand
+ * one code unit into several (for example, `İ` becomes `i` plus a combining dot), so an index
+ * obtained from `text.toLowerCase()` is unsafe to reuse with `text.slice()`.
+ */
+function indexOfMarker(text: string, marker: string, from = 0): number {
+  const last = text.length - marker.length;
+  outer: for (let at = Math.max(0, from); at <= last; at++) {
+    for (let offset = 0; offset < marker.length; offset++) {
+      const code = text.charCodeAt(at + offset);
+      const folded = code >= 65 && code <= 90 ? code + 32 : code;
+      if (folded !== marker.charCodeAt(offset)) continue outer;
+    }
+    return at;
+  }
+  return -1;
 }
 
 /**
@@ -80,9 +100,10 @@ export interface ScaffoldFilterResult {
 function heldSuffixLength(text: string): number {
   const limit = Math.min(MAX_MARKER_LENGTH - 1, text.length);
   for (let length = limit; length > 0; length--) {
-    const suffix = text.slice(text.length - length).toLowerCase();
     for (const marker of ALL_MARKERS) {
-      if (marker.length > length && marker.startsWith(suffix)) return length;
+      if (marker.length > length && indexOfMarker(text, marker.slice(0, length), text.length - length) >= 0) {
+        return length;
+      }
     }
   }
   return 0;
@@ -114,7 +135,6 @@ export class QoderScaffoldFilter {
     for (;;) {
       if (this.mode === "suppress") {
         const scan = this.suppressedTail + buffer;
-        const scanned = scan.toLowerCase();
         // Unwind nesting rather than ending at the first closer. A reminder containing another
         // reminder would otherwise hand the outer block's remaining body — the MCP server list
         // in the reported leak — to the client as the model's answer, with a successful
@@ -122,11 +142,11 @@ export class QoderScaffoldFilter {
         let cursor = 0;
         let close = -1;
         for (;;) {
-          const nextClose = scanned.indexOf(REMINDER_CLOSE, cursor);
+          const nextClose = indexOfMarker(scan, REMINDER_CLOSE, cursor);
           if (nextClose < 0) break;
-          let nextOpen = scanned.indexOf(REMINDER_OPEN, cursor);
-          while (nextOpen >= 0 && !reminderOpensHere(scanned, nextOpen)) {
-            nextOpen = scanned.indexOf(REMINDER_OPEN, nextOpen + 1);
+          let nextOpen = indexOfMarker(scan, REMINDER_OPEN, cursor);
+          while (nextOpen >= 0 && !reminderOpensHere(scan, nextOpen)) {
+            nextOpen = indexOfMarker(scan, REMINDER_OPEN, nextOpen + 1);
           }
           if (nextOpen >= 0 && nextOpen < nextClose) {
             this.suppressDepth += 1;
@@ -159,11 +179,10 @@ export class QoderScaffoldFilter {
 
       let earliest = -1;
       let found = "";
-      const lowered = buffer.toLowerCase();
       for (const marker of ALL_MARKERS) {
-        let at = lowered.indexOf(marker);
-        while (at >= 0 && marker === REMINDER_OPEN && !reminderOpensHere(lowered, at)) {
-          at = lowered.indexOf(marker, at + 1);
+        let at = indexOfMarker(buffer, marker);
+        while (at >= 0 && marker === REMINDER_OPEN && !reminderOpensHere(buffer, at)) {
+          at = indexOfMarker(buffer, marker, at + 1);
         }
         if (at < 0) continue;
         // A closer sitting exactly where an opener starts cannot happen, so ties are impossible.
