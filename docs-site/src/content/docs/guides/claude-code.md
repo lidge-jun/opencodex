@@ -150,7 +150,7 @@ working. OpenCodex only writes two variables into the `env` block of `~/.claude/
 {
   "env": {
     "HTTPS_PROXY": "http://127.0.0.1:10200",
-    "NODE_EXTRA_CA_CERTS": "/Users/you/.opencodex/claude-intercept/ca.pem"
+    "NODE_EXTRA_CA_CERTS": "<home>/.opencodex/claude-intercept/ca.pem"
   }
 }
 ```
