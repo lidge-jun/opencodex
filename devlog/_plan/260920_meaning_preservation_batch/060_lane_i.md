@@ -86,3 +86,27 @@ files are registered in both `scripts/test-layout/layout.json` and
 The issue stays open for the coordinator to judge. This lane closes the four endpoints named in the
 #5265 adversarial review and nothing beyond them.
 
+## What the first review round changed
+
+Three findings on PR #5290, all of them about a destination the first pass was willing to assume.
+
+The refusal marker was being used as a model id. A request that named no model was checked as the
+literal `(unnamed)`, which the configuration schema accepts like any other string, so an operator
+who copied it out of a refusal into `allowedModels` would have granted "whatever the upstream
+picks". The absent model is now absent: the denial helper takes an undefined model id and refuses
+any key carrying a model list, judging a provider-only scope on the provider alone. The marker is
+message vocabulary and never reaches the comparison.
+
+A Realtime standalone socket was judged as the default. The external audio path read the `model=`
+query only for the Frameless style — the one that rewrites its own query — while a
+`realtime-standalone` socket forwards that parameter untouched. Both standalone styles now report
+the model they forward, through the helper the native path already used.
+
+A join was authorized against an assumed model, and what to do about it depends on what each path
+can know. The external path keeps a per-key call registry, so the model a call settles on is now
+recorded in its `LiveCallBinding` and a rejoin is judged against it. The native compatibility path
+records nothing about the calls it relays and does not gain a registry here — adding call ownership
+to it is a different change from closing a scope hole — so a native join, and a native call-create
+that sends no session model, name no destination and a key carrying a model list is refused. That
+is a real restriction on model-scoped keys and it is written down beside the contract it
+constrains, in `structure/data-planes/inbound-compat.md`, rather than left to be rediscovered.
