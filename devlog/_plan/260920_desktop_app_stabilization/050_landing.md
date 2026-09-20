@@ -36,3 +36,16 @@ Each merge reads the exact head's check runs rather than a rollup, distinguishes
 requested from one it skipped, and treats a missing, skipped, or cancelled job as not a pass. The
 last merge is followed by reading `dev`'s own push run, because five of the eight defects found in
 this unit were invisible until two changes met.
+
+## Deliberately not changed here
+
+Review asked for the public macOS install guidance to move with the release path, since
+`README.md`, `guides/desktop-app.md` and `guides/macos-menu-bar.md` all tell the reader the app is
+ad-hoc signed and not notarized, while this stack makes a real release refuse to run without a
+Developer ID and the full notarization credential set.
+
+Those pages are accurate today and will stop being accurate at the next release, not at this
+merge. No release has ever published a macOS application, so rewriting them now would describe an
+artifact nobody can download and would leave the Gatekeeper walkthrough — still correct for a
+locally built app — reading as though it were obsolete. The pages move with the first notarized
+artifact, which is also when someone can check the instructions against a real download.

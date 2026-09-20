@@ -247,17 +247,28 @@ jobs:
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_CERTIFICATE}" ]; then
+          # Checked as a set, because a partial set is the dangerous case: the Tauri CLI skips
+          # notarization without failing when the notary credentials are missing, and the
+          # unnotarized artifact is uploaded and attached exactly as a good one would be.
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
             if [ "${DRY_RUN}" != "true" ]; then
-              echo "::error::A real release needs the signing certificate; refusing to build an"
-              echo "::error::unsigned macOS artifact that would still be uploaded and attached."
+              echo "::error::A real release needs the full signing and notarization credential set."
+              echo "::error::Missing:$missing"
               exit 1
             fi
-            echo "No signing certificate is configured, so the extension will be ad-hoc signed."
-            echo "This build is usable for local validation and is not a release asset."
+            echo "Signing credentials are incomplete, so this build stays ad-hoc signed:$missing"
+            echo "It is usable for local validation and is not a release asset."
             exit 0
           fi
           keychain="$RUNNER_TEMP/opencodex-signing.keychain-db"
@@ -361,8 +372,12 @@ jobs:
             apps=$((apps + 1))
             echo "checking $app"
             while IFS= read -r -d '' file; do
+              # All eight Mach-O leading words: thin and fat, 32- and 64-bit, both byte orders.
+              # A list that covers only the common ones skips the rest in silence while the
+              # non-zero counter below still reports a healthy sweep.
               case "$(head -c 4 "$file" | xxd -p)" in
-                cffaedfe|cefaedfe|cafebabe|bebafeca) ;;
+                cefaedfe|cffaedfe|feedface|feedfacf) ;;
+                cafebabe|bebafeca|cafebabf|bfbafeca) ;;
                 *) continue ;;
               esac
               machos=$((machos + 1))
