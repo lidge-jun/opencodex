@@ -189,7 +189,12 @@ describe("the client registries cannot drift apart", () => {
         state: "absent",
         foreignEdit: "none",
         changes: changes.map(change => ({ ...change })),
-        fingerprint: PLAN_UNBOUND_FINGERPRINT,
+        // A plan that carries changes and could apply is bound by definition, so the
+        // sentinel cannot stand in for it here: the parser refuses an unbound
+        // fingerprint beside `canApply`, and that refusal is the contract, not the
+        // thing under test. The version prefix is taken from the sentinel so a
+        // version bump moves this fixture with it.
+        fingerprint: `${PLAN_UNBOUND_FINGERPRINT.split(":")[0]}:${"0".repeat(32)}`,
         canApply: true,
         willChange: true,
       });

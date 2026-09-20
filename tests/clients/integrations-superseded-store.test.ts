@@ -179,7 +179,7 @@ describe("a client that moved its provider store", () => {
       env: TEST_ENV,
       home,
     });
-    expect(resolved.superseded).toBeNull();
+    expect(resolved.ineffective).toBeNull();
     expect(resolved.configPath).toBe(spec().configPath(TEST_ENV, home));
     expect(applyIntegration(input()).ok).toBe(true);
   });
