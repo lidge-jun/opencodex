@@ -185,9 +185,31 @@ pluginkit: com.opencodex.desktop.widget re-registered, parent bundle resolved
 So the entry point is connected and the login item is registered, both on a real install rather
 than in a test double.
 
+## Verdict: it appears
+
+The gallery was opened on this machine after the fix and OpenCodex is in it, between OKX and
+PASS, with all three declared families rendering real data rather than placeholders:
+
+```
+com.opencodex.desktop::com.opencodex.desktop.widget:OpenCodexWidget:systemSmall
+com.opencodex.desktop::com.opencodex.desktop.widget:OpenCodexWidget:systemMedium
+com.opencodex.desktop::com.opencodex.desktop.widget:OpenCodexWidget:systemLarge
+  "OpenCodex — Proxy status, today's usage, and quota at a glance."
+```
+
+Small shows the token count for the day, medium adds requests, cost and the account quota rows,
+large adds the 24-hour per-model timeline. The list icon is the mark generated from `icon.svg`.
+
+That settles the whole question the acceptance note left open, and it settles it the right way
+round: the extension was never rejected by signing or by the sandbox. It had no widget in it, and
+then it had one that could not start. Both are fixed, and the fix is a SwiftPM configuration
+rather than the Xcode app-extension target the public record recommends — so the cheaper route
+does work, provided all three of `@main`, the `_NSExtensionMain` entry and
+`-application-extension` are present.
+
 ## Acceptance
 
-The entry-point half closes when the locally built widget appears in the gallery on this machine.
-The signing half closes when a release build's extension reports the team identifier, the runtime
-flag and a timestamp, and a clean install on a machine that did not build it offers the widget.
-That second half needs maintainer-held credentials and is recorded as outstanding.
+The entry-point half is closed by the gallery observation above. The signing half closes when a
+release build's extension reports the team identifier, the runtime flag and a timestamp, and a
+clean install on a machine that did not build it offers the widget. That second half needs a real
+release and is recorded as outstanding.
