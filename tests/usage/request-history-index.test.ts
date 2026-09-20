@@ -300,6 +300,29 @@ describe("request-history index (RI-02)", () => {
     expect(byRange.rows.map(row => row.requestId)).toEqual(["f2"]);
   });
 
+  test("requestedModel filter matches the encoded form of over-long selectors", async () => {
+    // Two valid selectors sharing the first 130 chars must stay distinguishable:
+    // the persisted form is prefix + digest, and the filter encodes identically.
+    const sharedPrefix = `a/${"m".repeat(200)}`;
+    const selectorA = `${sharedPrefix}-alpha`;
+    const selectorB = `${sharedPrefix}-omega`;
+    appendUsageEntry(entry("sel-a", 1000, "a", "m1", { requestedModel: selectorA }));
+    appendUsageEntry(entry("sel-b", 2000, "a", "m1", { requestedModel: selectorB }));
+
+    const pageA = await queryRequestHistory({ requestedModel: selectorA }, undefined, 10);
+    expect(pageA.rows.map(row => row.requestId)).toEqual(["sel-a"]);
+    const pageB = await queryRequestHistory({ requestedModel: selectorB }, undefined, 10);
+    expect(pageB.rows.map(row => row.requestId)).toEqual(["sel-b"]);
+
+    // Rows surface the bounded persisted form; filtering by that displayed value
+    // round-trips because the encoding is idempotent.
+    const persistedA = pageA.rows[0]!.requestedModel!;
+    expect(persistedA).not.toBe(selectorA);
+    expect(persistedA.length).toBeLessThanOrEqual(130);
+    const roundTrip = await queryRequestHistory({ requestedModel: persistedA }, undefined, 10);
+    expect(roundTrip.rows.map(row => row.requestId)).toEqual(["sel-a"]);
+  });
+
   test("row-by-id returns the canonical entry and unknown ids 404 through the API", async () => {
     appendUsageEntry(entry("target-id", 1234));
     const row = await requestHistoryRowById("target-id");
