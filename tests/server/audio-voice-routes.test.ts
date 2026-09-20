@@ -12,16 +12,27 @@ import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
+// Port 9 is discard: nothing listens, so a request that escapes is refused at
+// once rather than served.
+//
+// These pointed at 8915 and 8911 — the real Handy and pocket-voice on this
+// machine. Every test refuses before any upstream call, so it never mattered
+// until `red.ts` deliberately broke the 1 MiB cap: the megabyte of "x" then
+// went straight out to the live text-to-speech service, which spent the next
+// several minutes at 327% CPU and 3.2 GB trying to say it.
+//
+// A test fixture naming a real address is a loaded gun pointed at whatever
+// happens to be listening.
 const PROVIDERS = {
   handy: {
     adapter: "openai",
-    baseUrl: "http://127.0.0.1:8915/v1",
-    transcriptionUrl: "http://127.0.0.1:8915/v1/audio/transcriptions",
+    baseUrl: "http://127.0.0.1:9/v1",
+    transcriptionUrl: "http://127.0.0.1:9/v1/audio/transcriptions",
   },
   pocket: {
     adapter: "openai",
-    baseUrl: "http://127.0.0.1:8911/v1",
-    speechUrl: "http://127.0.0.1:8911/v1/audio/speech",
+    baseUrl: "http://127.0.0.1:9/v1",
+    speechUrl: "http://127.0.0.1:9/v1/audio/speech",
     speechHeaders: { authorization: "${POCKET_TOKEN}" },
   },
   bare: { adapter: "openai", baseUrl: "https://example.test/v1" },
@@ -229,11 +240,11 @@ describe("transcription provider relay", () => {
     // request with HTTP 400.
     const { status, sent, url } = await relayWith({
       adapter: "openai",
-      baseUrl: "http://127.0.0.1:8915/v1",
-      transcriptionUrl: "http://127.0.0.1:8915/v1/audio/transcriptions",
+      baseUrl: "http://127.0.0.1:9/v1",
+      transcriptionUrl: "http://127.0.0.1:9/v1/audio/transcriptions",
     } as OcxProviderConfig);
     expect(status).toBe(200);
-    expect(url).toBe("http://127.0.0.1:8915/v1/audio/transcriptions");
+    expect(url).toBe("http://127.0.0.1:9/v1/audio/transcriptions");
     expect(sent!.get("model")).toBeNull();
     expect(sent!.get("file")).toBeInstanceOf(File);
   });
@@ -241,8 +252,8 @@ describe("transcription provider relay", () => {
   test("a configured transcriptionModel is sent instead", async () => {
     const { sent } = await relayWith({
       adapter: "openai",
-      baseUrl: "http://127.0.0.1:8915/v1",
-      transcriptionUrl: "http://127.0.0.1:8915/v1/audio/transcriptions",
+      baseUrl: "http://127.0.0.1:9/v1",
+      transcriptionUrl: "http://127.0.0.1:9/v1/audio/transcriptions",
       transcriptionModel: "parakeet-unified-en-0.6b",
     } as OcxProviderConfig);
     expect(sent!.get("model")).toBe("parakeet-unified-en-0.6b");
