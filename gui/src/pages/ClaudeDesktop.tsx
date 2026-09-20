@@ -336,8 +336,11 @@ export default function ClaudeDesktop({
   const status = statusState.data ?? cachedStatus;
   const statusFailed = statusState.showError;
   // Until /status answers, the effective mode is unknown: the picker renders unchecked and
-  // disabled instead of flashing the first-party default at a gateway install.
+  // disabled instead of flashing the first-party default at a gateway install. A confirmed
+  // /status failure unlocks it (the status bar already shows the error) so an apply can still
+  // be attempted, but no "current" badge is claimed.
   const modeKnown = status !== null;
+  const modePickable = modeKnown || statusFailed;
   const effectiveMode: DesktopMode = status?.mode ?? "first-party";
   const selectedMode: DesktopMode = chosenMode ?? effectiveMode;
   const modeDirty = modeKnown && selectedMode !== effectiveMode;
@@ -482,15 +485,15 @@ export default function ClaudeDesktop({
         </div>
       </div>
 
-      <fieldset className="claude-mode-picker" disabled={pending !== null || !modeKnown}>
+      <fieldset className="claude-mode-picker" disabled={pending !== null || !modePickable}>
         <legend>{t("claudeDesktop.mode.legend")}</legend>
         {DESKTOP_MODES.map(mode => (
-          <label key={mode} className={`claude-mode-option${modeKnown && selectedMode === mode ? " active" : ""}`}>
+          <label key={mode} className={`claude-mode-option${modePickable && selectedMode === mode ? " active" : ""}`}>
             <input
               type="radio"
               name="claude-desktop-mode"
               value={mode}
-              checked={modeKnown && selectedMode === mode}
+              checked={modePickable && selectedMode === mode}
               onChange={() => setChosenMode(mode)}
             />
             <span className="claude-mode-title">

@@ -136,6 +136,29 @@ async function click(element: HTMLElement) {
   await act(async () => { element.click(); });
 }
 
+test("a failed /status unlocks the picker on the default without claiming a current mode", async () => {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (url: string) => {
+      const path = String(url);
+      if (path.includes("/status")) {
+        return { ok: false, status: 503, json: async () => ({ error: "down" }), text: async () => "down" } as unknown as Response;
+      }
+      const body = profilePayload();
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response;
+    },
+  });
+
+  await mount();
+  await act(async () => { await new Promise(r => setTimeout(r, 200)); });
+
+  expect((container.querySelector(".claude-mode-picker") as HTMLFieldSetElement).disabled).toBe(false);
+  expect(radio("first-party").checked).toBe(true);
+  expect(radio("gateway").checked).toBe(false);
+  expect(container.querySelector(".claude-mode-current")).toBeNull();
+  expect(container.querySelector(".claude-status-bar")?.textContent ?? "").toContain("Failed to load");
+});
+
 test("the picker follows the effective mode reported by /status and shows the proxy port", async () => {
   await mount();
   expect(radio("first-party").checked).toBe(true);
