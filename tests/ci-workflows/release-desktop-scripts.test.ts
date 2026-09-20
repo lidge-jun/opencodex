@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
 import { buildUpdaterManifest, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
+import { repoPath } from "../helpers/repo-root";
 
 function temporaryDirectory(): string {
   return mkdtempSync(join(tmpdir(), "opencodex-release-"));
@@ -195,5 +196,79 @@ describe("desktop release scripts", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The widget extension is the one piece of the macOS app that the Tauri bundler copies but
+ * never signs: `copy_custom_files_to_bundle` places `macOS.files` into the bundle and does not
+ * add them to `sign_paths`, so whatever signature `build-widget.sh` leaves is the signature
+ * that ships. That signature was ad-hoc, because the release step that builds the widget
+ * carried no signing environment at all while the very next step did. macOS does not register
+ * an extension signed that way, so the app would have installed with no widget and nothing in
+ * the build would have said so.
+ */
+describe("widget extension signing", () => {
+  const script = readFileSync(repoPath("desktop", "scripts", "build-widget.sh"), "utf8");
+  const workflow = Bun.YAML.parse(
+    readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8"),
+  ) as {
+    jobs?: Record<string, {
+      env?: Record<string, string>;
+      steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string> }>;
+    }>;
+  };
+  const steps = workflow.jobs?.["package-desktop"]?.steps ?? [];
+  const indexOfStep = (name: string) => steps.findIndex(step => step.name === name);
+
+  test("the release build hands the widget a signing identity and forbids an ad-hoc fallback", () => {
+    const build = steps.find(step => step.name === "Build WidgetKit extension");
+    expect(build).toBeDefined();
+    expect(build?.env?.MACOS_SIGN_IDENTITY).toContain("APPLE_SIGNING_IDENTITY");
+    expect(build?.env?.WIDGET_SIGN_REQUIRED).toContain("DESKTOP_SIGNING_CONFIGURED");
+    expect(workflow.jobs?.["package-desktop"]?.env?.DESKTOP_SIGNING_CONFIGURED)
+      .toContain("APPLE_CERTIFICATE");
+  });
+
+  test("the certificate is importable before the widget is signed and is removed afterwards", () => {
+    // codesign resolves an identity through the keychain search list, and Tauri does not build
+    // its own keychain until the bundling step, which is after this one.
+    const importStep = indexOfStep("Import the Apple signing certificate for the widget");
+    const buildStep = indexOfStep("Build WidgetKit extension");
+    expect(importStep).toBeGreaterThanOrEqual(0);
+    expect(buildStep).toBeGreaterThan(importStep);
+
+    const cleanup = steps.find(step => step.name === "Remove the widget signing keychain");
+    expect(cleanup?.if).toContain("always()");
+    expect(cleanup?.run).toContain("security delete-keychain");
+    // The decoded p12 must not outlive the import.
+    expect(steps[importStep]?.run).toContain("rm -f \"$certificate\"");
+  });
+
+  test("the script selects binaries by Mach-O magic bytes rather than by name", () => {
+    // A suffix filter is what let an unsigned helper through on a sibling project: neither
+    // `spawn-helper` nor `macos-trash` has an extension to match, and the submission came back
+    // rejected with the containing bundle looking correctly signed.
+    expect(script).toContain('file -b "$candidate"');
+    expect(script).toContain('*"Mach-O"*');
+    expect(script).not.toMatch(/-name\s+['"]\*\.(dylib|node|so)['"]/);
+  });
+
+  test("every signature carries the hardened runtime and the build proves it afterwards", () => {
+    // Notarization rejects any Mach-O in the bundle without it, and the widget's was omitted.
+    expect(script).toContain("--options runtime");
+    expect(script).toContain("codesign --verify --deep --strict");
+    expect(script).toContain('*"flags="*"runtime"*)');
+    // Captured, not piped: under `pipefail` a matcher that exits on its first hit kills codesign
+    // with SIGPIPE, and the assertion then fails on the signatures it was written to accept.
+    expect(script).toContain('signature_display="$(codesign --display');
+  });
+
+  test("a run holding Developer ID material refuses to fall back to an ad-hoc widget", () => {
+    expect(script).toContain('elif [[ "${WIDGET_SIGN_REQUIRED:-0}" == "1" ]]; then');
+    expect(script).toContain("refusing to ad-hoc sign a release widget");
+    // The refusal is resolved before the Swift build so a misconfigured release fails fast.
+    expect(script.indexOf("refusing to ad-hoc sign a release widget"))
+      .toBeLessThan(script.indexOf("swift build"));
   });
 });
