@@ -117,10 +117,20 @@ const WAIVED: Record<string, string> = {
   "502": "upstream failure — lifecycle, shared by every route",
 };
 
+/**
+ * Refusals on the built-in relay path, which this branch does not change.
+ * The custom-provider routing bypasses them entirely, so a guard here would
+ * pin upstream behaviour rather than this work's.
+ */
+const NOT_OURS: Record<string, string> = {
+  "ChatGPT transcription supports only ${TRANSCRIPTION_MODEL}":
+    "built-in ChatGPT relay; the custom-provider path never reaches it",
+};
+
 const allSites: Site[] = [];
 for (const file of FILES) allSites.push(...refusals(file, await Bun.file(file).text()));
-const waived = allSites.filter(site => WAIVED[site.kind]);
-const sites = allSites.filter(site => !WAIVED[site.kind]);
+const waived = allSites.filter(site => WAIVED[site.kind] || NOT_OURS[site.text]);
+const sites = allSites.filter(site => !WAIVED[site.kind] && !NOT_OURS[site.text]);
 
 const uncovered = sites.filter(site => !covered.get(site.file)?.has(site.line));
 for (const site of uncovered) {
@@ -129,5 +139,6 @@ for (const site of uncovered) {
 console.log(
   `\n${sites.length - uncovered.length}/${sites.length} refusal sites have a red.ts guard` +
   `\n${uncovered.length} are a worklist, not a failure — a site may well be tested without one.` +
-  `\n${waived.length} waived as request lifecycle (${Object.keys(WAIVED).join(", ")}).`,
+  `\n${waived.length} waived: request lifecycle (${Object.keys(WAIVED).join(", ")}), ` +
+  `and ${Object.keys(NOT_OURS).length} on the built-in relay path.`,
 );

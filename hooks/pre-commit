@@ -7,4 +7,20 @@
 # `bun run test:changed` before pushing, and read it without a pipe.
 set -e
 cd "$(git rev-parse --show-toplevel)"
-bun run check
+
+# Git hooks run with a minimal environment, not your shell's. This hook
+# failed once with "bun: command not found" on a commit that was perfectly
+# fine — and a hook that fails for a reason unrelated to correctness is how
+# people learn to pass --no-verify.
+if command -v bun >/dev/null 2>&1; then
+    BUN=bun
+elif [ -x "$HOME/.local/bin/bun" ]; then
+    BUN="$HOME/.local/bin/bun"
+elif [ -x "/opt/homebrew/bin/bun" ]; then
+    BUN=/opt/homebrew/bin/bun
+else
+    echo "pre-commit: cannot find bun; install it or remove .git/hooks/pre-commit" >&2
+    exit 1
+fi
+
+"$BUN" run check
