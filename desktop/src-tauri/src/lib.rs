@@ -1,5 +1,6 @@
 mod auth;
 mod discovery;
+mod first_run;
 mod formatting;
 mod logging;
 mod proxy;
@@ -101,6 +102,9 @@ pub fn run() {
             if tauri::async_runtime::block_on(proxy.is_alive()).is_ok() {
                 let _ = window.eval(format!("window.location.replace({dashboard:?})"));
             }
+            // Before the tray, so its Start at Login checkbox reads the state this leaves behind
+            // rather than the state from before first run.
+            first_run::apply_start_at_login_default(app.handle());
             tray::install(app.handle(), proxy)?;
             if !cfg!(debug_assertions) {
                 updater::start_background_checks(app.handle().clone());

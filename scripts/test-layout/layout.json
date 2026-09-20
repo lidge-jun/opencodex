@@ -717,6 +717,7 @@
     "desktop-profile.test.ts": "clients",
     "desktop-widget-entry.test.ts": "clients",
     "desktop-remote-store.test.ts": "clients",
+    "desktop-start-at-login-default.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",
     "devin-adapter.test.ts": "providers",
     "devin-cli-authmode-migration.test.ts": "providers",
