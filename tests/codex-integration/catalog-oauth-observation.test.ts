@@ -16,6 +16,7 @@ import {
   OAUTH_PROVIDERS,
 } from "../../src/oauth";
 import {
+  gatherRoutedModels,
   gatherRoutedModelsForCatalogGather,
   type CatalogGatherProviderAuthOutcome,
   type CatalogGatherProviderModelOutcome,
@@ -50,6 +51,23 @@ function authStoreBytes(expires: number): Buffer {
           access: "fixture-a",
           refresh: "fixture-r",
           expires,
+        },
+      }],
+    },
+  }) + "\n");
+}
+
+function devinAuthStoreBytes(apiBaseUrl: string): Buffer {
+  return Buffer.from(JSON.stringify({
+    devin: {
+      activeAccountId: "active",
+      accounts: [{
+        id: "active",
+        credential: {
+          access: "fixture-devin-key",
+          refresh: "fixture-devin-key",
+          expires: Number.MAX_SAFE_INTEGER,
+          apiBaseUrl,
         },
       }],
     },
@@ -229,5 +247,39 @@ describe("catalog gather OAuth observation", () => {
     expect(outboundCalls).toBe(1);
     expectFileUnchanged(authPath, before);
     expect(readdirSync(opencodexHome).sort()).toEqual(listingBefore);
+  });
+
+  test("Devin discovery keeps the durable key bound to its observed tenant host", async () => {
+    const tenantBaseUrl = "https://eu.windsurf.com/_route/api_server";
+    const observedBuffer = devinAuthStoreBytes(tenantBaseUrl);
+    const observation = observeActiveOAuthAccessToken("devin", observedBuffer);
+    expect(observation.kind).toBe("available");
+    if (observation.kind !== "available") throw new Error("expected available Devin credential");
+    expect(observation.snapshot.apiBaseUrl).toBe(tenantBaseUrl);
+
+    writeFileSync(join(opencodexHome, "auth.json"), observedBuffer, { mode: 0o600 });
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response("upstream unavailable", { status: 503 });
+    }) as typeof fetch;
+    try {
+      const provider = structuredClone(OAUTH_PROVIDERS["devin"]!.providerConfig);
+      await gatherRoutedModelsForCatalogGather(
+        { providers: { devin: provider } },
+        { authStoreBuffer: observedBuffer },
+      );
+      clearModelCache();
+      await gatherRoutedModels({ providers: { devin: provider } });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Both observe-only catalog materialization and ordinary refreshing discovery
+    // must retain the account's destination alongside its token.
+    expect(urls.length).toBe(2);
+    expect(urls.every(url => url.startsWith(`${tenantBaseUrl}/`))).toBe(true);
+    expect(urls.every(url => !url.startsWith("https://server.codeium.com/"))).toBe(true);
   });
 });

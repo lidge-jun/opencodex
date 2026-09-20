@@ -38,6 +38,7 @@ import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chat
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginDevin, refreshDevinToken } from "./devin";
+import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
@@ -89,11 +90,12 @@ export interface OAuthAccessSnapshot {
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion" | "authType">;
   /**
-   * Allowlisted GitHub Copilot API origin belonging to THIS account.
+   * Allowlisted API origin belonging to THIS account.
    *
-   * Copilot pins its bearer to an account-scoped regional host. Initial routing, 401 refresh, and
-   * account failover must resolve transport from this same snapshot; rereading the active account
-   * can pair account A's token with account B's origin during a concurrent switch (#2568d).
+   * Copilot and Devin pin credentials to account-scoped regional or tenant hosts. Initial routing,
+   * discovery, refresh, and account failover must resolve transport from this same snapshot;
+   * rereading the active account can pair account A's token with account B's origin during a
+   * concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
 }
@@ -480,16 +482,18 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
   // Validated here, not at the call site: an unvalidated origin from a legacy or crafted
   // credential must never travel with a bearer, and dropping it makes the transport fall back to
   // the canonical host rather than to whatever the previous account was using.
-  const copilotApiBaseUrl = provider === "github-copilot"
+  const accountApiBaseUrl = provider === "github-copilot"
     ? validateCopilotApiBaseUrl(cred.apiBaseUrl)
-    : undefined;
+    : provider === "devin" || provider === "devin-cli"
+      ? validateDevinApiBaseUrl(cred.apiBaseUrl)
+      : undefined;
   return {
     provider,
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
-    ...(copilotApiBaseUrl ? { apiBaseUrl: copilotApiBaseUrl } : {}),
+    ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
