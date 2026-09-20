@@ -146,13 +146,16 @@ function main(): number {
     const scratch = mkdtempSync(join(tmpdir(), "ocx-icons-"));
     try {
       const { produced, icnsSkipped } = generateInto(scratch);
-      for (const name of produced) writeFileSync(join(iconsDir, name), readFileSync(join(scratch, name)));
-      console.log(`[icons] regenerated ${produced.length} artifacts from ${source}`);
       if (icnsSkipped) {
-        console.error("[icons] iconutil is unavailable here, so icon.icns was NOT regenerated.");
-        console.error("[icons] the committed icon.icns may now disagree with the rest of the set.");
+        // Abort before touching the committed set. Copying the PNGs and the .ico and then
+        // reporting the missing .icns would leave the icons half regenerated: the rasters new,
+        // the .icns whatever it was, and no way to tell from the tree which is which.
+        console.error("[icons] iconutil is unavailable here, so the .icns cannot be regenerated.");
+        console.error("[icons] nothing was written; run this on a machine with iconutil.");
         return 1;
       }
+      for (const name of produced) writeFileSync(join(iconsDir, name), readFileSync(join(scratch, name)));
+      console.log(`[icons] regenerated ${produced.length} artifacts from ${source}`);
       return 0;
     } finally {
       rmSync(scratch, { recursive: true, force: true });

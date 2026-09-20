@@ -48,9 +48,15 @@ function declaredIcoSizes(source: string): number[] {
   return body.split(",").map(part => Number(part.trim())).filter(n => Number.isFinite(n));
 }
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function isPng(bytes: Buffer): boolean {
+  return bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+}
+
 /** Width and height out of a PNG's IHDR, which is always the first chunk. */
 function pngDimensions(bytes: Buffer): { width: number; height: number } {
-  expect(bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true);
+  expect(isPng(bytes)).toBe(true);
   expect(bytes.subarray(12, 16).toString("latin1")).toBe("IHDR");
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
@@ -101,7 +107,7 @@ describe("desktop icon set", () => {
     expect(seen).toEqual(icoSizes);
   });
 
-  test("icon.icns is well formed and carries one member per declared entry", () => {
+  test("icon.icns is well formed and its members are the declared sizes", () => {
     const icns = readFileSync(join(ICONS_DIR, "icon.icns"));
     expect(icns.subarray(0, 4).toString("latin1")).toBe("icns");
     // A truncated or concatenated icns still opens with the magic; the declared length is what
@@ -109,6 +115,7 @@ describe("desktop icon set", () => {
     expect(icns.readUInt32BE(4)).toBe(icns.length);
 
     const types: string[] = [];
+    const payloads: Buffer[] = [];
     let at = 8;
     while (at < icns.length) {
       const type = icns.subarray(at, at + 4).toString("latin1");
@@ -116,13 +123,37 @@ describe("desktop icon set", () => {
       expect(length).toBeGreaterThanOrEqual(8);
       expect(at + length).toBeLessThanOrEqual(icns.length);
       types.push(type);
+      payloads.push(icns.subarray(at + 8, at + length));
       at += length;
     }
     // The walk has to land exactly on the end, or some member lied about its length.
     expect(at).toBe(icns.length);
     // 'TOC ' and 'info' are bookkeeping the tool adds; the rest are the images.
-    const images = types.filter(type => type !== "TOC " && type !== "info");
+    const images = payloads.filter((_, i) => types[i] !== "TOC " && types[i] !== "info");
     expect(images.length).toBe(icnsMembers.length);
+
+    // Counting members is not enough: ten duplicates of one size would count the same as the ten
+    // the generator declares. The larger members are PNG and carry their dimensions, so read them
+    // and check they are sizes the generator actually asks for. The smallest two are ARGB, which
+    // has no dimension in its payload, so they are counted rather than measured - and that
+    // accounting is what bounds how many declared sizes may be absent from the PNG members.
+    const png = images.filter(isPng);
+    const argb = images.filter(payload => payload.subarray(0, 4).toString("latin1") === "ARGB");
+    expect(png.length + argb.length).toBe(images.length);
+
+    // Consume the declared sizes one member at a time rather than comparing sets. A set would
+    // accept ten copies of one declared size; matching multiplicities is what makes a duplicated
+    // or substituted member fail, which is the realistic way this file goes wrong.
+    const unaccounted = icnsMembers.map(member => member.size);
+    for (const payload of png) {
+      const { width, height } = pngDimensions(payload);
+      expect(width).toBe(height);
+      const at = unaccounted.indexOf(width);
+      expect(at, `icon.icns carries more ${width}px members than the generator declares`).toBeGreaterThan(-1);
+      unaccounted.splice(at, 1);
+    }
+    // Whatever is left has to be exactly the members ARGB carries, which store no dimension.
+    expect(unaccounted.length).toBe(argb.length);
   });
 
   test("nothing is hand-added beside the generated set", () => {
