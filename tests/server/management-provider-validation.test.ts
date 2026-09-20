@@ -2232,6 +2232,36 @@ describe("provider management validation", () => {
       }
       expect(loadConfig().providers["custom-summary-capability"].modelSupportsReasoningSummaries).toEqual({ strict: false });
 
+      const acceptedVerbosityCapability = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom-verbosity-capability",
+          provider: {
+            adapter: "openai-responses",
+            baseUrl: "https://api.example.test/v1",
+            modelSupportsVerbosity: { terse: false },
+          },
+        }),
+      });
+      expect(acceptedVerbosityCapability.status).toBe(200);
+      for (const invalid of [[], { terse: "false" }, { "": false }]) {
+        const rejected = await fetch(new URL("/api/providers", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "custom-verbosity-capability",
+            provider: {
+              adapter: "openai-responses",
+              baseUrl: "https://api.example.test/v1",
+              modelSupportsVerbosity: invalid,
+            },
+          }),
+        });
+        expect(rejected.status).toBe(400);
+      }
+      expect(loadConfig().providers["custom-verbosity-capability"].modelSupportsVerbosity).toEqual({ terse: false });
+
       const acceptedSummaryDelivery = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
