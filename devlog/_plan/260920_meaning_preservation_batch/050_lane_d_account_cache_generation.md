@@ -158,6 +158,25 @@ The branch is now aligned on `dev` at `447ac22ca6` (lanes B and E landed).
 Lane E's `run-turn-queue.ts` and `admission-model-scope.ts` do not overlap
 this lane's surface; the merge was clean.
 
+Run 35496444256 at `6bd074e0` confirmed both fixes: `test 1/4` and `test 4/4`
+passed, along with every other shard, both macOS shards, `structure gate`,
+`docker smoke`, `docs site build`, `api usage`, `storage policy`, keyring on
+all three platforms and `npm-global` on all three. Only `gates` still failed,
+on three GUI assertions, all of them the same restated-literal class and all
+introduced by the carried #4793 columns:
+
+- `usage-custom-range` listed the models-table headers as English literals and
+  omitted the `API list-price` column the page already renders, so the case
+  could not pass on any tree carrying both. The expectation now maps the
+  ordered column keys through the `en` catalog, which is where that copy lives.
+- The French accidental-English guard and the zh-TW stale-placeholder guard
+  both flagged `usage.unavailable`, whose value is an em dash. Adding one more
+  allowlist entry would have been literal-for-literal, so both checks now
+  derive the rule from the value: with placeholders removed, a string carrying
+  no letters has nothing to translate and is identical in every locale by
+  construction. Keys that do carry letters, `uptime.hour` among them, stay
+  allowlisted and still fail if they go untranslated.
+
 ## Verification
 
 Per batch rules, no local suites, individual tests, typecheck, build,
