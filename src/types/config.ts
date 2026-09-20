@@ -888,6 +888,16 @@ export interface OcxConfig {
    * stream; a custom provider can be selected globally or per active model.
    */
   dictation?: OcxDictationConfig;
+  /**
+   * File transcription (audio file → text) backend selection. Unset keeps the built-in OpenAI
+   * relay; a custom provider can be selected globally or per active model.
+   */
+  transcription?: OcxVoiceRouteConfig;
+  /**
+   * Speech synthesis (text → audio) backend for read-aloud. Unset means no speech route is
+   * served at all — opencodex has no built-in text-to-speech to fall back to.
+   */
+  speech?: OcxVoiceRouteConfig;
   /** /v1/alpha/search relay for codex's built-in web search client. */
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */
@@ -1327,6 +1337,22 @@ export interface OcxImagesConfig {
  */
 export interface OcxDictationConfig {
   /** Backend used when `byModel` has no match. "openai" (default) keeps ChatGPT dictation. */
+  provider?: string;
+  /**
+   * Per `provider/model` override. Keys match the active model's namespaced id exactly (for
+   * example "zai/glm-5.3-flash"); values are "openai" or a custom provider id.
+   */
+  byModel?: Record<string, string>;
+}
+
+/**
+ * Selects a voice route's backend. A target is either the reserved `"openai"` (the built-in
+ * path) or the id of a CUSTOM provider in `config.providers`, where the endpoint lives on the
+ * provider entry itself. Registry-managed provider ids are rejected as targets, mirroring
+ * `images.provider`: those built-ins carry no custom voice endpoint.
+ */
+export interface OcxVoiceRouteConfig {
+  /** Backend used when `byModel` has no match. */
   provider?: string;
   /**
    * Per `provider/model` override. Keys match the active model's namespaced id exactly (for

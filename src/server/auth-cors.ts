@@ -1038,6 +1038,11 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   // Header values may carry credentials (or ${ENV} references to them); treat like `headers`.
   dictationHeaders: "redacted",
   dictationProtocols: "editor",
+  transcriptionUrl: "editor",
+  transcriptionHeaders: "redacted",
+  transcriptionModel: "editor",
+  speechUrl: "editor",
+  speechHeaders: "redacted",
   reasoningEffortMap: "editor",
   modelReasoningEffortMap: "editor",
   reasoningWireFormat: "editor",
