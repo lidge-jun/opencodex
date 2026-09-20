@@ -567,7 +567,7 @@ describe("combo stream preflight", () => {
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
   });
 
-  test("a read error before any event is headers-only, and after output is committed", async () => {
+  test("a read error before any event is headers-only, and a committed stream never reports one", async () => {
     const readError = new Error("preflight-read-reset");
     const bare = await preflightComboStreamResponse(
       prefixThenReadError(new TextEncoder().encode(""), readError).response,
@@ -581,6 +581,10 @@ describe("combo stream preflight", () => {
       expect(stageCommitment(bare.stage)).toBe("nothing-observed");
     }
 
+    // Once output commits the preflight stops buffering and hands the body back, so the read
+    // error that follows happens on the caller's side of the boundary and no stage is ever
+    // reported. That is the stronger statement: a committed stream does not reach the resend
+    // gate at all, rather than reaching it and being refused there.
     const outputPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
       type: "response.output_text.delta", delta: "hi",
     })}\n\n`);
@@ -590,11 +594,11 @@ describe("combo stream preflight", () => {
       undefined,
       { replayReadErrors: true },
     );
-    expect(committed.kind).toBe("read-error");
-    if (committed.kind === "read-error") {
-      expect(committed.stage).toBe("semantic-output");
-      expect(stageCommitment(committed.stage)).not.toBe("nothing-observed");
-    }
+    expect(committed.kind).toBe("accepted");
+    // The prefix is still relayed and the error still reaches whoever reads it.
+    const reader = committed.response.body!.getReader();
+    expect((await reader.read()).value).toEqual(outputPrefix);
+    await expect(reader.read()).rejects.toBe(readError);
   });
 
   test("a response.created carrying output is not a prelude", () => {

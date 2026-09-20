@@ -133,6 +133,12 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
  * A terminal that settled carrying no output is `protocol-prelude`, not `terminal`. That is
  * the failure model's own rule: `terminal` means the answer was delivered, and an empty
  * completion delivered none.
+ *
+ * Only the two nothing-observed stages actually reach a read error today: the loop below hands
+ * the body back as `accepted` the moment output commits or a terminal arrives, so a stream
+ * that committed anything never reports a stage at all. The committed branches stay because
+ * this has to be total for any other caller, and because a later change to that loop must not
+ * be able to promote a committed stream into a replaceable one by omission.
  */
 function observedResponsesStage(state: {
   readonly outputCommitted: boolean;
