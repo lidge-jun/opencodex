@@ -142,12 +142,24 @@ export function estimateTokens(text: string, modelId?: string, contextWindow?: n
   if (!text) return 0;
   const len = text.length;
   if (len === 0) return 0;
-  const latinRatio = charsPerToken(modelId);
   const cjk = countCjk(text);
+  return estimateTokensFromCharacterCounts(len - cjk, cjk, modelId, contextWindow);
+}
+
+/** Estimate tokens from already-counted script buckets without materializing replacement text. */
+export function estimateTokensFromCharacterCounts(
+  latin: number,
+  cjk: number,
+  modelId?: string,
+  contextWindow?: number,
+): number {
+  const len = latin + cjk;
+  if (len === 0) return 0;
+  const latinRatio = charsPerToken(modelId);
   // Continuous in the CJK share: no threshold, so one added Korean character moves the estimate
   // by a fraction of a token instead of switching the whole blob to a different divisor.
   const estimate = cjk === 0
     ? Math.ceil(len / latinRatio)
-    : Math.ceil((len - cjk) / latinRatio + cjk / CJK_CHARS_PER_TOKEN);
+    : Math.ceil(latin / latinRatio + cjk / CJK_CHARS_PER_TOKEN);
   return capEstimateAtContextWindow(Math.max(1, estimate), contextWindow);
 }
