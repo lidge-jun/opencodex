@@ -130,6 +130,7 @@ describe("desktop release scripts", () => {
     try {
       writeFileSync(join(root, "OpenCodex-2.61.0-macos.app.tar.gz.sig"), "mac-signature\n");
       writeFileSync(join(root, "OpenCodex-2.61.0-windows-x64.msi.sig"), "win-signature\n");
+      writeFileSync(join(root, "OpenCodex-2.61.0-linux-x86_64.AppImage.sig"), "appimage-signature\n");
       const warnings: string[] = [];
       const manifest = buildUpdaterManifest({
         version: "2.61.0",
@@ -152,9 +153,15 @@ describe("desktop release scripts", () => {
           signature: "win-signature",
           url: "https://github.com/lidge-jun/opencodex/releases/download/v2.61.0/OpenCodex-2.61.0-windows-x64.msi",
         },
+        // The AppImage keeps the plugin's default Linux key so already-released AppImage
+        // installs keep resolving their updates; deb installs select the explicit key.
+        "linux-x86_64": {
+          signature: "appimage-signature",
+          url: "https://github.com/lidge-jun/opencodex/releases/download/v2.61.0/OpenCodex-2.61.0-linux-x86_64.AppImage",
+        },
       });
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("linux-x86_64");
+      expect(warnings[0]).toContain("linux-x86_64-deb");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -183,6 +190,7 @@ describe("desktop release scripts", () => {
     try {
       writeFileSync(join(root, "OpenCodex-2.61.0-macos.app.tar.gz.sig"), "mac-signature\n");
       writeFileSync(join(root, "OpenCodex-2.61.0-windows-x64.msi.sig"), "win-signature\n");
+      writeFileSync(join(root, "OpenCodex-2.61.0-linux-x86_64.AppImage.sig"), "appimage-signature\n");
 
       expect(() =>
         buildUpdaterManifest({
@@ -192,7 +200,7 @@ describe("desktop release scripts", () => {
           out: join(root, "latest.json"),
           requireAll: true,
         }),
-      ).toThrow("Missing signed updater platforms: linux-x86_64");
+      ).toThrow("Missing signed updater platforms: linux-x86_64-deb");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
