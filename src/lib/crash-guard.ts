@@ -176,9 +176,27 @@ export function isBenignAbortTeardown(err: unknown): boolean {
   const lockedStreamTeardown = err.message === "Invalid state: ReadableStream is locked"
     && (err as { code?: unknown }).code === "ERR_INVALID_STATE";
   if (!bareNullTeardown && !lockedStreamTeardown) return false;
+
+  const details = err as TypeError & {
+    sourceURL?: unknown;
+    line?: unknown;
+    column?: unknown;
+    originalLine?: unknown;
+    originalColumn?: unknown;
+  };
+  if (
+    (typeof details.sourceURL === "string" && details.sourceURL.length > 0)
+    || details.line !== undefined
+    || details.column !== undefined
+    || details.originalLine !== undefined
+    || details.originalColumn !== undefined
+  ) return false;
+
   const stack = err.stack ?? "";
-  // Native-only: no JS source frame. A real app TypeError would carry a `(file:line:col)` frame.
-  return !/\((?!native:)[^)]*:\d+:\d+\)/.test(stack);
+  // Native-only: no JS source frame, whether parenthesized or not.
+  return !stack.split(/\r?\n/).slice(1).some(line =>
+    /:\d+:\d+\)?\s*$/.test(line) && !/\bnative:\d+:\d+\)?\s*$/.test(line),
+  );
 }
 
 function record(kind: string, err: unknown, promise?: unknown): void {

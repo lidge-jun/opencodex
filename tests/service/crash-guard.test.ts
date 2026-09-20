@@ -108,6 +108,7 @@ describe("crash-guard diagnostics", () => {
 describe("benign abort-teardown classification", () => {
   test("flags the native-only bare TypeError as benign", () => {
     const err = new TypeError("null is not an object");
+    Object.assign(err, { sourceURL: "", line: undefined, column: undefined, originalLine: undefined, originalColumn: undefined });
     err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)\n    at processTicksAndRejections (native:7:39)";
     expect(isBenignAbortTeardown(err)).toBe(true);
   });
@@ -115,6 +116,19 @@ describe("benign abort-teardown classification", () => {
   test("does NOT flag a TypeError with a real JS source frame", () => {
     const err = new TypeError("null is not an object");
     err.stack = "TypeError: null is not an object\n    at handler (/abs/src/server.ts:120:13)";
+    expect(isBenignAbortTeardown(err)).toBe(false);
+  });
+
+  test("does NOT flag a TypeError with an unparenthesized JS source frame", () => {
+    const err = new TypeError("null is not an object");
+    err.stack = "TypeError: null is not an object\n    at /abs/src/server.ts:120:13";
+    expect(isBenignAbortTeardown(err)).toBe(false);
+  });
+
+  test("does NOT flag a TypeError with hidden JSC source fields", () => {
+    const err = new TypeError("null is not an object");
+    err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)";
+    Object.assign(err, { sourceURL: "/abs/src/server.ts", originalLine: 120, originalColumn: 13 });
     expect(isBenignAbortTeardown(err)).toBe(false);
   });
 
@@ -136,7 +150,14 @@ describe("benign abort-teardown classification", () => {
 
   test("flags the native-only locked-ReadableStream sink-close teardown as benign (260712)", () => {
     const err = new TypeError("Invalid state: ReadableStream is locked");
-    (err as { code?: string }).code = "ERR_INVALID_STATE";
+    Object.assign(err, {
+      code: "ERR_INVALID_STATE",
+      sourceURL: "",
+      line: undefined,
+      column: undefined,
+      originalLine: undefined,
+      originalColumn: undefined,
+    });
     err.stack = "TypeError: Invalid state: ReadableStream is locked\n    at unknown\n    at <anonymous> (native:1:11)\n    at onSinkClose2 (native:5:32)";
     expect(isBenignAbortTeardown(err)).toBe(true);
   });
