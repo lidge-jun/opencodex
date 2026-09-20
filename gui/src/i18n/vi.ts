@@ -1095,6 +1095,8 @@ export const vi: Record<TKey, string> = {
   "usage.col.cacheHits": "Lượt truy cập cache",
   "usage.col.cacheWrites": "Lần ghi cache",
   "usage.col.cacheHitRate": "Tỷ lệ truy cập cache",
+  "usage.cacheHitRate.partial": "Giá trị trung bình được tính dựa trên {measured} trong tổng số {total} token đầu vào; các yêu cầu còn lại không cung cấp thông tin chi tiết về cache.",
+  "usage.cacheHitRate.unmeasured": "Không có yêu cầu nào trong hàng này cung cấp thông tin chi tiết về cache, nên không thể tính tỷ lệ truy cập cache trung bình.",
   "usage.unavailable": "—",
   "usage.col.tokens": "Tokens",
   "usage.col.apiListPrice": "Giá niêm yết API",

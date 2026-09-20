@@ -1072,6 +1072,8 @@ export const de: Record<TKey, string> = {
   "usage.col.cacheHits": "Cache-Treffer",
   "usage.col.cacheWrites": "Cache-Schreibvorgänge",
   "usage.col.cacheHitRate": "Trefferquote",
+  "usage.cacheHitRate.partial": "Gemittelt über {measured} von insgesamt {total} Eingabe-Tokens; für die übrigen Anfragen wurden keine Cache-Details gemeldet.",
+  "usage.cacheHitRate.unmeasured": "Für keine Anfrage in dieser Zeile wurden Cache-Details gemeldet, daher kann keine durchschnittliche Trefferquote berechnet werden.",
   "usage.unavailable": "—",
   "usage.col.tokens": "Tokens",
   "usage.col.apiListPrice": "API-Listenpreis",

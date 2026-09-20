@@ -1093,6 +1093,8 @@ export const ru: Record<TKey, string> = {
   "usage.col.cacheHits": "Попадания в кэш",
   "usage.col.cacheWrites": "Записи в кэш",
   "usage.col.cacheHitRate": "Доля попаданий",
+  "usage.cacheHitRate.partial": "Среднее рассчитано по {measured} из {total} входных токенов; для остальных запросов сведения о кэше не поступили.",
+  "usage.cacheHitRate.unmeasured": "Ни один запрос в этой строке не содержал сведений о кэше, поэтому среднюю долю попаданий рассчитать нельзя.",
   "usage.unavailable": "—",
   "usage.col.tokens": "Токены",
   "usage.col.apiListPrice": "Прайс-лист API",

@@ -1087,6 +1087,8 @@ export const zh: Record<TKey, string> = {
   "usage.col.cacheHits": "缓存命中",
   "usage.col.cacheWrites": "缓存写入",
   "usage.col.cacheHitRate": "命中率",
+  "usage.cacheHitRate.partial": "全部 {total} 个输入 Token 中，有 {measured} 个提供了缓存明细，命中率取这些数据的平均值；其余请求未报告缓存明细。",
+  "usage.cacheHitRate.unmeasured": "此行没有任何请求报告缓存明细，因此无法计算平均命中率。",
   "usage.unavailable": "—",
   "usage.col.tokens": "Token 数",
   "usage.col.apiListPrice": "API 标价",
