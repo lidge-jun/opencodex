@@ -824,6 +824,13 @@ export interface OcxConfig {
    * See `src/storage/policy.ts`.
    */
   storageCleanupPolicy?: StorageCleanupPolicy;
+  /**
+   * Opt-in ceiling in bytes for `usage.jsonl`. Absent means the ledger grows without limit,
+   * which stays the default: history an operator did not ask to delete is not deleted. Values
+   * below the documented floor are treated as unset rather than enforced, because a ceiling
+   * smaller than a row cannot be met without emptying the file.
+   */
+  usageLedgerMaxBytes?: number;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
   apiKeys?: OcxApiKeyEntry[];
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */

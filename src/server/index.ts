@@ -111,6 +111,7 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
+import { setUsageLedgerRetention } from "./usage-ledger-retention";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
@@ -303,6 +304,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   enforceAppOwnedMemoryBudget();
   // Observe-only mode still journals physical sends, so every server owns before configuring.
   spendLedgerLifecycle.configure(config.spend);
+  // After ownership: a second server on the same home is refused above, so the process running
+  // this line is the only one appending to usage.jsonl and the only one that may compact it.
+  setUsageLedgerRetention(config.usageLedgerMaxBytes);
   registerCodexCooldownRecoveryProbeWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.

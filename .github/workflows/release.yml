@@ -196,6 +196,10 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    env:
+      # Whether this run holds the Developer ID material at all. A run without it still builds
+      # locally useful bundles; a run with it must not silently downgrade any part of the app.
+      DESKTOP_SIGNING_CONFIGURED: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -294,6 +298,10 @@ jobs:
         if: runner.os == 'macOS'
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # A run holding Developer ID material must not produce an ad-hoc widget. Without this
+          # the script's ad-hoc branch is the silent default, which is how a signed, notarized
+          # app shipped with an extension macOS will not register.
+          WIDGET_SIGN_REQUIRED: ${{ env.DESKTOP_SIGNING_CONFIGURED == 'true' && '1' || '0' }}
         run: bash desktop/scripts/build-widget.sh
 
       - name: Verify the extension carries the release signature

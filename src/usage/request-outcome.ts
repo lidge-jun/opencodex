@@ -35,6 +35,54 @@ export const REQUEST_OUTCOME_CLASSES = Object.freeze([
 export type RequestOutcomeClass = typeof REQUEST_OUTCOME_CLASSES[number];
 
 /**
+ * The terminal statuses a Responses turn can settle on.
+ *
+ * Derived from the outcome classes rather than restated: a turn reports whether it completed,
+ * failed or stopped short, and `aborted` is not one of them because the caller leaving is not a
+ * terminal the origin emits. Deriving it means a fifth outcome class cannot leave this list
+ * stale, and restating the three would be the same copy that let the recovery roster drift.
+ */
+export type RequestTerminalStatus = Exclude<RequestOutcomeClass, "aborted">;
+
+/**
+ * The same three members as a runtime list, filtered out of the outcome roster rather than
+ * typed out again, so the guard below cannot disagree with the type above it.
+ */
+export const REQUEST_TERMINAL_STATUSES: readonly RequestTerminalStatus[] = Object.freeze(
+  REQUEST_OUTCOME_CLASSES.filter((value): value is RequestTerminalStatus => value !== "aborted"),
+);
+
+/** Why the response body stopped being read. Closed, and persisted as such. */
+export const REQUEST_CLOSE_REASONS = Object.freeze([
+  "terminal",
+  "client_cancel",
+  "non_stream",
+  "body_stall",
+  "body_overflow",
+] as const);
+
+export type RequestCloseReason = typeof REQUEST_CLOSE_REASONS[number];
+
+/**
+ * Read-back guards for the two facts that reach a durable row as strings.
+ *
+ * `terminalStatus` was typed `string` on the persisted entry and copied through the normalizer
+ * on truthiness alone, unlike the inbound protocol, transport phase and terminal source beside
+ * it. That was harmless while the value was only rendered; it stops being harmless the moment
+ * the value becomes part of a grouping key, because the string is assembled from an upstream
+ * frame and an unvalidated one would put upstream-controlled text into the key.
+ */
+export function isRequestTerminalStatus(value: unknown): value is RequestTerminalStatus {
+  return typeof value === "string"
+    && (REQUEST_TERMINAL_STATUSES as readonly string[]).includes(value);
+}
+
+export function isRequestCloseReason(value: unknown): value is RequestCloseReason {
+  return typeof value === "string"
+    && (REQUEST_CLOSE_REASONS as readonly string[]).includes(value);
+}
+
+/**
  * The facts a terminal classification is allowed to read.
  *
  * Deliberately narrow, and deliberately NOT the whole durable row: an outcome that could consult

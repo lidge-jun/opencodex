@@ -7,6 +7,13 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
+import {
+  isRequestCloseReason,
+  isRequestTerminalStatus,
+  type RequestCloseReason,
+  type RequestTerminalStatus,
+} from "./request-outcome";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -15,15 +22,21 @@ import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
 import {
   ATTEMPT_RECOVERY_KIND_ROSTER,
   ATTEMPT_RECOVERY_WITHHELD_ROSTER,
+  REQUEST_FAILURE_CAUSES,
+  REQUEST_FAILURE_STAGES,
+  REQUEST_TRANSPORT_PHASES,
   type AttemptRecoveryKind,
   type AttemptRecoveryWithheld,
+  type AttemptDeliverySummary,
+  type RequestFailureCause,
+  type RequestFailureStage,
   type RequestSpendTotals,
 } from "./telemetry-contract";
 
 // Re-exported so every existing importer keeps its path. The declarations moved to a leaf the
 // dashboard can import without pulling node:fs and the config barrel into the browser build.
-export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER };
-export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestSpendTotals };
+export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER, REQUEST_FAILURE_CAUSES, REQUEST_FAILURE_STAGES };
+export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestFailureCause, RequestFailureStage, RequestSpendTotals };
 
 export interface PersistedClaudeCompatibilityLog {
   decision: "shadow";
@@ -173,6 +186,21 @@ export interface PersistedUsageAttempt {
    * account identifiers.
    */
   codexWsStage?: CodexWsStageRecord;
+  /**
+   * What this attempt delivered, as five bounded counts (#3983). Absent on attempts whose
+   * transport does not pass through the Responses bridge and on pre-instrumentation rows.
+   */
+  deliverySummary?: AttemptDeliverySummary;
+  /**
+   * How far this attempt's exchange got and why it failed, in the shared vocabulary (#2366).
+   *
+   * Both values are closed roster members, so the pair can be a metric label and a grouping key
+   * without a masking pass. Absent on a completed attempt and on every row written before the
+   * attribution existed. The resend verdict these two imply is NOT stored: it is derived at read
+   * time, so a stored row can never carry a verdict the current table would no longer reach.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
 }
 
 /**
@@ -290,8 +318,13 @@ export interface PersistedUsageEntry {
   // Failure diagnostics (devlog/_plan/260716_claudecode_hardening/030): persisted for
   // status>=400 or non-completed terminals so incidents survive the in-memory ring buffer.
   errorCode?: string;
-  terminalStatus?: string;
-  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
+  /**
+   * Closed, like `closeReason` beside it has always been. It was `string` while it was only
+   * rendered; it is a grouping-key slot now, and the value is assembled from an upstream
+   * terminal frame, so an open type here is the one way upstream text could reach that key.
+   */
+  terminalStatus?: RequestTerminalStatus;
+  closeReason?: RequestCloseReason;
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
   /** Where the terminal/failure was observed; absent on historic rows. */
@@ -318,6 +351,53 @@ export interface PersistedUsageEntry {
   routeDecision?: RouteDecisionTraceV1;
   /** Closed Claude protocol codes only; absent on older rows. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * How far this request got and why it failed (#2366). Projected from the attempt that ended
+   * the request so every surface reads the answer off the same row. Absent on a completed
+   * request and on rows written before the attribution existed.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+}
+
+/**
+ * Attribution for the logical request, projected from the attempt that ended it (#2366).
+ *
+ * Carried on the entry as well as the attempt because the three surfaces that have to agree read
+ * the entry: a projection that had to reach into `attempts` to answer "why did this fail" would
+ * be reading a different row from the exporter, which is the disagreement the landed terminal
+ * classifier already removed once.
+ */
+export interface PersistedRequestFailureAttribution {
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+}
+
+const KNOWN_REQUEST_FAILURE_STAGES: ReadonlySet<string> = new Set(REQUEST_FAILURE_STAGES);
+const KNOWN_REQUEST_FAILURE_CAUSES: ReadonlySet<string> = new Set(REQUEST_FAILURE_CAUSES);
+
+/**
+ * Same closed-set discipline as `isKnownTransportPhase`, with the set DERIVED from the roster
+ * rather than restated. The recovery vocabulary was written twice once -- as a union and as the
+ * read-back whitelist -- and a member present in only one of them is written to disk and dropped
+ * on the next read, which loses exactly the field that says why the row failed.
+ */
+export function isKnownRequestFailureStage(value: unknown): value is RequestFailureStage {
+  return typeof value === "string" && KNOWN_REQUEST_FAILURE_STAGES.has(value);
+}
+
+export function isKnownRequestFailureCause(value: unknown): value is RequestFailureCause {
+  return typeof value === "string" && KNOWN_REQUEST_FAILURE_CAUSES.has(value);
+}
+
+/** The stage/cause pair a normalizer keeps, dropping either half that is not a roster member. */
+export function normalizeRequestFailureAttribution(
+  raw: { failureStage?: unknown; failureCause?: unknown },
+): PersistedRequestFailureAttribution {
+  return {
+    ...(isKnownRequestFailureStage(raw.failureStage) ? { failureStage: raw.failureStage } : {}),
+    ...(isKnownRequestFailureCause(raw.failureCause) ? { failureCause: raw.failureCause } : {}),
+  };
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -355,12 +435,10 @@ export function isKnownInboundProtocol(value: unknown): value is NonNullable<Per
   return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
-const KNOWN_TRANSPORT_PHASES = new Set<NonNullable<PersistedUsageEntry["transportPhase"]>>([
-  "pre_headers", "mid_stream", "terminal_sse",
-]);
+const KNOWN_TRANSPORT_PHASES: ReadonlySet<string> = new Set(REQUEST_TRANSPORT_PHASES);
 
 export function isKnownTransportPhase(value: unknown): value is NonNullable<PersistedUsageEntry["transportPhase"]> {
-  return typeof value === "string" && KNOWN_TRANSPORT_PHASES.has(value as NonNullable<PersistedUsageEntry["transportPhase"]>);
+  return typeof value === "string" && KNOWN_TRANSPORT_PHASES.has(value);
 }
 
 const KNOWN_TERMINAL_SOURCES = new Set<NonNullable<PersistedUsageEntry["terminalSource"]>>([
@@ -587,6 +665,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   const codexWsStage = "codexWsStage" in attempt
     ? normalizeCodexWsStageRecord(attempt.codexWsStage)
     : undefined;
+  const deliverySummary = "deliverySummary" in attempt
+    ? normalizeAttemptDeliverySummary(attempt.deliverySummary)
+    : undefined;
   const recoveryKinds = Array.isArray(attempt.recoveryKinds)
     ? [...new Set(attempt.recoveryKinds.filter(
       (value): value is AttemptRecoveryKind => typeof value === "string"
@@ -655,6 +736,8 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
     ...(codexWsStage ? { codexWsStage } : {}),
+    ...(deliverySummary ? { deliverySummary } : {}),
+    ...normalizeRequestFailureAttribution(attempt),
   };
 }
 
@@ -826,11 +909,15 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(affinityReason ? { affinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
-    ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
-    ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
+    // Validated rather than copied on truthiness, like the inbound protocol and transport phase
+    // above. Harmless while these were only rendered; not harmless once the terminal status is
+    // a grouping-key slot, because the string is assembled from an upstream frame.
+    ...(isRequestTerminalStatus(entry.terminalStatus) ? { terminalStatus: entry.terminalStatus } : {}),
+    ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...normalizeRequestFailureAttribution(entry),
   };
 }
 
@@ -865,6 +952,20 @@ function ensureUsageLogDir(now: number): void {
   ensuredUsageLogDir = { path: dir, checkedAt: now };
 }
 
+/**
+ * One owner hook, run after an append lands.
+ *
+ * A slot rather than a direct call, because the only consumer -- ledger retention -- reads this
+ * module's revision helpers, and importing it back here would be a static cycle. The hook runs
+ * INSIDE the synchronous append call stack on purpose: that is what makes "no in-process append
+ * can interleave with a compaction" true rather than merely likely.
+ */
+let afterUsageLedgerAppend: (() => void) | null = null;
+
+export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
+  afterUsageLedgerAppend = hook;
+}
+
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
   const path = usageLogPath();
@@ -885,10 +986,12 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
       ensuredUsageLogDir = null;
       ensuredUsageLogFile = null;
       doAppend();
+      afterUsageLedgerAppend?.();
       return;
     }
     throw error;
   }
+  afterUsageLedgerAppend?.();
 }
 
 export type UsageLogRevision = {

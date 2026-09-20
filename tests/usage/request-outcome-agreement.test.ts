@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import {
   REQUEST_OUTCOME_CLASSES,
+  REQUEST_CLOSE_REASONS,
+  REQUEST_TERMINAL_STATUSES,
   classifyRequestOutcome,
   requestPhysicalSends,
   requestSettledSends,
@@ -11,6 +13,8 @@ import {
 } from "../../src/usage/request-outcome";
 import {
   REQUEST_METRICS_RESULTS,
+  REQUEST_METRICS_FAILURE_CAUSES,
+  REQUEST_METRICS_PROTOCOLS,
   createRequestMetricsOwner,
 } from "../../src/server/request-metrics";
 import { ATTEMPT_RECOVERY_KIND_ROSTER } from "../../src/usage/telemetry-contract";
@@ -32,11 +36,13 @@ function sampleValue(snapshot: string, series: string): number {
   return line === undefined ? Number.NaN : Number(line.slice(series.length + 1));
 }
 
-/** Every combination a terminal can arrive in, built from the declared vocabularies. */
-const TERMINAL_STATUSES = [undefined, "completed", "failed", "incomplete"] as const;
-const CLOSE_REASONS = [
-  undefined, "terminal", "client_cancel", "non_stream", "body_stall", "body_overflow",
-] as const;
+/**
+ * Every combination a terminal can arrive in, read from the modules that declare them rather
+ * than written out. A restated list is how a member added later leaves this cross product green
+ * without ever being exercised.
+ */
+const TERMINAL_STATUSES = [undefined, ...REQUEST_TERMINAL_STATUSES] as const;
+const CLOSE_REASONS = [undefined, ...REQUEST_CLOSE_REASONS] as const;
 const STATUSES = [101, 200, 204, 399, 400, 429, 499, 500, 502] as const;
 
 describe("terminal classification is stated once", () => {
@@ -185,13 +191,15 @@ describe("the dashboard recovery roster cannot drift from the durable one", () =
 
   test("the page derives the union rather than restating it", () => {
     const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    expect(page).toContain("import type { AttemptRecoveryKind");
+    // Matched without depending on how the import is wrapped: the property is that the name
+    // arrives from the contract leaf, not that it sits first on a single line.
+    expect(/import type \{[^}]*\bAttemptRecoveryKind\b[^}]*\}\s*from\s*"[^"]*usage\/telemetry-contract"/s.test(page)).toBe(true);
     expect(page).not.toContain('type AttemptRecoveryKind =');
   });
 
   test("every label key the page names exists in all ten catalogs", () => {
     const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    const keys = [...new Set([...page.matchAll(/"(logs\.detail\.(?:attempt\.recovery|outcome|sends)\.[a-zA-Z0-9]+)"/g)]
+    const keys = [...new Set([...page.matchAll(/"(logs\.detail\.(?:attempt\.recovery|outcome|sends|cause|stage|resend)\.[a-zA-Z0-9]+)"/g)]
       .map(match => match[1]!))];
     expect(keys.length).toBeGreaterThan(ATTEMPT_RECOVERY_KIND_ROSTER.length);
     const gaps: string[] = [];
@@ -214,6 +222,70 @@ describe("the exporter stays bounded", () => {
     }
     const snapshot = metrics.snapshot();
     const labels = [...new Set([...snapshot.matchAll(/([a-z_]+)="/g)].map(match => match[1]!))];
-    expect(labels.sort()).toEqual(["le", "protocol", "recovery", "result"]);
+    expect(labels.sort()).toEqual(["cause", "le", "protocol", "recovery", "result"]);
+  });
+
+  /**
+   * The cause label is a counter label and never a histogram one. Fifteen causes across four
+   * protocols is a fixed sixty series; the same label on a histogram would multiply that by the
+   * bucket count to answer a question nobody asked.
+   */
+  test("the failure cause labels a counter and no histogram", () => {
+    const snapshot = createRequestMetricsOwner(1).snapshot();
+    const causeLines = snapshot.split("\n").filter(line => line.includes('cause="'));
+    expect(causeLines.length).toBe(
+      REQUEST_METRICS_PROTOCOLS.length * REQUEST_METRICS_FAILURE_CAUSES.length,
+    );
+    expect(causeLines.every(line => line.startsWith("opencodex_request_failures_total{"))).toBe(true);
+    expect(causeLines.some(line => line.includes("_bucket") || line.includes("le="))).toBe(false);
+  });
+});
+
+describe("the failure cause is derived once and reported everywhere", () => {
+  /**
+   * The recorder derives the cause; the exporter counts the value it was handed. Two derivations
+   * of one answer is the disagreement this batch exists to remove, so this asserts the exporter
+   * has no opinion of its own -- a fact carrying a cause the status alone would classify
+   * differently is still counted under the cause it was given.
+   */
+  test("the exporter counts the recorder's cause rather than re-deriving one", () => {
+    for (const cause of REQUEST_METRICS_FAILURE_CAUSES) {
+      const metrics = createRequestMetricsOwner(1);
+      metrics.recordFinalRequest({
+        protocol: "responses", status: 200, durationMs: 1, terminalStatus: "failed", failureCause: cause,
+      });
+      const snapshot = metrics.snapshot();
+      expect(sampleValue(snapshot, `opencodex_request_failures_total{protocol="responses",cause="${cause}"}`)).toBe(1);
+    }
+  });
+
+  test("a request that delivered its answer contributes to no cause series", () => {
+    const metrics = createRequestMetricsOwner(1);
+    metrics.recordFinalRequest({ protocol: "responses", status: 200, durationMs: 1, terminalStatus: "completed" });
+    const snapshot = metrics.snapshot();
+    for (const cause of REQUEST_METRICS_FAILURE_CAUSES) {
+      expect(sampleValue(snapshot, `opencodex_request_failures_total{protocol="responses",cause="${cause}"}`)).toBe(0);
+    }
+  });
+
+  test("every cause the recorder can derive has a dashboard label", () => {
+    const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
+    const block = page.slice(page.indexOf("const FAILURE_CAUSE_KEYS"), page.indexOf("} as const satisfies Record<RequestFailureCause"));
+    const missing = REQUEST_METRICS_FAILURE_CAUSES.filter(cause => !block.includes(`"${cause}":`));
+    expect(missing).toEqual([]);
+  });
+
+  /**
+   * The verdict is computed at read time and must not appear in a durable shape. A row written
+   * by an older build would otherwise assert a permission the current tables refuse, and there
+   * would be no way to correct it.
+   */
+  test("the resend verdict is never persisted", () => {
+    const ledger = readFileSync(repoPath("src", "usage", "log.ts"), "utf8");
+    expect(ledger).toContain("failureStage");
+    expect(ledger).toContain("failureCause");
+    expect(ledger).not.toContain("resendPermission");
+    const dto = readFileSync(repoPath("src", "server", "management", "shared.ts"), "utf8");
+    expect(dto).toContain("resendPermission");
   });
 });
