@@ -42,8 +42,23 @@ interface DesktopModel {
   assignment: Assignment;
 }
 
+type DesktopMode = "first-party" | "gateway";
+const DESKTOP_MODES: readonly DesktopMode[] = ["first-party", "gateway"];
+
+interface DesktopFirstPartyStatus {
+  applied: boolean;
+  stale: boolean;
+  interceptEnabled: boolean;
+  interceptRunning: boolean;
+  proxyPort: number;
+  caCertPath: string;
+}
+
 interface DesktopStatus {
   desiredEnabled: boolean;
+  /** Effective mode: a gateway profile on disk wins; otherwise the saved/default mode. */
+  mode?: DesktopMode;
+  firstParty?: DesktopFirstPartyStatus;
   applied: boolean;
   appliedAt: string | null;
   stale: boolean;
@@ -65,6 +80,14 @@ function isDesktopStatus(value: unknown): value is DesktopStatus {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   const health = v.health as Record<string, unknown> | null | undefined;
+  if (v.mode !== undefined && !DESKTOP_MODES.includes(v.mode as DesktopMode)) return false;
+  if (v.firstParty !== undefined) {
+    const fp = v.firstParty as Record<string, unknown> | null;
+    if (typeof fp !== "object" || fp === null
+      || typeof fp.applied !== "boolean" || typeof fp.stale !== "boolean"
+      || typeof fp.interceptEnabled !== "boolean" || typeof fp.interceptRunning !== "boolean"
+      || typeof fp.proxyPort !== "number" || typeof fp.caCertPath !== "string") return false;
+  }
   return typeof v.desiredEnabled === "boolean"
     && typeof v.applied === "boolean"
     && (v.appliedAt === null || typeof v.appliedAt === "string")
@@ -201,6 +224,9 @@ export default function ClaudeDesktop({
   // a family's fold is a durable preference, but which single model you were inspecting
   // is not, and restoring five open rows on reload would rebuild the wall this removes.
   const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
+  // The mode the user wants the next apply to use. null = follow whatever /status reports
+  // (first-party by default), so a page load never silently changes an existing install.
+  const [chosenMode, setChosenMode] = useState<DesktopMode | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const fetchDesktop = useCallback(async (signal: AbortSignal): Promise<CachedDesktop> => {
     const response = await fetch(`${apiBase}/api/claude-desktop`, { signal });
@@ -309,6 +335,9 @@ export default function ClaudeDesktop({
   const statusState = statusResource.state;
   const status = statusState.data ?? cachedStatus;
   const statusFailed = statusState.showError;
+  const effectiveMode: DesktopMode = status?.mode ?? "first-party";
+  const selectedMode: DesktopMode = chosenMode ?? effectiveMode;
+  const modeDirty = selectedMode !== effectiveMode;
 
   const moveModel = (route: string, family: Family) => {
     if (!profile || profile.assignments[route]?.family === family) return;
@@ -353,7 +382,11 @@ export default function ClaudeDesktop({
 
       if (applyAfter) {
         setPending("apply");
-        const applyResponse = await fetch(`${apiBase}/api/claude-desktop/apply`, { method: "POST" });
+        const applyResponse = await fetch(`${apiBase}/api/claude-desktop/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: selectedMode }),
+        });
         const applyBody = await readJsonOrThrow<{ error?: string; saved?: boolean; warning?: string }>(
           applyResponse,
           t("claudeDesktop.applyFailed"),
@@ -368,6 +401,7 @@ export default function ClaudeDesktop({
           setMessage({ tone: "ok", text: t("claudeDesktop.savedApplied") });
           setAnnouncement(t("claudeDesktop.savedAppliedAnnounce"));
         }
+        setChosenMode(null);
       } else {
         setMessage({ tone: "ok", text: t("claudeDesktop.saved") });
         setAnnouncement(t("claudeDesktop.savedAnnounce"));
@@ -445,6 +479,30 @@ export default function ClaudeDesktop({
         </div>
       </div>
 
+      <fieldset className="claude-mode-picker" disabled={pending !== null}>
+        <legend>{t("claudeDesktop.mode.legend")}</legend>
+        {DESKTOP_MODES.map(mode => (
+          <label key={mode} className={`claude-mode-option${selectedMode === mode ? " active" : ""}`}>
+            <input
+              type="radio"
+              name="claude-desktop-mode"
+              value={mode}
+              checked={selectedMode === mode}
+              onChange={() => setChosenMode(mode)}
+            />
+            <span className="claude-mode-title">
+              {mode === "first-party" ? t("claudeDesktop.mode.firstParty") : t("claudeDesktop.mode.gateway")}
+              {mode === "first-party" && <span className="claude-mode-default">{t("claudeDesktop.mode.defaultBadge")}</span>}
+              {effectiveMode === mode && status && <span className="claude-mode-current">{t("claudeDesktop.mode.current")}</span>}
+            </span>
+            <span className="claude-mode-hint">
+              {mode === "first-party" ? t("claudeDesktop.mode.firstPartyHint") : t("claudeDesktop.mode.gatewayHint")}
+            </span>
+          </label>
+        ))}
+        {modeDirty && <span className="claude-mode-switch-note">{t("claudeDesktop.mode.switchNote")}</span>}
+      </fieldset>
+
       {/* Always mount the bar (pending strut when status is still cold) so a late /status
           response cannot insert a full row under the title and shove the lanes down. */}
       <div
@@ -455,7 +513,7 @@ export default function ClaudeDesktop({
               ? "pending"
               : !status.desiredEnabled
                 ? "not-applied"
-              : status.activeProfile === false
+              : effectiveMode === "gateway" && status.activeProfile === false
                 ? "not-applied"
                 : status.stale
                   ? "stale"
@@ -467,7 +525,8 @@ export default function ClaudeDesktop({
       >
         <span className="claude-status-dot" />
         {/* Desktop serving another profile outranks content drift: stale config that is
-            read still works, a config that is never read does not. */}
+            read still works, a config that is never read does not. First-party never
+            writes a Desktop profile, so that check only applies in gateway mode. */}
         <span>
           {statusFailed && !status
             ? t("claudeDesktop.loadFail")
@@ -475,14 +534,23 @@ export default function ClaudeDesktop({
               ? t("claudeDesktop.loading")
               : !status.desiredEnabled
                 ? t("claudeDesktop.status.disabled")
-              : status.activeProfile === false
+              : effectiveMode === "gateway" && status.activeProfile === false
                 ? t("claudeDesktop.status.notActiveProfile")
                 : status.stale
                   ? t("claudeDesktop.status.stale")
                   : status.applied
-                    ? t("claudeDesktop.status.applied")
+                    ? effectiveMode === "first-party" ? t("claudeDesktop.status.appliedFirstParty") : t("claudeDesktop.status.applied")
                     : t("claudeDesktop.status.notApplied")}
         </span>
+        {status?.firstParty && effectiveMode === "first-party" && status.desiredEnabled && (
+          <span className="claude-status-health">
+            {status.firstParty.interceptRunning
+              ? t("claudeDesktop.firstParty.proxyRunning", { port: status.firstParty.proxyPort })
+              : status.firstParty.interceptEnabled
+                ? t("claudeDesktop.firstParty.proxyStopped", { port: status.firstParty.proxyPort })
+                : t("claudeDesktop.firstParty.interceptDisabled")}
+          </span>
+        )}
         {status?.health.lastRequestAt && (
           <span className="claude-status-health">
             {t("claudeDesktop.health.lastRequest")}:{" "}
@@ -508,7 +576,7 @@ export default function ClaudeDesktop({
             {pending === "save" ? t("claudeDesktop.saving") : t("common.save")}
           </button>
           <button type="button" className="btn btn-primary" disabled={pending !== null} onClick={() => void save(true)}>
-            {pending === "apply" ? t("claudeDesktop.applying") : pending === "save" ? t("claudeDesktop.saving") : status?.desiredEnabled === false ? t("claudeDesktop.enableApply") : t("claudeDesktop.saveApply")}
+            {pending === "apply" ? t("claudeDesktop.applying") : pending === "save" ? t("claudeDesktop.saving") : status?.desiredEnabled === false ? t("claudeDesktop.enableApply") : modeDirty ? t("claudeDesktop.switchModeApply") : t("claudeDesktop.saveApply")}
           </button>
         </div>
       </div>
