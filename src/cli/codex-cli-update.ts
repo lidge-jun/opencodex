@@ -148,7 +148,7 @@ export async function handleCodexCliUpdateCommand(
           const snapshot = trustedNodeLauncherContext()?.codexCliInspectionEnv;
           const derive = deps.deriveInstallationInput
             ?? (await import("../codex/cli-installation-targets")).deriveCodexCliInstallationInput;
-          const derived = derive({
+          const derived = await derive({
             codexCliPath: snapshot?.codexCliPath ?? null,
             path: snapshot?.path ?? null,
             pathExt: snapshot?.pathExt ?? null,

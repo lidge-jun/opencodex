@@ -18,6 +18,8 @@ export interface WindowsInstallationFileRequest {
   readonly path: string;
   readonly maxBytes: number;
   readonly hashOnly?: boolean;
+  /** Validate and hold the path without reading its contents. */
+  readonly metadataOnly?: boolean;
 }
 export interface WindowsInstallationFileIdentity {
   readonly volumeSerial: string;
@@ -76,6 +78,7 @@ export async function inspectWindowsInstallationFiles(
     const parsedPath = request && components(request.path);
     if (!parsedPath || !Number.isSafeInteger(request.maxBytes) || request.maxBytes < 0
       || (request.hashOnly !== undefined && typeof request.hashOnly !== "boolean")
+      || (request.metadataOnly !== undefined && typeof request.metadataOnly !== "boolean")
       || request.maxBytes > (request.hashOnly ? 256 * MIB : MIB)) return null;
     ceiling += request.maxBytes;
     return parsedPath;
@@ -184,12 +187,13 @@ export async function inspectWindowsInstallationFiles(
       }
       const handle = relativeOpen(parent, names[names.length - 1]!, false);
       const identity = inspect(handle, false);
-      if (identity.size > request.maxBytes) throw new InspectionRefusal("size-limit");
+      if (!request.metadataOnly && identity.size > request.maxBytes) throw new InspectionRefusal("size-limit");
       return { request, handle, identity };
     });
     openedForTests?.();
     const observed = files.map(({ request, handle, identity }) => {
       const hash = createHash("sha256");
+      if (request.metadataOnly) return { path: request.path, identity, bytes: new Uint8Array(), digest: "" };
       const bytes = request.hashOnly ? new Uint8Array() : new Uint8Array(identity.size);
       const chunk = Buffer.alloc(Math.min(MIB, Math.max(1, identity.size)));
       const read = Buffer.alloc(4);

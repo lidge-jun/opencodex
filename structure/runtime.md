@@ -96,7 +96,9 @@ backing, the npm prefix layout, and the Node/npm toolchain beside the resolved n
 Configured values containing a path separator must be drive-absolute; otherwise derivation
 refuses with `candidate_unavailable` instead of substituting a different PATH candidate. Bare
 command names and the unset default continue to resolve only through the captured PATH.
-Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
+Discovery probes candidates through the same local-volume, reparse-refusing held-handle
+reader as final observation, so captured PATH entries cannot trigger network filesystem I/O.
+It never reads ambient state. Four explicit absolute paths
 remain accepted as an all-or-none override. Only the
 standard npm command shim or direct Codex package entry is accepted. The native reader in
 `src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
