@@ -199,7 +199,16 @@ async function handleChatCompletionsWithBudget(
     }
     // Combos must enter the Responses routing path so child selection, forced default
     // effort, failover, and per-attempt telemetry run before any native Chat send.
-    if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) chatNativeRoute = route;
+    if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) {
+      chatNativeRoute = route;
+      if (logCtx.usageLogInputTokens === undefined) {
+        logCtx.usageLogInputTokens = Math.max(1, estimateTokens(JSON.stringify(chatBody.messages ?? []), requestedModel));
+      }
+      const outputCeiling = chatBody.max_completion_tokens ?? chatBody.max_tokens;
+      if (typeof outputCeiling === "number" && outputCeiling > 0) {
+        logCtx.spendOutputCeilingTokens = Math.trunc(outputCeiling);
+      }
+    }
   } catch (err) {
     if (err instanceof AdmissionModelDeniedError) {
       logCtx.requestedModel = requestedModel;

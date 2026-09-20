@@ -1276,7 +1276,9 @@ target's own recovery decision, while the physical-send total is what binds ever
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
 what those sends may cost, and it is the only bound here that survives a restart. Its production
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`
-and parked on the log context so `addFinalRequestLog` can settle it.
+and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the
+same tracker before its independent physical-send ladder and charges it immediately before each
+dispatch, so taking that fast path cannot bypass root, identity, or provider-pool ceilings.
 
 It books by observing the budget's own send counter rather than by being called from each
 dispatch site. That counter moves exactly once per physical send — a reservation increments it, a
