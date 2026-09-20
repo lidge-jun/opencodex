@@ -918,9 +918,15 @@ describe("GitHub Actions hardening", () => {
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).
+    // The split alone does not bound a block: the last step of a job runs on into the next
+    // job's header, so a job-level `if: ${{ inputs.dry-run != true }}` — which is a condition,
+    // not shell — read as an injection in the step above it. Each block is cut at the first
+    // line that dedents to job level, which is where the step's script actually ends.
     const runBlocks = workflow.split(/\n {6,}- name: /).filter(block => block.includes("run: |"));
     for (const block of runBlocks) {
-      const runSource = block.slice(block.indexOf("run: |"));
+      const afterRun = block.slice(block.indexOf("run: |"));
+      const jobBoundary = afterRun.search(/\n {2}\S/);
+      const runSource = jobBoundary === -1 ? afterRun : afterRun.slice(0, jobBoundary);
       expect(runSource).not.toContain("${{ inputs.");
     }
 
