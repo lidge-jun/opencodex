@@ -251,7 +251,7 @@ function applyOrRefreshIntegration(
 ): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } = pre;
+  const { store, io, clientId, spec, exportSpec, configPath, detectDir, supersededStore, before, parsed, contribution, record, classified } = pre;
 
   // The detect directory preflight already resolved, so it cannot name a
   // different account than the config path this operation is about to write.
@@ -261,6 +261,24 @@ function applyOrRefreshIntegration(
   if (isLoopbackOnly(clientId) && shouldInjectApiAuthHeader(input.config)) {
     return refuse(clientId, "non_loopback", classified.state,
       `The generated ${clientId} integration is loopback-only and does not emit the admission header a non-loopback bind requires. Give it loopback access instead, through a tunnel or a local forwarder.`);
+  }
+  /*
+   * The write would land, and nothing would read it.
+   *
+   * This is deliberately a refusal rather than a warning attached to a success.
+   * The file is writable, our block merges cleanly, and the ownership record
+   * that follows would describe a real state of a real file — which is exactly
+   * how the original defect stayed invisible: every check the integration runs
+   * passed, the journal recorded a correct apply, and no model ever appeared in
+   * the client (#5348). Reporting the operation as done is the part that is
+   * wrong, so the operation does not report at all.
+   *
+   * Apply, overwrite and refresh only. Disable removes bytes this project put
+   * in this file, and that removal is as effective as it ever was.
+   */
+  if (supersededStore !== null) {
+    return refuse(clientId, "superseded_store", classified.state,
+      `${clientId} now reads its providers from ${supersededStore}, so opencodex writing ${configPath} would change nothing it loads. Add the proxy as a provider in ${clientId}'s own settings instead; \`ocx export --client ${clientId}\` prints the model list to copy.`);
   }
   if (classified.state === "conflict") {
     if (conflictPolicy === "refuse") {

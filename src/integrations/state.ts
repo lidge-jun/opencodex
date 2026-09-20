@@ -25,6 +25,7 @@ import {
 import {
   INTEGRATION_CLIENTS,
   resolveIntegrationPaths,
+  supersededStorePath,
   unresolvedPathHintFor,
   type IntegrationClientId,
 } from "./registry";
@@ -50,6 +51,16 @@ export interface IntegrationStatus {
   appliedAt?: string;
   lastOpId?: string;
   reason?: StateReason;
+  /**
+   * The store this client reads instead of `configPath`, when one exists.
+   *
+   * Orthogonal to `state`, which answers "what is on disk, and did we put it
+   * there?" — and answers it correctly here: the block can be byte-for-byte
+   * current in a file the client stopped opening. That pair is not a
+   * contradiction, it is the whole of #5348, so the surface that reports
+   * `current` has to be able to report this beside it.
+   */
+  supersededBy?: string;
   /** Snapshot files retained for this client; -1 when they cannot be inspected. */
   snapshotCount: number;
   /** Pruning is behind, so older (possibly credential-bearing) snapshots remain. */
@@ -501,12 +512,14 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
    */
   let configPath: string;
   let installed: boolean;
+  let supersededBy: string | null;
   try {
     // One resolution for both, so a client whose paths come from mutable state
     // cannot report one account's install beside another account's config path.
     const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home);
     configPath = paths.configPath;
     installed = io.statKind(paths.detectDir) === "dir";
+    supersededBy = supersededStorePath(input.clientId, path => io.statKind(path), input.env, input.home);
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
     /*
@@ -563,6 +576,7 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     installed,
     configPath,
     ...(reason ? { reason } : {}),
+    ...(supersededBy ? { supersededBy } : {}),
     ...(record ? { appliedAt: record.appliedAt, lastOpId: record.opId } : {}),
     ...retention,
   };

@@ -10,6 +10,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { StatKind } from "./config-io";
 import {
   ClientPathError,
   clineConfigPath,
@@ -43,6 +44,7 @@ import {
   raycastConfigPath,
   zcodeConfigPath,
   zcodeHomeDir,
+  zcodeProviderStorePath,
   type ExportClientId,
 } from "../clients/config-export";
 
@@ -58,6 +60,20 @@ export interface IntegrationClientSpec {
   configPath: (env?: NodeJS.ProcessEnv, home?: string) => string;
   /** Directory whose existence is the cheap "is it installed?" signal. */
   detectDir: (env?: NodeJS.ProcessEnv, home?: string) => string;
+  /**
+   * A file whose presence means this client no longer reads `configPath`.
+   *
+   * A client that moves its store between releases usually keeps a one-shot
+   * import from the old location, and that import is exactly what makes the old
+   * write look like it still works: it runs once, on an install that has never
+   * created the new file, and never again. Everything after it lands in a file
+   * the client does not open.
+   *
+   * Naming the new store is not a licence to write it. This resolver exists so
+   * an operation can ask whether its own write can still reach the client, and
+   * refuse rather than report a success the client will never show.
+   */
+  supersededBy?: (env?: NodeJS.ProcessEnv, home?: string) => string;
   /** Patch only this block-map YAML leaf; never re-render the shared file. */
   sourcePreservingYaml?: { path: readonly string[] };
   /** Coordinate the complete mutation through a sibling config lock. */
@@ -155,6 +171,30 @@ export function isLoopbackOnly(clientId: IntegrationClientId): boolean {
   return EXPORT_CLIENTS[clientId].loopbackOnly;
 }
 
+/**
+ * The store that has superseded this client's config file, or null.
+ *
+ * Takes the caller's `statKind` rather than touching the filesystem itself, so
+ * status and mutation observe this through the same IO seam they observe the
+ * config file through — a reader that probed the real filesystem while the
+ * writer used an injected one would disagree about whether a write can land.
+ *
+ * Only a regular file counts. `failed` is an unreadable stat, not evidence that
+ * the client migrated, and refusing every operation over an EACCES on a path we
+ * never write would be a worse answer than proceeding.
+ */
+export function supersededStorePath(
+  clientId: IntegrationClientId,
+  statKind: (path: string) => StatKind,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string | null {
+  const resolve = INTEGRATION_CLIENTS[clientId].supersededBy;
+  if (!resolve) return null;
+  const path = resolve(env, home);
+  return statKind(path) === "file" ? path : null;
+}
+
 function xdgConfigHome(env: NodeJS.ProcessEnv, home: string): string {
   const xdg = env.XDG_CONFIG_HOME;
   return xdg && xdg.length > 0 ? xdg : join(home, ".config");
@@ -231,6 +271,12 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "zcode",
     configPath: (env = process.env, home = homedir()) => zcodeConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => zcodeHomeDir(env, home),
+    /*
+     * ZCode 3.14 reads its providers from `v2/provider_config.json` and reaches
+     * `v2/config.json` only through the import that seeded it. Where the new
+     * file exists the import is spent, so our write is read by nobody (#5348).
+     */
+    supersededBy: (env = process.env, home = homedir()) => zcodeProviderStorePath(env, home),
   },
   prime: {
     id: "prime",

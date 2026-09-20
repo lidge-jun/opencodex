@@ -20,7 +20,13 @@ import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
 import { createClineIO, ClineTransactionError } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
-import { INTEGRATION_CLIENTS, isLoopbackOnly, resolveIntegrationPaths, type IntegrationClientId } from "./registry";
+import {
+  INTEGRATION_CLIENTS,
+  isLoopbackOnly,
+  resolveIntegrationPaths,
+  supersededStorePath,
+  type IntegrationClientId,
+} from "./registry";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -37,6 +43,7 @@ export type RefusalReason =
   | "conflict"
   | "unsafe"
   | "non_loopback"
+  | "superseded_store"
   | "drift_requires_confirm"
   | "snapshot_expired"
   | "write_failed";
@@ -205,6 +212,15 @@ export interface PlanFingerprintInput {
    * plan that did not bind it could be confirmed after the proxy stopped being a legal target.
    */
   readonly admissionBlocked: boolean;
+  /**
+   * The store that has replaced this client's config file, or null.
+   *
+   * Bound for the same reason `installKind` is: it can flip without touching the
+   * file, the record or the contribution. A client that creates its new store
+   * while a confirmation is outstanding has changed whether the write can reach
+   * it, and a plan that did not bind this would still authorize the write.
+   */
+  readonly supersededStore: string | null;
   /** Exact current bytes, or null when the target is missing. Missing and empty are not equal. */
   readonly before: string | null;
   readonly contribution: ManagedContribution | null;
@@ -226,7 +242,7 @@ export interface PlanFingerprintInput {
   };
 }
 
-const PLAN_FINGERPRINT_VERSION = "p1";
+const PLAN_FINGERPRINT_VERSION = "p2";
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
@@ -251,6 +267,7 @@ export function planFingerprint(input: PlanFingerprintInput): string {
     input.detectDir,
     input.installKind,
     input.admissionBlocked,
+    input.supersededStore,
     input.before === null ? "\u0000absent" : fingerprint(input.before),
     input.contribution === null ? null : fingerprint(canonicalContribution(input.contribution)),
     input.record === null ? null : fingerprint(JSON.stringify(input.record)),
@@ -305,6 +322,13 @@ function foreignEditOf(input: PlanInput): IntegrationPlanForeignEdit {
 function applyOutcome(input: PlanInput): PlanOutcome {
   if (input.installKind !== "dir") return deny("not_installed");
   if (input.admissionBlocked) return deny("non_loopback");
+  /*
+   * Before any file state. The document may be perfectly writable and our block
+   * may already be current in it; neither says anything about whether the
+   * client reads it, and reporting a change to a file nobody opens is the
+   * defect this refusal exists for.
+   */
+  if (input.supersededStore !== null) return deny("superseded_store");
   // Overwrite exists precisely to proceed through a conflict the operator has been shown.
   if (input.classified.state === "conflict" && input.operation !== "overwrite") return deny("conflict");
   if (input.classified.state === "unsafe") return deny("unsafe");
@@ -589,6 +613,7 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
     installKind: observed.io.statKind(observed.detectDir),
     // Loopback-only clients cannot carry the admission header a non-loopback bind requires.
     admissionBlocked: isLoopbackOnly(observed.clientId) && shouldInjectApiAuthHeader(input.config),
+    supersededStore: observed.supersededStore,
     before: observed.before,
     contribution: observed.contribution,
     record: observed.record,
@@ -659,6 +684,13 @@ function previewRestore(input: IntegrationWriteInput, request: PreviewRequest): 
     detectDir: observed.detectDir,
     installKind: observed.installKind,
     admissionBlocked: false,
+    /*
+     * Undo puts back bytes this project already wrote to this file. Whether the
+     * client still reads the file does not change whether those bytes may be
+     * restored, and refusing here would strand a user on a state they asked to
+     * leave.
+     */
+    supersededStore: null,
     before: observed.before,
     contribution: null,
     // Descriptive, never decisive. The record says which places are ours now and the document
@@ -757,6 +789,7 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
    */
   let configPath: string;
   let detectDir: string;
+  let supersededStore: string | null;
   try {
     /*
      * Resolve the PAIR, never one half.
@@ -770,6 +803,13 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
     const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home);
     configPath = resolved.configPath;
     detectDir = resolved.detectDir;
+    /*
+     * Inside the same guard as resolution, because this resolver can refuse the
+     * same way: the store is named by a client env var, and a relative one is a
+     * misconfiguration to report rather than an exception to leak through the
+     * collection route.
+     */
+    supersededStore = supersededStorePath(clientId, path => io.statKind(path), input.env, input.home);
     if (clientId === "cline") io = createClineIO(io, configPath, store, effects.recover);
   } catch (error) {
     if (error instanceof ClineTransactionError) {
@@ -811,5 +851,8 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
   const classified = classifyIntegration({
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
   });
-  return { failed: undefined, store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } as const;
+  return {
+    failed: undefined, store, io, clientId, spec, exportSpec, configPath, detectDir,
+    supersededStore, before, parsed, contribution, record, classified,
+  } as const;
 }
