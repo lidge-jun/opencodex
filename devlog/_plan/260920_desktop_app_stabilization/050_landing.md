@@ -31,9 +31,19 @@ invocation; this stack does not duplicate it.
 
 Fixing the build revealed the rest of the job, which had never run. Its first assertion looked for
 `Contents/MacOS/OpenCodex` — `productName` — while the bundle carries `opencodex-desktop`, the
-crate name. That is corrected here, along with a new assertion that the WidgetBundle is actually
-linked into the extension: the appex builds, signs and registers identically with the bundle
-dropped by the linker, so nothing else in this job would have noticed the defect that shipped.
+crate name. That half landed separately as #5351, and better than the version written here: it
+reads `CFBundleExecutable` out of the bundle instead of restating the name, so the check follows
+the config rather than drifting from it. This stack's copy was dropped in favour of it.
+
+What remains here is the assertion with no equivalent: that the WidgetBundle is actually linked
+into the extension. The appex builds, signs and registers identically with the bundle dropped by
+the linker, so nothing else in this job would have noticed the defect that shipped.
+
+Three of this stack's incidental repairs turned out to be running in parallel with the
+maintainer's own: the StepFun layout registration (#5335), the widget job's updater override
+(#5338), and this executable assertion (#5351). Each was dropped here once the other landed. The
+pattern is worth noting for the next batch — a repair found while passing through is worth
+checking against open pull requests before it is written.
 
 ## What closes this
 
