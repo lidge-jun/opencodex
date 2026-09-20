@@ -26,6 +26,8 @@ Usage:
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
+  ocx restore --remove-codex-provider-table
+                              Also drop [model_providers.opencodex] that a paginated restore kept
   ocx recover-history --legacy-openai --yes
                                Force all user-message opencodex rows to OpenAI (legacy recovery)
   ocx recover-history --ocx-compaction <thread-id> --yes

@@ -231,9 +231,24 @@ converged and suppress the relabel permanently.
 
 That stand-down applies only when the provider tags left in place still resolve through the
 resulting configuration. A provider-table transition that finds a paginated `openai` row returns
-`history_paginated_openai_requires_native_writer` and refuses the artifact transaction: removing
-the root `openai_base_url` without relabeling that row would route a resumed conversation through
-Codex's built-in OpenAI provider instead of this proxy.
+`history_paginated_openai_requires_native_writer`, because removing the root `openai_base_url`
+without relabeling that row would route a resumed conversation through Codex's built-in OpenAI
+provider instead of this proxy. That reason selects a third state rather than a refusal:
+`src/codex/inject/paginated-openai-compat.ts` keeps the marker-owned root override beside the
+provider table, exactly as the client-compaction form already does, and the transition completes
+with the relabel standing down. Codex merges the override onto its built-in `openai` entry when
+it builds the provider map, so the row keeps reaching this proxy while never being rewritten, and
+the retained value is journaled as OpenCodex's own so restore can still take it out.
+
+Two cases cannot reach that state. An admission-token form cannot use the root key at all —
+Codex's built-in entry carries no `x-opencodex-api-key` header — so it keeps the refusal, and the
+message names the two configuration keys that resolve it (`unauthenticatedLoopbackListener`,
+`syncResumeHistory`) instead of saying only "do not retry". A root line the user owns is left
+alone and the conversation follows the destination they chose, which is the same guarantee the
+injector makes everywhere else about a line it does not own. Refusing the whole transition with
+no named way forward was the 2.60.0 regression in #5321: nothing was written, the integration
+stayed disabled, and the only exits a reporter could find were deleting the affected
+conversations or downgrading.
 
 Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
 Apply retains that existing definition before building the candidate witness, even when

@@ -989,6 +989,14 @@ export type SseInspectorHandlers = {
    * with an empty `output`.
    */
   onParsedPayload?: (payload: unknown) => void;
+  /**
+   * A complete data payload that did not parse as a JSON event, `[DONE]` included.
+   *
+   * An inspector that only hears about parsed events cannot tell "nothing has been emitted"
+   * from "something was emitted that I could not read", and a replay decision needs that
+   * difference: an unreadable payload is a payload the caller may already have seen.
+   */
+  onOpaquePayload?: () => void;
   onFirstOutput?: () => void;
   /**
    * Provider-scoped compatibility: persist the completed snapshot under the
@@ -1176,6 +1184,11 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     // payload even when the terminal snapshot that follows no longer mentions it.
     if (handlers.onParsedPayload && parsed !== undefined) {
       try { handlers.onParsedPayload(parsed); } catch { /* inspection must never throw into the pump */ }
+    }
+    // The other half of the same observation. A payload that did not parse still reached the
+    // caller, so a consumer deciding whether anything has been emitted has to hear about it.
+    if (handlers.onOpaquePayload && parsed === undefined) {
+      try { handlers.onOpaquePayload(); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
     const status = terminalStatusFromParsed(parsed);

@@ -35,12 +35,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     aliases: ["eject"],
     usage: "ocx restore [back]",
     summary: "Restore native Codex config without stopping the proxy; `restore back` re-points codex at the running proxy.",
+    details: [
+      "--remove-codex-provider-table  Also remove [model_providers.opencodex] when a paginated home made restore keep it. Conversations tagged opencodex stop opening.",
+    ],
   },
   {
     name: "eject",
     aliases: [],
     usage: "ocx eject [back]",
     summary: "Restore native Codex config without stopping the proxy; `eject back` re-points codex at the running proxy.",
+    details: [
+      "--remove-codex-provider-table  Also remove [model_providers.opencodex] when a paginated home made restore keep it. Conversations tagged opencodex stop opening.",
+    ],
   },
   {
     name: "recover-history",

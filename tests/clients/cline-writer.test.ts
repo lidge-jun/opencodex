@@ -140,6 +140,9 @@ describe("Cline journaled pair", () => {
     expect(readFileSync(catalog, "utf8")).toBe(originalCatalog);
   });
 
+  // Skipped on Windows with the other symlink regressions: link creation needs
+  // a privilege the hosted runners do not grant, and the boundary under test is
+  // the platform-independent lstat-plus-rename path in the shared writer.
   test.skipIf(process.platform === "win32")("a member exchanged for a symlink at the write boundary cannot redirect replacement", () => {
     seed();
     const victim = join(root, "victim.json");
