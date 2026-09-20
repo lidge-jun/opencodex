@@ -4,7 +4,7 @@ import { IconAlert } from "../icons";
 import { Select } from "../ui";
 import { createBoundedFetch } from "../bounded-fetch";
 import { requireJson, type ModelInfo } from "../pages/dashboard-shared";
-import { parseComboList } from "../combo-workspace-data";
+import { comboModelId, parseComboList } from "../combo-workspace-data";
 import { formatNamespacedModelId } from "../provider-icons";
 
 type Setting = { model: string; reasoningEffort?: string; triggers?: string[] } | null;
@@ -167,10 +167,16 @@ function CompactionRoutingControls({ apiBase, models }: { apiBase: string; model
     || effort !== (saved?.reasoningEffort ?? "")
     || triggers !== triggersToChoice(saved?.triggers);
   // Ask what the selection resolves to instead of reading its name. An aliased combo answers
-  // here exactly like a prefixed one (#5216).
-  const comboTargets = comboProviders[model];
+  // here exactly like a prefixed one (#5216). `Object.hasOwn` because a combo id is free-form:
+  // an alias of `constructor` or `toString` would otherwise read an inherited member and be
+  // joined as if it were a target list.
+  const comboTargets = Object.hasOwn(comboProviders, model) ? comboProviders[model] : undefined;
+  // The canonical prefix stays a combo signal of its own. It is the only one left when
+  // /api/combos has not answered yet or failed, and losing it there would describe a combo as
+  // an ordinary provider named "combo" — worse than the alias gap this fixes.
+  const isCombo = comboTargets !== undefined || model.startsWith(comboModelId(""));
   const namespace = model.slice(0, Math.max(model.indexOf("/"), 0));
-  const provider = comboTargets ? "" : (namespace || model);
+  const provider = isCombo ? "" : (namespace || model);
   const providers = comboTargets?.join(", ") || t("compactionRouting.comboProvidersUnknown");
   const routesAutomatic = triggers !== "manual";
 
@@ -200,7 +206,7 @@ function CompactionRoutingControls({ apiBase, models }: { apiBase: string; model
           </button>
         </div>
       </div>
-      {model && <div className="notice-warn" role="note" style={{ marginTop: 12 }}><IconAlert width={14} /> {comboTargets
+      {model && <div className="notice-warn" role="note" style={{ marginTop: 12 }}><IconAlert width={14} /> {isCombo
         ? t("compactionRouting.comboWarning", { combo: model, providers })
         : t("compactionRouting.providerWarning", { provider })}</div>}
       {model && routesAutomatic && <div className="notice-warn" role="note" style={{ marginTop: 12 }}><IconAlert width={14} /> {t("compactionRouting.autoNotice")}</div>}

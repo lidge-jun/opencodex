@@ -91,6 +91,13 @@ function unitTokens(paragraph: string): string[] {
   return [...paragraph.matchAll(UNIT_TOKEN)].map(match => `${match[1]} ${match[2]}`);
 }
 
+/** Every standalone integer left once the byte ceilings are removed. */
+function rowNumbers(paragraph: string): number[] {
+  UNIT_TOKEN.lastIndex = 0;
+  const withoutUnits = paragraph.replace(UNIT_TOKEN, " ");
+  return [...withoutUnits.matchAll(/(?<![\d.,])(\d+)(?![\d.,])/g)].map(match => Number(match[1]));
+}
+
 describe("documented provider discovery limits match the registry", () => {
   test("the registry is the only source of the numbers under test", () => {
     expect(SECTIONS.length).toBeGreaterThan(0);
@@ -116,7 +123,11 @@ describe("documented provider discovery limits match the registry", () => {
         // would otherwise pass while still telling the reader the wrong number.
         expect(unitTokens(paragraph), `${guide.path} ${section.brand} byte ceiling`)
           .toEqual([unitLabel(bytes)]);
-        expect(paragraph, `${guide.path} ${section.brand} row ceiling`).toContain(String(rows));
+        // Read the row ceiling from the prose with the unit tokens removed. Left in, the byte
+        // ceiling's own digits satisfy the check: a Hyperbolic paragraph saying "256 KiB and
+        // 128 raw rows" would pass an expected 256 rows on the strength of the byte number.
+        expect(rowNumbers(paragraph), `${guide.path} ${section.brand} row ceiling`)
+          .toContain(rows);
       });
     }
   }
