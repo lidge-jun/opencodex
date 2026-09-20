@@ -176,6 +176,13 @@ export interface RequestExecutionBudget extends TransientSendBudget {
    * twice. It is NOT a send budget: an authorised replacement still has to fit inside
    * `remainingBaseSends` like every other send.
    *
+   * `limit` is the ceiling the ASKING leg is authorised to present, and the request keeps the
+   * smallest one any leg has presented. A leg reads it from `route.provider`, which credential
+   * rotation, OAuth refresh, transport resolution and a combo target all reassign mid-request,
+   * so a per-call ceiling meant the number of duplicate inferences a request could make
+   * depended on which row happened to ask last: a row granting one, then a row granting two,
+   * bought a second replacement of a turn that may already have run.
+   *
    * Optional so a hand-written stub that satisfies the shape test keeps typechecking; a caller
    * that cannot reach it has no operator override, which is the fail-closed answer.
    */
@@ -208,15 +215,47 @@ interface SharedSendLedger {
   spent: number;
   pendingExternalSends: number;
   /**
-   * Replacements this logical request has already spent on ambiguous failures. Beside `spent`
+   * Spend one of this logical request's replacements for an ambiguous failure. Beside `spent`
    * for the same reason `pendingExternalSends` is: a derived scope that shared one without the
    * other would hand the request a second grant.
+   *
+   * A function rather than the raw count, because the count is not the whole state. The
+   * ceiling belongs to the request too, and a bridged scope has no counter of its own to keep
+   * it in -- it has to ask whoever holds the request's grant.
    */
-  ambiguousResendsClaimed: number;
+  claimAmbiguousResend(limit: number): boolean;
   readonly observer?: RequestSendObserver;
 }
 
 const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>();
+
+/**
+ * One logical request's replacement grant: how many it has spent, and the ceiling it is held
+ * to.
+ *
+ * The ceiling is the SMALLEST any leg has presented rather than whatever the current leg
+ * presents. Each leg reads its number from the provider row it is running against, and that
+ * row changes inside one request -- credential rotation, OAuth refresh, transport resolution
+ * and each combo target reassign it. Taking the asking leg's number let a request that had
+ * already spent the one replacement a strict row granted buy another as soon as a more
+ * permissive row asked, which is a second duplicate inference of one turn.
+ */
+function createAmbiguousResendGrant(): (limit: number) => boolean {
+  let claimed = 0;
+  let ceiling: number | undefined;
+  return (limit: number): boolean => {
+    const presented = Number.isFinite(limit) ? Math.trunc(limit) : 0;
+    // A zero or nonsense ceiling refuses on its own and leaves the request's alone. It is a
+    // caller that cannot state a grant, not an operator narrowing this request: a leg with no
+    // policy is refused before it ever claims, so binding the request to a malformed number
+    // would only let such a caller cancel a grant an opted-in row really made.
+    if (presented <= 0) return false;
+    ceiling = ceiling === undefined ? presented : Math.min(ceiling, presented);
+    if (claimed >= ceiling) return false;
+    claimed += 1;
+    return true;
+  };
+}
 
 function createRequestExecutionBudgetWithLedger(
   policy: RequestExecutionBudgetPolicy,
@@ -261,10 +300,7 @@ function createRequestExecutionBudgetWithLedger(
       return Math.max(0, Math.min(capped, policy.baseSendAllowance - counter.spent));
     },
     claimAmbiguousResend(limit: number): boolean {
-      const ceiling = Number.isFinite(limit) ? Math.trunc(limit) : 0;
-      if (counter.ambiguousResendsClaimed >= ceiling) return false;
-      counter.ambiguousResendsClaimed += 1;
-      return true;
+      return counter.claimAmbiguousResend(limit);
     },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
@@ -363,7 +399,7 @@ export function createRequestExecutionBudget(
   return createRequestExecutionBudgetWithLedger(policy, logicalRequestId, {
     spent: 0,
     pendingExternalSends: 0,
-    ambiguousResendsClaimed: 0,
+    claimAmbiguousResend: createAmbiguousResendGrant(),
     ...(observer ? { observer } : {}),
   });
 }
@@ -398,14 +434,19 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
   const existing = sharedSendLedgers.get(parent);
   if (existing) return existing;
   let pendingExternalSends = 0;
-  let ambiguousResendsClaimed = 0;
   return {
     get spent(): number { return parent.used; },
     set spent(next: number) { parent.used = next; },
     get pendingExternalSends(): number { return pendingExternalSends; },
     set pendingExternalSends(next: number) { pendingExternalSends = next; },
-    get ambiguousResendsClaimed(): number { return ambiguousResendsClaimed; },
-    set ambiguousResendsClaimed(next: number) { ambiguousResendsClaimed = next; },
+    // Asked of the parent rather than counted here. A local counter is a SECOND grant: two
+    // scopes derived from one bridged parent, or one scope beside the parent it was derived
+    // from, each replaced an unknown-state send once. Pending bookings and the durable-spend
+    // observer genuinely cannot cross this boundary because they are private to the factory,
+    // but the grant can -- `claimAmbiguousResend` is public on the parent. A parent that does
+    // not implement it grants nothing, which is the fail-closed answer for a send whose
+    // upstream state is unknown.
+    claimAmbiguousResend: (limit: number): boolean => parent.claimAmbiguousResend?.(limit) === true,
   };
 }
 
