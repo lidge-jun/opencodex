@@ -75,7 +75,14 @@ interface ModalShell<T> {
 function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => void): ModalShell<T> {
   const messages = DICTS[locale];
   const id = `opencodex-action-dialog-${++dialogSequence}`;
-  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  /*
+   * Duck-typed rather than `instanceof HTMLElement`. These helpers are reached from a dozen
+   * components, and a constructor identity check binds every one of their callers to a
+   * realm that happens to expose the global — which is not true of a document handed in
+   * from elsewhere, and is not true of most of this package's DOM tests.
+   */
+  const active = document.activeElement as { focus?: unknown; isConnected?: boolean } | null;
+  const previouslyFocused = typeof active?.focus === "function" ? (active as HTMLElement) : null;
   let settled = false;
 
   const dialog = document.createElement("dialog");
@@ -95,12 +102,17 @@ function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => voi
   const finish = (value: T): void => {
     if (settled) return;
     settled = true;
-    if (dialog.open) dialog.close();
-    dialog.remove();
-    // Only when the trigger is still in the document: a dismissal that removed the row
-    // the button lived on would otherwise throw on the way out.
-    if (previouslyFocused?.isConnected) previouslyFocused.focus();
-    resolve(value);
+    // The caller is answered whatever the teardown does. A dialog left connected is a
+    // cosmetic fault; a promise that never settles hangs the handler that awaited it.
+    try {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+      dialog.remove();
+      // Only when the trigger is still in the document: a dismissal that removed the row
+      // the button lived on would otherwise throw on the way out.
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    } finally {
+      resolve(value);
+    }
   };
 
   backdrop.addEventListener("click", () => finish(cancelValue));
@@ -112,15 +124,23 @@ function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => voi
 
   dialog.append(backdrop, form);
   document.body.append(dialog);
-  if (typeof dialog.showModal === "function") dialog.showModal();
-  else dialog.setAttribute("open", "");
+  if (typeof dialog.showModal === "function") {
+    dialog.showModal();
+  } else {
+    // Without showModal the dialog is not modal and fires no "cancel" event, so Escape has
+    // to be handled directly or the only way out would be the two buttons.
+    dialog.setAttribute("open", "");
+    dialog.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Escape") finish(cancelValue);
+    });
+  }
 
   return { form, bodyId: `${id}-body`, finish };
 }
 
-/** Appends the message paragraphs and returns the container that names the dialog. */
-function appendMessage(form: HTMLFormElement, bodyId: string, message: string): HTMLDivElement {
-  const body = document.createElement("div");
+/** Appends the message paragraphs and returns the element that names the dialog. */
+function appendMessage(form: HTMLFormElement, bodyId: string, message: string, tag = "div"): HTMLElement {
+  const body = document.createElement(tag);
   body.id = bodyId;
   for (const paragraph of paragraphsOf(message)) {
     const element = document.createElement("p");
@@ -185,22 +205,28 @@ export function requestTextValue(options: RequestTextValueOptions): Promise<stri
 
   return new Promise<string | null>((resolve) => {
     const { form, bodyId, finish } = openModal<string | null>(locale, null, resolve);
-    const body = appendMessage(form, bodyId, options.message);
-    body.className = "field-label";
-
     const input = document.createElement("input");
+    const inputId = `${bodyId}-input`;
+    // A real <label for> rather than aria-describedby: the message IS the field's name, and
+    // the platform prompt() showed it the same way.
+    const label = appendMessage(form, bodyId, options.message, "label");
+    label.className = "field-label";
+    label.setAttribute("for", inputId);
+
+    input.id = inputId;
     input.className = "input";
     input.type = "text";
     input.value = options.initialValue ?? "";
     input.spellcheck = false;
     input.autocapitalize = "none";
-    input.setAttribute("aria-describedby", bodyId);
     if (options.maxLength !== undefined) input.maxLength = options.maxLength;
 
     // Mounted up front so role="alert" has a stable target, and kept empty while hidden so
     // the two halves of "there is no error" cannot drift apart — same rule as the
     // admin-token dialog's notice.
     const validationError = document.createElement("div");
+    const errorId = `${bodyId}-error`;
+    validationError.id = errorId;
     validationError.className = "notice notice-err";
     validationError.setAttribute("role", "alert");
     validationError.hidden = true;
@@ -208,8 +234,13 @@ export function requestTextValue(options: RequestTextValueOptions): Promise<stri
     const setValidationError = (text: string | null): void => {
       validationError.textContent = text ?? "";
       validationError.hidden = text === null;
-      if (text === null) input.removeAttribute("aria-invalid");
-      else input.setAttribute("aria-invalid", "true");
+      if (text === null) {
+        input.removeAttribute("aria-invalid");
+        input.removeAttribute("aria-describedby");
+      } else {
+        input.setAttribute("aria-invalid", "true");
+        input.setAttribute("aria-describedby", errorId);
+      }
     };
 
     const actions = document.createElement("div");

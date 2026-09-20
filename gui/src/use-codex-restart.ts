@@ -30,6 +30,10 @@ export interface CodexRestartOptions {
    * be `alert()`, which draws nothing inside the app, so every result — including a
    * partial stop that left app-servers running — was reported to no one. A consumer that
    * forgets to render it now fails to compile instead of failing silently.
+   *
+   * The sink has to outlive the surface that called `restart`. Enumeration can take tens
+   * of seconds, and a user who navigates away meanwhile is exactly the user who needs to
+   * be told that app-servers survived, so both consumers report through the shell.
    */
   report: (message: string, tone: NoticeTone) => void;
 }

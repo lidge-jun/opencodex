@@ -84,4 +84,33 @@ describe("dashboard platform-dialog guard", () => {
     const source = "const quoted = /['\"]/;\nalert(message);";
     expect(findPlatformDialogCalls(source).map(call => call.form)).toEqual(["alert("]);
   });
+
+  /*
+   * Shapes an earlier revision of the scanner missed. Each one is a way of writing or
+   * neighbouring a real global call that the lexer or the call pattern failed to see, and a
+   * missed call is the failure mode that matters: a false positive is loud, a false
+   * negative is a guard that has quietly stopped guarding.
+   */
+  test("the guard is not blinded by neighbouring syntax", () => {
+    const reported = (source: string) => findPlatformDialogCalls(source).map(call => call.form);
+
+    // A JSX closing tag is not a regular expression, and an apostrophe in JSX body text is
+    // not a string. Either reading masked the rest of the line.
+    expect(reported("const view = <div>don't</div>; alert(message);")).toEqual(["alert("]);
+    // A newline says nothing about whether the next slash divides.
+    expect(reported("const ratio = numerator\n/ alert(message);")).toEqual(["alert("]);
+    // A slash inside a character class does not close the pattern.
+    expect(reported("function f() { return /['/]/; } alert(message);")).toEqual(["alert("]);
+    // An arrow's => still opens a regular expression, so this one stays masked.
+    expect(reported("const f = x => /confirm\\(/.test(x);")).toEqual([]);
+  });
+
+  test("the guard reads the less obvious call spellings", () => {
+    const reported = (source: string) => findPlatformDialogCalls(source).map(call => call.form);
+
+    expect(reported("confirm?.(question);")).toEqual(["confirm?.("]);
+    expect(reported("(confirm)(question);")).toEqual(["(confirm)("]);
+    // A line continuation keeps the string open; the call after it is still code.
+    expect(reported('const s = "continued\\\r\ntext"; alert(message);')).toEqual(["alert("]);
+  });
 });

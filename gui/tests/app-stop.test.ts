@@ -67,7 +67,7 @@ describe("App proxy stop", () => {
     expect(outcome).toEqual({ accepted: false, message: "HTTP 503 stop failed" });
   });
 
-  test("App clears stopping state and alerts for every rejected stop outcome", async () => {
+  test("App gates the stop on an in-page dialog and reports every rejected outcome", async () => {
     const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
     const handleStopIdx = app.indexOf("const handleStop");
     const brandIdx = app.indexOf("const brand");
@@ -75,10 +75,17 @@ describe("App proxy stop", () => {
     expect(brandIdx).toBeGreaterThan(handleStopIdx);
     const handler = app.slice(handleStopIdx, brandIdx);
 
+    // The consent gate is awaited, and a refusal returns before the request. It used to
+    // be `confirm()`, which the app's webview answers false without drawing, so this
+    // control did nothing there at all.
+    expect(handler).toContain("await confirmAction(");
+    expect(handler).toContain("if (!consented) return;");
     expect(handler).toContain("await requestProxyStop(machineBase");
     expect(handler).toContain('mode: targets.connected ? "client" : "standalone"');
     expect(handler).toContain("if (!outcome.accepted)");
     expect(handler).toContain("setStopping(false)");
-    expect(handler).toContain("alert(outcome.message)");
+    // Reported in the page, not through a platform dialog that draws nothing.
+    expect(handler).toContain('report(outcome.message, "err")');
+    expect(handler).not.toContain("alert(");
   });
 });

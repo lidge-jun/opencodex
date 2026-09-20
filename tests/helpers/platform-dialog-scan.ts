@@ -36,9 +36,35 @@ const CALL_POSITION_KEYWORDS = new Set([
   "case", "in", "of", "do", "else", "throw",
 ]);
 
-/** A `/` following one of these opens a regular expression rather than dividing. */
+/**
+ * A `/` after one of these punctuation marks opens a regular expression rather than dividing.
+ *
+ * `<` and `>` are deliberately absent. A JSX closing tag is spelled `</div>`, so treating
+ * `/` after `<` as a regular expression masked everything between that tag and the end of
+ * the line — which in dense JSX is exactly where a handler calling a dialog would sit. The
+ * one case worth keeping is the arrow function `=> /pattern/`, handled by looking at the
+ * character before the `>`.
+ */
 const REGEX_PRECEDING_PUNCTUATION = new Set([
-  "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "~", "^", "<", ">", "\n",
+  "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "~", "^",
+]);
+
+/**
+ * Words after which a quote opens a string literal and a slash opens a regular expression.
+ *
+ * The distinction matters because JSX body text is not a string: in `<div>don't</div>` the
+ * apostrophe follows the word `don`, and treating it as a quote would mask the rest of the
+ * line — including a platform-dialog call sitting on it. A word that is not a keyword
+ * therefore means "prose", and the scanner declines to mask.
+ *
+ * A word missing from this set fails SAFE: the text is left unmasked, so at worst its
+ * contents are reported as a call that has to be looked at, rather than a real call going
+ * unreported.
+ */
+const VALUE_PRECEDING_KEYWORDS = new Set([
+  "return", "typeof", "case", "in", "of", "do", "else", "void", "await", "yield", "new",
+  "delete", "throw", "instanceof", "from", "import", "export", "default", "as", "extends",
+  "satisfies", "keyof", "readonly", "let", "const", "var",
 ]);
 
 function isIdentifierChar(character: string): boolean {
@@ -76,8 +102,23 @@ export function maskNonCode(source: string): string {
     return cursor;
   };
 
-  /** Last significant character, used to tell a regular expression from a division. */
-  let previousSignificant = "\n";
+  /**
+   * The last significant token. A word carries its text so a keyword can be told from an
+   * ordinary identifier; punctuation carries the character. It deliberately survives line
+   * breaks — a newline says nothing about whether the next `/` divides or opens a regular
+   * expression, and resetting on one made `numerator\n/ alert(x)` read as a regex and mask
+   * the call.
+   */
+  let previousWord = "";
+  let previousPunctuation = "";
+  /** The punctuation before that, so `=>` can be told from a bare `>`. */
+  let punctuationBefore = "";
+  const opensValue = (): boolean => {
+    if (previousWord) return VALUE_PRECEDING_KEYWORDS.has(previousWord);
+    if (previousPunctuation === ">") return punctuationBefore === "=";
+    return previousPunctuation === "" || REGEX_PRECEDING_PUNCTUATION.has(previousPunctuation);
+  };
+  const noteValue = (): void => { previousWord = ""; punctuationBefore = ""; previousPunctuation = "x"; };
   /** Open template literals, each counting the brace depth of the hole it is inside. */
   const templates: number[] = [];
   let index = 0;
@@ -100,19 +141,21 @@ export function maskNonCode(source: string): string {
       index = stop;
       continue;
     }
-    if (character === "'" || character === '"') {
+    // A quote after an ordinary word is prose, not a string opener: `don't` inside JSX.
+    if ((character === "'" || character === '"') && opensValue()) {
       let cursor = index + 1;
       while (cursor < source.length && source[cursor] !== character) {
-        if (source[cursor] === "\\") cursor += 1;
+        // A line continuation keeps the string open, including the CRLF spelling.
+        if (source[cursor] === "\\") cursor += source[cursor + 1] === "\r" && source[cursor + 2] === "\n" ? 2 : 1;
         else if (source[cursor] === "\n") break;
         cursor += 1;
       }
       blank(index, cursor + 1);
-      previousSignificant = "x";
+      noteValue();
       index = cursor + 1;
       continue;
     }
-    if (character === "/" && REGEX_PRECEDING_PUNCTUATION.has(previousSignificant)) {
+    if (character === "/" && opensValue()) {
       let cursor = index + 1;
       let inClass = false;
       while (cursor < source.length) {
@@ -125,7 +168,7 @@ export function maskNonCode(source: string): string {
         cursor += 1;
       }
       blank(index, cursor + 1);
-      previousSignificant = "x";
+      noteValue();
       index = cursor + 1;
       continue;
     }
@@ -133,7 +176,7 @@ export function maskNonCode(source: string): string {
       templates.push(0);
       out[index] = " ";
       index = maskTemplateText(index + 1);
-      previousSignificant = "x";
+      noteValue();
       continue;
     }
     if (templates.length > 0 && character === "{") {
@@ -142,13 +185,20 @@ export function maskNonCode(source: string): string {
       if (templates[templates.length - 1] === 0) {
         out[index] = " ";
         index = maskTemplateText(index + 1);
-        previousSignificant = "x";
+        noteValue();
         continue;
       }
       templates[templates.length - 1] -= 1;
     }
-    if (character === "\n") previousSignificant = "\n";
-    else if (!/\s/.test(character)) previousSignificant = character;
+    if (isIdentifierChar(character)) {
+      previousWord += character;
+      previousPunctuation = "";
+      punctuationBefore = "";
+    } else if (!/\s/.test(character)) {
+      previousWord = "";
+      punctuationBefore = previousPunctuation;
+      previousPunctuation = character;
+    }
     index += 1;
   }
 
@@ -181,9 +231,14 @@ export function findPlatformDialogCalls(source: string): PlatformDialogCall[] {
     found.push({ line: lineOf(code, match.index), form: match[0].replace(/\s+/g, "") });
   }
 
-  const barePattern = new RegExp(`(?<![A-Za-z0-9_$.])(?:${DIALOGS.join("|")})\\s*\\(`, "g");
+  // `confirm(`, `confirm ?. (` and `(confirm)(` all reach the same global.
+  const barePattern = new RegExp(
+    `(?<![A-Za-z0-9_$.])\\(?\\s*(?:${DIALOGS.join("|")})\\s*\\)?\\s*(?:\\?\\.)?\\s*\\(`,
+    "g",
+  );
   for (const match of code.matchAll(barePattern)) {
-    let before = match.index;
+    // Skip a wrapping `(` so the preceding-token test sees the real context.
+    let before = match.index + (match[0].startsWith("(") ? 1 : 0);
     while (before > 0 && /\s/.test(code[before - 1])) before -= 1;
     // A member access reaches the receiver's own method, not the global.
     if (before > 0 && code[before - 1] === ".") continue;
