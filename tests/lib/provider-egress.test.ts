@@ -114,9 +114,11 @@ describe("provider egress resolution", () => {
 
 describe("provider egress never reproduces a proxy credential", () => {
   test("log output keeps scheme, host and port and drops everything else", () => {
-    const secret = "http://operator:hunter2@egress.example:3128/path?token=abc";
+    // A `.test` host, because a credentialed proxy URL reads as `password@host` to the privacy
+    // scanner and that domain is on its allowed list for fixtures.
+    const secret = "http://operator:hunter2@egress.test:3128/path?token=abc";
     const label = sanitizeProxyUrlForLog(secret);
-    expect(label).toBe("http://egress.example:3128");
+    expect(label).toBe("http://egress.test:3128");
     for (const fragment of ["operator", "hunter2", "token", "abc"]) {
       expect(label).not.toContain(fragment);
     }
@@ -125,8 +127,8 @@ describe("provider egress never reproduces a proxy credential", () => {
   test("the described route carries no digest of the credential either", () => {
     // A short hash over a known host is a guessable stand-in for the secret and a durable
     // correlation key for the account behind it, so the description derives nothing from it.
-    const described = describeProviderEgressForLog(resolve({ proxy: "http://operator:hunter2@egress.example:3128" }));
-    expect(described).toBe("http(http://egress.example:3128)");
+    const described = describeProviderEgressForLog(resolve({ proxy: "http://operator:hunter2@egress.test:3128" }));
+    expect(described).toBe("http(http://egress.test:3128)");
     expect(described).not.toContain("hunter2");
     expect(describeProviderEgressForLog({ kind: "inherit" })).toBe("inherit");
     expect(describeProviderEgressForLog({ kind: "direct", reason: "noProxy" })).toBe("direct(noProxy)");

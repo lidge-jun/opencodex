@@ -30,9 +30,11 @@ describe("provider egress at the management write boundary", () => {
   });
 
   test("a rejection never echoes the value, because a proxy URL carries credentials", () => {
-    const error = validate({ proxy: "ftp://operator:hunter2@egress.example:3128" });
+    // A `.test` host: a credentialed proxy URL reads as `password@host` to the privacy scanner,
+    // and that domain is on its allowed list for fixtures.
+    const error = validate({ proxy: "ftp://operator:hunter2@egress.test:3128" });
     expect(error).not.toBeNull();
-    for (const fragment of ["operator", "hunter2", "egress.example"]) {
+    for (const fragment of ["operator", "hunter2", "egress.test"]) {
       expect(error).not.toContain(fragment);
     }
   });
