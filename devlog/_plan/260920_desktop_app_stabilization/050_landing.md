@@ -26,9 +26,14 @@ from it. Registering it under `providers` restores the gate for everyone.
 `macos widget + bundle` failed with *A public key has been found, but no private key*. The job is
 an unsigned build by design, so the key is correctly absent — but the committed config sets
 `bundle.createUpdaterArtifacts` and `plugins.updater.pubkey`, so `tauri build` writes the updater
-archive and then refuses to finish. Selecting bundle targets does not avoid it because the flag is
-config rather than a target; the invocation turns the artifact off instead, leaving nothing to sign
-rather than something signed badly.
+archive and then refuses to finish. That half is #5338's, which turns the artifact off for that one
+invocation; this stack does not duplicate it.
+
+Fixing the build revealed the rest of the job, which had never run. Its first assertion looked for
+`Contents/MacOS/OpenCodex` — `productName` — while the bundle carries `opencodex-desktop`, the
+crate name. That is corrected here, along with a new assertion that the WidgetBundle is actually
+linked into the extension: the appex builds, signs and registers identically with the bundle
+dropped by the linker, so nothing else in this job would have noticed the defect that shipped.
 
 ## What closes this
 
