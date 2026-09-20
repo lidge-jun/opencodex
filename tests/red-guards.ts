@@ -289,4 +289,28 @@ export const GUARDS: Guard[] = [
     expect: "refuses a body past the 32 MiB read cap, with no content-length to warn of it",
     suite: VOICE,
   },
+  {
+    name: "the speech response cap is enforced as bytes pass",
+    file: "src/server/audio-speech.ts",
+    from: "        if (seen > SPEECH_RESPONSE_MAX_BYTES) {",
+    to: "        if (false) {",
+    expect: "a response past the cap is torn down mid-flight",
+    suite: VOICE,
+  },
+  {
+    name: "an upstream failure is read and reported, not streamed through",
+    file: "src/server/audio-speech.ts",
+    from: "    if (!upstream.ok) {",
+    to: "    if (false) {",
+    expect: "an upstream failure is still a clean message, not a streamed error page",
+    suite: VOICE,
+  },
+  {
+    name: "an upstream with no body is refused",
+    file: "src/server/audio-speech.ts",
+    from: "    if (!upstream.body) {",
+    to: "    if (false) {",
+    expect: "an upstream with no body at all is 502",
+    suite: VOICE,
+  },
 ];

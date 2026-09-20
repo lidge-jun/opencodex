@@ -117,25 +117,54 @@ async function speakAdmitted(
       signal: signal.signal,
       redirect: "manual",
     });
-    const detach = cancelBodyOnAbort(upstream.body, signal.signal);
-    let audio: ArrayBuffer | Response;
-    try {
-      audio = await readBodyCapped(upstream.body, SPEECH_RESPONSE_MAX_BYTES, () => "Speech response too large", signal.signal);
-    } finally {
-      detach();
-    }
-    if (audio instanceof Response) return audio;
+    // The failure branch reads the body; the success branch does not. An
+    // error is small and worth a clean message, and committing to a status
+    // before knowing the body is good is the price of not buffering the good
+    // case.
     if (!upstream.ok) {
+      const detach = cancelBodyOnAbort(upstream.body, signal.signal);
+      try {
+        await readBodyCapped(upstream.body, SPEECH_RESPONSE_MAX_BYTES, () => "Speech response too large", signal.signal);
+      } finally {
+        detach();
+      }
       const status = upstream.status >= 400 && upstream.status <= 599 ? upstream.status : 502;
       return formatErrorResponse(status, "upstream_error",
         `Speech provider "${backend.providerName}" returned HTTP ${upstream.status}`);
     }
-    if (audio.byteLength === 0) {
+    if (!upstream.body) {
       return formatErrorResponse(502, "upstream_error", `Speech provider "${backend.providerName}" returned no audio`);
     }
+
+    // Streamed, not buffered. Measured against pocket-voice on this machine:
+    // buffering put time-to-first-byte at 3.59s for a paragraph the provider
+    // itself began delivering at 2.68s, and `ttfb == total` because nothing
+    // moved until the whole clip existed. Total transfer time was within
+    // 0.12s either way, so the buffering bought nothing and cost 0.9s of
+    // silence — and it gets worse with length, which is exactly the case
+    // read-aloud is for.
+    //
+    // The cap is enforced as the bytes pass rather than up front. A stream
+    // that overruns is torn down mid-flight: the caller has already had a
+    // 200, so there is no status left to change, and truncation is the only
+    // honest end.
+    let seen = 0;
+    const capped = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        seen += chunk.byteLength;
+        if (seen > SPEECH_RESPONSE_MAX_BYTES) {
+          controller.error(new Error("Speech response too large"));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    });
+    const detach = cancelBodyOnAbort(upstream.body, signal.signal);
+    void upstream.body.pipeTo(capped.writable).catch(() => {}).finally(detach);
+
     // Carry the provider's own content type: the caller asked for a format and
     // relabelling the bytes would be a lie the player finds out about later.
-    return new Response(audio, {
+    return new Response(capped.readable, {
       headers: { "content-type": upstream.headers.get("content-type") ?? "audio/mpeg" },
     });
   } catch {

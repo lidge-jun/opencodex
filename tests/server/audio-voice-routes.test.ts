@@ -5,7 +5,7 @@ import {
   voiceConfigValueError,
   voiceProviderEndpointError,
 } from "../../src/config/voice-target";
-import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS, SPEECH_REQUEST_MAX_BYTES } from "../../src/server/audio-speech";
+import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS, SPEECH_REQUEST_MAX_BYTES, SPEECH_RESPONSE_MAX_BYTES } from "../../src/server/audio-speech";
 import { handleAudioTranscriptions } from "../../src/server/audio-transcriptions";
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
@@ -588,4 +588,60 @@ describe("transcription request validation", () => {
       expect(await response.text()).toContain(row.expect);
     });
   }
+});
+
+describe("speech streaming", () => {
+  const CONFIGURED = config({ speech: { provider: "pocket" } } as Partial<OcxConfig>);
+
+  async function speakWith(upstream: () => Response): Promise<Response> {
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => upstream()) as typeof fetch;
+    try {
+      return await handleAudioSpeech(speechRequest({ input: "hello" }), CONFIGURED, LOG, ADMISSION);
+    } finally {
+      globalThis.fetch = real;
+    }
+  }
+
+  test("audio is forwarded as a stream, carrying the provider's content type", async () => {
+    const response = await speakWith(() =>
+      new Response(new Blob([new Uint8Array(1024)]).stream(), {
+        headers: { "content-type": "audio/wav" },
+      }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("audio/wav");
+    expect(await response.arrayBuffer()).toHaveLength(1024);
+  });
+
+  test("a response past the cap is torn down mid-flight", async () => {
+    // The caller already has a 200, so there is no status left to change:
+    // the stream errors and the body ends short. Buffering could have
+    // answered 413; streaming cannot, and truncation is the honest end.
+    const oversized = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const chunk = new Uint8Array(1024 * 1024);
+        for (let sent = 0; sent <= SPEECH_RESPONSE_MAX_BYTES; sent += chunk.byteLength) {
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+    const response = await speakWith(() =>
+      new Response(oversized, { headers: { "content-type": "audio/wav" } }));
+    expect(response.status).toBe(200);
+    await expect(response.arrayBuffer()).rejects.toThrow();
+  });
+
+  test("an upstream failure is still a clean message, not a streamed error page", async () => {
+    const response = await speakWith(() =>
+      new Response("upstream exploded", { status: 503 }));
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain("returned HTTP 503");
+  });
+
+  test("an upstream with no body at all is 502", async () => {
+    const response = await speakWith(() => new Response(null, { status: 200 }));
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("no audio");
+  });
 });
