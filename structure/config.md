@@ -68,6 +68,8 @@ process-wide temp sequence, symlink target resolution, no-follow directory-entry
 externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut.
+The no-follow variant resolves the parent directory once and then operates on the named entry; pinning
+that resolved parent through the whole operation is a deferred follow-up, not part of this contract.
 
 Windows hardening there is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the

@@ -283,5 +283,6 @@ Recovery reads commit history and ownership through strict store methods. Unread
 metadata is uncertainty, never evidence that a transaction did not commit. Pending records validate
 complete ownership, exact Cline paths and result fingerprints before either native file is replaced.
 Native pair writes replace the named directory entries without following final symlinks. A symlink
-present at validation is refused, and one exchanged into place during a mutation is refused rather
-than redirecting OpenCodex's write outside Cline's settings directory.
+present at validation, including the revalidation immediately before rename, is refused; one exchanged
+into place afterward is itself replaced by the atomic rename rather than followed, so a late swap still
+cannot redirect OpenCodex's write outside Cline's settings directory.
