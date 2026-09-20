@@ -615,13 +615,13 @@ test("a target edited after the history copy is still not rewritten by the old c
   const plan = await preview.json() as { canApply: boolean; fingerprint: string };
   expect(plan.canApply).toBe(true);
 
-  /*
-   * The edit lands on the second reading of this profile's document. The first belongs to the
-   * check that runs before the copy, which therefore accepts the file the operator confirmed; by
-   * the second, which the coordinated restore's own check performs, the file is something else.
-   */
+  // The absent destination snapshot is the observable boundary. Neither restore preflight nor
+  // either pre-import check can trigger the edit; only a read after the real copy can do so.
+  const copiedSnapshotPath = join(profileStore, snapshotName);
+  const sourceSnapshot = readFileSync(join(root, "store", snapshotName), "utf8");
+  expect(existsSync(copiedSnapshotPath)).toBe(false);
   const edited = JSON.stringify({ theme: "edited-after-the-copy" });
-  let reads = 0;
+  let editedAfterCopy = false;
   /*
    * A file-level seam only. The Aside layer rebinds the journal and record writers to the
    * profile's own store whatever io it is handed, so the history assertions below still describe
@@ -633,9 +633,10 @@ test("a target edited after the history copy is still not rewritten by the old c
     io: {
       ...base,
       readText: (target: string) => {
-        if (target === path(1)) {
-          reads += 1;
-          if (reads === 2) writeFileSync(path(1), edited);
+        if (target === path(1) && !editedAfterCopy && existsSync(copiedSnapshotPath)) {
+          expect(readFileSync(copiedSnapshotPath, "utf8")).toBe(sourceSnapshot);
+          editedAfterCopy = true;
+          writeFileSync(path(1), edited);
         }
         return base.readText(target);
       },
@@ -646,7 +647,9 @@ test("a target edited after the history copy is still not rewritten by the old c
     opId, operation: "restore", confirmDrift: true, planFingerprint: plan.fingerprint,
   });
 
-  expect(reads).toBeGreaterThan(1);
+  expect(editedAfterCopy).toBe(true);
+  expect(readFileSync(copiedSnapshotPath, "utf8")).toBe(sourceSnapshot);
+  expect(saved?.asideProfileSync?.profiles?.["1"]).toBe(false);
   expect(undo.status).toBe(409);
   expect((await undo.json() as { code: string }).code).toBe("integration_preview_stale");
   // The editor's file survives: no restore transaction ran.
