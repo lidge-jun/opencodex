@@ -22,6 +22,7 @@ import { getConfigDir } from "../../config";
 import { recordOwnedConfigPath } from "../../lib/config-ownership";
 import {
   currentUsageLogRevision,
+  encodePersistedRequestedModel,
   normalizeUsageEntryForTest,
   usageLogPath,
   type PersistedUsageEntry,
@@ -510,7 +511,9 @@ function queryRows(
   };
   if (filters.provider !== undefined) add("provider = ?", filters.provider);
   if (filters.model !== undefined) add("model = ?", filters.model);
-  if (filters.requestedModel !== undefined) add("requested_model = ?", filters.requestedModel);
+  // Rows store the bounded encoded form, so the lookup value must be encoded the
+  // same way — short selectors encode to themselves and still match verbatim.
+  if (filters.requestedModel !== undefined) add("requested_model = ?", encodePersistedRequestedModel(filters.requestedModel));
   if (filters.status !== undefined) add("status = ?", filters.status);
   if (filters.conversationId !== undefined) add("conversation_id = ?", filters.conversationId);
   if (filters.surface !== undefined) add("surface = ?", filters.surface);
