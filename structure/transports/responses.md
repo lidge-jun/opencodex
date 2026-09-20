@@ -867,6 +867,16 @@ counter rather than holding a second. A replacement never widens a send budget: 
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through.
 
+The number of replacements is the request's as well. A leg reads it from `route.provider`, which
+credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
+request, so the grant is held to the smallest ceiling any leg has presented rather than to
+whatever the asking leg presents. Otherwise a request that had already spent the one replacement a
+strict row granted bought a second duplicate inference as soon as a more permissive row asked, and
+how many times one turn could be re-sent depended on the order the rows happened to ask in. A
+derived scope draws on the same grant even when its parent is a hand-built view rather than a
+factory budget: the claim is public on the parent, so unlike a pending external booking there is
+nothing private that forces a second counter.
+
 A committed or futile failure refuses without touching the grant, so a turn that already emitted
 output cannot drain the replacement a later ambiguous reset would have been entitled to. The
 cause is derived from the `AttemptRecoveryKind` the send will be recorded as, which is what
