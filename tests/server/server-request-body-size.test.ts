@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync} from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { startServer } from "../../src/server";
 import { MAX_DECOMPRESSED_BODY_BYTES, MAX_CONFIGURABLE_INBOUND_BODY_BYTES, readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../../src/server/request-decompress";
 import {
@@ -14,21 +16,37 @@ import {
 } from "../../src/server/inbound-body-admission";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-server-request-body-size-test");
+let testHome = "";
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+const previousHome = process.env.OPENCODEX_HOME;
 
+// server.stop(true) is async: its teardown closes the spend-ledger lease and drains the
+// icacls.exe config-dir flight, both of which hold OPENCODEX_HOME open on Windows. A test
+// that discards the promise lets removeTreeWithRetry's synchronous sleeps starve that
+// teardown entirely, so every later hook re-fails EBUSY on the same fixed directory.
 beforeEach(() => {
-  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-  mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
+  testHome = mkdtempSync(join(tmpdir(), "ocx-server-body-size-"));
+  process.env.OPENCODEX_HOME = testHome;
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-body-size-codex-");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Awaited server.stop() drains the config-dir ACL flight it started, but the failed-start
+  // rollback and timed-out icacls reaps release those handles through fire-and-forget paths —
+  // the hook that removes the tree has to settle all three itself (mandatory Windows locking
+  // turns any still-open handle under the state directory into EBUSY/EPERM on rm).
+  await flushConfigDirHardeningForTests();
+  await flushWindowsSecretAclReapsBeforeRemoval(testHome);
+  if (isolatedCodexHome) await flushWindowsSecretAclReapsBeforeRemoval(isolatedCodexHome.path);
+  await flushNativeMainStartupReleases();
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  if (testHome) removeTreeWithRetry(testHome);
 });
 
 describe("server maxRequestBodySize (Issue #1601)", () => {
@@ -56,7 +74,7 @@ describe("server maxRequestBodySize (Issue #1601)", () => {
       // Drain the response so the connection closes cleanly.
       await res.text();
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 });
@@ -92,7 +110,7 @@ describe("configurable listener body size (Issue #3573)", () => {
       expect(result.refused).toBe(false);
       expect(result.status).not.toBeNull();
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -105,7 +123,7 @@ describe("configurable listener body size (Issue #3573)", () => {
     try {
       expect((await postFixedBody(server.port)).refused).toBe(true);
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 });
