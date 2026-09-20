@@ -13,6 +13,8 @@ const provider: OcxProviderConfig = {
   apiKey: "sk-test",
   authMode: "key",
 };
+// This generic destination does not advertise native developer-role support, so the adapter
+// deliberately folds developer barriers to system while preserving their repaired ordering.
 
 interface ChatMsg {
   role: string;
@@ -106,7 +108,7 @@ describe("openai-chat dangling tool_calls hardening", () => {
     expect(roles[aIdx + 1]).toBe("tool");
     expect(messages[aIdx + 1].tool_call_id).toBe("call_x");
     expect(messages[aIdx + 1].content).toBe('{"answers":{}}');
-    expect(messages[aIdx + 2]).toEqual({ role: "developer", content: "[injected guidance]" });
+    expect(messages[aIdx + 2]).toEqual({ role: "system", content: "[injected guidance]" });
     expect(roles[aIdx + 3]).toBe("user");
     // no synthetic result fabricated for an answered call
     expect(messages.some(m => typeof m.content === "string" && m.content.includes("no tool result was recorded"))).toBe(false);
@@ -167,7 +169,7 @@ describe("openai-chat dangling tool_calls hardening", () => {
     const real = block.find(m => m.tool_call_id === "call_2");
     expect(real?.content).toBe("img-ok");
     expect(messages[0]).toEqual({ role: "user", content: "hi" });
-    expect(messages[aIdx + 3]).toEqual({ role: "developer", content: "barrier while call_1 pending" });
+    expect(messages[aIdx + 3]).toEqual({ role: "system", content: "barrier while call_1 pending" });
     expect(messages[aIdx + 4].role).toBe("assistant");
   });
 
@@ -184,7 +186,7 @@ describe("openai-chat dangling tool_calls hardening", () => {
     expect(messages[aIdx + 1].tool_call_id).toBe("call_p");
     expect(String(messages[aIdx + 1].content)).toContain("no tool result was recorded");
     expect(messages[0]).toEqual({ role: "user", content: "hi" });
-    expect(messages[aIdx + 2]).toEqual({ role: "developer", content: "deferred barrier" });
+    expect(messages[aIdx + 2]).toEqual({ role: "system", content: "deferred barrier" });
     expect(messages[aIdx + 3].role).toBe("assistant");
     const orphanIdx = messages.findIndex((m, i) => i > aIdx && m.role === "assistant");
     expect(messages[orphanIdx].tool_calls?.[0].id).toBe("call_unknown");
