@@ -1,6 +1,6 @@
 export interface StatusCodeInfo { label: string; description: string }
 
-type Locale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi";
+type Locale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt-BR";
 type LocalizedInfo = Record<Locale, StatusCodeInfo>;
 
 const STATUS_CODES: Record<number, LocalizedInfo> = {
@@ -15,6 +15,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "不正なリクエスト", description: "プロキシがリクエストを解釈できませんでした。再試行前にモデル、メッセージ形式、ヘッダー、JSON 本文を確認してください。" },
     tr: { label: "Hatalı istek", description: "Proxy isteği anlayamadı. Yeniden denemeden önce modeli, mesaj yapısını, başlıkları ve JSON gövdesini kontrol edin." },
     vi: { label: "Yêu cầu không hợp lệ", description: "Proxy không thể hiểu yêu cầu. Hãy kiểm tra model, cấu trúc tin nhắn, header và nội dung JSON trước khi thử lại." },
+    "pt-BR": { label: "Requisição inválida", description: "O proxy não conseguiu interpretar a requisição. Verifique o model, formato de mensagens, headers e o corpo JSON antes de tentar novamente." },
   },
   401: {
     en: { label: "Unauthorized", description: "Credentials are missing, expired, or invalid. Re-login or refresh the account/provider credentials used by opencodex." },
@@ -27,6 +28,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "認証が必要", description: "認証情報が不在・期限切れ・無効です。opencodex が使用するアカウントまたはプロバイダー認証情報を再ログインまたは更新してください。" },
     tr: { label: "Yetkisiz erişim", description: "Kimlik bilgileri eksik, süresi dolmuş veya geçersiz. opencodex tarafından kullanılan hesap veya sağlayıcı kimlik bilgilerini yeniden doğrulayın." },
     vi: { label: "Chưa xác thực", description: "Thông tin xác thực bị thiếu, đã hết hạn hoặc không hợp lệ. Hãy đăng nhập lại hoặc làm mới thông tin xác thực của tài khoản hay nhà cung cấp mà opencodex sử dụng." },
+    "pt-BR": { label: "Não autorizado", description: "As credenciais estão ausentes, expiradas ou são inválidas. Faça login novamente ou atualize as credenciais de conta/provedor usadas pelo opencodex." },
   },
   402: {
     en: { label: "Payment required", description: "The upstream provider rejected the request because billing, credits, or plan access is not available. Add credits, update billing, or switch provider." },
@@ -39,6 +41,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "支払いが必要", description: "課金、クレジット、プランアクセスが利用できないため上流プロバイダーがリクエストを拒否しました。クレジット追加、支払い情報更新、プロバイダー切替が必要です。" },
     tr: { label: "Ödeme gerekli", description: "Yukarı akış sağlayıcısı faturalandırma, kredi veya plan erişimi bulunmadığından isteği reddetti. Kredi ekleyin, ödeme bilgilerini güncelleyin veya sağlayıcı değiştirin." },
     vi: { label: "Yêu cầu thanh toán", description: "Nhà cung cấp upstream đã từ chối yêu cầu vì không có quyền truy cập thanh toán, tín dụng hoặc gói dịch vụ. Hãy thêm tín dụng, cập nhật thanh toán hoặc đổi nhà cung cấp." },
+    "pt-BR": { label: "Pagamento necessário", description: "O provedor upstream rejeitou a requisição porque o faturamento, créditos ou acesso ao plano não estão disponíveis. Adicione créditos, atualize o faturamento ou troque de provedor." },
   },
   403: {
     en: { label: "Forbidden", description: "The account is authenticated but not allowed to use this model or operation. Often a plan/subscription gate (e.g. Ollama Cloud Pro), org policy, or model permission — not necessarily a bad API key." },
@@ -51,6 +54,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "アクセス禁止", description: "アカウントは認証済みですがこのモデルや操作の使用が許可されていません。多くはプラン/サブスクリプション制限（例: Ollama Cloud Pro）、組織ポリシー、モデル権限であり、API キーが不正とは限りません。" },
     tr: { label: "Erişim yasaklandı", description: "Hesabın kimliği doğrulandı ancak bu modeli veya işlemi kullanma izni yok. Genellikle plan/abonelik sınırı (örn. Ollama Cloud Pro), organizasyon politikası veya model izni kaynaklıdır." },
     vi: { label: "Bị cấm", description: "Tài khoản đã được xác thực nhưng không được phép dùng model hoặc thao tác này. Nguyên nhân thường là giới hạn gói hoặc thuê bao (ví dụ Ollama Cloud Pro), chính sách tổ chức hay quyền model — không nhất thiết do API key sai." },
+    "pt-BR": { label: "Acesso proibido", description: "A conta está autenticada, mas não tem permissão para usar este model ou operação. Geralmente é um bloqueio de plano/assinatura (ex: Ollama Cloud Pro), política da organização ou permissão do model." },
   },
   404: {
     en: { label: "Not found", description: "The requested route, model, account, or upstream resource was not found. Verify the model name and opencodex provider configuration." },
@@ -63,6 +67,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "見つかりません", description: "要求されたルート、モデル、アカウント、上流リソースが見つかりませんでした。モデル名と opencodex プロバイダー設定を確認してください。" },
     tr: { label: "Bulunamadı", description: "İstenen rota, model, hesap veya yukarı akış kaynağı bulunamadı. Model adını ve opencodex sağlayıcı yapılandırmasını doğrulayın." },
     vi: { label: "Không tìm thấy", description: "Không tìm thấy endpoint, model hoặc tài nguyên được yêu cầu. Hãy kiểm tra base URL, tên model và đường dẫn yêu cầu." },
+    "pt-BR": { label: "Não encontrado", description: "A rota, model, conta ou recurso upstream solicitado não foi encontrado. Verifique o nome do model e a configuração de provedor do opencodex." },
   },
   408: {
     en: { label: "Request timeout", description: "The request took too long before the proxy or upstream provider could complete it. Retry with a smaller request or a different provider." },
@@ -75,6 +80,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "リクエストタイムアウト", description: "プロキシまたは上流プロバイダーがリクエストを完了する前に時間切れになりました。より小さいリクエストで再試行するか、別のプロバイダーに切り替えてください。" },
     tr: { label: "İstek zaman aşımı", description: "Proxy veya yukarı akış sağlayıcısı isteği tamamlayamadan zaman aşımına uğradı. Daha küçük bir istek veya farklı bir sağlayıcı ile tekrar deneyin." },
     vi: { label: "Yêu cầu hết thời gian chờ", description: "Yêu cầu không hoàn tất trước thời hạn. Hãy thử lại với yêu cầu nhỏ hơn hoặc kiểm tra kết nối mạng." },
+    "pt-BR": { label: "Tempo limite esgotado", description: "A requisição demorou muito antes que o proxy ou o provedor upstream pudesse concluí-la. Tente novamente com uma requisição menor ou outro provedor." },
   },
   409: {
     en: { label: "Conflict", description: "The request conflicts with the current account, session, or provider state. Refresh the session or retry after the active operation finishes." },
@@ -87,6 +93,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "状態の衝突", description: "リクエストが現在のアカウント、セッション、プロバイダー状態と衝突しています。セッションを更新するか、進行中の操作が終わった後に再試行してください。" },
     tr: { label: "Durum çakışması", description: "İstek mevcut hesap, oturum veya sağlayıcı durumuyla çakışıyor. Oturumu yenileyin veya aktif işlem bittikten sonra tekrar deneyin." },
     vi: { label: "Xung đột", description: "Yêu cầu xung đột với trạng thái hiện tại của tài nguyên hoặc tài khoản. Hãy làm mới trạng thái rồi thử lại." },
+    "pt-BR": { label: "Conflito", description: "A requisição entra em conflito com o estado atual da conta, sessão ou provedor. Atualize a sessão ou tente novamente após a conclusão da operação ativa." },
   },
   413: {
     en: { label: "Request too large", description: "The prompt, attachments, or generated payload exceeds a proxy or upstream limit. Reduce tokens, file size, or conversation history." },
@@ -99,6 +106,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "リクエストが大きすぎます", description: "プロンプト、添付ファイル、生成ペイロードがプロキシまたは上流の制限を超えました。トークン、ファイルサイズ、会話履歴を減らしてください。" },
     tr: { label: "İstek çok büyük", description: "İstemi, ekler veya oluşturulan veri proxy ya da yukarı akış sınırını aşıyor. Jeton sayısını, dosya boyutunu veya sohbet geçmişini azaltın." },
     vi: { label: "Nội dung quá lớn", description: "Nội dung yêu cầu vượt quá giới hạn của proxy hoặc nhà cung cấp. Hãy giảm kích thước tin nhắn, tệp hoặc ngữ cảnh rồi thử lại." },
+    "pt-BR": { label: "Requisição muito grande", description: "O prompt, anexos ou payload gerado excede o limite do proxy ou do upstream. Reduza os tokens, tamanho do arquivo ou histórico da conversa." },
   },
   422: {
     en: { label: "Invalid content", description: "The provider accepted the request format but rejected its contents. Check model options, tool definitions, message roles, and unsupported fields." },
@@ -111,6 +119,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "内容の検証失敗", description: "プロバイダーはリクエスト形式を受け付けましたが内容を拒否しました。モデルオプション、ツール定義、メッセージロール、未サポートのフィールドを確認してください。" },
     tr: { label: "Geçersiz içerik", description: "Sağlayıcı istek formatını kabul etti ancak içeriğini reddetti. Model seçeneklerini, araç tanımlarını, mesaj rollerini ve desteklenmeyen alanları kontrol edin." },
     vi: { label: "Yêu cầu không thể xử lý", description: "Yêu cầu có cú pháp hợp lệ nhưng chứa giá trị hoặc tổ hợp tùy chọn mà model hay nhà cung cấp không hỗ trợ." },
+    "pt-BR": { label: "Conteúdo inválido", description: "O provedor aceitou o formato da requisição, mas rejeitou seu conteúdo. Verifique opções do model, definições de ferramentas, papéis de mensagem e campos não suportados." },
   },
   424: {
     en: { label: "Provider dependency failed", description: "A required upstream dependency failed while opencodex was routing the request. Retry later or switch to another configured provider." },
@@ -123,6 +132,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "プロバイダー依存の失敗", description: "opencodex がリクエストをルーティング中に必要な上流依存が失敗しました。後で再試行するか、別の設定済みプロバイダーに切り替えてください。" },
     tr: { label: "Sağlayıcı bağımlılığı başarısız", description: "opencodex isteği yönlendirirken gerekli bir yukarı akış bağımlılığı başarısız oldu. Daha sonra tekrar deneyin veya başka bir sağlayıcıya geçin." },
     vi: { label: "Phụ thuộc thất bại", description: "Không thể hoàn tất yêu cầu vì một dịch vụ phụ thuộc hoặc thao tác upstream đã thất bại. Hãy kiểm tra lỗi liên quan rồi thử lại." },
+    "pt-BR": { label: "Falha na dependência do provedor", description: "Uma dependência upstream obrigatória falhou enquanto o opencodex roteava a requisição. Tente novamente mais tarde ou mude para outro provedor configurado." },
   },
   429: {
     en: { label: "Rate limited", description: "The upstream provider rate or quota limit has been reached. Wait for the quota window to reset or switch account/provider." },
@@ -135,6 +145,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "レート制限", description: "上流プロバイダーのレートまたはクォータ制限に達しました。クォータウィンドウがリセットされるまで待つか、アカウント/プロバイダーを切り替えてください。" },
     tr: { label: "Oran sınırı aşıldı", description: "Yukarı akış sağlayıcısının hız veya kota sınırına ulaşıldı. Kota penceresinin sıfırlanmasını bekleyin ya da hesap/sağlayıcı değiştirin." },
     vi: { label: "Quá nhiều yêu cầu", description: "Tài khoản hoặc nhà cung cấp đã đạt giới hạn tốc độ hay hạn ngạch. Hãy chờ thời gian Retry-After, đổi tài khoản hoặc đổi nhà cung cấp." },
+    "pt-BR": { label: "Limite de taxa atingido", description: "O limite de taxa ou cota do provedor upstream foi atingido. Aguarde a janela de cota reiniciar ou troque de conta/provedor." },
   },
   499: {
     en: { label: "Client closed request", description: "The client disconnected or canceled the request before opencodex finished routing it. Retry if the cancellation was accidental." },
@@ -147,6 +158,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "クライアントがリクエストをクローズ", description: "opencodex がルーティングを終える前にクライアントが切断またはキャンセルしました。意図しないキャンセルなら再試行してください。" },
     tr: { label: "İstemci isteği kapattı", description: "opencodex yönlendirmeyi bitirmeden önce istemci bağlantıyı kesti veya isteği iptal etti. İptal kazara yapıldıysa tekrar deneyin." },
     vi: { label: "Máy khách đã đóng yêu cầu", description: "Máy khách đã ngắt kết nối hoặc hủy yêu cầu trước khi opencodex định tuyến xong. Nếu không chủ ý hủy, hãy thử lại." },
+    "pt-BR": { label: "Cliente encerrou a requisição", description: "O cliente desconectou ou cancelou a requisição antes que o opencodex terminasse de roteá-la. Tente novamente se o cancelamento foi acidental." },
   },
   500: {
     en: { label: "Proxy error", description: "opencodex hit an internal error while handling the request. Retry once, then check proxy logs if it repeats." },
@@ -159,6 +171,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "プロキシエラー", description: "opencodex がリクエスト処理中に内部エラーに遭遇しました。1 回再試行し、繰り返す場合はプロキシログを確認してください。" },
     tr: { label: "Proxy hatası", description: "opencodex isteği işlerken dahili bir hatayla karşılaştı. Bir kez tekrar deneyin, tekrarlarsa proxy günlüklerini kontrol edin." },
     vi: { label: "Lỗi proxy", description: "opencodex gặp lỗi nội bộ khi xử lý yêu cầu. Hãy thử lại một lần, rồi kiểm tra log proxy nếu lỗi lặp lại." },
+    "pt-BR": { label: "Erro no proxy", description: "O opencodex encontrou um erro interno ao processar a requisição. Tente novamente uma vez; se persistir, verifique os logs do proxy." },
   },
   502: {
     en: { label: "Bad upstream response", description: "The upstream provider returned an invalid or failed response through the proxy. Retry or route the request to another provider." },
@@ -171,6 +184,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "上流レスポンス不良", description: "上流プロバイダーがプロキシ経由で無効または失敗したレスポンスを返しました。再試行するか、リクエストを別のプロバイダーにルーティングしてください。" },
     tr: { label: "Kötü yukarı akış yanıtı", description: "Yukarı akış sağlayıcısı proxy üzerinden geçersiz veya başarısız bir yanıt döndürdü. Tekrar deneyin veya isteği başka bir sağlayıcıya yönlendirin." },
     vi: { label: "Phản hồi upstream không hợp lệ", description: "Nhà cung cấp upstream trả về phản hồi không hợp lệ hoặc thất bại qua proxy. Hãy thử lại hoặc định tuyến yêu cầu sang nhà cung cấp khác." },
+    "pt-BR": { label: "Resposta inválida do upstream", description: "O provedor upstream retornou uma resposta inválida ou com falha através do proxy. Tente novamente ou roteie a requisição para outro provedor." },
   },
   503: {
     en: { label: "Provider unavailable", description: "The proxy or upstream provider is temporarily unavailable or overloaded. Wait briefly, then retry or switch provider." },
@@ -183,6 +197,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "プロバイダー利用不可", description: "プロキシまたは上流プロバイダーが一時的に利用不可または過負荷です。少し待ってから再試行するか、プロバイダーを切り替えてください。" },
     tr: { label: "Sağlayıcı kullanılamıyor", description: "Proxy veya yukarı akış sağlayıcısı geçici olarak kullanılamıyor veya aşırı yüklü. Kısa bir süre bekleyip tekrar deneyin ya da sağlayıcı değiştirin." },
     vi: { label: "Nhà cung cấp không khả dụng", description: "Proxy hoặc nhà cung cấp upstream tạm thời không khả dụng hay đang quá tải. Hãy chờ một lát rồi thử lại hoặc đổi nhà cung cấp." },
+    "pt-BR": { label: "Provedor indisponível", description: "O proxy ou provedor upstream está temporariamente indisponível ou sobrecarregado. Aguarde alguns instantes e tente novamente ou troque de provedor." },
   },
   504: {
     en: { label: "Upstream timeout", description: "The upstream provider did not respond before the proxy timeout. Retry with a smaller request or choose a faster provider." },
@@ -195,6 +210,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "上流タイムアウト", description: "上流プロバイダーがプロキシタイムアウト前に応答しませんでした。より小さいリクエストで再試行するか、より速いプロバイダーを選んでください。" },
     tr: { label: "Yukarı akış zaman aşımı", description: "Yukarı akış sağlayıcısı proxy zaman aşımı süresinden önce yanıt vermedi. Daha küçük bir istekle tekrar deneyin veya daha hızlı bir sağlayıcı seçin." },
     vi: { label: "Upstream hết thời gian chờ", description: "Nhà cung cấp upstream không phản hồi trước thời hạn của proxy. Hãy thử lại với yêu cầu nhỏ hơn hoặc chọn nhà cung cấp nhanh hơn." },
+    "pt-BR": { label: "Tempo limite do upstream", description: "O provedor upstream não respondeu antes do tempo limite do proxy. Tente novamente com uma requisição menor ou escolha um provedor mais rápido." },
   },
   529: {
     en: { label: "Provider overloaded", description: "The upstream provider is overloaded or capacity-limited. Wait and retry, or switch to another account/provider." },
@@ -207,6 +223,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "プロバイダー過負荷", description: "上流プロバイダーが過負荷または容量制限されています。待ってから再試行するか、別のアカウント/プロバイダーに切り替えてください。" },
     tr: { label: "Sağlayıcı aşırı yüklü", description: "Yukarı akış sağlayıcısı aşırı yüklü veya kapasitesi sınırlı. Bekleyip tekrar deneyin veya başka bir hesap/sağlayıcıya geçin." },
     vi: { label: "Nhà cung cấp quá tải", description: "Nhà cung cấp upstream đang quá tải hoặc bị giới hạn công suất. Hãy chờ rồi thử lại, hoặc đổi sang tài khoản hay nhà cung cấp khác." },
+    "pt-BR": { label: "Provedor sobrecarregado", description: "O provedor upstream está sobrecarregado ou com capacidade limitada. Aguarde e tente novamente, ou troque de conta/provedor." },
   },
 };
 
@@ -222,6 +239,7 @@ const GENERIC_STATUS: { client: LocalizedInfo; server: LocalizedInfo } = {
     ja: { label: "リクエストエラー", description: "プロキシまたは上流プロバイダーがリクエストを拒否しました。リクエスト形式、認証情報、モデル名、プロバイダー設定を確認してください。" },
     tr: { label: "İstek hatası", description: "Proxy veya yukarı akış sağlayıcısı isteği reddetti. İstek yapısını, kimlik bilgilerini, model adını ve sağlayıcı yapılandırmasını kontrol edin." },
     vi: { label: "Lỗi yêu cầu", description: "Proxy hoặc nhà cung cấp upstream đã từ chối yêu cầu. Hãy kiểm tra cấu trúc yêu cầu, thông tin xác thực, tên model và cấu hình nhà cung cấp." },
+    "pt-BR": { label: "Erro na requisição", description: "O proxy ou o provedor upstream rejeitou a requisição. Verifique a estrutura da requisição, credenciais, nome do model e configuração do provedor." },
   },
   server: {
     en: { label: "Server or upstream error", description: "opencodex or an upstream provider failed while processing the request. Retry later or route the request to another provider." },
@@ -234,12 +252,14 @@ const GENERIC_STATUS: { client: LocalizedInfo; server: LocalizedInfo } = {
     ja: { label: "サーバーまたは上流エラー", description: "opencodex または上流プロバイダーがリクエスト処理中に失敗しました。後で再試行するか、リクエストを別のプロバイダーにルーティングしてください。" },
     tr: { label: "Sunucu veya yukarı akış hatası", description: "opencodex veya bir yukarı akış sağlayıcısı isteği işlerken başarısız oldu. Daha sonra tekrar deneyin veya isteği başka bir sağlayıcıya yönlendirin." },
     vi: { label: "Lỗi máy chủ hoặc upstream", description: "opencodex hoặc một nhà cung cấp upstream đã thất bại khi xử lý yêu cầu. Hãy thử lại sau hoặc định tuyến yêu cầu sang nhà cung cấp khác." },
+    "pt-BR": { label: "Erro no servidor ou upstream", description: "O opencodex ou um provedor upstream falhou ao processar a requisição. Tente novamente mais tarde ou roteie para outro provedor." },
   },
 };
 
 function normalizeLocale(locale: string): Locale {
   if (locale.toLowerCase().startsWith("fr")) return "fr";
   if (locale.toLowerCase().startsWith("vi")) return "vi";
+  if (locale.toLowerCase().startsWith("pt")) return "pt-BR";
   return locale === "de" || locale === "ko" || locale === "zh" || locale === "zh-TW" || locale === "ru" || locale === "ja" || locale === "tr" ? locale : "en";
 }
 

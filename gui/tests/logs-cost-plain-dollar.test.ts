@@ -15,6 +15,7 @@ const LOCALE_TAGS: Record<Locale, string> = {
   ru: "ru-RU",
   tr: "tr-TR",
   vi: "vi-VN",
+  "pt-BR": "pt-BR",
 };
 
 function translator(locale: Locale): TFn {

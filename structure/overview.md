@@ -3,7 +3,7 @@
 Management provider-validation calls use the [shared relative send-path validation](config.md#provider-relative-send-paths) before persistence.
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
-The dashboard's compile-checked locale catalogs include Vietnamese. Locale registration, browser
+The dashboard's compile-checked locale catalogs include Vietnamese and Brazilian Portuguese. Locale registration, browser
 detection, Compatibility Lab labels, status descriptions, and locale-sensitive quota formatting
 advance together under the `gui/` catalog parity contract.
 
