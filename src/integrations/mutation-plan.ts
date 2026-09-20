@@ -20,7 +20,7 @@ import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
 import { createClineIO, ClineTransactionError } from "./cline-io";
 import { parseClineDocument } from "./cline-document";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
-import { INTEGRATION_CLIENTS, isLoopbackOnly, resolveIntegrationPaths, type IntegrationClientId } from "./registry";
+import { INTEGRATION_CLIENTS, boundIntegrationConfigPath, isLoopbackOnly, resolveIntegrationPaths, type IntegrationClientId } from "./registry";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -123,6 +123,7 @@ const CLIENT_MANAGED_PATHS = {
     ["settings", "providers", OPENCODE_PROVIDER_ID],
     ["catalog", "providers", OPENCODE_PROVIDER_ID],
   ],
+  kilo: [["provider", OPENCODE_PROVIDER_ID]],
 } satisfies Record<IntegrationClientId, readonly (readonly string[])[]>;
 
 /** Not a configuration surface. Exported so a parity case can compare it against the shipped clients. */
@@ -515,8 +516,11 @@ export function observeRestore(
   }
   const configPath = entry.configPath;
   // An undo acts on the path the operation was journaled against. A row recorded for one home must
-  // never be allowed to rewrite a file in another.
-  if (resolved.configPath !== configPath) {
+  // never be allowed to rewrite a file in another. The bindsDriftedRecord exception is the same
+  // one the writer takes: a journaled candidate of a first-EXISTING resolver (Kilo) restores
+  // against the journaled file even after priority discovery has moved on.
+  if (resolved.configPath !== configPath
+    && INTEGRATION_CLIENTS[clientId].bindsDriftedRecord?.(configPath, input.env, input.home) !== true) {
     return {
       failed: observationFailure("conflict", "conflict", "that operation was recorded for a different location"),
     } as const;
@@ -673,7 +677,7 @@ function previewRestore(input: IntegrationWriteInput, request: PreviewRequest): 
       ? {}
       : observed.clientId === "cline"
         ? parseClineDocument(observed.before)
-        : parseConfig(observed.before, EXPORT_CLIENTS[observed.clientId].format),
+        : parseConfig(observed.before, EXPORT_CLIENTS[observed.clientId].format, EXPORT_CLIENTS[observed.clientId].jsonc ? { jsonc: true } : undefined),
     restore: {
       opId: observed.entry.opId,
       entry: observed.entry,
@@ -770,6 +774,22 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
     const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home);
     configPath = resolved.configPath;
     detectDir = resolved.detectDir;
+    /*
+     * boundIntegrationConfigPath is the ONE binding shared with status: while
+     * the client's own accepts-the-record rule holds (Kilo's first-EXISTING
+     * candidates under the CURRENT env and home), reads and mutations stay on
+     * the recorded file instead of silently re-homing onto a newcomer. A
+     * record from another home never binds, so that refusal contract is
+     * untouched.
+     */
+    configPath = boundIntegrationConfigPath({
+      clientId,
+      record: store.readRecords()[clientId] ?? null,
+      resolvedPath: configPath,
+      statKind: io.statKind,
+      env: input.env,
+      home: input.home,
+    });
     if (clientId === "cline") io = createClineIO(io, configPath, store, effects.recover);
   } catch (error) {
     if (error instanceof ClineTransactionError) {
@@ -791,7 +811,9 @@ export function observeIntegration(input: IntegrationWriteInput, effects: Observ
     } as const;
   }
   const before = target.before;
-  const parsed = clientId === "cline" ? parseClineDocument(before) : parseConfig(before, exportSpec.format);
+  const parsed = clientId === "cline"
+    ? parseClineDocument(before)
+    : parseConfig(before, exportSpec.format, exportSpec.jsonc ? { jsonc: true } : undefined);
   if (parsed === PARSE_FAILED) {
     return { failed: observationFailure("unsafe", "unsafe",
       `${configPath} could not be parsed, or holds something opencodex cannot rewrite without changing it (a non-finite number, a large integer or a tiny one a rewrite would round, -0, a duplicate member, or nesting deeper than 1000 levels)`) } as const;

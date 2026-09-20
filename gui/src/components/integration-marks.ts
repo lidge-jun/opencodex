@@ -60,6 +60,7 @@ export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
   raycast: CLIENT_MARKS.raycast ?? null,
   omo: CLIENT_MARKS.omo ?? null,
   cline: CLIENT_MARKS.cline ?? null,
+  kilo: CLIENT_MARKS.kilo ?? null,
 };
 
 /**

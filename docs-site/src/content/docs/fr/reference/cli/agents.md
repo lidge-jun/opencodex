@@ -166,7 +166,7 @@ Gérez et appliquez la clôture du modèle Grok Build.
 
 ## Exportation de la configuration client
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo>`
 
 Imprimez une configuration client connectée au proxy en cours d'exécution. La commande sérialise le
 bloc fournisseur `opencodex` — URL de base, liste de modèles et référence d’identifiant du client
@@ -177,7 +177,7 @@ les modèles Codex peuvent actuellement voir.
 
 | Option | Actions |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Requis. Sélectionne le dialecte de configuration client. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo>` | Requis. Sélectionne le dialecte de configuration client. |
 | `--json` | Imprimez le document généré en tant que JSON sur la sortie standard pour les scripts. Il s'agit de JSON même lorsque le format natif du client sélectionné est YAML, TOML ou JSON5. |
 | `--out <path>` | Écrivez le format de configuration natif du client dans `<path>`. Refuse de remplacer un fichier existant. |
 | `--force` | Autoriser `--out` à remplacer un fichier existant. |
@@ -210,6 +210,7 @@ propres valeurs par défaut à ces lignes.
 | `aside` | `~/.aside/u/<account>/models.json` pour le compte que le fichier `accounts.json` d'Aside désigne comme courant ; un manifeste illisible est refusé plutôt que de retomber sur un compte | `aside-models.json` | aucun — espace réservé de bouclage |
 | `raycast` | `~/.config/raycast/ai/providers.yaml`, sur macOS comme sur Windows (Raycast n'honore pas `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | aucun — bouclage uniquement, aucune entrée `api_keys` n'est écrite |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, puis `SENPI_CODING_AGENT_DIR`, puis `PI_CODING_AGENT_DIR` l'emportent dans cet ordre une fois définis ; une valeur relative est refusée) | `omo-models.json` | aucun — espace réservé de bouclage |
+| `kilo` | premier fichier existant parmi `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` ou `config.json` sous `~/.config/kilo` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
 
 L'exportation Raycast est un document `providers.yaml` autonome contenant un seul élément `id: opencodex`
 dans la séquence `providers` : `name: OpenCodex`, l'URL de base `/v1` du proxy et chaque modèle routé avec

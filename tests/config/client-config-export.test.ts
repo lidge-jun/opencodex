@@ -837,8 +837,8 @@ describe("hub-resolved Fast exports", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the fourteen file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"]);
+  test("covers exactly the sixteen file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline", "kilo"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -992,9 +992,10 @@ describe("EXPORT_CLIENTS registry", () => {
       expect(typeof spec.summarize).toBe("function");
       expect(typeof spec.buildContribution).toBe("function");
       // The filename's extension must match the declared format, so a reader
-      // never has to guess which one is authoritative.
+      // never has to guess which one is authoritative. Kilo's destination is
+      // `.jsonc` while serialize stays pretty JSON (`format: "json"`).
       const extension = spec.filename.slice(spec.filename.lastIndexOf(".") + 1);
-      expect(extension).toBe(spec.format);
+      expect(extension).toBe(id === "kilo" ? "jsonc" : spec.format);
     }
   });
 
@@ -1008,6 +1009,11 @@ describe("EXPORT_CLIENTS registry", () => {
     const extensionFor = { json: "json", yaml: "yaml", toml: "toml", json5: "json5" } as const;
     for (const id of EXPORT_CLIENT_IDS) {
       const spec = EXPORT_CLIENTS[id];
+      if (id === "kilo") {
+        expect(spec.filename.endsWith(".jsonc")).toBe(true);
+        expect(spec.format).toBe("json");
+        continue;
+      }
       expect(spec.filename.endsWith(`.${extensionFor[spec.format]}`)).toBe(true);
     }
   });

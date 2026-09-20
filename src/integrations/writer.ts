@@ -572,9 +572,13 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
     ?? INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
   // Restore acts on the path the operation was journaled against. Resolving a
   // different path here would let an operation recorded for one home delete a
-  // file in another.
+  // file in another. A client whose path resolves by first-EXISTING candidate
+  // (Kilo) may accept its own journaled candidate while priority discovery
+  // has moved on; the restore still targets the journaled file, never the
+  // newcomer.
   const configPath = entry.configPath;
-  if (resolvedPath !== configPath) {
+  if (resolvedPath !== configPath
+    && INTEGRATION_CLIENTS[clientId].bindsDriftedRecord?.(configPath, input.env, input.home) !== true) {
     return refuse(clientId, "conflict", "conflict",
       `that operation was recorded for ${configPath}, but this client now resolves to ${resolvedPath}`);
   }

@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo and Cline CLI from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI and Kilo from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Fifteen clients work this way, each with a switch:
+file, and removes it again. Sixteen clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ file, and removes it again. Fifteen clients work this way, each with a switch:
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
+| Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -423,3 +424,27 @@ The download `cline-config-bundle.json` contains two native document members: `s
 `providers.json`, and `catalog` for `models.json`. It is not itself a Cline settings file. Prefer
 the integration command for a journaled merge and rollback. Remote admission wiring is not
 supported by this generated integration; it requires unauthenticated loopback access.
+
+## Kilo
+
+Kilo CLI, VS Code, and JetBrains share one global config. This integration writes
+`provider.opencodex` into the first existing file among `kilo.jsonc`, `kilo.json`,
+`opencode.jsonc`, `opencode.json`, and `config.json` under `~/.config/kilo`
+(`XDG_CONFIG_HOME` relocates that directory). If none exist, the destination is
+`kilo.jsonc`. Project configs are never written.
+
+The owned fragment is only `provider.opencodex` (OpenCode V1 shape: `npm`, `options`,
+`models`). Kilo's published schema has no OpenCode V2 `providers` key, so that block is
+not emitted. `$schema`, `model`, `enabled_providers`, MCP, and other keys stay
+user-owned. Select `opencodex/<provider/model>` in Kilo after applying.
+
+Loopback uses `{env:OPENCODEX_KILO_API_KEY}` as `options.apiKey`. A non-loopback bind
+moves admission to `options.headers["x-opencodex-api-key"]` and never serializes a real
+key. Apply rewrites the whole global file as pretty JSON, so comments and trailing
+commas in other keys are not preserved. Kilo is not on the implicit catalog fan-out;
+refresh it explicitly after changing the routed model selection.
+
+```bash
+ocx integration client enable --client kilo
+ocx export --client kilo --out ./kilo.jsonc
+```

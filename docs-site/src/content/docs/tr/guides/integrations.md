@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast ve omo'yu opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI ve Kilo'yu opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. On altı istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -24,6 +24,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. On beş istemci bu şekild
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | kaydedildiği anda — Raycast dosyayı izler | yok — yalnızca geri döngü |
 | omo | `~/.omo/agent/models.json` | JSON | yeni oturumlarda | geri döngü yer tutucusu |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | kapatıp yeniden başlattıktan sonra | yalnızca loopback |
+| Kilo | `~/.config/kilo` altında ilk bulunan `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` veya `config.json` (`XDG_CONFIG_HOME` bu dizini taşır; hiçbiri yoksa `kilo.jsonc` oluşturulur) | JSONC | yeni oturumlarda | `OPENCODEX_KILO_API_KEY` |
 
 Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
 `llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
@@ -292,3 +293,11 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Kilo
+
+Kilo yalnızca `~/.config/kilo` altındaki ilk mevcut genel dosyada `provider.opencodex` yazar (`XDG_CONFIG_HOME` bu dizini taşır; hiçbir aday yoksa `kilo.jsonc` oluşturulur). Diğer anahtarlar değişmez. Uygula dosyanın tamamını yeniden yazar; yorumlar ve sondaki virgüller korunmaz. Kilo’da `opencodex/<model>` seçin.
+
+```bash
+ocx integration client enable --client kilo
+```

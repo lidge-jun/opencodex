@@ -154,7 +154,7 @@ override, но файлы на диске никогда не меняются. 
 
 ## Экспорт client config
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo>`
 
 Печатает client config, направленный на работающий прокси. Команда сериализует блок
 провайдера `opencodex` в нативном формате выбранного клиента: base URL, список моделей и,
@@ -165,7 +165,7 @@ override, но файлы на диске никогда не меняются. 
 
 | Флаг | Действие |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo>` | Обязателен. Выбирает формат конфигурации клиента. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh\|mcode\|zcode\|prime\|aside\|raycast\|omo\|cline\|kilo>` | Обязателен. Выбирает формат конфигурации клиента. |
 | `--json` | Печатать только JSON-конфиг в stdout, чтобы redirect сохранял побайтно точный вывод. Вся диагностика, включая заметку о записи через `--out`, идёт в stderr. |
 | `--out <path>` | Записать конфиг в `<path>`. Перезаписывать существующий файл не позволит. |
 | `--force` | Разрешить `--out` заменить существующий файл. |
@@ -198,6 +198,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `aside` | `~/.aside/u/<account>/models.json` для аккаунта, который `accounts.json` самого Aside называет текущим; нечитаемый манифест отклоняется, а не подменяется произвольным аккаунтом | `aside-models.json` | нет — loopback placeholder |
 | `raycast` | `~/.config/raycast/ai/providers.yaml` одинаково на macOS и Windows (Raycast не учитывает `XDG_CONFIG_HOME`) | `raycast-providers.yaml` | нет — только loopback, запись `api_keys` не создаётся |
 | `omo` | `~/.omo/agent/models.json` (`OMO_CODING_AGENT_DIR`, затем `SENPI_CODING_AGENT_DIR`, затем `PI_CODING_AGENT_DIR` имеют приоритет в этом порядке, если заданы; относительное значение отклоняется) | `omo-models.json` | нет — loopback placeholder |
+| `kilo` | первый существующий файл среди `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` или `config.json` в `~/.config/kilo` | `kilo.jsonc` | `OPENCODEX_KILO_API_KEY` |
 
 Экспорт для Raycast — это отдельный документ `providers.yaml` с одним элементом `id: opencodex` в
 последовательности `providers`: `name: OpenCodex`, базовый URL прокси с `/v1` и каждая маршрутизируемая

@@ -9,6 +9,7 @@
  */
 import { lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import type { ConfigFormat } from "../clients/config-export";
+import { canonicalizeJsonc } from "../lib/jsonc";
 import { MAX_JSON_NESTING } from "./serialize";
 import { atomicWriteFileNoFollow, isMissingPathError } from "../config/atomic-write";
 import type { JournalEntry } from "./journal";
@@ -132,7 +133,11 @@ function jsonTextSafeToRewrite(text: string): boolean {
 }
 
 /** Parse a client config, tolerating absence. PARSE_FAILED on garbage. */
-export function parseConfig(text: string | null, format: ConfigFormat): unknown | typeof PARSE_FAILED {
+export function parseConfig(
+  text: string | null,
+  format: ConfigFormat,
+  options?: { jsonc?: boolean },
+): unknown | typeof PARSE_FAILED {
   if (text === null || text.trim().length === 0) return {};
   try {
     switch (format) {
@@ -143,9 +148,13 @@ export function parseConfig(text: string | null, format: ConfigFormat): unknown 
          * would otherwise cap the rewrite only after JSON.parse had already
          * built the 50k-deep object graph. The outcome is unchanged: invalid
          * JSON still returns PARSE_FAILED, from the catch below.
+         *
+         * Kilo's global file is JSONC. Comments and trailing commas are
+         * stripped first so the rewrite-safety scan sees JSON, not comment text.
          */
-        if (!jsonTextSafeToRewrite(text)) return PARSE_FAILED;
-        return JSON.parse(text);
+        const source = options?.jsonc ? canonicalizeJsonc(text) : text;
+        if (!jsonTextSafeToRewrite(source)) return PARSE_FAILED;
+        return JSON.parse(source);
       }
       case "json5": return Bun.JSON5.parse(text);
       case "yaml": return Bun.YAML.parse(text);

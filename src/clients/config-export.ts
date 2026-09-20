@@ -31,7 +31,7 @@ import type { OcxConfig } from "../types";
 
 export type { ConfigFormat } from "../integrations/serialize";
 export type { ManagedFragment, ManagedContribution, BuildContribution, OpencodeLaunchEnv, OpencodeCatalogModel, ExportModel, ExportContext, ExportClientId, ExportClientSpec, PiModelEntry } from "./config-export/contracts";
-export { OPENCODE_PROVIDER_ID, OPENCODE_CONFIG_SCHEMA, OPENCODE_API_KEY_ENV, OPENCODE_API_KEY_ENV_REF, HERMES_API_KEY_ENV, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV, OPENCLAW_API_KEY_ENV_REF, LOOPBACK_API_KEY_PLACEHOLDER, GAJAE_API_KEY_ENV, SCHEMA_REQUIRED_OUTPUT_BUDGET, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG } from "./config-export/constants";
+export { OPENCODE_PROVIDER_ID, OPENCODE_CONFIG_SCHEMA, OPENCODE_API_KEY_ENV, OPENCODE_API_KEY_ENV_REF, KILO_API_KEY_ENV, KILO_API_KEY_ENV_REF, KILO_CONFIG_SCHEMA, HERMES_API_KEY_ENV, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV, OPENCLAW_API_KEY_ENV_REF, LOOPBACK_API_KEY_PLACEHOLDER, GAJAE_API_KEY_ENV, SCHEMA_REQUIRED_OUTPUT_BUDGET, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG } from "./config-export/constants";
 export { normalizeExportModels } from "./config-export/model-metadata";
 export type { OmpModelEntry, OmpProviderBlock, OmpGeneratedConfig } from "./config-export/omp";
 export type { ZcodeModelEntry, ZcodeProviderBlock, ZcodeGeneratedConfig } from "./config-export/zcode";
@@ -41,7 +41,7 @@ export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProv
 export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
-import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
+import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV, KILO_API_KEY_ENV } from "./config-export/constants";
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
@@ -49,6 +49,9 @@ import { buildMcodeClientConfig, summarizeMcode, buildMcodeContribution } from "
 import { buildZcodeClientConfig, summarizeZcode, buildZcodeContribution } from "./config-export/zcode";
 import { buildClineClientConfig, summarizeCline, buildClineContribution } from "./config-export/cline";
 import { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
+import { buildKiloClientConfig, summarizeKilo, buildKiloContribution, kiloConfigPath } from "./config-export/kilo";
+export { kiloConfigPath, kiloHomeDir, KILO_CONFIG_CANDIDATES } from "./config-export/kilo";
+export type { KiloGeneratedConfig, KiloProviderBlock, KiloModelEntry } from "./config-export/kilo";
 
 
 
@@ -1462,6 +1465,19 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     summarize: summarizeCline,
     buildContribution: buildClineContribution,
     loopbackOnly: true,
+  },
+  kilo: {
+    id: "kilo",
+    filename: "kilo.jsonc",
+    destination: env => kiloConfigPath(env),
+    apiKeyEnv: KILO_API_KEY_ENV,
+    exportHint: `export ${KILO_API_KEY_ENV}=<your key>`,
+    build: buildKiloClientConfig,
+    format: "json",
+    summarize: summarizeKilo,
+    buildContribution: buildKiloContribution,
+    loopbackOnly: false,
+    jsonc: true,
   },
 };
 

@@ -24,6 +24,7 @@ import {
 } from "./ownership-policy";
 import {
   INTEGRATION_CLIENTS,
+  boundIntegrationConfigPath,
   resolveIntegrationPaths,
   unresolvedPathHintFor,
   type IntegrationClientId,
@@ -507,6 +508,20 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     const paths = input.resolvedPaths ?? resolveIntegrationPaths(input.clientId, input.env, input.home);
     configPath = paths.configPath;
     installed = io.statKind(paths.detectDir) === "dir";
+    /*
+     * boundIntegrationConfigPath is the ONE binding shared with the mutation
+     * planner: while the client's own accepts-the-record rule holds, status
+     * reports the owned file rather than a newcomer that won discovery after
+     * apply (Kilo). A record from another home never binds.
+     */
+    configPath = boundIntegrationConfigPath({
+      clientId: input.clientId,
+      record: store.readRecords()[input.clientId] ?? null,
+      resolvedPath: configPath,
+      statKind: io.statKind,
+      env: input.env,
+      home: input.home,
+    });
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
     /*
@@ -544,7 +559,9 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
     };
   }
 
-  const parsed = input.clientId === "cline" ? parseClineDocument(target.before) : parseConfig(target.before, exportSpec.format);
+  const parsed = input.clientId === "cline"
+    ? parseClineDocument(target.before)
+    : parseConfig(target.before, exportSpec.format, exportSpec.jsonc ? { jsonc: true } : undefined);
   const contribution = exportSpec.buildContribution(exportContextOf(input));
   const record = store.readRecords()[input.clientId] ?? null;
   const { state, reason } = classifyIntegration({

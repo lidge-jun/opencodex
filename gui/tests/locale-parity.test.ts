@@ -153,6 +153,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // Cline product name and CLI acronym are intentionally preserved.
   "integrations.tab.cline",
   "api.clientConfig.clientCline",
+  "integrations.tab.kilo",
+  "api.clientConfig.clientKilo",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",

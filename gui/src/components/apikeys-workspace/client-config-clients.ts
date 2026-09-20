@@ -8,7 +8,7 @@
  * with EXPORT_CLIENT_IDS by hand; adding a client server-side renders no row
  * until this tuple changes.
  */
-export const CLIENTS = ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline"] as const;
+export const CLIENTS = ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "prime", "aside", "raycast", "omo", "cline", "kilo"] as const;
 export type ExportClientId = (typeof CLIENTS)[number];
 
 export const CLIENT_LABEL_KEYS = {
@@ -27,6 +27,7 @@ export const CLIENT_LABEL_KEYS = {
   raycast: "api.clientConfig.clientRaycast",
   omo: "api.clientConfig.clientOmo",
   cline: "api.clientConfig.clientCline",
+  kilo: "api.clientConfig.clientKilo",
 } as const;
 
 /**
@@ -79,6 +80,7 @@ export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   // so it would paint the plate and throw the face away — see the README.
   omo: "/provider-icons/omo.svg",
   cline: "/provider-icons/cline-color.svg",
+  kilo: "/provider-icons/kilo.svg",
 };
 
 /**

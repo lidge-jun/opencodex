@@ -103,7 +103,8 @@ export type ExportClientId =
   | "aside"
   | "raycast"
   | "omo"
-  | "cline";
+  | "cline"
+  | "kilo";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -144,6 +145,16 @@ export interface ExportClientSpec {
    * reasoning as the Grok managed block's non-loopback refusal.
    */
   loopbackOnly: boolean;
+  /**
+   * True when the destination file may carry comments and trailing commas
+   * even though `format` is "json" and serialization stays pretty JSON.
+   *
+   * Parse tolerates them by canonicalizing the text before the rewrite-safety
+   * scan (Kilo's kilo.jsonc). A spec flag rather than a client-name branch:
+   * the next OpenCode-family client opts in here instead of growing another
+   * `clientId ===` check at every parse site.
+   */
+  jsonc?: boolean;
 }
 
 export interface PiModelEntry {

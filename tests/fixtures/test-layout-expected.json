@@ -665,6 +665,7 @@
   "key-login-live-update.test.ts": "oauth",
   "key-login-preserves-model-costs.test.ts": "oauth",
   "keyring-smoke.test.ts": "ci-workflows",
+  "kilo-client.test.ts": "clients",
   "kimi-oauth-identity.test.ts": "providers",
   "kimi-responses-adjacency.test.ts": "providers",
   "kiro-account-quota.test.ts": "providers/kiro",

@@ -1,9 +1,9 @@
 ---
 title: 整合
-description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast 與 omo——每個客戶端一個開關，每次寫入前都會先備份。
+description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI 與 Kilo——每個客戶端一個開關，每次寫入前都會先備份。
 ---
 
-**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十五個客戶端以這種方式運作，每個都有一個開關：
+**整合（Integrations）** 分頁會把 opencodex 的 provider 區塊寫入客戶端自己的設定檔，也會把它移除。共有十六個客戶端以這種方式運作，每個都有一個開關：
 
 | 客戶端 | 設定檔 | 格式 | 變更生效時機 | 憑證 |
 |---|---|---|---|---|
@@ -22,6 +22,7 @@ description: 從儀表板把 opencodex 連接到 OpenCode、Pi、OMP、Hermes、
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | 儲存後立即生效——Raycast 會監看該檔案 | 無——僅限 loopback |
 | omo | `~/.omo/agent/models.json` | JSON | 新工作階段 | loopback 佔位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` + `models.json` | JSON | 結束並重新啟動後 | 僅限 loopback |
+| Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 會移動該目錄；若都不存在則建立 `kilo.jsonc`） | JSONC | 新工作階段 | `OPENCODEX_KILO_API_KEY` |
 
 受管理 DSH 支援的相容性下限是 **DSH 0.1.0-rc.6**。OpenCodex 只擁有
 `llm-pi-ai.providers.opencodex`：Apply 與 Refresh 會取代該片段，Disable 只移除該片段，
@@ -176,3 +177,11 @@ ocx integration client restore --op <operation-id>
 ```
 
 [CLI / rollback / CLINE_PROVIDER_SETTINGS_PATH](/guides/integrations/#cline-cli).
+
+## Kilo
+
+Kilo 只會把 `provider.opencodex` 寫入 `~/.config/kilo` 下最先存在的全域檔（`XDG_CONFIG_HOME` 會移動該目錄；若沒有任何候選檔則建立 `kilo.jsonc`）。其他鍵保持不變。套用會重寫整個檔案，因此不會保留註解與尾隨逗號。請在 Kilo 中選擇 `opencodex/<模型>`。
+
+```bash
+ocx integration client enable --client kilo
+```

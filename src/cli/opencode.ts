@@ -50,6 +50,8 @@ import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-li
 import type { OcxConfig } from "../types";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
+import { parseJsonc } from "../lib/jsonc";
+export { parseJsonc };
 
 /**
  * The provider-block serializer, its constants, and the config-path helpers now live in
@@ -119,89 +121,6 @@ export const OPENCODE_CONFIG_CONTENT_ENV = "OPENCODE_CONFIG_CONTENT";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * Strip `//` and block comments outside string literals. Escape-aware so a quote inside
- * an escaped sequence cannot flip string state and expose config text to the stripper.
- */
-function stripJsonComments(text: string): string {
-  let out = "";
-  let inString = false;
-  let inLine = false;
-  let inBlock = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    const next = text[i + 1];
-    if (inLine) {
-      if (ch === "\n") {
-        inLine = false;
-        out += ch;
-      }
-      continue;
-    }
-    if (inBlock) {
-      // Newlines are preserved so JSON.parse error positions stay meaningful.
-      if (ch === "\n") out += ch;
-      else if (ch === "*" && next === "/") { inBlock = false; i++; }
-      continue;
-    }
-    if (inString) {
-      out += ch;
-      if (ch === "\\") {
-        const escaped = text[i + 1];
-        if (escaped !== undefined) { out += escaped; i++; }
-        continue;
-      }
-      if (ch === "\"") inString = false;
-      continue;
-    }
-    if (ch === "\"") { inString = true; out += ch; continue; }
-    if (ch === "/" && next === "/") { inLine = true; i++; continue; }
-    if (ch === "/" && next === "*") { inBlock = true; i++; continue; }
-    out += ch;
-  }
-  return out;
-}
-
-/** Drop commas that sit directly before `}` or `]`, ignoring string contents. */
-function stripTrailingCommas(text: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (inString) {
-      out += ch;
-      if (ch === "\\") {
-        const escaped = text[i + 1];
-        if (escaped !== undefined) { out += escaped; i++; }
-        continue;
-      }
-      if (ch === "\"") inString = false;
-      continue;
-    }
-    if (ch === "\"") { inString = true; out += ch; continue; }
-    if (ch === ",") {
-      let j = i + 1;
-      while (j < text.length && /\s/.test(text[j]!)) j++;
-      if (text[j] === "}" || text[j] === "]") continue;
-    }
-    out += ch;
-  }
-  return out;
-}
-
-/**
- * opencode documents opencode.json as JSONC, so a valid user config may carry comments
- * or trailing commas. Strict JSON.parse runs first and untouched — the tolerant path is
- * only attempted when that throws, keeping well-formed configs away from the stripper.
- */
-export function parseJsonc(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return JSON.parse(stripTrailingCommas(stripJsonComments(text)));
-  }
 }
 
 /** Model key as the proxy routes it: `provider/id` for routed models, bare slug for native OpenAI entries. */

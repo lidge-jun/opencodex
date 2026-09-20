@@ -143,6 +143,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Cline product name and CLI acronym are intentionally preserved.
   "integrations.tab.cline",
   "api.clientConfig.clientCline",
+  "integrations.tab.kilo",
+  "api.clientConfig.clientKilo",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
   "models.reasoningEffort.ultra",

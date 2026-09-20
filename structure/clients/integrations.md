@@ -143,7 +143,7 @@ All registered integrations consume the shared catalog, including [Anthropic see
 
 | Client | Per-model output |
 | --- | --- |
-| OpenCode | `attachment`, `modalities.input` |
+| OpenCode, Kilo | `attachment`, `modalities.input` |
 | Pi, OMP, Prime, Aside, omo, Gajae, DSH | `input` (text/image only) |
 | ZCode | `modalities.input` (text/image only) |
 | Cline | `modalities.input`, `supportsVision` |
@@ -259,6 +259,25 @@ separate. Restore reconciles target intent from validated snapshot ownership wit
 sibling policy. Profile journal views retain source-store provenance for older legacy entries.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
+
+## Kilo global JSONC
+
+Kilo owns only `provider.opencodex` in the first existing global file among `kilo.jsonc`,
+`kilo.json`, `opencode.jsonc`, `opencode.json`, and `config.json` under `~/.config/kilo`
+(`XDG_CONFIG_HOME` relocates that directory). Parse accepts JSONC comments and trailing
+commas; serialize rewrites the whole file as pretty JSON, so comments in other keys are
+not preserved. Kilo is not on the implicit owned-catalog fan-out. Remote admission uses
+the same `{env:OPENCODEX_KILO_API_KEY}` / `x-opencodex-api-key` rule as OpenCode.
+
+Because that resolution depends on which candidates EXIST, a candidate created after
+apply can win discovery while the owned file still holds the block. The registry's
+opt-in `bindsDriftedRecord` seam covers exactly that case: while the recorded path is
+still one of Kilo's own candidates under the current env and home, reads and mutations
+stay bound to the recorded file (status reports it, disable removes the block from it,
+and both restore paths act on the journaled file instead of refusing) and priority
+discovery resumes only once the record is dropped. A record from a
+different home never binds, preserving the audit contract that a record for one home
+cannot authorize a write to another.
 
 ## Cline paired files
 
