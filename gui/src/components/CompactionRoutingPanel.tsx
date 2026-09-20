@@ -48,7 +48,7 @@ function readComboProviders(payload: unknown): Map<string, string[]> {
   // back would return an inherited member for an alias of `constructor` or `toString`.
   const result = new Map<string, string[]>();
   for (const combo of parseComboList(payload)) {
-    result.set(combo.model, [...new Set(combo.targets.map(target => target.provider).filter(Boolean))]);
+    result.set(combo.model, [...new Set(combo.targets.flatMap(target => target.provider ? [target.provider] : []))]);
   }
   return result;
 }
