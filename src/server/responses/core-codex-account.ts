@@ -280,15 +280,11 @@ export async function shouldRetryCodexPoolAccountQuota(
   // body carries no quota evidence either, but the marker is the contract, not the prose.
   if (isNonReplayableResponse(response)) return false;
   if (response.status === 402 || response.status === 429) {
-    // Status alone used to authorize the move, which is right for a limit the ACCOUNT owns and
-    // wrong for one it merely belongs to. An organization- or project-scoped exhaustion refuses
-    // every credential inside that organization, so the second account meets the same counter
-    // and the only thing the rotation buys is a second cold prompt prefix (#4546). Positive
-    // evidence is required to withhold it: the helper fails closed, so an unreadable or
-    // ambiguous body keeps the broad #584 behaviour unchanged, and `rate_limit_exceeded`,
-    // `slow_down` and plan-level exhaustion still rotate exactly as before.
-    const { codexScopedExhaustionCode } = await import("../../codex/quota-rejection");
-    return await codexScopedExhaustionCode(response, { signal }) === undefined;
+    // The response does not identify the organization or project whose quota was exhausted.
+    // Resolve the alternate before deciding whether its known workspace identity proves that an
+    // organization-scoped retry would be futile. Until then, preserve the broad #584 behaviour.
+    void signal;
+    return true;
   }
   if (response.status < 500 || response.status >= 600) return false;
   try {
@@ -302,6 +298,20 @@ export async function shouldRetryCodexPoolAccountQuota(
   } catch {
     return false;
   }
+}
+
+
+export async function shouldRetryCodexScopedQuotaOnAlternate(
+  response: Response,
+  firstWorkspaceAccountId: string,
+  alternateWorkspaceAccountId: string | undefined,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (!firstWorkspaceAccountId || firstWorkspaceAccountId !== alternateWorkspaceAccountId) return true;
+  const { codexScopedExhaustionCode } = await import("../../codex/quota-rejection");
+  const code = await codexScopedExhaustionCode(response, { signal });
+  // Workspace identity binds organization-level limits, but the response supplies no project id.
+  return code === undefined || code === "project_spend_limit_exceeded";
 }
 
 
@@ -645,6 +655,22 @@ export async function retryCodexPoolOnAlternateAccount(
     // No usable alternate was resolved, so the reserved move never becomes a send.
     accountMovePermit?.release();
     recordUnmovedTransientOutcome();
+    return { kind: "no-alternate" };
+  }
+
+  if (
+    (outcomeStatus === 429 || outcomeStatus === 402)
+    && !await shouldRetryCodexScopedQuotaOnAlternate(
+      firstResponse,
+      firstAuthCtx.chatgptAccountId,
+      retryAuthCtx.kind === "pool" || retryAuthCtx.kind === "main-pool"
+        ? retryAuthCtx.chatgptAccountId
+        : undefined,
+      options.abortSignal,
+    )
+  ) {
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
     return { kind: "no-alternate" };
   }
 
