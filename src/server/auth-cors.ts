@@ -1231,6 +1231,13 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // The GUI's browser-open toggle reads and writes this; absent means the
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
+    // Voice routing is provider names and model ids — no secrets, so it is
+    // returned as configured. Without it the management API cannot read back
+    // which backend serves speech, which makes "is the running process using
+    // the config on disk?" unanswerable from outside.
+    ...(config.dictation ? { dictation: config.dictation } : {}),
+    ...(config.transcription ? { transcription: config.transcription } : {}),
+    ...(config.speech ? { speech: config.speech } : {}),
     providers,
   };
 }

@@ -6,6 +6,7 @@ import {
   voiceProviderEndpointError,
 } from "../../src/config/voice-target";
 import { handleAudioSpeech } from "../../src/server/audio-speech";
+import { safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -206,5 +207,26 @@ describe("transcription provider relay", () => {
       transcriptionModel: "parakeet-unified-en-0.6b",
     } as OcxProviderConfig);
     expect(sent!.get("model")).toBe("parakeet-unified-en-0.6b");
+  });
+});
+
+describe("management DTO", () => {
+  test("returns the voice routing blocks so they can be read back", () => {
+    const dto = safeConfigDTO({
+      port: 1, providers: {}, defaultProvider: "x",
+      dictation: { provider: "handy" },
+      transcription: { provider: "handy" },
+      speech: { provider: "pocket", byModel: { "deepseek/chat": "pocket" } },
+    } as unknown as OcxConfig) as Record<string, unknown>;
+    expect(dto.dictation).toEqual({ provider: "handy" });
+    expect(dto.transcription).toEqual({ provider: "handy" });
+    expect(dto.speech).toEqual({ provider: "pocket", byModel: { "deepseek/chat": "pocket" } });
+  });
+
+  test("omits a block that is not configured, rather than sending null", () => {
+    const dto = safeConfigDTO({
+      port: 1, providers: {}, defaultProvider: "x",
+    } as unknown as OcxConfig) as Record<string, unknown>;
+    expect("speech" in dto).toBe(false);
   });
 });
