@@ -28,7 +28,7 @@ proxy compiling a frontend at startup trades silent staleness for a slow, surpri
 
 Unknown is not stale, because a packaged install ships no `gui/src` and a missing bundle is a
 separate condition. `node_modules` is skipped so a dependency install cannot make sources look
-newer than they are. Four regressions in `tests/server/gui-bundle-freshness.test.ts` hold those
+newer than they are. Four regressions in `tests/server/server-gui-bundle-freshness.test.ts` hold those
 cases, and the live check was confirmed by touching a source file and watching the warning appear
 and then disappear after a rebuild.
 
