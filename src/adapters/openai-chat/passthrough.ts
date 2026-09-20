@@ -1,6 +1,7 @@
 import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
+import { applyExplicitChatDeveloperRole } from "./developer-role";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../../providers/service-tier";
@@ -55,7 +56,16 @@ export function buildOpenAIChatPassthroughRequest(
 
   const body: Record<string, unknown> = {
     model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId,
-    messages: frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
+    // The caller's messages are forwarded as they arrived, with one exception: an operator who
+    // recorded that this destination rejects the `developer` role gets that role converted in
+    // place. Verbatim was not neutral there — it sent the role anyway and the turn failed
+    // upstream with a 400 before the model saw it. An unrecorded destination is still verbatim,
+    // and the conversion changes the role of those messages and nothing else, so the position
+    // of every message and every other field survive unchanged.
+    messages: applyExplicitChatDeveloperRole(
+      frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
+      provider,
+    ),
     stream,
   };
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
