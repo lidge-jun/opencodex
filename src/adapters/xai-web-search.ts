@@ -1,4 +1,5 @@
 import type { OcxProviderConfig } from "../types";
+import { debugProviderDiagnostic } from "../lib/debug";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
 
 const CODEX_WEB_SEARCH_TOOL = "web_search";
@@ -84,19 +85,32 @@ function hasWebSearchTool(body: Record<string, unknown>): boolean {
 }
 
 function hasAnyDeclaredTool(body: Record<string, unknown>): boolean {
-  if (Array.isArray(body.tools) && body.tools.length > 0) return true;
-  return Array.isArray(body.input) && body.input.some(item =>
-    isPlainObject(item)
-    && item.type === "additional_tools"
-    && Array.isArray(item.tools)
-    && item.tools.length > 0
-  );
+  try {
+    if (Array.isArray(body.tools) && body.tools.length > 0) return true;
+    return Array.isArray(body.input) && body.input.some(item =>
+      isPlainObject(item)
+      && item.type === "additional_tools"
+      && Array.isArray(item.tools)
+      && item.tools.length > 0
+    );
+  } catch {
+    // Fail closed: keep tool_choice rather than dropping a selector that still has tools.
+    debugProviderDiagnostic("xai", "declared-tools-unreadable", {});
+    return true;
+  }
 }
 
 /** Remove selectors that would still force a cached-only tool omitted above. */
 function normalizeToolChoice(body: Record<string, unknown>): Record<string, unknown> {
   const choice = body.tool_choice;
   if (choice === undefined) return body;
+  // xAI rejects even the default selectors when there is no declared tool.
+  // Omitting auto/none preserves the same tool-free semantics.
+  if ((choice === "auto" || choice === "none") && !hasAnyDeclaredTool(body)) {
+    debugProviderDiagnostic("xai", "tool-choice-omitted", { choice });
+    const { tool_choice: _toolChoice, ...rest } = body;
+    return rest;
+  }
   const hasSearch = hasWebSearchTool(body);
 
   if (isPlainObject(choice) && isCodexWebSearchToolType(choice.type)) {

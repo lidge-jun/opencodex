@@ -6,6 +6,7 @@ import {
   createCursorBlobRequestScope,
   cursorBlobMetrics,
   cursorBlobByteLength,
+  cursorBlobTextForEstimate,
   cursorBlobRetainedStoreSnapshot,
   cursorBlobStoreDebugSnapshotForTests,
   CursorBlobAdmissionError,
@@ -35,6 +36,7 @@ import { resetDebugSettingsForTests } from "../../../src/lib/debug-settings";
 import {
   CURSOR_EXTERNAL_ROOT_BYTE_LIMIT,
   CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT,
+  CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE,
   CURSOR_EXTERNAL_ROOT_BLOB_LIMIT,
   CURSOR_ROUTING_LEVEL_PARAMETER_ID,
   encodeCursorRunRequest,
@@ -1054,10 +1056,46 @@ describe("Cursor blob handshake", () => {
 
     expect(run?.action?.action.case).toBe("userMessageAction");
     const value = run?.action?.action.case === "userMessageAction" ? run.action.action.value : undefined;
-    expect(value?.userMessage?.text).toBe(CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT);
+    expect(value?.userMessage?.text).toBe(`${CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT}\n\n${CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE}\n\n[Current user request]\nread a file`);
     // Tool results are still replayed via history blobs.
     const roots = decodeRootMessages(bytes) as Array<{ role?: string }>;
     expect(JSON.stringify(roots)).toContain("contents");
+  });
+  test("skips current-request guidance when the latest user text is empty", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-fable-5",
+      conversationId: "c-empty-user",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "contents" }],
+      rawMessages: [
+        { role: "user", content: "   ", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/claude-fable-5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+        },
+        { role: "toolResult", toolCallId: "call_1", toolName: "read_file", content: "contents", isError: false, timestamp: 3 },
+      ],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const value = run?.action?.action.case === "userMessageAction" ? run.action.action.value : undefined;
+    expect(value?.userMessage?.text).toBe(CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT);
+    expect(value?.userMessage?.text).not.toContain("[Current user request]");
+  });
+
+});
+
+describe("cursorBlobTextForEstimate", () => {
+  test("returns stored utf-8 text", () => {
+    const id = storeCursorBlob(new TextEncoder().encode("hello estimate"));
+    expect(cursorBlobTextForEstimate(id)).toBe("hello estimate");
+  });
+  test("returns null for a missing blob, empty id, or non-bytes input", () => {
+    expect(cursorBlobTextForEstimate(new Uint8Array(32))).toBeNull();
+    expect(cursorBlobTextForEstimate(new Uint8Array())).toBeNull();
+    expect(cursorBlobTextForEstimate(null as unknown as Uint8Array)).toBeNull();
   });
 });
 
