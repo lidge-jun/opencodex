@@ -1626,7 +1626,8 @@
     "management-provider-reset-replay.test.ts": "server",
     "responses-reset-replay.test.ts": "responses",
     "ambiguous-resend-gate.test.ts": "lib",
-    "docs-developer-role-policy.test.ts": "ci-workflows"
+    "docs-developer-role-policy.test.ts": "ci-workflows",
+    "chat-inbound-developer-position.test.ts": "responses"
   },
   "migrated": [
     "adapters",
