@@ -19,7 +19,8 @@ parsing and ownership rules below.
 | Module | Responsibility |
 | --- | --- |
 | `src/clients/config-export.ts` | Pure per-client config builders and the exact managed fragments each client receives. It never writes files. |
-| `src/integrations/registry.ts` | Canonical config/detection paths, the superseded-store resolver, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
+| `src/integrations/registry.ts` | Canonical config/detection paths, current-provider-store declarations, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
+| `src/integrations/target.ts` | Which file one operation reads, writes and records, and whether a write there reaches the client. |
 | `src/integrations/config-io.ts` | Bounded file loading and parsing. Values that cannot round-trip through the target serializer are rejected before mutation. |
 | `src/integrations/state.ts` | The single `absent` / `current` / `stale` / `conflict` / `unsafe` classifier used by status and every writer operation. |
 | `src/integrations/ownership.ts` | Durable ownership records: file, generated contribution, protected contribution, exact fragment paths, and operation identity. |
@@ -217,22 +218,51 @@ new file and never again, so every later write to the old path is read by nobody
 instance this rule was written for: the apply was correct, the ownership record was correct, the
 journal row was correct, and no model appeared in the client.
 
-A client in that position declares `supersededBy` in the registry, naming the file whose presence
-proves the move. Three properties are load-bearing:
+A client in that position declares `currentStore` in the registry. The declaration is not only a
+location: it carries the text format of that file, the contribution shape its reader understands,
+and the predicate that decides whether a document on disk is a version whose shape has been
+observed. Naming the store without the last three would be naming a file we cannot write.
 
-- The predicate is observed through the same `IntegrationIO` seam as the config file, so status and
-  mutation cannot disagree about whether a write can land. Only a regular file counts; a failed stat
-  is not evidence of a migration.
-- It is bound into the plan fingerprint, so a confirmation taken before the client created its new
-  store cannot be committed afterwards.
-- It refuses apply, overwrite and refresh, and leaves disable alone. Removing bytes this project
-  wrote to this file is unaffected by where the client reads, and refusing it would leave the block
-  unremovable through the tool.
+`src/integrations/target.ts` turns that declaration into the one answer every surface uses: which
+file this operation reads, writes, journals and records, and whether a write there reaches the
+client. It decides from three facts, in order:
 
-Naming the new store is not permission to write it. Writing a store whose schema this project has
-not observed, into a file that holds the user's other providers and that the client rewrites on its
-own, would trade a silent no-op for a silent loss. Status reports the store beside the file state
-rather than folding it into the state: `current` remains the truth about the file.
+1. No declared store, or no store on disk — the config file, unchanged. A client that has never run
+   still imports what we write there, which is why the rule keys on the store's presence rather
+   than on a client version.
+2. This project's own block already in one of the two files — that file. Disable removes what we
+   wrote from where we wrote it, and no apply leaves a block in one file while writing another.
+3. Otherwise the store, and only when its schema establishes.
+
+Four properties are load-bearing:
+
+- The store is observed through the same `IntegrationIO` seam as the config file, so status and
+  mutation cannot disagree about which file an operation is about. Only a regular file counts; a
+  failed stat is not evidence of a migration.
+- The ownership record, the journal row and the undo guard all follow the target rather than the
+  client. A row naming the store is restorable because the guard asks whether this client still
+  names that location, not whether it is the config file.
+- The refusal is bound into the plan fingerprint together with its reason, so a confirmation taken
+  before the client created its store cannot be committed afterwards — and neither can one taken
+  before the store's schema version moved under an unchanged path.
+- Disable is never gated on it. Removing bytes this project wrote from the file it wrote them to is
+  unaffected by where the client reads, and refusing it would leave the block unremovable through
+  the tool.
+
+Writing the store does not relax ownership anywhere. The store keys a model rule by the pair
+`(providerId, modelId)`, so the managed path names both: a selector naming only the model would
+match another provider's rule for the same model and replace it. A rule carrying this project's
+provider id that no record accounts for — including one the client's own migration created — is a
+conflict, and the explicit overwrite remains the only way past it.
+
+A store whose schema cannot be established is reported, never merged into. That file holds the
+user's other providers and the client rewrites it on its own, so asserting a nesting we have not
+observed would trade a silent no-op for a silent loss. Status reports the store beside the file
+state rather than folding it into the state: `current` remains the truth about the file, and the
+notice appears only when the client reads some other file than the one the state is about.
+
+Deleting the client's store to re-trigger its own import is not implemented and must not be. It
+discards every provider the client keeps there.
 
 ## Verification
 

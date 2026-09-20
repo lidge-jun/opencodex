@@ -257,20 +257,32 @@ consultez les notes de recherche dans
 ## ZCode 3.14 et versions ultérieures
 
 ZCode 3.14 a déplacé ses fournisseurs personnalisés vers `~/.zcode/v2/provider_config.json` et ne
-lit plus `~/.zcode/v2/config.json` — le fichier que cette intégration écrit — qu'au travers d'un
-import unique, exécuté seulement quand le nouveau fichier est absent. ZCode crée ce nouveau fichier
-au premier lancement : sur toute installation déjà démarrée une fois, l'import a donc déjà eu lieu
-et une écriture dans `config.json` n'atteint plus rien.
+lit plus `~/.zcode/v2/config.json` qu'au travers d'un import unique, exécuté seulement quand le
+nouveau fichier est absent. ZCode crée ce nouveau fichier au premier lancement : sur toute
+installation déjà démarrée une fois, l'import a donc déjà eu lieu et une écriture dans
+`config.json` n'atteint plus rien.
 
-Lorsque opencodex trouve ce fichier, l'interrupteur refuse au lieu d'annoncer une réussite qu'aucun
-modèle ne suivrait, et l'état l'indique à côté de celui du fichier. La désactivation continue de
-fonctionner : elle retire le bloc écrit par opencodex, ce que l'endroit où ZCode lit ne change pas.
+opencodex écrit désormais `provider_config.json` directement quand il le peut. Activer
+l'intégration ajoute la règle de fournisseur `opencodex` dans ce fichier, une actualisation du
+catalogue la met à jour, et la désactivation retire exactement ce qu'opencodex y a mis. Toutes les
+autres règles du fichier restent intactes, y compris celle qu'un autre fournisseur conserve pour un
+identifiant de modèle qui figure aussi chez nous. Une règle portant l'identifiant `opencodex`
+qu'opencodex n'a pas écrite est un conflit et non quelque chose à reprendre : réglez-la dans ZCode,
+ou utilisez l'écrasement explicite.
 
-Pour utiliser le proxy depuis ZCode 3.14, ajoutez le fournisseur dans les réglages de ZCode : URL de
-base `http://127.0.0.1:10100/v1` (ajustez le port à votre écoute), une clé non vide quelconque, et
-les identifiants de modèle donnés par `ocx export --client zcode`. Supprimer
-`provider_config.json` pour relancer l'import de ZCode n'est pas pris en charge : cela détruit tous
-les fournisseurs que ZCode y conserve.
+Deux situations refusent encore au lieu d'écrire. Un bloc écrit par opencodex avant le déplacement
+du stockage maintient l'intégration sur `config.json` : désactivez-la d'abord à cet endroit, puis
+réactivez-la pour écrire le nouveau stockage. Et un `provider_config.json` dont le
+`schemaVersion` n'est pas un de ceux qu'opencodex a observés est signalé plutôt que fusionné :
+ce fichier contient tous les fournisseurs de ZCode, et y affirmer une forme échangerait une
+absence d'effet silencieuse contre une perte silencieuse. L'état nomme le fichier que ZCode lit dès
+que l'intégration ne l'écrit pas.
+
+Dans ce second cas, ajoutez le fournisseur dans les réglages de ZCode : URL de base
+`http://127.0.0.1:10100/v1` (ajustez le port à votre écoute), une clé non vide quelconque, et les
+identifiants de modèle donnés par `ocx export --client zcode`. Supprimer
+`provider_config.json` pour relancer l'import de ZCode n'est pas pris en charge : cela détruit
+tous les fournisseurs que ZCode y conserve.
 
 ## Cline CLI
 

@@ -289,11 +289,21 @@ entegrasyonun yazdığı `~/.zcode/v2/config.json` dosyasına artık yalnızca, 
 bir kez bile başlatılmış her kurulumda bu içe aktarma çoktan tükenmiştir ve `config.json` dosyasına
 yazmak hiçbir şeye ulaşmaz.
 
-opencodex bu dosyayı bulduğunda, hiçbir modelin izlemeyeceği bir başarıyı bildirmek yerine anahtarı
-reddeder; durum ekranı da bunu dosya durumunun yanında söyler. Devre dışı bırakma çalışmaya devam
-eder: opencodex'in yazdığı bloğu kaldırır ve bunu ZCode'un nereden okuduğu etkilemez.
+opencodex artık mümkün olduğunda `provider_config.json` dosyasını doğrudan yazıyor. Entegrasyonu
+etkinleştirmek bu dosyaya `opencodex` sağlayıcı kuralını ekler, katalog yenilemesi onu günceller ve
+devre dışı bırakmak opencodex'in oraya koyduğu şeyi tam olarak kaldırır. Dosyadaki diğer her kural
+olduğu gibi kalır; buna başka bir sağlayıcının, bizde de bulunan bir model kimliği için tuttuğu
+kural da dahildir. opencodex'in yazmadığı, `opencodex` kimliğini taşıyan bir kural devralınacak bir
+şey değil, bir çakışmadır: ZCode içinde çözün ya da açık üzerine yazmayı kullanın.
 
-ZCode 3.14 ile proxy'yi kullanmak için sağlayıcıyı ZCode'un kendi ayarlarından ekleyin: temel URL
+İki durum hâlâ yazmak yerine reddeder. ZCode deposunu taşımadan önce opencodex'in yazdığı bir blok,
+entegrasyonu `config.json` üzerinde tutar: önce orada devre dışı bırakın, sonra yeni depoyu yazmak
+için yeniden etkinleştirin. `schemaVersion` değeri opencodex'in gözlemlediklerinden biri olmayan
+bir `provider_config.json` ise birleştirilmez, bildirilir: o dosya ZCode'un tüm sağlayıcılarını
+tutar ve oraya bir şekil dayatmak sessiz bir etkisizliği sessiz bir kayıpla değiştirirdi. Durum
+ekranı, entegrasyon o dosyayı yazmadığı her durumda ZCode'un okuduğu dosyayı adlandırır.
+
+Bu ikinci durumda sağlayıcıyı ZCode'un kendi ayarlarından ekleyin: temel URL
 `http://127.0.0.1:10100/v1` (bağlantı noktasını kendi bağınıza göre ayarlayın), boş olmayan
 herhangi bir anahtar ve `ocx export --client zcode` çıktısındaki model kimlikleri. ZCode'un içe
 aktarmasını yeniden tetiklemek için `provider_config.json` dosyasını silmek desteklenmez: bu,
