@@ -151,7 +151,7 @@ still cover the rule, which is a judgement only review makes.
   and a stage the caller observed something at refuses without spending it. The grant never
   widens a send budget: an authorised replacement still has to fit the allowance the leg already
   had.
-  Enforced by `tests/lib/request-resend-gate.test.ts`.
+  Enforced by `tests/lib/ambiguous-resend-gate.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
