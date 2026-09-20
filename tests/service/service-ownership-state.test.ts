@@ -8,7 +8,7 @@
  * doctor suggestion — and nothing said it had gone.
  */
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
 import {
@@ -24,14 +24,37 @@ import {
   ServiceStateConflictError,
   serviceOwnership,
   serviceStatePath,
+  serviceStatePaths,
   swapServiceInstallState,
   writeServiceInstallState,
 } from "../../src/service/state";
 
 let home: TempHome;
+/**
+ * `serviceStatePaths()` deliberately includes the legacy `~/.opencodex/service-state.json`
+ * entry so an install made before OPENCODEX_HOME existed can still be found, and a write
+ * lands on BOTH. Under the suite that second path is the shared sandbox home, which outlives
+ * this file: a claim recorded here reappeared in `tests/service/service.test.ts` and in the
+ * dashboard update worker's tests, where the repair gate and the restart veto then fired on
+ * state those files never wrote. This fixture restores every state path it touched.
+ */
+let statePathSnapshot: { path: string; content: string | null }[] = [];
 
-beforeEach(() => { home = createTempHome("ocx-service-ownership-"); });
-afterEach(() => { home.remove(); });
+beforeEach(() => {
+  home = createTempHome("ocx-service-ownership-");
+  statePathSnapshot = serviceStatePaths().map(path => ({
+    path,
+    content: existsSync(path) ? readFileSync(path, "utf8") : null,
+  }));
+});
+
+afterEach(() => {
+  for (const { path, content } of statePathSnapshot) {
+    if (content === null) { if (existsSync(path)) unlinkSync(path); }
+    else writeFileSync(path, content);
+  }
+  home.remove();
+});
 
 const DESKTOP = { owner: "desktop", installId: "app-install-a" } as const;
 
