@@ -132,6 +132,19 @@ for (const file of FILES) allSites.push(...refusals(file, await Bun.file(file).t
 const waived = allSites.filter(site => WAIVED[site.kind] || NOT_OURS[site.text]);
 const sites = allSites.filter(site => !WAIVED[site.kind] && !NOT_OURS[site.text]);
 
+// A waiver keyed on message text stops matching the moment the message is
+// reworded, and the site then vanishes from the denominator instead of
+// reappearing as work. An unused waiver is a stale one.
+const unusedWaivers = [
+  ...Object.keys(NOT_OURS).filter(text => !allSites.some(site => site.text === text)),
+  ...Object.keys(WAIVED).filter(kind => !allSites.some(site => site.kind === kind)),
+];
+if (unusedWaivers.length) {
+  console.error("waivers that no longer match any site — reworded, or removed:");
+  for (const key of unusedWaivers) console.error(`  ${key}`);
+  process.exit(2);
+}
+
 const uncovered = sites.filter(site => !covered.get(site.file)?.has(site.line));
 for (const site of uncovered) {
   console.log(`  ?     ${site.file}:${site.line}  ${site.kind}  ${site.text}`);
