@@ -1,7 +1,8 @@
 # Lane B — request-scoped transport and managed-write safety
 
-Status: branch pushed for hosted CI. One branch, two ordered commits, one PR
-against `dev`, per the batch topology.
+Status: PR #5264 open against `dev` at exact head `235525b52a`, hosted CI
+in flight. One branch, two ordered commits plus this progress record, per the
+batch topology.
 
 ## Scope
 
@@ -16,8 +17,7 @@ stay open for the coordinator.
 
 ## Branch
 
-`codex/260920-lane-b-transport-write-safety`, cut from `origin/dev`
-(`0613aaec17`). Commits in order:
+`codex/260920-lane-b-transport-write-safety`. Commits in order:
 
 1. `fix(transport): decide DNS pinning by whether the proxy applies to the request`
 2. `fix(integrations): reject symlinked managed write targets`
