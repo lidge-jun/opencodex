@@ -62,8 +62,15 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     // The captured static policy now supplies the repair decision; the real platform gate and
     // pure native relay invariants below are unchanged.
     expect(sseBranch).toContain("const terminalRepairPolicy = route.staticPolicy.model.responsesTerminalRepair;");
-    expect(sseBranch).toContain("const passthroughSseBody = terminalRepairPolicy");
+    expect(sseBranch).toContain("let passthroughSseBody = terminalRepairPolicy");
     expect(sseBranch).toContain(": upstreamResponse.body;");
+    // Repair has to wrap the raw first leg before the bridge hides its completed web-search call;
+    // otherwise a terminal-less open leg cannot trigger the repair timer and continuation stalls.
+    const terminalRepair = sseBranch.indexOf("relayResponsesSseWithTerminalRepair(");
+    const webSearchBridge = sseBranch.indexOf("createPassthroughWebSearchBridgeStream({");
+    expect(terminalRepair).toBeGreaterThanOrEqual(0);
+    expect(webSearchBridge).toBeGreaterThan(terminalRepair);
+    expect(sseBranch.slice(webSearchBridge)).toContain("firstLeg: passthroughSseBody,");
     // Native tee stays inside the bounded observer. The production owner passes
     // the raw stream and disconnect signal before any client-side rewrite.
     expect(sseBranch).toMatch(/const \[nativeBody, inspectBody\] = teeWithBoundedInspection\(passthroughSseBody, \{ clientGoneSignal \}\)/);
