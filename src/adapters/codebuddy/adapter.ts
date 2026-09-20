@@ -58,6 +58,8 @@ export function buildArgs(
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
   if (effort) args.push("--effort", effort);
+  // The vendor CLI documents no file-backed append flag, so the staged prompt replaces the default.
+  // That default targets interactive tool use, which this adapter disables end to end.
   if (systemPromptFile) args.push("--system-prompt-file", systemPromptFile);
   // profile is retained for symmetry with the region-isolated design and future per-region flags.
   void profile;
