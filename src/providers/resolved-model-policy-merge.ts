@@ -48,10 +48,19 @@ export function nestedMapFill(
   operator: Readonly<Record<string, Record<string, string>>> | undefined,
 ): [Record<string, Record<string, string>> | undefined, StaticPolicySource] {
   if (!registry && !operator) return [undefined, "unknown"];
+  // The outer model key folds case like mapFill: a case-varied operator key claims the registry
+  // row instead of shadowing behind it, while the claimed row's inner entries still fill
+  // underneath the operator's inner map.
+  const claimed = new Set(Object.keys(operator ?? {}).map(key => key.toLowerCase()));
   const merged: Record<string, Record<string, string>> = {};
-  for (const [key, value] of Object.entries(registry ?? {})) merged[key] = { ...value };
+  const claimedInner: Record<string, Record<string, string>> = {};
+  for (const [key, value] of Object.entries(registry ?? {})) {
+    const folded = key.toLowerCase();
+    if (claimed.has(folded)) claimedInner[folded] = { ...(claimedInner[folded] ?? {}), ...value };
+    else merged[key] = { ...value };
+  }
   for (const [key, value] of Object.entries(operator ?? {})) {
-    merged[key] = { ...(merged[key] ?? {}), ...value };
+    merged[key] = { ...(claimedInner[key.toLowerCase()] ?? merged[key] ?? {}), ...value };
   }
   return [merged, operator ? "operator" : "registry"];
 }
