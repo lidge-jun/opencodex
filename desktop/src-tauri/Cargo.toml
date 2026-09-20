@@ -33,3 +33,13 @@ codegen-units = 1
 lto = "thin"
 opt-level = "s"
 strip = "symbols"
+
+# Build scripts and proc macros are compiled for the host and loaded by rustc, so
+# they must keep the symbols it resolves them through. `strip = "symbols"` above
+# applies to them as well without this override, and a stripped proc-macro dylib
+# fails to load with a bare `can't find crate`, naming the macro rather than the
+# profile that removed it. `ctor-proc-macro`, pulled in by `tauri-utils`, is the
+# one this repository hits: the release build stops at `pub use ctor_proc_macro::ctor`
+# while the dev profile compiles the same graph.
+[profile.release.build-override]
+strip = false

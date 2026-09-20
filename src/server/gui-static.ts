@@ -20,7 +20,7 @@ const MIME_TYPES: Record<string, string> = {
  */
 const HASHED_ASSET_PATTERN = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
-function findGuiDist(): string | null {
+export function findGuiDist(): string | null {
   const candidates = [
     process.env.OPENCODEX_GUI_DIST,
     ...(isStandaloneBinary() ? [join(standaloneRoot(), "gui", "dist")] : []),

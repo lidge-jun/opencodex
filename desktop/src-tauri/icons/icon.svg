@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="opencodex">
+  <!--
+    The opencodex mark: one open rounded square, drawn as a stroke rather than two filled paths so
+    every raster size below is the same curve at a different scale.
+
+    The geometry is not invented. It was measured from the icon.png this file replaces: the shape
+    spans 58..453 on both axes, the stroke is 48 wide, and the outer corner turns at 135. A
+    centred stroke puts the rect at 82 with a 348 box, and rx=127 reproduces the original corner to
+    within 430 of 262144 pixels — antialiasing, not a redrawn shape.
+
+    Pure black on transparency. macOS and Windows both composite the mark over their own
+    backgrounds, and a baked background would show as a square card on one of them.
+  -->
+  <rect x="82" y="82" width="348" height="348" rx="127" ry="127"
+        fill="none" stroke="#000000" stroke-width="48"/>
+</svg>
