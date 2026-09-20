@@ -13,6 +13,7 @@ import {
   clampObservedModelLimits,
   resolveModelPolicy,
 } from "../../src/providers/resolved-model-policy";
+import { modelRecordValue } from "../../src/reasoning-effort";
 
 const MODEL = "vendor/model-a";
 
@@ -795,5 +796,20 @@ describe("resolved static model policy parity", () => {
     expect(Object.isFrozen(policy.model.inputModalities)).toBe(true);
     expect(JSON.stringify(policy)).not.toContain("secret-value");
     expect(JSON.stringify(policy)).not.toContain("account-like-private-id");
+  });
+
+  test("case-varied modelReasoningEffortMap override claims the registry row", () => {
+    const entry = registry({
+      modelReasoningEffortMap: { [MODEL]: { low: "registry-low", xhigh: "registry-xhigh" } },
+    });
+    const configured = provider({
+      modelReasoningEffortMap: { "VENDOR/Model-A": { xhigh: "custom" } },
+    });
+    const policy = resolve(configured, entry);
+    const map = policy.provider.modelReasoningEffortMap;
+    expect(map).not.toHaveProperty(MODEL);
+    expect(map?.["VENDOR/Model-A"]).toEqual({ low: "registry-low", xhigh: "custom" });
+    // The folded runtime lookup must resolve the operator row, not a registry-spelled shadow.
+    expect(modelRecordValue(map, MODEL)).toEqual({ low: "registry-low", xhigh: "custom" });
   });
 });
