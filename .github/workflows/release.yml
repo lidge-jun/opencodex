@@ -196,6 +196,10 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    env:
+      # Whether this run holds the Developer ID material at all. A run without it still builds
+      # locally useful bundles; a run with it must not silently downgrade any part of the app.
+      DESKTOP_SIGNING_CONFIGURED: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -236,8 +240,38 @@ jobs:
         if: runner.os != 'macOS'
         run: bun desktop/scripts/prepare-sidecar.ts --target ${{ matrix.sidecar-targets }}
 
+      # The widget is signed by build-widget.sh, which runs before `tauri build` exists to make
+      # its own signing keychain, so the Developer ID has to be reachable by codesign already at
+      # that point. Tauri builds an independent keychain later and re-adds it to the same search
+      # list, so the two do not collide; this one is removed by the cleanup step below.
+      - name: Import the Apple signing certificate for the widget
+        if: runner.os == 'macOS' && env.DESKTOP_SIGNING_CONFIGURED == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/opencodex-widget-signing.keychain-db"
+          certificate="$RUNNER_TEMP/opencodex-widget-certificate.p12"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -x
+          rm -f "$certificate"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychain -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          echo "WIDGET_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
       - name: Build WidgetKit extension
         if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # A run holding Developer ID material must not produce an ad-hoc widget. Without this
+          # the script's ad-hoc branch is the silent default, which is how a signed, notarized
+          # app shipped with an extension macOS will not register.
+          WIDGET_SIGN_REQUIRED: ${{ env.DESKTOP_SIGNING_CONFIGURED == 'true' && '1' || '0' }}
         run: bash desktop/scripts/build-widget.sh
 
       # Release signing is intentionally secret-gated. Developer ID, notarization,
@@ -274,6 +308,10 @@ jobs:
           path: dist/release/
           if-no-files-found: error
           retention-days: 7
+
+      - name: Remove the widget signing keychain
+        if: always() && env.WIDGET_SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$WIDGET_SIGNING_KEYCHAIN" || true
 
   attach-release:
     runs-on: ubuntu-latest
