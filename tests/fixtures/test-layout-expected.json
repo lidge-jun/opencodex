@@ -1052,6 +1052,7 @@
   "remote-workspace-protocol.test.ts": "clients",
   "remote-workspace-rpc-framing.test.ts": "clients",
   "remove-tree-helper.test.ts": "lib",
+  "replay-refusal-parity.test.ts": "server",
   "repo-hygiene.test.ts": "ci-workflows",
   "request-decompress.test.ts": "usage",
   "request-evidence.test.ts": "usage",
