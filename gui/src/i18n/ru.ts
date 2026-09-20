@@ -2185,6 +2185,7 @@ export const ru: Record<TKey, string> = {
   "accountPool.priorityUpdateFailed": "Не удалось сохранить порядок выбора для {email}. Показано последнее подтверждённое значение.",
   "codexAuth.switched": "{email} выбран для следующего запроса",
   "codexAuth.loadFailed": "Не удалось загрузить настройки аккаунтов Codex.",
+  "codexAuth.accountsRefreshFailed": "Последнее обновление аккаунтов не удалось. Ниже показаны последние подтверждённые аккаунты.",
   "codexAuth.switchFailed": "Не удалось переключить аккаунт. Ваш предыдущий выбор не изменён.",
   "codexAuth.removeConfirm": "Удалить {id}?",
   "codexAuth.removeFailed": "Не удалось удалить аккаунт. Ничего не изменено.",

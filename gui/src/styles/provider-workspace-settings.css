@@ -29,6 +29,7 @@
   background: var(--raised); border-radius: var(--radius-xs);
 }
 .pwi-auth-state--error { color: var(--red); background: var(--red-soft); justify-content: space-between; }
+.pwi-auth-state--stale { color: var(--amber); background: var(--amber-soft); justify-content: space-between; }
 .pwi-auth-state--empty { justify-content: center; }
 
 .pwi-auth-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }

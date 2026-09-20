@@ -2205,6 +2205,7 @@ export const tr: Record<TKey, string> = {
 
   "codexAuth.switched": "Sonraki istek için {email} seçildi",
   "codexAuth.loadFailed": "Codex hesap ayarları yüklenemedi.",
+  "codexAuth.accountsRefreshFailed": "Son hesap yenilemesi başarısız oldu. Aşağıda son doğrulanan hesaplar gösteriliyor.",
   "codexAuth.switchFailed": "Hesap değiştirilemedi.",
   "codexAuth.removeConfirm": "{id} kaldırılsın mı?",
   "codexAuth.removeFailed": "Hesap kaldırılamadı.",

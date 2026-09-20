@@ -1669,6 +1669,7 @@ export const zhTW: Record<TKey, string> = {
   "accountPool.quotaWindowInert": "只有配額策略，或門檻大於 0 的填滿優先策略，才會依用量計分；在目前的輪換策略下，這項設定不會有任何作用。",
   "codexAuth.switched": "下一次請求將使用 {email}",
   "codexAuth.loadFailed": "無法載入 Codex 帳號設定。",
+  "codexAuth.accountsRefreshFailed": "最近一次帳號重新整理失敗。以下是最後一次確認的帳號。",
   "codexAuth.switchFailed": "無法切換帳號。之前的選擇保持不變。",
   "codexAuth.removeConfirm": "刪除 {id}？",
   "codexAuth.removeFailed": "無法移除帳號。未進行任何更改。",

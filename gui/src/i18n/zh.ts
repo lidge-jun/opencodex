@@ -1687,6 +1687,7 @@ export const zh: Record<TKey, string> = {
   "accountPool.priorityUpdateFailed": "无法保存 {email} 的选择顺序。当前显示最后一次确认的值。",
   "codexAuth.switched": "下一次请求将使用 {email}",
   "codexAuth.loadFailed": "无法加载 Codex 账号设置。",
+  "codexAuth.accountsRefreshFailed": "最近一次账号刷新失败。以下是最后一次确认的账号。",
   "codexAuth.switchFailed": "无法切换账户。之前的选择保持不变。",
   "codexAuth.removeConfirm": "删除 {id}？",
   "codexAuth.removeFailed": "无法移除账户。未进行任何更改。",

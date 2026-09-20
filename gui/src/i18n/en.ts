@@ -2264,6 +2264,7 @@ export const en = {
 
   "codexAuth.switched": "{email} is selected for the next request",
   "codexAuth.loadFailed": "Codex account settings could not be loaded.",
+  "codexAuth.accountsRefreshFailed": "The latest account refresh failed. The accounts below are the last ones confirmed.",
   "codexAuth.switchFailed": "The account could not be switched. Your previous selection is unchanged.",
   "codexAuth.removeConfirm": "Remove {id}?",
   "codexAuth.removeFailed": "The account could not be removed. Nothing was changed.",

@@ -1670,6 +1670,7 @@ export const de: Record<TKey, string> = {
   "accountPool.priorityUpdateFailed": "Die Auswahlreihenfolge für {email} konnte nicht gespeichert werden. Der zuletzt bestätigte Wert wird angezeigt.",
   "codexAuth.switched": "{email} ist für die nächste Anfrage ausgewählt",
   "codexAuth.loadFailed": "Die Codex-Kontoeinstellungen konnten nicht geladen werden.",
+  "codexAuth.accountsRefreshFailed": "Die letzte Kontoaktualisierung ist fehlgeschlagen. Unten stehen die zuletzt bestätigten Konten.",
   "codexAuth.switchFailed": "Das Konto konnte nicht gewechselt werden. Die vorherige Auswahl bleibt erhalten.",
   "codexAuth.removeConfirm": "{id} entfernen?",
   "codexAuth.removeFailed": "Das Konto konnte nicht entfernt werden. Es wurde nichts geändert.",

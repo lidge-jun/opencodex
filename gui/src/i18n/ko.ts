@@ -1706,6 +1706,7 @@ export const ko: Record<TKey, string> = {
   "accountPool.priorityUpdateFailed": "{email}의 선택 순서를 저장하지 못했습니다. 마지막으로 확인된 값을 표시합니다.",
   "codexAuth.switched": "다음 요청에 {email}을(를) 사용합니다",
   "codexAuth.loadFailed": "Codex 계정 설정을 불러오지 못했습니다.",
+  "codexAuth.accountsRefreshFailed": "최신 계정 새로고침에 실패했습니다. 아래 목록은 마지막으로 확인된 계정입니다.",
   "codexAuth.switchFailed": "계정을 전환하지 못했습니다. 이전 선택은 그대로 유지됩니다.",
   "codexAuth.removeConfirm": "{id}을(를) 삭제하시겠습니까?",
   "codexAuth.removeFailed": "계정을 제거하지 못했습니다. 변경된 내용은 없습니다.",

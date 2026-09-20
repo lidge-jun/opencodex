@@ -2202,6 +2202,7 @@ export const vi: Record<TKey, string> = {
   "accountPool.priorityUpdateFailed": "Không thể lưu thứ tự lựa chọn cho {email}. Giá trị được xác nhận gần nhất đang được hiển thị.",
   "codexAuth.switched": "Tài khoản được chọn cho request tiếp theo là {email}",
   "codexAuth.loadFailed": "Không thể tải cài đặt tài khoản Codex.",
+  "codexAuth.accountsRefreshFailed": "Lần làm mới tài khoản gần nhất thất bại. Dưới đây là các tài khoản được xác nhận gần nhất.",
   "codexAuth.switchExceedsThresholdWarning": "Mức sử dụng của tài khoản này đã đạt hoặc vượt ngưỡng chuyển đổi ({threshold}%). Lựa chọn đã ghim sẽ được giải phóng nếu không còn hạn ngạch khả dụng.",
   "codexAuth.switchFailed": "Không thể chuyển đổi tài khoản. Tùy chọn trước đó của bạn vẫn được giữ nguyên.",
   "codexAuth.removeConfirm": "Gỡ bỏ {id}?",

@@ -2114,6 +2114,7 @@ export const ja: Record<TKey, string> = {
   "accountPool.priorityUpdateFailed": "{email} の選択順序を保存できませんでした。最後に確認された値を表示しています。",
   "codexAuth.switched": "次のリクエストでは {email} を使用します",
   "codexAuth.loadFailed": "Codex アカウント設定を読み込めませんでした。",
+  "codexAuth.accountsRefreshFailed": "最新のアカウント更新に失敗しました。以下は最後に確認されたアカウントです。",
   "codexAuth.switchFailed": "アカウントを切り替えられませんでした。以前の選択はそのままです。",
   "codexAuth.removeConfirm": "{id} を削除しますか?",
   "codexAuth.removeFailed": "アカウントを削除できませんでした。何も変更されていません。",
