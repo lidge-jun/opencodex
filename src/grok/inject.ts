@@ -309,6 +309,9 @@ function canonicalDottedKey(raw: string): string[] {
  * TOML admits equivalent header spellings for BOTH segments (`["model"."ocx-mine"]`,
  * `['model'.ocx-mine]`, `[ model . ocx-mine ]`); all of them redefine the same table, so each
  * form is canonicalized before it is reserved.
+ * Only exactly two-segment headers collide: `[[model.x]]` makes `model.x` an array that a
+ * generated `[model.x]` table cannot redefine, while a sub-table like `[model.x.extra]` does
+ * not collide at all — TOML permits its implicitly created parent to be defined explicitly later.
  */
 function userModelAliases(content: string, region: ManagedRegion | null): Set<string> {
   const outsideManagedRegion = region
@@ -316,7 +319,7 @@ function userModelAliases(content: string, region: ManagedRegion | null): Set<st
     : content;
   const aliases = new Set<string>();
   for (const header of analyzeTomlStructure(outsideManagedRegion).headers) {
-    if (header.segments[0] !== "model" || header.segments.length < 2) continue;
+    if (header.segments[0] !== "model" || header.segments.length !== 2) continue;
     aliases.add(header.segments[1]!);
   }
   return aliases;

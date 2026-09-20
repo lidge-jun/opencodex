@@ -194,7 +194,6 @@ describe("Grok config injection", () => {
       ["mixed quoting with whitespace", `[ "model" . 'ocx-mine' ]`],
       ["bare (baseline)", "[model.ocx-mine]"],
       ["array of tables", "[[model.ocx-mine]]"],
-      ["sub-table", "[model.ocx-mine.extra]"],
       ["trailing comment", '[model."ocx-mine"] # mine'],
     ];
 
@@ -210,6 +209,21 @@ describe("Grok config injection", () => {
         expect(generated).not.toContain("[model.ocx-mine]\n");
       });
     }
+
+    test("does not reserve an alias from a user sub-table", () => {
+      // [model.ocx-mine.extra] implicitly creates model.ocx-mine, and TOML permits that parent
+      // to be defined explicitly later — reserving "ocx-mine" here would needlessly suffix the
+      // generated alias.
+      writeFileSync(configPath(), "[model.ocx-mine.extra]\nx = 1\n", "utf8");
+
+      injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      const written = readFileSync(configPath(), "utf8");
+      const generated = written.slice(written.indexOf(BEGIN_MARKER));
+      expect(written).toContain("[model.ocx-mine.extra]");
+      expect(generated).toContain("[model.ocx-mine]\n");
+      expect(generated).not.toContain("[model.ocx-mine-2]");
+    });
 
     test("does not reserve aliases from unrelated tables", () => {
       // [models.*] and [model_providers.*] are different tables entirely — reserving from them
