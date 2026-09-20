@@ -249,6 +249,36 @@ test("8. an unsaved edit survives navigating away and back", async () => {
   await act(async () => { root.unmount(); });
 });
 
+test("8b. closing or saving another layer warns about a parked edit", async () => {
+  const calls = stubRoutes(call => {
+    if (call.url.includes("/text")) return json({ ok: true, layers: {} });
+    if (call.method === "PUT") return json({ ok: true, changed: true, snapshot: snapshot({ custom: THREE }) });
+    return json(snapshot({ custom: THREE }));
+  });
+  const { container, root } = await mount();
+  await openEditor(container, "aaaaaa");
+  await act(async () => { typeInto(fields().body, "Parked work in progress."); });
+  await act(async () => { navButtons()[1]!.click(); });
+
+  await act(async () => { dialog().dispatchEvent(new testWindow.Event("cancel", { cancelable: true })); });
+  expect(dialog().querySelector(".codex-set-custom-dialog__discard")).not.toBeNull();
+  await act(async () => {
+    const keepEditing = [...dialog().querySelectorAll("button")].find(button => button.textContent?.includes("Keep editing"))!;
+    keepEditing.click();
+  });
+
+  const save = [...dialog().querySelectorAll("button")].find(button => button.textContent?.includes("Save"))!;
+  await act(async () => { save.click(); });
+  expect(calls.filter(call => call.method === "PUT")).toHaveLength(0);
+  expect(dialog().querySelector(".codex-set-custom-dialog__discard")).not.toBeNull();
+  await act(async () => {
+    const discard = [...dialog().querySelectorAll("button")].find(button => button.textContent?.includes("Discard"))!;
+    discard.click();
+  });
+  expect(calls.filter(call => call.method === "PUT")).toHaveLength(1);
+  await act(async () => { root.unmount(); });
+});
+
 test("10. one layer offers no navigation at all", async () => {
   stubRoutes(call => (call.url.includes("/text") ? json({ ok: true, layers: {} }) : json(snapshot({ custom: [layer()] }))));
   const { container, root } = await mount();

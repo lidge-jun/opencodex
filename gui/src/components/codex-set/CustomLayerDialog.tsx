@@ -68,6 +68,9 @@ export default function CustomLayerDialog({
    * mid-edit, which is the whole point of moving between them.
    */
   const draftsRef = useRef(new Map<string, { title: string; body: string }>());
+  const [parkedDirty, setParkedDirty] = useState(false);
+  const othersRef = useRef(others);
+  useEffect(() => { othersRef.current = others; }, [others]);
   const editingId = layer?.id ?? null;
   const lastIdRef = useRef(editingId);
 
@@ -92,8 +95,13 @@ export default function CustomLayerDialog({
     const parked = editingId === null ? undefined : draftsRef.current.get(editingId);
     setTitle(parked?.title ?? layer?.title ?? "");
     setBody(parked?.body ?? layer?.body ?? "");
+    setParkedDirty([...draftsRef.current].some(([id, draft]) => {
+      if (id === editingId) return false;
+      const saved = othersRef.current.find(candidate => candidate.id === id);
+      return saved !== undefined && (draft.title !== saved.title || draft.body !== saved.body);
+    }));
   }, [editingId, layer]);
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [discardAction, setDiscardAction] = useState<"close" | "save" | null>(null);
   const titleId = "codex-set-custom-dialog";
 
   // Compare against what the editor OPENED with, seed included. Comparing against
@@ -102,6 +110,8 @@ export default function CustomLayerDialog({
   const initialTitle = layer?.title ?? seed?.title ?? "";
   const initialBody = layer?.body ?? seed?.body ?? "";
   const dirty = title !== initialTitle || body !== initialBody;
+  // A parked draft is still live user work. Exclude the displayed layer because
+  // its inputs supersede the older parked copy when someone navigates back.
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -114,9 +124,9 @@ export default function CustomLayerDialog({
   }, []);
 
   const requestClose = useCallback(() => {
-    if (dirty) { setConfirmingDiscard(true); return; }
+    if (dirty || parkedDirty) { setDiscardAction("close"); return; }
     onClose();
-  }, [dirty, onClose]);
+  }, [dirty, parkedDirty, onClose]);
 
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
@@ -124,6 +134,10 @@ export default function CustomLayerDialog({
   }, [requestClose]);
 
   const draft: Draft = { id: layer?.id ?? null, title, body, enabled: layer?.enabled ?? true };
+  const requestSave = () => {
+    if (parkedDirty) { setDiscardAction("save"); return; }
+    onSave({ ...draft, body: normalizeBody(body) });
+  };
   const problem = validateDraft(draft, others);
   const normalized = normalizeBody(body);
   const normalizationApplied = normalized !== body;
@@ -215,7 +229,7 @@ export default function CustomLayerDialog({
           </ul>
         )}
 
-        {confirmingDiscard ? (
+        {discardAction ? (
           // The prompt text IS the accessible name. role="alertdialog" without one
           // announces an unnamed dialog, so a screen-reader user is asked to confirm
           // something the announcement never states.
@@ -225,10 +239,14 @@ export default function CustomLayerDialog({
             aria-labelledby={titleId + "-discard"}
           >
             <span id={titleId + "-discard"} className="muted small">{t("codexSet.custom.discardPrompt")}</span>
-            <button type="button" className="btn btn-sm" onClick={() => setConfirmingDiscard(false)}>
+            <button type="button" className="btn btn-sm" onClick={() => setDiscardAction(null)}>
               {t("codexSet.custom.keepEditing")}
             </button>
-            <button type="button" className="btn btn-danger btn-sm" onClick={onClose}>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => discardAction === "save" ? onSave({ ...draft, body: normalized }) : onClose()}
+            >
               {t("common.discard")}
             </button>
           </div>
@@ -238,7 +256,7 @@ export default function CustomLayerDialog({
               type="button"
               className="btn btn-primary btn-sm"
               disabled={problem !== null || busy}
-              onClick={() => onSave({ ...draft, body: normalized })}
+              onClick={requestSave}
             >
               {t("common.save")}
             </button>
