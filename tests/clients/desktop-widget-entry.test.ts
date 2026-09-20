@@ -1,43 +1,52 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
 /**
- * The WidgetKit extension shipped registered and empty.
+ * The WidgetKit extension needs two things that look unrelated, and either one alone produces a
+ * widget that is never offered in the gallery with nothing in the build to say so.
  *
- * `app/Package.swift` forced the executable's entry to `_NSExtensionMain` and `main.swift` was
- * comments, so nothing ever called `OpenCodexWidgetBundle.main()`. The extension still appeared
- * in `pluginkit` — that comes from the Info.plist alone — and `NSExtensionMain` then looked for
- * an `NSExtensionPrincipalClass` a SwiftUI widget does not declare. The result is a widget that
- * installs, registers, and is never offered in the gallery, with no error anywhere.
+ * Without `@main` on the WidgetBundle, nothing references it, the linker drops it, and the
+ * extension still registers with `pluginkit` because the Info.plist alone is enough. The gallery
+ * then has no configuration to offer. That is what shipped.
  *
- * Nothing in the build catches that: the bundle is well formed, the signature verifies, and the
- * binary links WidgetKit. Only the entry point is wrong, which is why it is asserted here.
+ * Without the `_NSExtensionMain` linker entry, the Swift main runs instead of the extension host's
+ * bootstrap and ExtensionFoundation traps in `_EXRunningExtension._shared` — EXC_BREAKPOINT on
+ * every launch, one crash report per attempt, and `chronod` logging
+ * "query failed - will try lazy reload later".
+ *
+ * Both were measured on a real install. Neither is visible to a build that only checks the bundle
+ * is well formed and the signature verifies, which is why they are asserted from the source.
  */
 const PACKAGE = repoPath("app/Package.swift");
-const ENTRY = repoPath("app/Sources/OpenCodexWidget/main.swift");
+const VIEWS = repoPath("app/Sources/OpenCodexWidget/Views.swift");
+
+function stripComments(source: string): string {
+  return source.replace(/\/\/[^\n]*/g, "");
+}
 
 describe("widget extension entry point", () => {
-  test("the linker entry is not redirected away from the Swift main", () => {
-    const manifest = readFileSync(PACKAGE, "utf8");
-    // Strip comments first, so the explanation of why this override is wrong does not read as
-    // the override itself.
-    const code = manifest.replace(/\/\/[^\n]*/g, "");
-    expect(code).not.toContain("_NSExtensionMain");
-    expect(code).not.toContain("-e");
+  test("the linker entry is NSExtensionMain, as it is for an Xcode app-extension target", () => {
+    const code = stripComments(readFileSync(PACKAGE, "utf8"));
+    expect(code).toContain("_NSExtensionMain");
   });
 
-  test("main.swift hands the bundle to WidgetKit", () => {
-    const entry = readFileSync(ENTRY, "utf8");
-    const code = entry.replace(/\/\/[^\n]*/g, "");
-    expect(code).toContain("import WidgetKit");
-    expect(code).toMatch(/OpenCodexWidgetBundle\.main\(\)/);
+  test("the widget bundle is the Swift entry, so the linker keeps it", () => {
+    const views = readFileSync(VIEWS, "utf8");
+    expect(views).toMatch(/@main\s*\n\s*struct OpenCodexWidgetBundle: WidgetBundle/);
   });
 
-  test("the bundle it calls is the one the views define", () => {
-    const views = readFileSync(repoPath("app/Sources/OpenCodexWidget/Views.swift"), "utf8");
-    expect(views).toMatch(/struct OpenCodexWidgetBundle: WidgetBundle/);
-    // A WidgetBundle with no body offers nothing, which is the same failure by another route.
+  test("there is no main.swift competing with @main", () => {
+    // SwiftPM refuses @main in a target that also has a main.swift, and the refusal is a build
+    // error rather than a silent fallback - but the file existing at all means someone moved the
+    // entry back out of the bundle.
+    expect(existsSync(repoPath("app/Sources/OpenCodexWidget/main.swift"))).toBe(false);
+  });
+
+  test("the bundle actually carries a widget", () => {
+    const views = readFileSync(VIEWS, "utf8");
+    // A WidgetBundle with an empty body offers nothing, which is the same failure by another route.
     expect(views).toMatch(/OpenCodexWidget\(\)/);
+    expect(views).toMatch(/configurationDisplayName/);
   });
 });

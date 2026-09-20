@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpenCodexWidget",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [
         .executable(name: "OpenCodexWidget", targets: ["OpenCodexWidget"]),
         .executable(name: "MenuBarCoreTests", targets: ["MenuBarCoreTests"]),
@@ -15,12 +15,26 @@ let package = Package(
             dependencies: ["MenuBarCore"],
             path: "Sources/OpenCodexWidget",
             linkerSettings: [
-                // The entry stays the Swift one so main.swift runs and calls
-                // OpenCodexWidgetBundle.main(); that call is what connects the bundle to the
-                // extension host. Forcing the entry to _NSExtensionMain instead skips it, and
-                // NSExtensionMain then looks for an NSExtensionPrincipalClass a SwiftUI widget
-                // does not declare, so the extension registers and offers nothing.
+                // A widget extension needs both halves of what Xcode does for an app-extension
+                // target, and each half is useless alone. This flag is one of them; `@main` on
+                // OpenCodexWidgetBundle is the other.
+                //
+                // With the entry override and no `@main`, nothing references the WidgetBundle, the
+                // linker drops it, and the extension registers with pluginkit — the Info.plist is
+                // enough for that — while the gallery has no configuration to offer. That is what
+                // shipped, and it failed silently.
+                //
+                // With `@main` and no entry override, the Swift main runs instead of
+                // NSExtensionMain, and ExtensionFoundation traps inside
+                // _EXRunningExtension._shared while bootstrapping. Measured: EXC_BREAKPOINT on
+                // every launch, chronod logging "query failed - will try lazy reload later", and
+                // a crash report per attempt.
+                //
+                // Both together is the shape that works and the shape Xcode produces: the entry
+                // is NSExtensionMain, and the bundle stays in the binary because `@main` refers
+                // to it.
                 .linkedFramework("Foundation"),
+                .unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"]),
             ]
         ),
         // An executable rather than a .testTarget: Xcode Command Line Tools ships

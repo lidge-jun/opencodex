@@ -34,34 +34,78 @@ Info.plist, which is complete, so registration succeeds. `NSExtensionMain` then 
 the `WidgetBundle` is what connects it instead. Nothing errors. The gallery simply has no
 configuration to offer.
 
-## The fix
+## The fix, and the wrong turn on the way to it
 
-`main.swift` calls the entry that `@main` expands to, and the linker override is gone:
+The first attempt was to delete the linker override and call the bundle from `main.swift`. That
+made the bundle's symbols appear in the binary and did not work either — it replaced a silent
+failure with a loud one. Every launch died:
 
-```swift
-if #available(macOS 14, *) {
-    OpenCodexWidgetBundle.main()
-}
+```
+EXC_BREAKPOINT (SIGTRAP)
+  ExtensionFoundation  closure #1 in ... _EXRunningExtension._shared
+  ExtensionFoundation  MainActor.assumeIsolated
+  ExtensionFoundation  _EXExtension.bootstrap(with:)
+  WidgetKit
+  OpenCodexWidget      main
+chronod: [com.opencodex.desktop::com.opencodex.desktop.widget] query failed - will try lazy
+         reload later
 ```
 
-SwiftPM cannot use `@main` here — `@main` and a `main.swift` in the same target are mutually
-exclusive — so the call is written out. After the change the entry is the Swift `_main` and the
-bundle's symbols are in the binary.
+Seventeen crash reports accumulated in `~/Library/Logs/DiagnosticReports` while the gallery stayed
+empty, because `chronod` asks the extension for its descriptors and the extension never survives
+long enough to answer.
 
-`tests/clients/desktop-widget-entry.test.ts` holds this: no linker entry override in the manifest,
-`main.swift` importing WidgetKit and calling `OpenCodexWidgetBundle.main()`, and the bundle in
-`Views.swift` actually carrying a widget. It was driven red by reinstating the override.
+**The extension needs both halves of what Xcode does, and each is useless alone.** `@main` on the
+`WidgetBundle` is what keeps it in the binary; `-e _NSExtensionMain` is what makes the process
+start as an extension rather than as a program. The original code had the second without the
+first, this branch briefly had the first without the second, and only both together produce a
+widget the system will talk to. With both in place the crash reports stop at zero and `chronod`
+processes the extension normally.
+
+`tests/clients/desktop-widget-entry.test.ts` asserts both, plus that no `main.swift` has come back
+to compete with `@main`, and that the bundle carries a widget with a display name rather than an
+empty body — the same failure by a third route.
+
+The deployment target moved to macOS 14 at the same time, which drops the per-declaration
+`@available(macOS 14, *)` guards and puts the binary's `minos` at 14.0, matching every working
+widget on the machine this was measured on.
+
+## The sandbox is not optional
+
+While narrowing this down, the extension was rebuilt without `com.apple.security.app-sandbox` to
+test whether the sandbox was implicated. It is required, and the system says so plainly:
+
+```
+pkd: Ignoring mis-configured plugin at [.../OpenCodexWidget.appex]: plug-ins must be sandboxed
+```
+
+An unsandboxed extension is not rejected at launch — it is never registered at all, so it vanishes
+from `pluginkit` entirely. That also settles the snapshot path: the host writes into
+`~/Library/Containers/com.opencodex.desktop.widget/Data/...` precisely because the extension reads
+its own container, and that arrangement has to stay.
 
 ## The signing defect underneath it
 
 Fixing the entry point does not make a *released* widget adoptable on someone else's machine,
-because the release pipeline never signed it.
+because the release pipeline would not sign it.
 
 `.github/workflows/release.yml` ran `build-widget.sh` with no `env:` block. `MACOS_SIGN_IDENTITY`
 was set one step later, on the Tauri build, which never reads it. So the script took its
-`codesign --force --sign -` branch every time, and the bundler does not re-sign anything under
-`PlugIns/` — its nested-code walker handles `.framework`, `.xpc` and `.app`, not `.appex`. Every
-release therefore shipped an ad-hoc extension with no team identifier inside a Developer ID host.
+`codesign --force --sign -` branch, and the bundler does not re-sign anything under `PlugIns/` —
+its nested-code walker handles `.framework`, `.xpc` and `.app`, not `.appex`.
+
+**This has not harmed a release yet, and the reason matters.** No release has ever published a
+macOS application: the last three carry no desktop assets at all, and the signing secrets did not
+exist until after the most recent one was cut. `MACOS_SIGN_IDENTITY` reads a secret that was not
+there, so the real-signing branch has never executed and the Developer ID path in the Tauri step
+has never executed either. The bug is a mine rather than a crater — the next release is the first
+one that would step on it. Saying otherwise would be inventing a history this repository does not
+have.
+
+**Signing one path is also not enough.** A bundler that did not place a file does not sign it, and
+picking binaries by file extension misses the ones that have none. The durable form of the check
+is to find Mach-O files by their magic bytes and require every one of them to carry the release
+identity, rather than naming the paths that are expected to exist.
 
 Three changes:
 
