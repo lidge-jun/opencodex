@@ -13,8 +13,10 @@ preserves sibling rows and top-level settings; disable removes only recorded row
 the same snapshot transaction as every other JSON client. Droid reaches the loopback
 `/v1/chat/completions` surface through `generic-chat-completion-api`. The export stays loopback-only
 because its schema cannot carry the dedicated remote admission header without persisting a secret.
-Each row uses Factory's documented 16,384-token response ceiling rather than turning the context
-window into the request's output budget.
+Each row uses a fixed 16,384-token output ceiling selected by the Droid export from Factory's
+example because the catalog has no per-model output-limit field. It remains separate from the
+request context window. Mutation plans publish each owned row as `customModels.*`, keeping the
+model selector out of the value-free plan.
 
 Shared response support has a separate [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 raw-byte callers own their byte and deadline budgets and inherit best-effort cancellation.

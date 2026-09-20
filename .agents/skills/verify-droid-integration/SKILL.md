@@ -18,7 +18,7 @@ http://127.0.0.1:10100/healthz` succeeds. The provider credentials live in that 
 If no proxy is running, start this checkout and keep its PID:
 
 ```bash
-node_modules/bun/bin/bun.exe run src/cli/index.ts start --port 10100
+bun run src/cli/index.ts start --port 10100
 ```
 
 Wait for `http://127.0.0.1:10100/healthz`. Stop only the PID you started.
@@ -28,7 +28,7 @@ Wait for `http://127.0.0.1:10100/healthz`. Stop only the PID you started.
 Run the no-inference pass first:
 
 ```bash
-node_modules/bun/bin/bun.exe .agents/skills/verify-droid-integration/scripts/run.ts --dry-run
+bun .agents/skills/verify-droid-integration/scripts/run.ts --dry-run
 ```
 
 It exports the live active catalog through `ocx export --client droid`, checks proxy health and
@@ -40,7 +40,7 @@ ID with `--list-tools`. A failure makes the instance unfit for the paid live pas
 Run the full matrix:
 
 ```bash
-node_modules/bun/bin/bun.exe .agents/skills/verify-droid-integration/scripts/run.ts \
+bun .agents/skills/verify-droid-integration/scripts/run.ts \
   --concurrency 3 \
   --timeout-ms 180000 \
   --long-words 20000
@@ -58,8 +58,10 @@ settings, export and health evidence, one command/result JSON per model and case
 and `failures.json`. The command, exit code, stdout, stderr, timeout state, and duration preserve
 both the action and result. Keep the full directory through review.
 
-Passing means no `fail` result. `unsupported` is accepted only when the exported model lacks the
-corresponding reasoning or image capability. The generated settings must remain free of real keys.
+Passing means no `fail` or `error` result. `fail` records a completed assertion mismatch; `error`
+records a timeout, nonzero exit, or caught execution exception. `unsupported` is accepted only when
+the exported model lacks the corresponding reasoning or image capability. The generated settings
+must remain free of real keys.
 
 ## Cleanup
 
@@ -74,7 +76,7 @@ helper records their IDs in command output and does not delete unrelated history
 `scripts/run.ts` is executable and self-documenting:
 
 ```bash
-node_modules/bun/bin/bun.exe .agents/skills/verify-droid-integration/scripts/run.ts --help
+bun .agents/skills/verify-droid-integration/scripts/run.ts --help
 ```
 
 ## Failure recovery

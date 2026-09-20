@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleExportCommand, exportModelsFromProxyRows } from "../../src/cli/export-command";
+import { buildClientConfigText, isExportClientId } from "../../src/clients/config-export";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
@@ -58,6 +59,24 @@ function fakeProxy(rows: unknown = ROWS) {
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/api/models") return Response.json(rows);
+      if (url.pathname === "/api/client-config") {
+        const client = url.searchParams.get("client") ?? "";
+        if (!isExportClientId(client) || !Array.isArray(rows)) {
+          return Response.json({ error: "invalid fixture request" }, { status: 400 });
+        }
+        const exportConfig = config();
+        const built = buildClientConfigText(client, {
+          baseUrl: `http://127.0.0.1:${server.port}/v1`,
+          models: exportModelsFromProxyRows(rows, exportConfig),
+          config: exportConfig,
+        });
+        return Response.json({
+          client,
+          format: built.format,
+          config: built.document,
+          text: built.text,
+        });
+      }
       return new Response("not found", { status: 404 });
     },
   });
@@ -477,7 +496,7 @@ describe("export allowlist parity", () => {
     try {
       process.env.OPENCODEX_HOME = home;
       writeFileSync(path, JSON.stringify(pending));
-      const code = await handleExportCommand(["--client", "pi", "--json"], {
+      const code = await handleExportCommand(["--client", "opencode", "--json"], {
         baseUrl: "http://127.0.0.1:10123",
         fetchImpl: async input => {
           expect(String(input)).toBe("http://127.0.0.1:10123/api/models");
@@ -489,7 +508,7 @@ describe("export allowlist parity", () => {
       });
       expect(code).toBe(0);
       expect(requests).toBe(1);
-      expect(JSON.parse(stdout()).providers.opencodex.models.map((row: { id: string }) => row.id))
+      expect(Object.keys(JSON.parse(stdout()).provider.opencodex.models))
         .toEqual(["pending/chosen"]);
       expect(pending.providers.pending!.initialModelSelection!.status).toBe("pending");
     } finally {
@@ -517,7 +536,7 @@ describe("export allowlist parity", () => {
       process.env.OPENCODEX_HOME = home;
       const localBytes = JSON.stringify(local);
       writeFileSync(path, localBytes);
-      const code = await handleExportCommand(["--client", "pi", "--json"], {
+      const code = await handleExportCommand(["--client", "opencode", "--json"], {
         baseUrl: "http://127.0.0.1:10123",
         configImpl: () => { events.push("config"); return structuredClone(resolved); },
         fetchImpl: async () => {
@@ -528,7 +547,7 @@ describe("export allowlist parity", () => {
       });
       expect(code).toBe(0);
       expect(events).toEqual(["fetch", "config"]);
-      expect(JSON.parse(stdout()).providers.opencodex.models.map((row: { id: string }) => row.id))
+      expect(Object.keys(JSON.parse(stdout()).provider.opencodex.models))
         .toEqual(["custom/remote-only"]);
       expect(readFileSync(path, "utf8")).toBe(localBytes);
     } finally {
@@ -568,9 +587,10 @@ describe("export allowlist parity", () => {
   });
 });
 
-describe("Raycast export uses the live management admission policy", () => {
-  for (const secondary of [false, true]) {
-    test(`live wildcard bind with secondary=${secondary} wins over saved loopback config`, async () => {
+describe("loopback-only exports use the live management admission policy", () => {
+  for (const client of ["raycast", "droid"] as const) {
+    for (const secondary of [false, true]) {
+      test(`${client} wildcard bind with secondary=${secondary} wins over saved loopback config`, async () => {
       const oldHome = process.env.OPENCODEX_HOME;
       const oldCodexHome = process.env.CODEX_HOME;
       const root = tempDir();
@@ -587,17 +607,22 @@ describe("Raycast export uses the live management admission policy", () => {
           ...(secondary ? { unauthenticatedLoopbackListener: { enabled: true, port: 10237 } } : {}),
         });
         const proxy = managementProxy(liveConfig);
-        const out = join(root, "providers.yaml");
+        const out = join(root, client === "raycast" ? "providers.yaml" : "settings.json");
         writeFileSync(out, "keep existing export\n");
-        const result = await run(["--client", "raycast", "--json", "--out", out, "--force"], {
+        const result = await run(["--client", client, "--json", "--out", out, "--force"], {
           baseUrl: proxy.baseUrl,
           // Deliberately contradict both live bind and secondary port.
           config: config({ unauthenticatedLoopbackListener: { enabled: true, port: 10999 } }),
         });
         if (secondary) {
           expect(result.code).toBe(0);
-          const document = JSON.parse(result.stdout) as { providers: Array<{ base_url: string }> };
-          expect(document.providers[0]!.base_url).toBe("http://127.0.0.1:10237/v1");
+          const document = JSON.parse(result.stdout) as {
+            providers?: Array<{ base_url: string }>;
+            customModels?: Array<{ baseUrl: string }>;
+          };
+          expect(client === "raycast"
+            ? document.providers?.[0]?.base_url
+            : document.customModels?.[0]?.baseUrl).toBe("http://127.0.0.1:10237/v1");
           expect(readFileSync(out, "utf8")).toContain("10237/v1");
           expect(readFileSync(out, "utf8")).not.toContain("10999");
         } else {
@@ -612,6 +637,7 @@ describe("Raycast export uses the live management admission policy", () => {
         if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = oldCodexHome;
       }
-    });
+      });
+    }
   }
 });

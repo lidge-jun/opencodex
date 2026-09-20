@@ -12,9 +12,9 @@ Select an image-capable OpenCodex custom model and ask Droid to inspect an image
 
 ## Driving it with Droid CLI
 
-Run `--cases image`. The helper asks Droid to read `assets/pr-gate-screenshot-required.png` without
-putting the headline in the prompt, then requires the exact pixel-only answer plus a matching Read
-call and result.
+Run `--cases image`. The helper copies `assets/pr-gate-screenshot-required.png` to an opaque random
+filename, asks Droid to read that copy without putting the headline in the prompt, then requires the
+exact pixel-only answer plus a matching Read call and two-part text/image result payload.
 
 ## Gotchas
 

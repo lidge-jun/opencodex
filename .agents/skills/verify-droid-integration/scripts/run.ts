@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
-type Status = "pass" | "fail" | "unsupported";
+type Status = "pass" | "fail" | "error" | "unsupported";
 
 interface DroidModel {
   id: string;
@@ -149,9 +149,10 @@ function completionText(output: string): string {
 }
 
 function verdict(result: CommandResult, marker: string): CaseResult {
-  const ok = !result.timedOut && result.exitCode === 0 && completionText(result.stdout).trim() === marker;
+  const executionError = result.timedOut || result.exitCode !== 0;
+  const ok = !executionError && completionText(result.stdout).trim() === marker;
   return {
-    status: ok ? "pass" : "fail",
+    status: executionError ? "error" : ok ? "pass" : "fail",
     detail: result.timedOut
       ? "timed out"
       : ok
@@ -159,6 +160,10 @@ function verdict(result: CommandResult, marker: string): CaseResult {
         : "exit " + result.exitCode + "; exact response mismatch",
     durationMs: result.durationMs,
   };
+}
+
+function assertionStatus(base: CaseResult, ok: boolean): Status {
+  return base.status === "pass" ? (ok ? "pass" : "fail") : base.status;
 }
 
 function readRoundTrip(
@@ -312,7 +317,9 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
     advertisesRead = false;
   }
   cases.catalog = {
-    status: !catalog.timedOut && catalog.exitCode === 0 && advertisesRead ? "pass" : "fail",
+    status: catalog.timedOut || catalog.exitCode !== 0
+      ? "error"
+      : advertisesRead ? "pass" : "fail",
     detail: catalog.timedOut
       ? "timed out"
       : "exit " + catalog.exitCode + "; Read advertised=" + advertisesRead,
@@ -344,7 +351,7 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
     const base = verdict(result, "STREAM_OK");
     cases.stream = {
       ...base,
-      status: base.status === "pass" && hasLifecycle ? "pass" : "fail",
+      status: assertionStatus(base, hasLifecycle),
       detail: hasLifecycle ? base.detail : base.detail + "; stream lifecycle missing",
       evidence,
     };
@@ -370,7 +377,7 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
       const selected = init?.reasoning_effort === effort;
       cases.reasoning = {
         ...base,
-        status: base.status === "pass" && selected ? "pass" : "fail",
+        status: assertionStatus(base, selected),
         detail: selected ? base.detail + "; effort " + effort : base.detail + "; requested effort not observed",
         evidence,
       };
@@ -393,9 +400,10 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
     const base = verdict(result, "TOOL_OK:" + marker);
     cases.tool = {
       ...base,
-      status: base.status === "pass" && roundTrip.called && roundTrip.returned && resultContainsMarker
-        ? "pass"
-        : "fail",
+      status: assertionStatus(
+        base,
+        roundTrip.called && roundTrip.returned && resultContainsMarker,
+      ),
       detail: base.detail + "; Read call=" + roundTrip.called + "; result=" + roundTrip.returned
         + "; result marker=" + resultContainsMarker,
       evidence,
@@ -405,7 +413,9 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
     if (model.noImageSupport === true) {
       cases.image = { status: "unsupported", detail: "exported model disables image input" };
     } else {
-      const imagePath = join(repoRoot, "assets", "pr-gate-screenshot-required.png");
+      const sourceImagePath = join(repoRoot, "assets", "pr-gate-screenshot-required.png");
+      const imagePath = join(modelDir, "image-" + crypto.randomUUID() + ".png");
+      await Bun.write(imagePath, Bun.file(sourceImagePath));
       const result = await runCommand([
         "droid", "exec", "--settings", settingsPath, "--model", model.id,
         "--cwd", repoRoot, "--only-tools", "Read", "--output-format", "stream-json",
@@ -415,12 +425,14 @@ async function verifyModel(model: DroidModel): Promise<ModelResult> {
       ], repoRoot, timeoutMs);
       const parsed = events(result.stdout);
       const roundTrip = readRoundTrip(parsed, imagePath);
+      const imagePayload = roundTrip.value === "[object Object],[object Object]";
       const evidence = await writeEvidence(modelDir, "image", result);
       const base = verdict(result, "IMAGE_OK: UI screenshot required");
       cases.image = {
         ...base,
-        status: base.status === "pass" && roundTrip.called && roundTrip.returned ? "pass" : "fail",
-        detail: base.detail + "; image Read call=" + roundTrip.called + "; result=" + roundTrip.returned,
+        status: assertionStatus(base, roundTrip.called && roundTrip.returned && imagePayload),
+        detail: base.detail + "; image Read call=" + roundTrip.called + "; result=" + roundTrip.returned
+          + "; image payload=" + imagePayload,
         evidence,
       };
     }
@@ -457,12 +469,27 @@ let cursor = 0;
 const workers = Array.from({ length: Math.min(concurrency, models.length) }, async () => {
   while (cursor < models.length) {
     const model = models[cursor++]!;
-    const result = await verifyModel(model);
+    let result: ModelResult;
+    try {
+      result = await verifyModel(model);
+    } catch (error) {
+      result = {
+        id: model.id,
+        model: model.model,
+        cases: {
+          execution: {
+            status: "error",
+            detail: error instanceof Error ? error.stack ?? error.message : String(error),
+          },
+        },
+      };
+    }
     summary.results.push(result);
     summary.results.sort((a, b) => a.model.localeCompare(b.model));
     await Bun.write(summaryPath, JSON.stringify(summary, null, 2) + "\n");
-    const failed = Object.values(result.cases).filter(item => item.status === "fail").length;
-    console.log(model.model + ": " + (failed === 0 ? "PASS" : "FAIL (" + failed + ")"));
+    const nonPassing = Object.values(result.cases)
+      .filter(item => item.status === "fail" || item.status === "error").length;
+    console.log(model.model + ": " + (nonPassing === 0 ? "PASS" : "FAIL (" + nonPassing + ")"));
   }
 });
 await Promise.all(workers);
@@ -471,8 +498,10 @@ summary.finishedAt = new Date().toISOString();
 await Bun.write(summaryPath, JSON.stringify(summary, null, 2) + "\n");
 const failures = summary.results.flatMap(model =>
   Object.entries(model.cases)
-    .filter(([, result]) => result.status === "fail")
-    .map(([name, result]) => ({ model: model.model, case: name, detail: result.detail })));
+    .filter(([, result]) => result.status === "fail" || result.status === "error")
+    .map(([name, result]) => ({
+      model: model.model, case: name, status: result.status, detail: result.detail,
+    })));
 await Bun.write(join(runDir, "failures.json"), JSON.stringify(failures, null, 2) + "\n");
 console.log("Evidence: " + runDir);
 console.log("Models: " + summary.results.length + "; failures: " + failures.length);
