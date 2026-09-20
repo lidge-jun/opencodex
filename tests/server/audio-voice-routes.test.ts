@@ -339,6 +339,34 @@ describe("speech request validation", () => {
       expect: "Expected application/json",
     },
     {
+      why: "a body that is not valid JSON",
+      request: new Request("http://127.0.0.1/v1/audio/speech", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{not json",
+      }),
+      expect: "not valid JSON",
+    },
+    {
+      why: "a body stream that fails mid-read",
+      request: new Request("http://127.0.0.1/v1/audio/speech", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // A truncated upload looks like this: the stream starts and then
+        // errors, which is a different refusal from a body that arrived whole
+        // and was unparseable.
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"input":'));
+            controller.error(new Error("connection reset"));
+          },
+        }),
+        // @ts-expect-error duplex is required for a streaming request body
+        duplex: "half",
+      }),
+      expect: "Malformed speech request body",
+    },
+    {
       why: "valid JSON that is not an object",
       request: speechRequest("just a string"),
       expect: "must be a JSON object",
@@ -454,6 +482,26 @@ describe("transcription request validation", () => {
       }),
       expect: "no larger than 16 KiB",
       status: 413,
+    },
+    {
+      why: "a multipart body whose boundary does not match",
+      request: new Request("http://127.0.0.1/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=declared" },
+        body: '--actual\r\nContent-Disposition: form-data; name="file"\r\n\r\nx\r\n--actual--\r\n',
+      }),
+      expect: "Malformed audio multipart body",
+    },
+    {
+      why: "the same field twice",
+      request: upload(f => {
+        f.append("file", clip());
+        f.append("model", "gpt-4o-transcribe");
+        // FormData keeps both, so this reaches the duplicate scan rather than
+        // being collapsed on the way in.
+        f.append("model", "gpt-4o-transcribe");
+      }),
+      expect: "Duplicate transcription field",
     },
     {
       why: "a model the route does not serve",
