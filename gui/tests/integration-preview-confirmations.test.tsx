@@ -109,6 +109,7 @@ test("a profile no-op explains document scope and still confirms its fingerprint
   });
   expect(container.textContent).toContain("No changes to the managed client document are needed");
   expect(container.textContent).toContain("The profile sync preference will still be saved");
+  expect(container.textContent).not.toContain("A backup is saved first");
   const confirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Disable") as HTMLButtonElement;
   await act(async () => { confirm.click(); });
   expect(confirmed).toEqual({ operation: "disable", planFingerprint: noOpPlan.fingerprint });
@@ -134,6 +135,7 @@ test("a stale confirmation replaces the plan and requires a second explicit pres
       </LanguageProvider>,
     );
   });
+  expect(container.textContent).toContain("A backup is saved first");
   const confirm = Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Apply") as HTMLButtonElement;
   await act(async () => { confirm.click(); });
   expect(confirmed).toEqual([original.fingerprint]);

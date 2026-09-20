@@ -23,6 +23,10 @@ function CopySlot({ copyKey, vars }: { copyKey: TKey; vars?: Record<string, stri
   return <p>{before}<code>{path}</code>{after.join(path)}</p>;
 }
 
+function planHasRollback(plan: IntegrationMutationPlan): boolean {
+  return plan.changes.some(change => change.kind === "snapshot" || change.kind === "journal");
+}
+
 export default function ConsequenceDialog({
   copy,
   plan = null,
@@ -55,6 +59,8 @@ export default function ConsequenceDialog({
     ? staleOverride.plan
     : plan;
   const stale = staleOverride?.sourceFingerprint === (plan?.fingerprint ?? null);
+  const showUndo = !planRequired
+    || (activePlan ? planHasRollback(activePlan) : plans?.some(item => planHasRollback(item.plan)) === true);
   const dismiss = useCallback(() => {
     if (!pending) onClose();
   }, [onClose, pending]);
@@ -95,8 +101,8 @@ export default function ConsequenceDialog({
   const slots: ReactNode[] = [
     <CopySlot key="changes" copyKey={copy.changesKey} vars={copy.vars} />,
     <CopySlot key="breakage" copyKey={copy.breakageKey} vars={copy.vars} />,
-    <CopySlot key="undo" copyKey={copy.undoKey} vars={copy.vars} />,
   ];
+  if (showUndo) slots.push(<CopySlot key="undo" copyKey={copy.undoKey} vars={copy.vars} />);
   if (copy.sideEffectKey) {
     slots.push(<CopySlot key="side-effect" copyKey={copy.sideEffectKey} vars={copy.vars} />);
   }
