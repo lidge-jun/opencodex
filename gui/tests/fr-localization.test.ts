@@ -13,6 +13,17 @@ import { statusCodeInfo } from "../src/status-codes";
 const FR_CATALOG_URL = new URL("../src/i18n/fr.ts", import.meta.url);
 const PLACEHOLDER_RE = /\{([a-zA-Z0-9_]+)\}/g;
 
+/**
+ * A value carrying no letters once its placeholders are removed has nothing to translate.
+ * An em dash, a unit symbol and "{position} / {total}" are identical in every locale by
+ * construction, so matching English is evidence of nothing. Deriving that from the value
+ * keeps the allowlist below for real words instead of growing it each time the UI gains
+ * another symbol.
+ */
+function carriesTranslatableWords(value: string): boolean {
+  return /\p{L}/u.test(value.replace(/\{[a-zA-Z0-9_]+\}/g, " "));
+}
+
 const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Units, symbols, protocol values, machine labels, and product names.
   "integrations.cursor.noControl",
@@ -223,7 +234,9 @@ describe("French base catalog", () => {
 
     const french = (await import("../src/i18n/fr")).fr;
     const accidental = (Object.keys(DICTS.en) as TKey[]).filter(key =>
-      french[key] === DICTS.en[key] && !INTENTIONAL_ENGLISH.has(key)
+      french[key] === DICTS.en[key]
+      && !INTENTIONAL_ENGLISH.has(key)
+      && carriesTranslatableWords(String(DICTS.en[key]))
     );
 
     expect(accidental).toEqual([]);

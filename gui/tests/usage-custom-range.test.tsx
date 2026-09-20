@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Usage from "../src/pages/Usage";
 
@@ -121,10 +122,15 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
 
   const table = container.querySelector<HTMLElement>("#usage-section-models table");
   expect(table).not.toBeNull();
+  // Header labels come from the catalog the page renders, so a copy change stays a
+  // one-place edit and this case keeps asserting the column ORDER it cares about --
+  // the five cache columns sitting between Measured and Tokens.
   expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
-    "Model", "Provider", "Requests", "Measured", "Input tokens", "Output tokens",
-    "Cache hits", "Cache writes", "Hit rate", "Tokens", "Share",
-  ]);
+    "logs.col.model", "logs.col.provider", "usage.col.requests", "usage.col.measured",
+    "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.cacheHits",
+    "usage.col.cacheWrites", "usage.col.cacheHitRate", "usage.col.tokens",
+    "usage.col.apiListPrice", "usage.col.share",
+  ].map(key => en[key as keyof typeof en]));
   const rows = table!.querySelectorAll("tbody tr");
   expect(rows).toHaveLength(3);
   const measured = [...rows[0]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
