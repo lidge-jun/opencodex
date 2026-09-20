@@ -789,7 +789,8 @@ describe("injectCodexConfig integration (Design B)", () => {
     // #5321. The transition used to be refused outright, so nothing was written and the
     // integration stayed disabled. It now completes by keeping the marker-owned root override
     // beside the table: the row is never relabeled, and it still resolves to this proxy.
-    const original = 'model_provider = "openai"\n# >>> opencodex managed openai_base_url >>>\nopenai_base_url = "http://127.0.0.1:10100/v1"\n# <<< opencodex managed openai_base_url <<<\n';
+    // The reporter's shape: a loopback root-override home turning on codexDesktopAuthless.
+    const original = `${OCX_ROUTING_MARKER_LINE}\nopenai_base_url = "http://127.0.0.1:10100/v1"\nmodel = "gpt-5.5"\n`;
     const configPath = join(codexHome, "config.toml");
     writeFileSync(configPath, original);
     const rollout = join(codexHome, "openai-paginated.jsonl");
