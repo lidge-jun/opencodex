@@ -1432,5 +1432,10 @@
   "api-key-scope-images.test.ts": "server",
   "api-key-scope-audio.test.ts": "server",
   "api-key-scope-live.test.ts": "server",
-  "api-key-scope-alpha-search.test.ts": "server"
+  "api-key-scope-alpha-search.test.ts": "server",
+  "claude-intercept-local-ca.test.ts": "claude-integration",
+  "claude-intercept-proxy.test.ts": "claude-integration",
+  "claude-intercept-settings.test.ts": "claude-integration",
+  "claude-desktop-first-party.test.ts": "claude-integration",
+  "claude-intercept-integration.test.ts": "server"
 }

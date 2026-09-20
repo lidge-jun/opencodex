@@ -1,0 +1,184 @@
+import { afterAll, expect, test } from "bun:test";
+import { connect, createServer } from "node:net";
+import { CLAUDE_INTERCEPT_HOSTS, isLoopbackTarget, parseConnectRequestLine, startConnectProxy, type ConnectProxyHandle } from "../../src/claude/intercept/connect-proxy";
+import { startClaudeInterceptListener, rewriteInterceptedRequest } from "../../src/claude/intercept/listener";
+import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
+
+/**
+ * End-to-end shape of the intercept pair: a client that only knows `HTTPS_PROXY` and trusts the
+ * local CA reaches the router's Messages handler for `api.anthropic.com`, while every other
+ * CONNECT target is relayed blind. No real network: the "upstream" for blind tunnels is a local
+ * echo socket and the relay target for non-Messages paths is a local Bun server.
+ */
+
+const cleanups: Array<() => Promise<void> | void> = [];
+afterAll(async () => {
+  for (const cleanup of cleanups.reverse()) await cleanup();
+});
+
+test("parseConnectRequestLine accepts host:port and bracketed IPv6, rejects the rest", () => {
+  expect(parseConnectRequestLine("CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: x")).toEqual({ host: "api.anthropic.com", port: 443 });
+  expect(parseConnectRequestLine("CONNECT API.Anthropic.COM.:443 HTTP/1.0")).toEqual({ host: "api.anthropic.com", port: 443 });
+  expect(parseConnectRequestLine("CONNECT [::1]:8443 HTTP/1.1")).toEqual({ host: "::1", port: 8443 });
+  expect(parseConnectRequestLine("GET http://example.com/ HTTP/1.1")).toBeNull();
+  expect(parseConnectRequestLine("CONNECT example.com HTTP/1.1")).toBeNull();
+  expect(parseConnectRequestLine("CONNECT example.com:99999 HTTP/1.1")).toBeNull();
+});
+
+function rawRequest(port: number, payload: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port }, () => socket.write(payload));
+    let out = "";
+    socket.on("data", chunk => { out += chunk.toString("latin1"); });
+    socket.on("end", () => resolve(out));
+    socket.on("close", () => resolve(out));
+    socket.on("error", reject);
+  });
+}
+
+async function startEchoUpstream(): Promise<{ port: number; close(): Promise<void> }> {
+  const server = createServer(socket => socket.on("data", chunk => socket.write(`echo:${chunk.toString()}`)));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  return { port, close: () => new Promise(resolve => server.close(() => resolve())) };
+}
+
+async function startPair(): Promise<{ proxy: ConnectProxyHandle; ca: ReturnType<typeof createLocalInterceptCa>; seen: Request[]; relayHits: string[] }> {
+  const ca = createLocalInterceptCa();
+  const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
+  const seen: Request[] = [];
+  const relayHits: string[] = [];
+  const fakeUpstream = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(req) {
+      relayHits.push(`${req.method} ${new URL(req.url).pathname} host=${req.headers.get("host")}`);
+      return new Response(JSON.stringify({ relayed: true }), { headers: { "content-type": "application/json", "x-upstream": "fake" } });
+    },
+  });
+  cleanups.push(() => fakeUpstream.stop(true));
+  const listener = startClaudeInterceptListener({
+    leaf,
+    upstreamBase: `http://127.0.0.1:${fakeUpstream.port}`,
+    dispatch: async req => {
+      seen.push(req);
+      const body = await req.text();
+      return Response.json({ dispatched: true, url: req.url, host: req.headers.get("host"), body });
+    },
+  });
+  cleanups.push(() => listener.stop(true));
+  const echo = await startEchoUpstream();
+  cleanups.push(echo.close);
+  const proxy = await startConnectProxy(0, {
+    interceptPort: listener.port!,
+    dialUpstream: (host, port) => {
+      expect(host).toBe("telemetry.example");
+      expect(port).toBe(443);
+      return connect({ host: "127.0.0.1", port: echo.port });
+    },
+  });
+  cleanups.push(proxy.close);
+  return { proxy, ca, seen, relayHits };
+}
+
+/** Speak HTTPS to `api.anthropic.com` through the CONNECT proxy, trusting only the local CA. */
+async function viaProxy(proxyPort: number, caPem: string, method: string, path: string, body?: string): Promise<{ status: number; headers: Headers; body: string }> {
+  const res = await fetch(`https://api.anthropic.com${path}`, {
+    method,
+    headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+    body,
+    proxy: `http://127.0.0.1:${proxyPort}`,
+    tls: { ca: caPem },
+  });
+  return { status: res.status, headers: res.headers, body: await res.text() };
+}
+
+test("CONNECT api.anthropic.com terminates TLS locally and dispatches Messages to the router", async () => {
+  const { proxy, ca, seen } = await startPair();
+  const res = await viaProxy(proxy.port, ca.certPem, "POST", "/v1/messages?beta=true", JSON.stringify({ model: "claude-x" }));
+  expect(res.status).toBe(200);
+  const json = JSON.parse(res.body) as { dispatched: boolean; url: string; host: string; body: string };
+  expect(json.dispatched).toBe(true);
+  expect(json.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1\/messages\?beta=true$/);
+  expect(json.host).toMatch(/^127\.0\.0\.1:\d+$/);
+  expect(json.body).toBe(JSON.stringify({ model: "claude-x" }));
+  expect(seen).toHaveLength(1);
+  expect(seen[0]!.headers.get("x-api-key")).toBe("sk-ant-test");
+});
+
+test("non-Messages paths on the intercepted host are relayed to upstream, not dispatched", async () => {
+  const { proxy, ca, seen, relayHits } = await startPair();
+  const res = await viaProxy(proxy.port, ca.certPem, "GET", "/v1/models?limit=1");
+  expect(res.status).toBe(200);
+  expect(JSON.parse(res.body)).toEqual({ relayed: true });
+  expect(res.headers.get("x-upstream")).toBe("fake");
+  expect(relayHits).toEqual(["GET /v1/models host=127.0.0.1:" + relayHits[0]!.split(":").pop()]);
+  expect(seen).toHaveLength(0);
+});
+
+test("GET on /v1/messages is relayed rather than dispatched", async () => {
+  const { proxy, ca, seen, relayHits } = await startPair();
+  await viaProxy(proxy.port, ca.certPem, "GET", "/v1/messages");
+  expect(seen).toHaveLength(0);
+  expect(relayHits[0]).toStartWith("GET /v1/messages ");
+});
+
+test("other CONNECT targets are relayed blind, including pipelined bytes after the head", async () => {
+  const { proxy } = await startPair();
+  const out = await new Promise<string>((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port: proxy.port }, () => {
+      socket.write("CONNECT telemetry.example:443 HTTP/1.1\r\nHost: telemetry.example:443\r\n\r\nhello");
+    });
+    let buf = "";
+    socket.on("data", chunk => {
+      buf += chunk.toString("latin1");
+      if (buf.includes("echo:hello")) { socket.end(); resolve(buf); }
+    });
+    socket.on("error", reject);
+  });
+  expect(out.startsWith("HTTP/1.1 200 Connection Established\r\n\r\n")).toBe(true);
+  expect(out).toContain("echo:hello");
+});
+
+test("plain proxied HTTP, loopback targets and oversized heads are refused", async () => {
+  const { proxy } = await startPair();
+  expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")).toStartWith("HTTP/1.1 405");
+  expect(await rawRequest(proxy.port, "CONNECT 127.0.0.1:22 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, "CONNECT localhost:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, "CONNECT [::ffff:127.0.0.1]:22 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, `CONNECT a:443 HTTP/1.1\r\nX: ${"y".repeat(9000)}`)).toStartWith("HTTP/1.1 431");
+});
+
+test("isLoopbackTarget covers mapped, unspecified and shorthand loopback literals", () => {
+  for (const host of ["localhost", "foo.localhost", "127.0.0.1", "127.255.0.9", "::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "0.0.0.0", "::", "127.1", "0x7f000001", "2130706433"]) {
+    expect(isLoopbackTarget(host)).toBe(true);
+  }
+  for (const host of ["api.anthropic.com", "10.0.0.1", "::ffff:10.0.0.1", "2606:4700::1", "1.example"]) {
+    expect(isLoopbackTarget(host)).toBe(false);
+  }
+});
+
+test("a dead upstream yields 502 instead of a hung tunnel", async () => {
+  const dead = await startEchoUpstream();
+  await dead.close();
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1,
+    dialUpstream: () => connect({ host: "127.0.0.1", port: dead.port }),
+  });
+  cleanups.push(proxy.close);
+  expect(await rawRequest(proxy.port, "CONNECT gone.example:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 502");
+});
+
+test("rewriteInterceptedRequest moves the request onto the loopback origin and keeps path, query and headers", () => {
+  const original = new Request("https://api.anthropic.com/v1/messages?x=1", {
+    method: "POST",
+    headers: { "anthropic-version": "2023-06-01", host: "api.anthropic.com" },
+    body: "{}",
+  });
+  const rewritten = rewriteInterceptedRequest(original, "http://127.0.0.1:4567");
+  expect(rewritten.url).toBe("http://127.0.0.1:4567/v1/messages?x=1");
+  expect(rewritten.headers.get("host")).toBe("127.0.0.1:4567");
+  expect(rewritten.headers.get("anthropic-version")).toBe("2023-06-01");
+  expect(rewritten.method).toBe("POST");
+});

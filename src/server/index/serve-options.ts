@@ -24,6 +24,7 @@ import {
 } from "./startup-warnings";
 
 import { remoteWorkspaceEnabled } from "../../remote-control/workspace-activation";
+import { isClaudeInterceptedPath } from "../../claude/intercept/listener";
 import { markActivity } from "../../lib/sidecar-tracker";
 import { knownModelIdsForProvider } from "../../router";
 import {
@@ -197,7 +198,16 @@ import { readyProtocolMetadata } from "../../remote/protocol";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management";
+export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept";
+
+/**
+ * Routes the Claude intercept TLS listener may reach. Everything else on that socket is relayed
+ * to the real upstream by the listener itself, so a request that lands here with another path
+ * is a bug, not a client — refuse it.
+ */
+export function claudeInterceptRouteAllowed(url: URL, req: Request): boolean {
+  return isClaudeInterceptedPath(url.pathname, req.method);
+}
 
 export interface ServeOptionsContext {
   readonly server: Server<WsData>;
@@ -301,12 +311,24 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           config,
         );
       }
+      if (ingress === "claude-intercept" && !claudeInterceptRouteAllowed(codexCompatibleUrl(req.url), req)) {
+        return withCors(
+          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          req,
+          loopbackPolicy(),
+        );
+      }
       // Auth and CORS decisions below read `policy`, not `config`. For the public listener the
       // two are the same object, so its behaviour is unchanged; for the loopback listener the
       // view substitutes 127.0.0.1 as the bind address, which is what routes it through the
       // same code path a plain loopback bind has always taken — Host-header check included.
       // Routing, provider selection and response bodies keep using `config`.
-      const policy: RequestPolicyView = ingress === "unauthenticated-loopback" ? loopbackPolicy() : config;
+      // The Claude intercept listener is loopback by construction (the CONNECT proxy binds
+      // 127.0.0.1 and the request was rewritten onto a loopback origin), and its callers carry
+      // Anthropic credentials, not opencodex admission tokens — so it takes the loopback view too.
+      const policy: RequestPolicyView = ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
+        ? loopbackPolicy()
+        : config;
       const url = codexCompatibleUrl(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 

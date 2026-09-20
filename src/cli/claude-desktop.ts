@@ -15,13 +15,23 @@ import {
   type DesktopFamily,
   type DesktopProfile,
 } from "../claude/desktop-profile";
-import { writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
+import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
+import {
+  applyDesktopFirstParty,
+  recordClaudeDesktopMode,
+  removeDesktopFirstParty,
+  resolveClaudeDesktopApplyMode,
+  type ClaudeDesktopMode,
+} from "../claude/desktop-first-party";
 import { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } from "../claude/desktop-policy";
 import { filterCatalogVisibleModels, desktopVisibleNativeSlugs, nativeContextLimits } from "../codex/catalog";
 import { buildClaudeDesktopState, fetchAllModels } from "../server/management-api";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { CliUsageError, runtimeRequest, takeJsonFlag } from "./runtime-api";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import type { OcxConfig } from "../types";
+
+const APPLY_FLAGS = ["--first-party", "--gateway", "--static", "--hybrid", "--discovery-only"];
 
 function isFamily(value: string | undefined): value is DesktopFamily {
   return !!value && (DESKTOP_FAMILIES as readonly string[]).includes(value);
@@ -29,7 +39,10 @@ function isFamily(value: string | undefined): value is DesktopFamily {
 
 function printDesktopHelp(): void {
   console.log(`Usage:
-  ocx claude desktop [apply] [--static|--hybrid|--discovery-only]
+  ocx claude desktop [apply] [--first-party | --gateway [--static|--hybrid|--discovery-only]]
+      --first-party  (default) keep Desktop on claude.ai; route only the Code tab's Claude Code
+                     through the local intercept proxy via ~/.claude/settings.json env
+      --gateway      install the third-party gateway profile for the whole app
   ocx claude desktop show [--json]
   ocx claude desktop status [--json]
   ocx claude desktop move <provider/model> <opus|fable|sonnet|haiku> [--default]
@@ -135,6 +148,104 @@ async function applyConnectedDesktopProfile(
   }
 }
 
+/** Persist the operator's Desktop mode choice; a failed marker save never undoes the apply. */
+function saveDesktopMode(mode: ClaudeDesktopMode, deps: ApplyProfileDeps): boolean {
+  try {
+    return withClientLifecycleSync(() => {
+      const outcome = mutatePersistedConfig(current => recordClaudeDesktopMode(current, mode));
+      return outcome.status !== "unavailable";
+    }, deps.lifecycleLockDeps);
+  } catch {
+    return false;
+  }
+}
+
+export type DesktopApplyTarget =
+  | { kind: "first-party" }
+  | { kind: "gateway"; mode: Desktop3pConfigMode };
+
+/** Parse `ocx claude desktop apply` flags into a target; legacy gateway shape flags imply --gateway. */
+/**
+ * Default mode when no flag is given: first-party wherever the local intercept proxy can
+ * run; a connected client (proxy lives on the hub) or a disabled intercept falls back to
+ * the gateway profile rather than pointing Claude Code at a proxy that does not exist.
+ */
+export function defaultDesktopApplyMode(
+  config: Pick<OcxConfig, "claudeCode" | "runtimeRole">,
+  connection: ClientConnectionState = readClientConnectionState(),
+): ClaudeDesktopMode {
+  const resolved = resolveClaudeDesktopApplyMode(config);
+  if (resolved === "gateway") return resolved;
+  return connection.kind === "connected" ? "gateway" : "first-party";
+}
+
+export function parseDesktopApplyArgs(
+  flags: string[],
+  config: Pick<OcxConfig, "claudeCode" | "runtimeRole">,
+): { target: DesktopApplyTarget } | { error: string } {
+  const shapeFlags = flags.filter(arg => ["--static", "--hybrid", "--discovery-only"].includes(arg));
+  const wantsFirstParty = flags.includes("--first-party");
+  const wantsGateway = flags.includes("--gateway") || shapeFlags.length > 0;
+  if (wantsFirstParty && wantsGateway) return { error: "--first-party cannot be combined with --gateway or gateway shape flags." };
+  const unknown = flags.filter(arg => !["--first-party", "--gateway", "--static", "--hybrid", "--discovery-only"].includes(arg));
+  if (unknown.length > 0) return { error: `알 수 없는 인자: ${unknown.join(" ")}` };
+  const kind: ClaudeDesktopMode = wantsFirstParty ? "first-party" : wantsGateway ? "gateway" : defaultDesktopApplyMode(config);
+  if (kind === "first-party") return { target: { kind } };
+  const parsedMode = parseDesktop3pModeArgs(shapeFlags);
+  if ("error" in parsedMode) return parsedMode;
+  return { target: { kind, mode: parsedMode.mode } };
+}
+
+/**
+ * First-party apply: settings.json env only. The intercept pair the env points at runs inside
+ * the hub process, so this is a local-hub operation — a connected client machine cannot reach
+ * a loopback proxy on the hub and is refused rather than left with a dead `HTTPS_PROXY`.
+ */
+async function applyFirstPartyDesktop(
+  deps: ApplyProfileDeps,
+): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
+  try { assertNoClientDisconnectPending(); } catch { return { ok: false, path: "", reason: "client_disconnect_pending" }; }
+  const connection = readClientConnectionState();
+  if (connection.kind === "connected") return { ok: false, path: "", reason: "first_party_requires_local_hub" };
+  if (connection.kind !== "disconnected") return { ok: false, path: "", reason: "client_connection_invalid" };
+  const config = loadConfig();
+  const desired = setIntegrationEnabled("claude-desktop", true);
+  if (!desired.ok) return { ok: false, path: "", reason: desired.message };
+  // First-party replaces gateway; the two must never be active together.
+  const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
+  const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
+  if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
+    const removed = removeDesktop3pStandardPivot({ appliedFingerprint, replaceWhileEnabled: true });
+    if (!removed.ok) {
+      return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}` };
+    }
+  }
+  const applied = applyDesktopFirstParty(config);
+  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason };
+  const saved = saveDesktopMode("first-party", deps);
+  return {
+    ok: true,
+    path: applied.path,
+    ...(saved ? {} : { warning: "desktop mode marker was not saved" }),
+  };
+}
+
+export async function applyDesktop(
+  profile: DesktopProfile | undefined,
+  target: DesktopApplyTarget,
+  deps: ApplyProfileDeps = {},
+): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
+  if (target.kind === "first-party") return applyFirstPartyDesktop(deps);
+  // Gateway replaces first-party; the two must never be active together.
+  const removed = removeDesktopFirstParty();
+  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable" };
+  const result = await applyProfile(profile, target.mode, deps);
+  if (result.ok && !saveDesktopMode("gateway", deps)) {
+    return { ...result, warning: [result.warning, "desktop mode marker was not saved"].filter(Boolean).join(" ") };
+  }
+  return result;
+}
+
 export async function applyProfile(
   profile: DesktopProfile | undefined,
   mode: Desktop3pConfigMode,
@@ -222,24 +333,35 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
     return 0;
   }
 
-  // Legacy mode flags remain apply aliases and are parsed before subcommands.
-  const legacyFlags = argv.filter(arg => ["--static", "--hybrid", "--discovery-only"].includes(arg));
-  const applyInvocation = argv.length === 0 || command === "apply" || legacyFlags.length > 0;
+  // Mode flags remain apply aliases and are parsed before subcommands.
+  const applyFlags = argv.filter(arg => APPLY_FLAGS.includes(arg));
+  const applyInvocation = argv.length === 0 || command === "apply" || applyFlags.length > 0;
   if (applyInvocation) {
-    const nonMode = argv.filter(arg => !["apply", "--static", "--hybrid", "--discovery-only"].includes(arg));
-    if (nonMode.length > 0) {
-      console.error(`알 수 없는 인자: ${nonMode.join(" ")}`);
-      return 2;
-    }
-    const parsedMode = parseDesktop3pModeArgs(legacyFlags);
-    if ("error" in parsedMode) { console.error(parsedMode.error); return 2; }
+    const rest = argv.filter(arg => arg !== "apply");
+    const parsedTarget = parseDesktopApplyArgs(rest, loadConfig());
+    if ("error" in parsedTarget) { console.error(parsedTarget.error); return 2; }
+    const { target } = parsedTarget;
     try {
-      const result = await applyProfile(undefined, parsedMode.mode, deps);
+      const result = await applyDesktop(undefined, target, deps);
       if (!result.ok) {
         console.error(`설정 적용 실패: ${result.reason ?? "unknown error"}`);
+        if (result.reason?.startsWith("gateway_")) {
+          console.error("The gateway profile could not be removed safely, so first-party mode was not applied. Turn the integration off (dashboard toggle) and retry, or keep gateway with `ocx claude desktop apply --gateway`.");
+        } else if (result.reason === "foreign_env") {
+          console.error(`~/.claude/settings.json already sets HTTPS_PROXY or NODE_EXTRA_CA_CERTS to a value opencodex does not own (${result.path}). Remove them or use --gateway.`);
+        } else if (result.reason === "intercept_disabled") {
+          console.error("First-party mode needs the Claude intercept proxy (claudeCode.intercept.enabled on a hub). Use --gateway instead.");
+        } else if (result.reason === "first_party_requires_local_hub") {
+          console.error("First-party mode runs on the hub machine only; on a connected client use --gateway.");
+        }
         return 1;
       }
-      console.log(`Claude Desktop 설정을 적용했습니다: ${result.path}`);
+      if (target.kind === "first-party") {
+        console.log(`Claude Desktop first-party 설정을 적용했습니다: ${result.path}`);
+        console.log("Desktop 앱 설정은 그대로이며, Code 탭의 Claude Code만 로컬 프록시를 거칩니다.");
+      } else {
+        console.log(`Claude Desktop gateway 설정을 적용했습니다: ${result.path}`);
+      }
       // The write landed; only the bookkeeping marker did not. Saying nothing
       // would leave the saved-vs-applied display wrong with no explanation.
       if (result.warning) console.warn(`⚠️  ${result.warning}`);
@@ -336,7 +458,8 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       }
       saveLocalDesktopProfile(reconciled, config.claudeCode?.desktopProfile, connection, deps);
       if (flags.includes("--apply")) {
-        const result = await applyProfile(reconciled, "static", deps);
+        // A routing profile is a gateway-mode artifact: importing with --apply installs it there.
+        const result = await applyDesktop(reconciled, { kind: "gateway", mode: "static" }, deps);
         if (!result.ok) { console.error(`프로필은 저장했지만 Desktop 적용에 실패했습니다: ${result.reason ?? "unknown error"}`); return 1; }
         if (result.warning) console.warn(`⚠️  ${result.warning}`);
       }

@@ -10,7 +10,13 @@
  */
 import { loadConfig } from "../config";
 import { stripGrokConfig, type GrokInjectResult } from "../grok/inject";
-import { removeDesktop3pStandardPivot } from "../claude/desktop-3p";
+import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../claude/desktop-3p";
+import {
+  applyDesktopFirstParty,
+  inspectDesktopFirstParty,
+  removeDesktopFirstParty,
+  resolveClaudeDesktopMode,
+} from "../claude/desktop-first-party";
 import {
   claudeDesktopIntegrationEnabled,
   grokIntegrationEnabled,
@@ -35,6 +41,10 @@ export interface EnsureDesiredIntegrationsDeps {
     opts?: { hostname?: string },
   ) => Promise<GrokInjectResult>;
   removeDesktop3pStandardPivot: typeof removeDesktop3pStandardPivot;
+  removeDesktopFirstParty?: typeof removeDesktopFirstParty;
+  applyDesktopFirstParty?: typeof applyDesktopFirstParty;
+  inspectDesktopFirstParty?: typeof inspectDesktopFirstParty;
+  inspectDesktop3pConfigLibrary?: typeof inspectDesktop3pConfigLibrary;
   log?: (message: string) => void;
   error?: (message: string) => void;
 }
@@ -113,16 +123,44 @@ export async function ensureGrokFenceMatchesDesired(
 }
 
 /**
- * When Claude Desktop is durably OFF, clear any leftover owned gateway profile.
- * ensure/update used to leave Claude-3p residue in place after a failed disable
- * (drifted fingerprint), so the Integrations card kept looking applied/stale.
+ * When Claude Desktop is durably OFF, clear any leftover owned gateway profile and the
+ * first-party settings env. ensure/update used to leave Claude-3p residue in place after a
+ * failed disable (drifted fingerprint), so the Integrations card kept looking applied/stale.
+ *
+ * When it is ON in first-party mode, refresh a stale env (the intercept port follows the
+ * public port, so a port change would otherwise leave Claude Code pointed at a dead proxy).
  */
 export function ensureClaudeDesktopMatchesDesired(
   deps: EnsureDesiredIntegrationsDeps = productionDeps,
 ): void {
   const config = deps.loadConfig();
   const { log, error } = io(deps);
-  if (claudeDesktopIntegrationEnabled(config)) return;
+  if (claudeDesktopIntegrationEnabled(config)) {
+    if (resolveClaudeDesktopMode(config) !== "first-party") return;
+    const library = (deps.inspectDesktop3pConfigLibrary ?? inspectDesktop3pConfigLibrary)({
+      appliedFingerprint: config.claudeCode?.desktopProfile?.appliedFingerprint ?? null,
+    });
+    if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
+      // The mode marker and the disk disagree. Replacing a live Desktop profile is an operator
+      // action, not something an update hook should do silently.
+      error("⚠️  Claude Desktop mode is first-party but a gateway profile is still applied; run `ocx claude desktop apply --first-party` (or `--gateway`) to reconcile.");
+      return;
+    }
+    const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
+    if (!seen.stale) return;
+    const applied = (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(config);
+    if (applied.ok && applied.changed) log(`   + Claude Desktop first-party env refreshed (${applied.path})`);
+    else if (!applied.ok) error(`⚠️  Claude Desktop first-party env refresh skipped: ${applied.reason}.`);
+    return;
+  }
+  try {
+    const env = (deps.removeDesktopFirstParty ?? removeDesktopFirstParty)();
+    if (env.ok && env.changed) log("   ↩️  Claude Desktop first-party env removed.");
+    else if (!env.ok) error(`⚠️  Claude Desktop first-party env cleanup skipped: ${env.reason} (${env.path}).`);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    error(`⚠️  Claude Desktop first-party env cleanup failed: ${detail}.`);
+  }
   try {
     const removed = deps.removeDesktop3pStandardPivot({
       appliedFingerprint: config.claudeCode?.desktopProfile?.appliedFingerprint ?? null,

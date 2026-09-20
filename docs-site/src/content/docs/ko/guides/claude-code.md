@@ -118,6 +118,27 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 `claudeCode.nativePassthrough: false`로 끌 수 있고, `claudeCode.anthropicBaseUrl`로 다른 주소를
 지정할 수 있어요.
 
+## Claude Desktop 모드: 1P(기본값)와 게이트웨이
+
+Claude Desktop은 서로 배타적인 두 모드 중 하나로 OpenCodex를 사용해요. 대시보드의
+**Claude → Desktop → 연결 모드** 또는 `ocx claude desktop apply --first-party|--gateway`로 선택합니다.
+
+- **1P(퍼스트파티, 기본값)**: Desktop 자체는 건드리지 않아요. claude.ai 로그인, 채팅 탭, 커넥터,
+  원격 제어가 그대로 유지됩니다. OpenCodex는 `~/.claude/settings.json`의 `env`에
+  `HTTPS_PROXY=http://127.0.0.1:<공개 포트+100>`과 `NODE_EXTRA_CA_CERTS=~/.opencodex/claude-intercept/ca.pem`
+  두 값만 씁니다. Desktop이 Code 탭용으로 실행하는 Claude Code(서브에이전트 포함)와 터미널의
+  `claude` CLI만 이 값을 읽어 로컬 인터셉트 프록시를 거치고, `POST /v1/messages`·`count_tokens`만
+  OpenCodex가 처리하며 나머지 `api.anthropic.com` 경로는 그대로 Anthropic으로 전달돼요. CA는 OS
+  신뢰 저장소에 설치되지 않습니다.
+- **게이트웨이(3P)**: 기존 방식으로, 아래 프로필을 써서 앱 전체가 OpenCodex를 게이트웨이로
+  사용해요. `--gateway`(또는 기존 `--static`/`--hybrid`/`--discovery-only`)로 명시적으로 선택합니다.
+
+모드는 `claudeCode.desktopMode`에 저장돼요. 이미 게이트웨이 프로필을 적용한 설치는 업데이트 후에도
+게이트웨이를 유지하고, 새 설치만 1P가 기본이에요. 모드를 바꾸면 다른 모드의 설정(OpenCodex가 쓴
+값만)이 제거되며, 회사 프록시 같은 외부 `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` 값은 덮어쓰지 않고 적용을
+거부해요. 전환 후에는 Desktop을 완전히 종료하고 다시 열어 주세요. 자세한 내용과 Claude Code CLI
+호환성은 영어 문서를 참고하세요.
+
 ## 원격 허브에 연결된 Claude Desktop
 
 허브에 연결된 컴퓨터에서 `ocx claude desktop apply` 또는 `ocx claude desktop`을 실행하면
