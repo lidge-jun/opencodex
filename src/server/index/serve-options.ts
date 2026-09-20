@@ -1270,7 +1270,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease);
+          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
         }, { requestId, start, logCtx });

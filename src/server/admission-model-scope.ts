@@ -164,3 +164,26 @@ export function assertRouteAllowedByScope(
     throw new AdmissionModelDeniedError(requestedModel, route);
   }
 }
+
+/**
+ * The refusal a non-routed data-plane surface returns, or undefined when the
+ * destination is permitted.
+ *
+ * The Responses path resolves a route inside a try/catch and throws from the
+ * point the destination becomes concrete. The endpoints beside it -- images,
+ * audio, voice and the search relay -- have no router and no such boundary:
+ * each picks its own upstream inline and returns a Response. This is the same
+ * predicate against the same kind of resolved destination, shaped for that
+ * control flow, so a key that may not reach a provider is refused identically
+ * whichever surface it asked through.
+ */
+export function admissionScopeDenial(
+  config: Pick<OcxConfig, "apiKeys">,
+  admission: DataPlaneAdmission | undefined,
+  requestedModel: string,
+  route: ScopedRoute,
+): Response | undefined {
+  const scope = resolveAdmissionModelScope(config, admission);
+  if (routeAllowedByScope(scope, route)) return undefined;
+  return admissionModelDeniedResponse(new AdmissionModelDeniedError(requestedModel, route));
+}
