@@ -6,8 +6,10 @@ import {
   isUpstreamPolicyRefusal,
   parseRetryAfterFromMessage,
 } from "../../src/lib/errors";
-import { syntheticOpenAIChatRefusalResponse } from "../../src/adapters/openai-chat/policy-refusal";
 import { bufferCompactResponse } from "../../src/server/responses";
+import { rewriteUpstreamPolicyRefusal } from "../../src/server/responses/policy-refusal";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { collectSse } from "../helpers/responses-conformance";
 
 describe("adapterFailureFromMessage", () => {
   test("maps resource_exhausted to 429 rate_limit_error", () => {
@@ -151,17 +153,54 @@ describe("xAI policy-refusal 403", () => {
       .toBe("I can't help with that request.");
   });
 
-  test("synthetic rewrite is HTTP 200 with content_filter so Codex records a turn", async () => {
-    const json = syntheticOpenAIChatRefusalResponse("I can't help with that request.", false);
-    expect(json.status).toBe(200);
-    const body = await json.json() as { choices: Array<{ finish_reason: string; message: { content: string } }> };
-    expect(body.choices[0]?.finish_reason).toBe("content_filter");
-    expect(body.choices[0]?.message.content).toBe("I can't help with that request.");
+  test("rewriteUpstreamPolicyRefusal returns Codex incomplete/content_filter for both wires", async () => {
+    const budget = createTranslatorBudget();
+    try {
+      expect(rewriteUpstreamPolicyRefusal({
+        status: 403,
+        errorText: "You have run out of credits or need a Grok subscription.",
+        stream: false,
+        modelId: "grok-4.6",
+        translatorBudget: budget,
+      })).toBeNull();
 
-    const stream = syntheticOpenAIChatRefusalResponse("I can't help with that request.", true);
-    expect(stream.status).toBe(200);
-    const text = await stream.text();
-    expect(text).toContain("content_filter");
-    expect(text).toContain("[DONE]");
+      const jsonResponse = rewriteUpstreamPolicyRefusal({
+        status: 403,
+        errorText: JSON.stringify({ error: "I can't help with that request." }),
+        stream: false,
+        modelId: "grok-4.6",
+        translatorBudget: budget,
+      });
+      expect(jsonResponse?.status).toBe(200);
+      const json = await jsonResponse!.json() as {
+        status: string;
+        incomplete_details?: { reason?: string };
+        output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
+      };
+      expect(json.status).toBe("incomplete");
+      expect(json.incomplete_details).toEqual({ reason: "content_filter" });
+      const texts = (json.output ?? []).flatMap(item =>
+        (item.content ?? []).map(part => part.text).filter((text): text is string => typeof text === "string"),
+      );
+      expect(texts.join("")).toContain("I can't help with that request.");
+
+      const streamResponse = rewriteUpstreamPolicyRefusal({
+        status: 403,
+        errorText: "Provider error 403: I can't help with that request.",
+        stream: true,
+        modelId: "grok-4.6",
+        translatorBudget: budget,
+      });
+      expect(streamResponse?.status).toBe(200);
+      expect(streamResponse?.headers.get("content-type")).toContain("text/event-stream");
+      const frames = await collectSse(streamResponse!.body!);
+      const terminal = frames.find(frame => frame.event === "response.incomplete");
+      expect(terminal).toBeDefined();
+      const response = terminal!.data.response as { status?: string; incomplete_details?: { reason?: string } };
+      expect(response.status).toBe("incomplete");
+      expect(response.incomplete_details).toEqual({ reason: "content_filter" });
+    } finally {
+      budget.dispose();
+    }
   });
 });
