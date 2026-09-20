@@ -64,6 +64,28 @@ describe("Grok config injection", () => {
     expect(content).toContain("[model.ocx-newer-model]");
   });
 
+  test("treats managed markers in model metadata as TOML data", () => {
+    const configPath = join(grokHome, "config.toml");
+    const userContent = 'theme = "dark"\n';
+    writeFileSync(configPath, userContent, "utf8");
+    const hostileId = `provider/${BEGIN_MARKER} ${END_MARKER} stale-tail`;
+
+    injectGrokConfig(10100, [{ id: hostileId }], { grokHome });
+    const injected = readFileSync(configPath, "utf8");
+    expect(() => Bun.TOML.parse(injected)).not.toThrow();
+
+    const stripped = stripGrokConfig({ grokHome });
+    expect(stripped).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(userContent);
+
+    injectGrokConfig(10100, [{ id: hostileId }], { grokHome });
+    injectGrokConfig(10100, [{ id: "replacement" }], { grokHome });
+    const replaced = readFileSync(configPath, "utf8");
+    expect(replaced).not.toContain("stale-tail");
+    expect(replaced).toContain('model = "replacement"');
+    expect(() => Bun.TOML.parse(replaced)).not.toThrow();
+  });
+
   test("emits a shared model_providers block and per-model references (grok 0.2.109+)", () => {
     const block = buildGrokManagedBlock(10190, [{ id: "cursor/grok-4.5", contextWindow: 500_000 }]);
     expect(block).toContain("[model_providers.opencodex]");
