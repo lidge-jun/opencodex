@@ -255,10 +255,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const resolveServiceHomes = deps.resolveServiceHomes ?? currentServiceHomes;
   let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
   let startupOwnershipStatePaths: readonly string[] | null = null;
-  // #2923: both synchronous startup ownership decisions keep their fresh,
-  // race-sensitive targeted task query. Only the expensive fallback listing is
-  // shared, and only while that targeted result stays byte-for-byte unchanged.
-  // Runtime ownership retries below intentionally omit this startup-local memo.
+  // #2923: retain a successful fallback listing only within the first startup
+  // ownership decision. A targeted query's bytes are not a Task Scheduler state
+  // generation, so the later race-sensitive decision must take a fresh listing.
+  // Runtime ownership retries below intentionally omit this startup-local memo too.
   const startupWindowsTaskListingCache = createWindowsTaskListingCache();
   try {
     const homes = resolveServiceHomes();
@@ -554,7 +554,6 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
-    startupWindowsTaskListingCache,
   );
   const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null
