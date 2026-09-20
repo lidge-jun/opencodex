@@ -1445,6 +1445,7 @@ export function addFinalRequestLog(
     ...(closeReason ? { closeReason } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
     ...(spend ? { spendSends: spend.sends } : {}),
+    ...(attribution?.cause ? { failureCause: attribution.cause } : {}),
   });
   const cacheProvenance = classifyCacheTelemetryProvenance(loggedUsage, {
     wireParsed: logCtx.usageWireParsed === true,
