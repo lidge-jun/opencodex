@@ -703,7 +703,7 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ## Remote credentials and bounded sessions
 
-Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session.
+Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. Source limiting applies only to invalid guesses from an allowed browser origin — disallowed origins record no limiter state, and a valid grant redeems even from a throttled source. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session.
 
 ### Model picker ordering settings
 

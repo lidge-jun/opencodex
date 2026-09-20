@@ -1341,7 +1341,7 @@ describe("management and data-plane credential separation", () => {
     )).toBeNull();
   });
 
-  test("pairing burns a grant after five failures and rate-limits a source after ten guesses", () => {
+  test("pairing burns a grant after five failures and rate-limits allowed-origin guesses without locking out valid grants", () => {
     const config = hubConfig();
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
@@ -1374,6 +1374,30 @@ describe("management and data-plane credential separation", () => {
     }
     expect(consumeGuiPairingGrant(validOrigin, { grant: `ocx_pair_${"z".repeat(43)}` }, config, state, now + 10, guessContext))
       .toMatchObject({ allowed: false, reason: "source" });
+
+    const redeemable = createGuiPairingGrant("https://dashboard.example.test", config, state, now + 11);
+    expect(consumeGuiPairingGrant(validOrigin, { grant: redeemable.grant }, config, state, now + 12, guessContext))
+      .toMatchObject({ browserOrigin: "https://dashboard.example.test", issuance: "pairing" });
+
+    const untrustedOriginContext = { ...context, peerAddress: "192.0.2.12" };
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      expect(consumeGuiPairingGrant(
+        wrongOrigin,
+        { grant: `ocx_pair_${String(attempt).padStart(43, "b")}` },
+        config,
+        state,
+        now + attempt,
+        untrustedOriginContext,
+      )).toBeNull();
+    }
+    expect(consumeGuiPairingGrant(
+      validOrigin,
+      { grant: `ocx_pair_${"y".repeat(43)}` },
+      config,
+      state,
+      now + 11,
+      untrustedOriginContext,
+    )).toBeNull();
   });
 
   test("self logout revokes only the current GUI session and admin credentials get 403", async () => {

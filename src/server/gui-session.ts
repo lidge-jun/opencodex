@@ -341,19 +341,12 @@ export function consumeGuiPairingGrant(
     tailscaleUser: null,
     browserOrigin,
   };
-  const sourceRecord = attemptContext
-    ? pairingSourceAttempts.get(state)?.get(pairingSourceKey(context))
-    : undefined;
-  if (sourceRecord && sourceRecord.windowStartedAt + PAIRING_SOURCE_WINDOW_MS > now
-    && sourceRecord.failures >= PAIRING_SOURCE_FAILURE_LIMIT) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.max(1, Math.ceil((sourceRecord.windowStartedAt + PAIRING_SOURCE_WINDOW_MS - now) / 1000)),
-      reason: "source",
-    };
-  }
+  // Source throttling is only a cost bound for invalid guesses. Look up the grant
+  // first so callers sharing a proxy address cannot lock out a valid redemption.
   const found = findPairingGrant(grant, state);
   if (!found) {
+    // Cross-origin browser requests must not create limiter state as a side effect.
+    if (!isRemoteGuiBrowserOriginAllowed(browserOrigin, config)) return null;
     const source = recordSourceFailure(state, context, now);
     return attemptContext && !source.allowed ? source : null;
   }

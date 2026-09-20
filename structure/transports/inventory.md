@@ -299,7 +299,8 @@ Response constructor; this tunnel assembles the body from a socket, so a respons
 its upstream headers hands the coded bytes to whatever parses them. The request therefore asks
 for `identity` unless the caller chose an `accept-encoding` itself, a `gzip` or `deflate`
 response is decoded and stops advertising the coding and the coded length, and any other coding
-is refused by name rather than surfaced as bytes no caller can read.
+is refused by name rather than surfaced as bytes no caller can read. Decoded SOCKS5 bodies stop at
+the 32 MiB translator turn ceiling, before a buffered parser can materialize a larger expansion.
 
 ## Raw transport null-body statuses
 

@@ -7,6 +7,7 @@ const SOCKS5_CONNECT_TIMEOUT_MS = 30_000;
 const SOCKS5_RESPONSE_TIMEOUT_MS = 200_000;
 const MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
 const MAX_BODY_SLICE_BYTES = 64 * 1024;
+const MAX_DECODED_BODY_BYTES = 32 * 1024 * 1024;
 const SOCKS5_VERSION = 0x05;
 const SOCKS5_NO_AUTH = 0x00;
 const SOCKS5_USER_PASS = 0x02;
@@ -526,15 +527,30 @@ function bodylessResponse(method: string, status: number): boolean {
  * response means an upstream ignored that; gzip and deflate are undone here, and any other
  * coding fails closed rather than surfacing bytes no caller can parse.
  *
- * No decompressed-size ceiling is imposed. The identity path has no total-size bound either —
- * it cannot, because a long-lived SSE stream is legitimately unbounded — and a ceiling on only
- * the coded path would fail responses that succeed uncompressed.
+ * Decoded bodies are capped separately below because a tiny coded response can otherwise expand
+ * until a buffered caller exhausts the process. Identity bodies retain their existing streaming
+ * behavior; providers are asked to use that path by default.
  */
 function contentCodingFormat(headers: Headers): "gzip" | "deflate" | undefined {
   const coding = classifyContentCoding(headers);
   if (coding.kind === "identity") return undefined;
   if (coding.kind === "decodable") return coding.format;
   throw new Socks5FetchError("SOCKS5 upstream returned an unsupported content-encoding: " + coding.coding);
+}
+
+/** Refuse compressed bodies whose decoded representation exceeds the translator's turn ceiling. */
+function decodedBody(body: ReadableStream<Uint8Array>, format: "gzip" | "deflate"): ReadableStream<Uint8Array> {
+  const decompressor = new DecompressionStream(format) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
+  let decodedBytes = 0;
+  return body.pipeThrough(decompressor).pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      decodedBytes += chunk.byteLength;
+      if (decodedBytes > MAX_DECODED_BODY_BYTES) {
+        throw new Socks5FetchError(`SOCKS5 decoded response exceeds ${MAX_DECODED_BODY_BYTES} byte cap`);
+      }
+      controller.enqueue(chunk);
+    },
+  }));
 }
 
 /** Read response heads until the final one, consuming the interim informational answers. */
@@ -708,19 +724,11 @@ export async function socks5Fetch(
       // The declared length describes the coded bytes, not what the caller now reads.
       responseHeaders.delete("content-length");
     }
-    // `DecompressionStream` declares its writable side as `WritableStream<BufferSource>`, and
-    // TypeScript measures `WritableStream` as invariant in its chunk type, so the pair is not
-    // assignable to `ReadableWritablePair<Uint8Array, Uint8Array>` even though every chunk this
-    // body produces is a valid `BufferSource`. The conversion states that relationship and
-    // nothing else; it does not widen what is actually written.
-    const decompressor = codingFormat === undefined
-      ? undefined
-      : new DecompressionStream(codingFormat) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
-    const decodedBody = body !== null && decompressor !== undefined
-      ? body.pipeThrough(decompressor)
+    const responseBodyStream = body !== null && codingFormat !== undefined
+      ? decodedBody(body, codingFormat)
       : body;
     request.signal.removeEventListener("abort", onAbort);
-    return new Response(decodedBody, {
+    return new Response(responseBodyStream, {
       status: responseHead.status,
       statusText: responseHead.statusText,
       headers: responseHeaders,
