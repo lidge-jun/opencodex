@@ -1,5 +1,6 @@
 {
   "release-desktop-scripts.test.ts": "ci-workflows",
+  "installed-gate-drivers.test.ts": "ci-workflows",
   "gui-desktop-sidecar-script.test.ts": "gui",
   "standalone-build-script.test.ts": "gui",
   "standalone-service.test.ts": "service",
