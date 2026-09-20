@@ -391,6 +391,7 @@
   "codex-service-manager-probe-hardening.test.ts": "codex-integration",
   "codex-service-manager-probe.test.ts": "codex-integration",
   "codex-shim-autorestore.test.ts": "codex-integration",
+  "codex-shim-ensure-failure.test.ts": "codex-integration",
   "codex-shim-readiness.test.ts": "codex-integration",
   "codex-shim.test.ts": "codex-integration",
   "codex-signin-lockout.test.ts": "codex-integration",
