@@ -41,6 +41,7 @@ import {
   NamespaceToolCollisionError,
   restoreRoutedNamespaceCalls,
 } from "../../responses/namespace-tool-compat";
+import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
@@ -61,7 +62,6 @@ import {
   parseMuseSubscriptionUsage,
 } from "../../providers/muse-subscription-usage";
 import { restoreMuseToolNames } from "../../responses/muse-tool-name-alias";
-import { restoreRoutedCustomCalls } from "../../responses/custom-tool-compat";
 import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v2-agent-messages";
 import {
   recordAdapterReasoning,
@@ -329,7 +329,11 @@ export async function preparePassthroughExchange(
       // unstructured 500 — and no request log — depending only on whether a rotation ran first.
       // Same shape for a tool_choice this proxy cannot honor: the destination rejects a schema the
       // catalog had to drop, so the selector naming it is a client input error, not a 500.
-      if (error instanceof NamespaceToolCollisionError || error instanceof XaiToolSchemaCompatibilityError) {
+      if (
+        error instanceof NamespaceToolCollisionError
+        || error instanceof XaiToolSchemaCompatibilityError
+        || error instanceof RoutedCustomToolCompatError
+      ) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
       }
       throw error;
