@@ -164,4 +164,72 @@ describe("desktop icon set", () => {
       .sort();
     expect(stray).toEqual([]);
   });
+
+  test("the menu bar image is the size the generator declares", () => {
+    const source = generatorSource();
+    const output = /const TRAY_OUTPUT = "([^"]+)";/.exec(source)?.[1];
+    const size = Number(/const TRAY_SIZE = (\d+);/.exec(source)?.[1]);
+    expect(output, "TRAY_OUTPUT is missing from generate-icons.ts").toBeTruthy();
+    expect(Number.isFinite(size) && size > 0).toBe(true);
+
+    // Declaring the constants is not the same as rendering them. Without these two the tray could
+    // be dropped from the run and from `--check` while every assertion below still read the stale
+    // committed file and passed.
+    expect(source, "generate-icons.ts declares TRAY_OUTPUT but never renders it")
+      .toContain("render(TRAY_SIZE, join(target, TRAY_OUTPUT), traySource);");
+    expect(source, "the tray output is rendered but never reported, so --check skips it")
+      .toContain("produced.push(TRAY_OUTPUT);");
+
+    const bytes = readFileSync(join(ICONS_DIR, output!));
+    expect(isPng(bytes)).toBe(true);
+    expect(pngDimensions(bytes)).toEqual({ width: size, height: size });
+  });
+
+  /**
+   * The menu bar asset has its own SVG because a template image carries no backdrop, not because
+   * it is a second drawing. Two files holding the same curves is exactly the drift the generator
+   * was written to remove, so the curves in the smaller one have to be characters out of the
+   * larger one — a redrawn brace would stop matching here rather than ship as a second mark.
+   *
+   * Subset alone is too weak to hold the asset up, because every way of breaking it removes
+   * something. Dropping the mask, deleting the underscore, or repeating one brace in place of the
+   * cloud all produce a strict subset, and all three ship a black blob into the menu bar. So the
+   * glyph geometry is compared whole, the mask has to be wired onto the mark, and the mark paths
+   * have to be distinct from each other.
+   */
+  test("the menu bar source is a subset of the app icon source", () => {
+    const icon = readFileSync(join(ICONS_DIR, "icon.svg"), "utf8");
+    const tray = readFileSync(join(ICONS_DIR, "tray", "icon.svg"), "utf8");
+
+    // The glyphs are the whole point of the mark, so they are compared as a block rather than as
+    // a bag of paths: an identical mask carries the chevron, the underscore and the white ground
+    // that turns them into holes.
+    const iconMask = block(icon, '<mask id="prompt"', "</mask>");
+    const trayMask = block(tray, '<mask id="prompt"', "</mask>");
+    expect(trayMask, "the tray mask is not the app icon's mask").toBe(iconMask);
+    expect(trayMask).toContain('stroke-width="22"');
+    expect(trayMask).toContain("<rect ");
+
+    // A mark that does not reference the mask renders as a filled blob with no prompt in it.
+    const iconMark = block(icon, '<g id="mark"', "</g>");
+    const trayMark = block(tray, '<g id="mark"', "</g>");
+    for (const [name, mark] of [["icon.svg", iconMark], ["tray/icon.svg", trayMark]] as const) {
+      expect(mark, `${name} draws the mark without the prompt cut`).toContain('mask="url(#prompt)"');
+    }
+
+    const trayPaths = [...trayMark.matchAll(/ d="([^"]+)"/g)].map(m => m[1]!);
+    const iconPaths = [...iconMark.matchAll(/ d="([^"]+)"/g)].map(m => m[1]!);
+    expect(new Set(trayPaths).size, "tray/icon.svg repeats a curve instead of drawing the mark")
+      .toBe(trayPaths.length);
+    expect(trayPaths.length, "the menu bar mark is the cloud and both braces").toBeGreaterThanOrEqual(3);
+    expect(iconPaths.length).toBeGreaterThan(trayPaths.length);
+    const foreign = trayPaths.filter(d => !iconPaths.includes(d));
+    expect(foreign, "tray/icon.svg draws curves icon.svg does not have").toEqual([]);
+
+    // A status item is tinted from its alpha, so anything but black-and-clear is a mistake, and a
+    // backdrop would paint the whole menu bar slot.
+    expect(tray).not.toContain('id="backdrop"');
+    const fills = new Set([...tray.matchAll(/fill="([^"]+)"/g)].map(m => m[1]!));
+    expect([...fills].sort()).toEqual(["#000000", "#ffffff", "none"]);
+  });
 });

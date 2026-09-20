@@ -58,8 +58,20 @@ const ICNS_ENTRIES: Array<{ name: string; size: number }> = [
 /** Sizes packed into the .ico, which stores each one as an embedded PNG. */
 const ICO_SIZES = [16, 32, 48, 64, 128, 256];
 
-function render(size: number, out: string): void {
-  const result = spawnSync("rsvg-convert", ["-w", String(size), "-h", String(size), source, "-o", out]);
+/**
+ * The menu bar image, which is the same mark with no backdrop and the prompt cut through.
+ *
+ * It needs its own source because a status item is a template image: macOS reads the alpha as
+ * coverage and paints it with the menu bar tint, so the backdrop has to be gone rather than
+ * recoloured. 44px is 22pt at @2x, which is the menu bar working height and the size this asset
+ * already shipped at.
+ */
+const TRAY_OUTPUT = "tray/icon.png";
+const TRAY_SIZE = 44;
+const traySource = join(iconsDir, "tray", "icon.svg");
+
+function render(size: number, out: string, from: string = source): void {
+  const result = spawnSync("rsvg-convert", ["-w", String(size), "-h", String(size), from, "-o", out]);
   if (result.status !== 0) {
     const detail = result.error?.message ?? result.stderr?.toString().trim() ?? "unknown error";
     throw new Error(`rsvg-convert failed for ${size}px: ${detail}`);
@@ -131,12 +143,20 @@ function generateInto(target: string): { produced: string[]; icnsSkipped: boolea
   writeFileSync(join(target, "icon.ico"), buildIco(icoParts));
   produced.push("icon.ico");
 
+  mkdirSync(join(target, "tray"), { recursive: true });
+  render(TRAY_SIZE, join(target, TRAY_OUTPUT), traySource);
+  produced.push(TRAY_OUTPUT);
+
   return { produced, icnsSkipped };
 }
 
 function main(): number {
   if (!existsSync(source)) {
     console.error(`[icons] missing source: ${source}`);
+    return 1;
+  }
+  if (!existsSync(traySource)) {
+    console.error(`[icons] missing source: ${traySource}`);
     return 1;
   }
   const check = process.argv.includes("--check");
@@ -174,7 +194,7 @@ function main(): number {
       }
     }
     if (drifted.length > 0) {
-      console.error(`[icons] these do not match icon.svg: ${drifted.join(", ")}`);
+      console.error(`[icons] these do not match their source: ${drifted.join(", ")}`);
       console.error("[icons] regenerate with: bun run icons");
       return 1;
     }
