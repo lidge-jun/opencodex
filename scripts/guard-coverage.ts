@@ -67,15 +67,13 @@ for (const block of redSource.split(/\n  \{\n/).slice(1)) {
   );
   if (!file || !from) continue;
   const raw = from[1] ?? from[2] ?? from[3] ?? "";
-  // The same escapes a template literal needs: bun unescapes these when red.ts
-  // runs, and this file reads them as text, so it has to do the same. Missing
-  // `\$` and `\"` made four entries unlocatable — caught by the floor rather
-  // than silently scored as covering nothing.
-  const source = raw
-    .replace(/\\n/g, "\n")
-    .replace(/\\`/g, "`")
-    .replace(/\\\$/g, "$")
-    .replace(/\\"/g, '"');
+  // One left-to-right pass, not a chain of replaces: chained, `\\b` becomes
+  // `\b` and then the next rule reprocesses it. Each escape is consumed once.
+  const source = raw.replace(/\\(.)/g, (_, ch: string) => {
+    if (ch === "n") return "\n";
+    if (ch === "t") return "\t";
+    return ch; // ` $ " ' \ and anything else stands for itself
+  });
   redEntries.push({ file, from: source });
 }
 

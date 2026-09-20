@@ -27,7 +27,7 @@ export const SPEECH_REQUEST_MAX_BYTES = 1024 * 1024;
 export const SPEECH_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const SPEECH_TIMEOUT_MS = 120_000;
 /** Longest single utterance accepted, in characters. */
-const SPEECH_INPUT_MAX_CHARS = 8192;
+export const SPEECH_INPUT_MAX_CHARS = 8192;
 
 const FIELDS = new Set(["model", "input", "voice", "response_format", "speed", "instructions"]);
 

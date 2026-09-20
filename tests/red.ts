@@ -111,6 +111,38 @@ const GUARDS: Guard[] = [
     expect: "a provider with no voice endpoint at all is refused",
     suite: VOICE,
   },
+  {
+    name: "a non-JSON speech body is refused",
+    file: "src/server/audio-speech.ts",
+    from: '  if (!/^application\\/json\\b/i.test(req.headers.get("content-type") ?? "")) {',
+    to: "  if (false) {",
+    expect: "refuses a body that is not JSON at all",
+    suite: VOICE,
+  },
+  {
+    name: "a speech body that is not an object is refused",
+    file: "src/server/audio-speech.ts",
+    from: "  if (!payload || typeof payload !== \"object\" || Array.isArray(payload)) {",
+    to: "  if (false) {",
+    expect: "refuses valid JSON that is not an object",
+    suite: VOICE,
+  },
+  {
+    name: "an unknown speech field is refused",
+    file: "src/server/audio-speech.ts",
+    from: "  const unknown = Object.keys(body).find(key => !FIELDS.has(key));",
+    to: "  const unknown = undefined;",
+    expect: "refuses a field the OpenAI shape does not define",
+    suite: VOICE,
+  },
+  {
+    name: "the speech input character cap is enforced",
+    file: "src/server/audio-speech.ts",
+    from: "  if (body.input.length > SPEECH_INPUT_MAX_CHARS) {",
+    to: "  if (false) {",
+    expect: "refuses an input past the character cap",
+    suite: VOICE,
+  },
 ];
 
 async function runSuite(suite: string): Promise<{ ok: boolean; output: string }> {

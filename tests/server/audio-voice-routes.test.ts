@@ -5,7 +5,7 @@ import {
   voiceConfigValueError,
   voiceProviderEndpointError,
 } from "../../src/config/voice-target";
-import { handleAudioSpeech } from "../../src/server/audio-speech";
+import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS } from "../../src/server/audio-speech";
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -134,37 +134,6 @@ describe("speech route", () => {
     expect(await response.text()).toContain("speechUrl");
   });
 
-  test("an empty input is refused before any upstream call", async () => {
-    const response = await handleAudioSpeech(
-      speechRequest({ input: "   " }),
-      config({ speech: { provider: "pocket" } } as Partial<OcxConfig>),
-      LOG,
-      ADMISSION,
-    );
-    expect(response.status).toBe(400);
-    expect(await response.text()).toContain("nonempty");
-  });
-
-  test("an unknown field is refused rather than forwarded", async () => {
-    const response = await handleAudioSpeech(
-      speechRequest({ input: "hi", sneaky: 1 }),
-      config({ speech: { provider: "pocket" } } as Partial<OcxConfig>),
-      LOG,
-      ADMISSION,
-    );
-    expect(response.status).toBe(400);
-    expect(await response.text()).toContain("sneaky");
-  });
-
-  test("a non-JSON content type is refused", async () => {
-    const request = new Request("http://127.0.0.1/v1/audio/speech", {
-      method: "POST",
-      headers: { "content-type": "text/plain" },
-      body: "hello",
-    });
-    const response = await handleAudioSpeech(request, config({ speech: { provider: "pocket" } } as Partial<OcxConfig>), LOG, ADMISSION);
-    expect(response.status).toBe(400);
-  });
 });
 
 describe("transcription provider relay", () => {
@@ -291,4 +260,84 @@ describe("redacted field presence", () => {
     expect(flags.hasApiKey).toBe(true);
     expect("hasHeaders" in flags).toBe(true);
   });
+});
+
+describe("speech request validation", () => {
+  /**
+   * One row per refusal in `parseSpeech`. Table-driven because these are a
+   * parser: eleven near-identical branches whose only interesting property is
+   * which input reaches which message, and writing eleven prose tests would
+   * hide that they are one thing.
+   *
+   * Through `handleAudioSpeech`, not the parser: `parseSpeech` is private, and
+   * a test that reaches past the handler proves the parser works while saying
+   * nothing about whether the handler calls it.
+   */
+  const SPEECH_CONFIGURED = config({
+    speech: { provider: "pocket" },
+  } as Partial<OcxConfig>);
+
+  const ROWS: Array<{ why: string; request: Request; expect: string; status?: number }> = [
+    {
+      why: "a body that is not JSON at all",
+      request: new Request("http://127.0.0.1/v1/audio/speech", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "hello",
+      }),
+      expect: "Expected application/json",
+    },
+    {
+      why: "valid JSON that is not an object",
+      request: speechRequest("just a string"),
+      expect: "must be a JSON object",
+    },
+    {
+      why: "a field the OpenAI shape does not define",
+      request: speechRequest({ input: "hi", surprise: 1 }),
+      expect: "Unsupported speech field",
+    },
+    {
+      why: "no input at all",
+      request: speechRequest({ model: "tts-1" }),
+      expect: "A nonempty",
+    },
+    {
+      why: "an input of only whitespace",
+      request: speechRequest({ input: "   " }),
+      expect: "A nonempty",
+    },
+    {
+      why: "an input past the character cap",
+      request: speechRequest({ input: "x".repeat(SPEECH_INPUT_MAX_CHARS + 1) }),
+      expect: "characters",
+      // 413, not 400: the request is well-formed and too big, which is a
+      // different thing for a client to act on. The table assumed one status
+      // for every refusal and this row is why it does not.
+      status: 413,
+    },
+    {
+      why: "a model that is not a string",
+      request: speechRequest({ input: "hi", model: 7 }),
+      expect: "`model` must be a string",
+    },
+    {
+      why: "a voice that is not a string",
+      request: speechRequest({ input: "hi", voice: [] }),
+      expect: "`voice` must be a string",
+    },
+    {
+      why: "a response_format that is not a string",
+      request: speechRequest({ input: "hi", response_format: {} }),
+      expect: "`response_format` must be a string",
+    },
+  ];
+
+  for (const row of ROWS) {
+    test(`refuses ${row.why}`, async () => {
+      const response = await handleAudioSpeech(row.request, SPEECH_CONFIGURED, LOG, ADMISSION);
+      expect(response.status).toBe(row.status ?? 400);
+      expect(await response.text()).toContain(row.expect);
+    });
+  }
 });
