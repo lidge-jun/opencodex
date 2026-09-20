@@ -10,3 +10,5 @@ Depends on: the completed analysis and current GitHub duplicate scan. No product
 6. Confirm actual initial progress with wait_threads, not only creation responses. Record returned IDs/host IDs and observed worktree paths in 001_status.md. If a requested model cannot start, report the exact failure; never silently substitute.
 
 Acceptance: both requested main-task model selections accepted, separate worktrees exist, initial bounded plans/progress observed, current-task heartbeat created and saved, and source checkout staged analysis preserved. Verification is tool receipts and read-only state inspection; no runtime tests/build are justified for this coordination cycle.
+
+Final acceptance follow-up: the runtime owner retains a separate test-only delivery for original #5109/#5110 HEAD, informational-response and stalled-upload-timeout criteria. Freeze/preserve server PR5185 before switching the single owned checkout; use a separate branch/PR from current dev and no concurrent writers. No production change is planned unless the new execution exposes a concrete defect.
