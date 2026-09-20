@@ -27,7 +27,7 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 
 일부 xAI Chat Completions 거부는 HTTP 200과 `finish_reason: content_filter` 대신, HTTP 403과 `I can't help with that request.` 같은 거절 문장만 돌려줍니다. Codex는 403을 전송 실패로 보므로 사용자 턴이 기록되지 않고 같은 요청을 다시 보냅니다.
 
-콤보가 아닌 Responses 요청에서 OpenCodex는 allowlist에 오른 그 403을 HTTP 200 Responses, `status: "incomplete"`, `incomplete_details.reason: "content_filter"`로 바꿉니다. 스트리밍도 같은 incomplete 경계입니다. 다시 쓴 본문은 업스트림 오류가 아니므로 Codex는 403 재시도 경로를 타지 않습니다. 구독, 크레딧, 권한, `not allowed to use this model` 403은 오류로 남습니다. 콤보 페일오버는 원래 HTTP 403을 그대로 봅니다.
+콤보가 아닌 Responses 요청에서 OpenCodex는 allowlist에 오른 그 403을 HTTP 200 Responses, `status: "incomplete"`, `incomplete_details.reason: "content_filter"`로 바꿉니다. openai-chat 어댑터 경로와 openai-responses passthrough(grok-4.6 / grok-4.5 OAuth) 모두에서 동작합니다. 스트리밍도 같은 incomplete 경계입니다. 빈 본문 403은 오류로 남습니다. 구독, 크레딧, 권한, `not allowed to use this model` 403은 오류로 남습니다. 콤보 페일오버는 원래 HTTP 403을 그대로 봅니다.
 
 ## 엔드포인트 개요
 

@@ -48,9 +48,10 @@ user turn is never recorded and the same request is retried.
 
 On a non-combo Responses request, OpenCodex rewrites that allowlisted 403 to an
 HTTP 200 Responses payload with `status: "incomplete"` and
-`incomplete_details.reason: "content_filter"`. Streaming uses the same incomplete
-boundary. The rewritten body is not an upstream error, so Codex does not follow
-its 403 retry path. Subscription, credit, entitlement, and `not allowed to use this
+`incomplete_details.reason: "content_filter"`. The rewrite runs on the openai-chat
+adapter path and on openai-responses passthrough (grok-4.6 / grok-4.5 OAuth).
+Streaming uses the same incomplete boundary. Empty or whitespace 403 bodies stay
+errors. Subscription, credit, entitlement, and `not allowed to use this
 model` 403s stay errors. Combo failover still sees the original HTTP 403.
 
 ## Cursor context overflow
