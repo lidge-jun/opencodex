@@ -119,7 +119,7 @@
       "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
       "fixture": { "id": "chat-request-mapping", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"context\":{\"systemPrompt\":[\"SYS\"],\"messages\":[{\"role\":\"developer\",\"content\":\"DEV\",\"timestamp\":0},{\"role\":\"user\",\"content\":\"PING\",\"timestamp\":1}]},\"options\":{\"textFormat\":{\"type\":\"json_object\"}}}", "digest": "0a9c319b3a6dadbf581d0d2185f57527cd28aa57127e0eac91a421735b4c2ad9" },
       "assertions": [
-        { "id": "roles", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages", "expected": [{"role":"system","content":"SYS"},{"role":"system","content":"DEV"},{"role":"user","content":"PING"}], "required": true },
+        { "id": "roles", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages", "expected": [{"role":"system","content":"SYS"},{"role":"developer","content":"DEV"},{"role":"user","content":"PING"}], "required": true },
         { "id": "format", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/response_format", "expected": {"type":"json_object"}, "required": true }
       ]
     },
