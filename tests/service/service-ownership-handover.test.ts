@@ -10,8 +10,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
-import { foreignServiceOwnerRefusal, repairService } from "../../src/service/repair";
+import { foreignServiceOwnerRefusal, repairService, unknownServiceOwnerRefusal } from "../../src/service/repair";
 import type { ServiceDiagnostic } from "../../src/service/diagnostics";
+import type { ServiceOwnershipResolution } from "../../src/service/state";
 
 const INSTALLED: ServiceDiagnostic = {
   supported: true, installed: true, enabled: true, running: true, viable: true,
@@ -19,14 +20,16 @@ const INSTALLED: ServiceDiagnostic = {
 };
 
 const DESKTOP_CLAIM = { owner: "desktop", installId: "app-install-a", consentGeneration: 2 } as const;
+const DESKTOP: ServiceOwnershipResolution = { kind: "owned", ownership: DESKTOP_CLAIM };
+const UNKNOWN: ServiceOwnershipResolution = { kind: "unknown", reason: "a service state path could not be read (EACCES)" };
 
-describe("repair under a foreign owner", () => {
+describe("repair under an owner that is not this CLI", () => {
   test("refuses before it asserts, writes, stops or starts anything", async () => {
     const touched: string[] = [];
     await expect(repairService({
       platform: "darwin",
       diagnose: () => INSTALLED,
-      readOwnership: () => DESKTOP_CLAIM,
+      readOwnership: () => DESKTOP,
       assertEnv: () => { touched.push("assertEnv"); },
       assertAuth: () => { touched.push("assertAuth"); },
       repairLaunchd: () => { touched.push("repairLaunchd"); },
@@ -42,27 +45,54 @@ describe("repair under a foreign owner", () => {
       platform: "darwin",
       verb: "restart",
       diagnose: () => INSTALLED,
-      readOwnership: () => DESKTOP_CLAIM,
+      readOwnership: () => DESKTOP,
       repairLaunchd: () => { throw new Error("must not run"); },
       restartLaunchd: () => { throw new Error("must not run"); },
     })).rejects.toThrow(/desktop app owns the runtime/);
   });
 
-  test("the refusal names the claim, the untouched registration and the way back", () => {
-    const message = foreignServiceOwnerRefusal(DESKTOP_CLAIM);
-    expect(message).toContain("app-install-a");
-    expect(message).toContain("consent generation 2");
-    expect(message).toContain("not re-enabled, not rewritten and not restarted");
-    expect(message).toContain("ocx service install");
+  /**
+   * Collapsing "I could not read the claim" into "there is no claim" is how a permissions
+   * error reactivates a consented takeover. Only true absence may mean nobody owns it.
+   */
+  test("an unreadable or contradictory record refuses too, rather than reading as CLI-owned", async () => {
+    const touched: string[] = [];
+    await expect(repairService({
+      platform: "darwin",
+      diagnose: () => INSTALLED,
+      readOwnership: () => UNKNOWN,
+      assertEnv: () => { touched.push("assertEnv"); },
+      repairLaunchd: () => { touched.push("repairLaunchd"); },
+    })).rejects.toThrow(/could not be determined/);
+    expect(touched).toEqual([]);
+  });
+
+  test("both refusals name the untouched registration and the way back", () => {
+    const foreign = foreignServiceOwnerRefusal(DESKTOP_CLAIM);
+    expect(foreign).toContain("app-install-a");
+    expect(foreign).toContain("consent generation 2");
+    expect(foreign).toContain("not re-enabled, not rewritten and not restarted");
+    expect(foreign).toContain("ocx service install");
+
+    const unknown = unknownServiceOwnerRefusal("a service state path could not be read (EACCES)");
+    expect(unknown).toContain("EACCES");
+    expect(unknown).toContain("ocx service install");
+    // Both take the verb, so `start` does not report itself as a repair.
+    expect(foreignServiceOwnerRefusal(DESKTOP_CLAIM, "start")).toContain("Background service start stopped");
+    expect(unknownServiceOwnerRefusal("nothing parsed", "start")).toContain("Background service start stopped");
   });
 
   test("a CLI owner repairs normally, and so does a record with no claim at all", async () => {
-    for (const ownership of [null, { owner: "cli" as const, installId: "npm-install", consentGeneration: 4 }]) {
+    const resolutions: ServiceOwnershipResolution[] = [
+      { kind: "none" },
+      { kind: "owned", ownership: { owner: "cli", installId: "npm-install", consentGeneration: 4 } },
+    ];
+    for (const resolution of resolutions) {
       let repaired = false;
       await repairService({
         platform: "darwin",
         diagnose: () => INSTALLED,
-        readOwnership: () => ownership,
+        readOwnership: () => resolution,
         assertEnv: () => {},
         assertAuth: () => {},
         repairLaunchd: () => { repaired = true; },
@@ -75,23 +105,42 @@ describe("repair under a foreign owner", () => {
     await expect(repairService({
       platform: "darwin",
       diagnose: () => ({ ...INSTALLED, installed: false }),
-      readOwnership: () => DESKTOP_CLAIM,
+      readOwnership: () => DESKTOP,
     })).rejects.toThrow(/not installed/);
   });
 });
 
-describe("install is the verb that takes the runtime back", () => {
+describe("which service verbs are gated", () => {
   const cli = readFileSync(repoPath("src", "service", "cli.ts"), "utf8");
-  const installCase = cli.slice(cli.indexOf("case \"install\":"), cli.indexOf("case \"start\":"));
+  const between = (from: string, to: string): string => cli.slice(cli.indexOf(from), cli.indexOf(to));
+  const installCase = between("case \"install\":", "case \"start\":");
+  const startCase = between("case \"start\":", "case \"stop\"");
 
-  test("the install path releases a recorded owner before it registers anything", () => {
+  /**
+   * Releasing first meant a cancelled UAC prompt, a failed registration or an aborted
+   * cleanup left the retained npm registration looking CLI-owned, so the next incidental
+   * repair would reactivate it.
+   */
+  test("install releases the marker only after the registration succeeded", () => {
     expect(installCase).toContain("releaseServiceOwner()");
-    expect(installCase.indexOf("releaseServiceOwner()")).toBeLessThan(installCase.indexOf("installServiceSafely"));
+    expect(installCase.indexOf("installServiceSafely")).toBeLessThan(installCase.indexOf("releaseServiceOwner()"));
+    // The failure branch leaves before the release.
+    expect(installCase.indexOf("Service install cleanup failed")).toBeLessThan(installCase.indexOf("releaseServiceOwner()"));
   });
 
-  test("no other subcommand releases it, so an incidental run cannot undo consent", () => {
-    const rest = cli.slice(cli.indexOf("case \"start\":"));
-    expect(rest).not.toContain("releaseServiceOwner");
+  test("start refuses on the same terms, because it activates the registration", () => {
+    expect(startCase).toContain("resolveServiceOwnership()");
+    expect(startCase).toContain("foreignServiceOwnerRefusal");
+    expect(startCase).toContain("unknownServiceOwnerRefusal");
+    // Reported, not thrown: the Windows tray drives this through a caller that does not catch.
+    expect(startCase).toContain("process.exitCode = 1;");
+  });
+
+  test("stop and uninstall stay ungated, and nothing else releases the marker", () => {
+    const deactivating = cli.slice(cli.indexOf("case \"stop\""));
+    expect(deactivating).not.toContain("resolveServiceOwnership");
+    expect(deactivating).not.toContain("releaseServiceOwner");
+    expect(startCase).not.toContain("releaseServiceOwner");
     expect(readFileSync(repoPath("src", "service", "repair.ts"), "utf8")).not.toContain("releaseServiceOwner");
   });
 });

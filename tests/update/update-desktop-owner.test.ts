@@ -114,3 +114,60 @@ describe("both updaters consult the shared rule", () => {
   });
 });
 
+describe("an unreadable record is not an unowned runtime", () => {
+  test("unknown ownership vetoes both halves and points at the way back", () => {
+    const plan = planUpdateRuntimeHandling({ ownership: null, ownershipUnknown: true, serviceInstalled: true });
+    expect(plan.stopRuntime).toBe(false);
+    expect(plan.refreshService).toBe(false);
+    expect(plan.notice).toContain("could not be determined");
+    expect(plan.notice).toContain("ocx service install");
+  });
+
+  test("the desktop notice also says how to clear a stale marker", () => {
+    const plan = planUpdateRuntimeHandling({
+      ownership: { owner: "desktop", installId: "a", consentGeneration: 1 },
+      serviceInstalled: true,
+    });
+    expect(plan.notice).toContain("ocx service install");
+  });
+});
+
+describe("every updater re-reads ownership before it starts a proxy directly", () => {
+  const bunPath = readFileSync(repoPath("src", "update", "index.ts"), "utf8");
+  const launcher = readFileSync(repoPath("bin", "ocx.mjs"), "utf8");
+  const worker = readFileSync(repoPath("src", "update", "job.ts"), "utf8");
+
+  /**
+   * Ownership is sampled before a package install that can take minutes. If the app claims
+   * the runtime during it, the post-update repair refuses — and both callers used to read
+   * that refusal as a generic failure and start an npm proxy beside the app's sidecar.
+   */
+  test("the two package updaters re-resolve before the direct-start fallback", () => {
+    for (const source of [bunPath, launcher]) {
+      const fallbackAt = source.indexOf("starting the proxy directly instead");
+      expect(fallbackAt).toBeGreaterThan(-1);
+      const recheckAt = source.lastIndexOf("planUpdateRuntimeHandling({", fallbackAt);
+      expect(recheckAt).toBeGreaterThan(-1);
+      expect(source.slice(recheckAt, fallbackAt)).toContain("nowOwned.stopRuntime");
+    }
+  });
+
+  /**
+   * The dashboard is a third lane. It defaults to restarting, and after the package updater
+   * correctly left a foreign-owned runtime alone it would reclaim the port, run the repair
+   * that now refuses, and fall through to a direct start.
+   */
+  test("the dashboard worker checks before it restarts anything", () => {
+    const restartAt = worker.indexOf("if (restart) {");
+    const handoffAt = worker.indexOf("finishGuiUpdateRestart(", restartAt);
+    const gateAt = worker.indexOf("updateRestartVeto(", restartAt);
+    expect(gateAt).toBeGreaterThan(restartAt);
+    expect(gateAt).toBeLessThan(handoffAt);
+    expect(worker.slice(gateAt, handoffAt)).toContain("if (veto)");
+    expect(worker.slice(gateAt, handoffAt)).toContain("restarted: false");
+    // The veto is the shared rule, not a second opinion about ownership.
+    const veto = readFileSync(repoPath("src", "update", "restart-ownership.ts"), "utf8");
+    expect(veto).toContain("planUpdateRuntimeHandling({");
+    expect(veto).toContain("resolveServiceOwnership");
+  });
+});

@@ -13,12 +13,14 @@ import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
 import {
   desktopOwnsService,
+  inspectServiceStateEvidence,
   ownershipGrantedTo,
   parseServiceInstallState,
   parseServiceOwnership,
   readServiceInstallState,
   recordServiceOwner,
   releaseServiceOwner,
+  resolveServiceOwnership,
   ServiceStateConflictError,
   serviceOwnership,
   serviceStatePath,
@@ -223,3 +225,87 @@ describe("parsing", () => {
   });
 });
 
+describe("the record is read fail-closed", () => {
+  test("unreadable at any path is unknown, not unowned", () => {
+    const unreadable = home.path("unreadable-state");
+    mkdirSync(unreadable, { recursive: true });
+    const resolution = resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath(), unreadable]));
+    expect(resolution.kind).toBe("unknown");
+  });
+
+  test("a corrupt anchor is unknown; corrupt legacy leftovers are ignored", () => {
+    writeFileSync(serviceStatePath(), "not json");
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath()])).kind).toBe("unknown");
+
+    // The second path is the legacy default-home entry. Junk left there by an old version
+    // must not be able to block every repair on the machine.
+    recordServiceOwner(DESKTOP);
+    const legacy = home.path("legacy-service-state.json");
+    writeFileSync(legacy, "{ broken");
+    const resolution = resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath(), legacy]));
+    expect(resolution).toEqual({ kind: "owned", ownership: { owner: "desktop", installId: "app-install-a", consentGeneration: 1 } });
+  });
+
+  test("paths that name different owners are unknown", () => {
+    recordServiceOwner(DESKTOP);
+    const other = home.path("other-service-state.json");
+    const record = JSON.parse(readFileSync(serviceStatePath(), "utf8"));
+    writeFileSync(other, JSON.stringify({ ...record, ownership: { ...record.ownership, installId: "app-install-b" } }));
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath(), other])).kind).toBe("unknown");
+  });
+
+  test("absent everywhere is the only thing that means no claim", () => {
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath()]))).toEqual({ kind: "none" });
+  });
+
+  /**
+   * Pre-existing, and it is why this had to be fixed here: cliEntry() returns null for a
+   * standalone binary, so every standalone install wrote a record its own parser rejected.
+   * After ownership moved into that record, an unparseable record reads as "nobody owns the
+   * runtime" — the exact demotion the claim exists to prevent.
+   */
+  test("a standalone install record parses, so its ownership is readable at all", () => {
+    const standalone = { version: 2, codexHome: "/c", opencodexHome: "/o", bunPath: "/b", cliPath: null, backend: "scheduler" };
+    expect(parseServiceInstallState(standalone)).not.toBeNull();
+    expect(parseServiceInstallState(JSON.parse(JSON.stringify(standalone)))).not.toBeNull();
+    expect(parseServiceInstallState({ ...standalone, cliPath: "" })).toBeNull();
+  });
+});
+
+describe("the generation cannot be reused", () => {
+  test("a release keeps the high-water mark so the next grant does not repeat it", () => {
+    expect(recordServiceOwner(DESKTOP).consentGeneration).toBe(1);
+    releaseServiceOwner();
+    expect(readServiceInstallState()?.consentGenerationCeiling).toBe(1);
+    // Without the ceiling this would be 1 again, and an app-local record still holding the
+    // first 1 would read the second grant as its own prior consent.
+    expect(recordServiceOwner(DESKTOP).consentGeneration).toBe(2);
+  });
+
+  test("an ordinary install-state write carries the ceiling forward", () => {
+    recordServiceOwner(DESKTOP);
+    releaseServiceOwner();
+    writeServiceInstallState("scheduler", null);
+    expect(readServiceInstallState()?.consentGenerationCeiling).toBe(1);
+    expect(recordServiceOwner({ owner: "desktop", installId: "app-install-b" }).consentGeneration).toBe(2);
+  });
+});
+
+describe("the anchor lock", () => {
+  test("a lock another process holds blocks the write rather than racing it", () => {
+    writeFileSync(serviceStatePath() + ".lock", "");
+    expect(() => swapServiceInstallState(() => ({
+      version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler",
+    }), { lockWaitMs: 50 })).toThrow(/another process is writing/);
+    // Nothing was written: the swap never reached a commit.
+    expect(existsSync(serviceStatePath())).toBe(false);
+  });
+
+  test("a swap nested inside another one is not a race and does not deadlock", () => {
+    writeServiceInstallState("scheduler", null);
+    const result = swapServiceInstallState(current => ({ ...current!, launcherPath: "/opt/ocx" }), {
+      beforeCommit: attempt => { if (attempt === 0) recordServiceOwner(DESKTOP); },
+    });
+    expect(result?.ownership?.installId).toBe("app-install-a");
+  });
+});
