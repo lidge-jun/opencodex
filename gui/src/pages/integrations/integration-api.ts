@@ -264,7 +264,13 @@ export function parseIntegrationMutationPlan(value: unknown): IntegrationMutatio
     || !PLAN_OPERATIONS.includes(value.operation as IntegrationPlanOperation)
     || !INTEGRATION_STATES.has(String(value.state))
     || !PLAN_FOREIGN_EDITS.includes(value.foreignEdit as IntegrationPlanForeignEdit)
-    || typeof value.fingerprint !== "string" || !/^p1:(?:[0-9a-f]{32}|unbound)$/.test(value.fingerprint)
+    /*
+     * The version is matched as a version, not as `p1`. The server calls this
+     * token opaque and bumps its prefix whenever the inputs it binds change; a
+     * literal here made that bump a silent client-side rejection of every
+     * preview, which is a worse failure than the drift it was meant to catch.
+     */
+    || typeof value.fingerprint !== "string" || !/^p[0-9]+:(?:[0-9a-f]{32}|unbound)$/.test(value.fingerprint)
     || typeof value.canApply !== "boolean" || typeof value.willChange !== "boolean"
     || !Array.isArray(value.changes) || value.changes.length > PLAN_CHANGE_LIMIT
     || (value.profileId !== undefined && (typeof value.profileId !== "number" || !Number.isSafeInteger(value.profileId) || value.profileId < 0))
@@ -293,7 +299,7 @@ export function parseIntegrationMutationPlan(value: unknown): IntegrationMutatio
   }
   if ((value.willChange && (!value.canApply || changes.length === 0))
     || (!value.willChange && changes.length !== 0)
-    || (value.fingerprint === "p1:unbound" && value.canApply)
+    || ((value.fingerprint as string).endsWith(":unbound") && value.canApply)
     || (value.canApply === (value.refusalReason !== undefined))) throw invalidPreviewResponse();
   return {
     version: 1,

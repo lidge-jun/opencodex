@@ -7,6 +7,7 @@ import { createClineIO } from "../../src/integrations/cline-io";
 import { parseClineDocument } from "../../src/integrations/cline-document";
 import { parseConfig } from "../../src/integrations/config-io";
 import { INTEGRATION_CLIENTS, INTEGRATION_CLIENT_IDS, type IntegrationClientId } from "../../src/integrations/registry";
+import { previewIntegration } from "../../src/integrations/mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
 import { readIntegrationState, readPath } from "../../src/integrations/state";
 import { applyIntegration, disableIntegration, restoreIntegration } from "../../src/integrations/writer";
@@ -109,6 +110,55 @@ describe("the client registries cannot drift apart", () => {
       .filter(id => (expected as string[]).includes(id))
       .sort();
     expect(routedFileClients).toEqual(expected);
+  });
+
+  test("a plan the server produces is one the dashboard accepts", async () => {
+    const guiIntegrations = await import("../../gui/src/pages/integrations/integration-api");
+    installClient("zcode");
+    const input = { clientId: "zcode" as const, models: MODELS, config: CONFIG, port: 10100, env: TEST_ENV, home, store };
+
+    /*
+     * The parser re-declares the plan vocabulary by hand for the same reason
+     * the client list above is re-declared: it cannot import the backend. So
+     * the token format and the refusal names are two more hand-maintained
+     * copies, and nothing but a real plan crossing the boundary catches one of
+     * them going stale. It has: a fingerprint version bump once became a
+     * client-side rejection of every preview, silently, because the parser
+     * matched the previous version as a literal.
+     */
+    const applied = previewIntegration(input, { operation: "apply" });
+    expect(guiIntegrations.parseIntegrationMutationPlan(JSON.parse(JSON.stringify(applied)))).toMatchObject({
+      clientId: "zcode",
+      fingerprint: applied.fingerprint,
+    });
+
+    // And a refusal, so the reason vocabulary crosses too rather than only the
+    // shape of a plan that can apply.
+    const storePath = INTEGRATION_CLIENTS.zcode.supersededBy!(TEST_ENV, home);
+    mkdirSync(dirname(storePath), { recursive: true });
+    writeFileSync(storePath, "{}\n");
+    const refused = previewIntegration(input, { operation: "apply" });
+    expect(refused.canApply).toBe(false);
+    const parsed = guiIntegrations.parseIntegrationMutationPlan(JSON.parse(JSON.stringify(refused)));
+    expect(parsed.refusalReason).toBe(refused.refusalReason);
+
+    /*
+     * The mutation itself, shaped as the route sends it. A reason missing from
+     * the parser's own set is not recognised as a refusal at all, so the user
+     * would see a bare server error instead of the sentence that names the file
+     * their client actually reads.
+     */
+    const mutation = applyIntegration(input);
+    expect(mutation.ok).toBe(false);
+    if (mutation.ok) return;
+    expect(guiIntegrations.isIntegrationRefusalEnvelope({
+      error: "integration mutation failed",
+      code: "integration_mutation_failed",
+      clientId: mutation.clientId,
+      state: mutation.state,
+      reason: mutation.reason,
+      message: mutation.message,
+    })).toBe(true);
   });
 
   test("source preservation and cross-process locking are registry capabilities", () => {
