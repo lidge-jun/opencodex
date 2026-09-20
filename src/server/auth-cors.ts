@@ -1044,6 +1044,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   transcriptionModel: "editor",
   speechUrl: "editor",
   speechHeaders: "redacted",
+  liveUrl: "editor",
+  liveHeaders: "redacted",
   reasoningEffortMap: "editor",
   modelReasoningEffortMap: "editor",
   reasoningWireFormat: "editor",
@@ -1266,6 +1268,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ...(config.dictation ? { dictation: config.dictation } : {}),
     ...(config.transcription ? { transcription: config.transcription } : {}),
     ...(config.speech ? { speech: config.speech } : {}),
+    ...(config.liveVoice ? { liveVoice: config.liveVoice } : {}),
     providers,
   };
 }

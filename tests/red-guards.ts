@@ -76,7 +76,7 @@ export const GUARDS: Guard[] = [
   {
     name: "an unknown key in a route block is refused",
     file: "src/config/voice-target.ts",
-    from: `  if (unknown) return \`schema_invalid: \${route.label}.\${unknown}: unknown key\`;`,
+    from: `  if (unknown) return \`schema_invalid: \${route.key}.\${unknown}: unknown key\`;`,
     to: "",
     expect: "an unknown key in a route block is refused",
     suite: VOICE,
@@ -84,7 +84,7 @@ export const GUARDS: Guard[] = [
   {
     name: "a route block that is not an object is refused",
     file: "src/config/voice-target.ts",
-    from: `  if (!isRecord(value)) return \`schema_invalid: \${route.label}: must be an object\`;`,
+    from: `  if (!isRecord(value)) return \`schema_invalid: \${route.key}: must be an object\`;`,
     to: "",
     expect: "a route block that is not an object is refused",
     suite: VOICE,
@@ -92,7 +92,7 @@ export const GUARDS: Guard[] = [
   {
     name: "a byModel map that is not an object is refused",
     file: "src/config/voice-target.ts",
-    from: `    if (!isRecord(byModel)) return \`schema_invalid: \${route.label}.byModel: must be an object\`;`,
+    from: `    if (!isRecord(byModel)) return \`schema_invalid: \${route.key}.byModel: must be an object\`;`,
     to: "",
     expect: "a byModel map that is not an object is refused",
     suite: VOICE,
@@ -188,7 +188,7 @@ export const GUARDS: Guard[] = [
   {
     name: "a non-string target is named as such",
     file: "src/config/voice-target.ts",
-    from: '    if (typeof target !== "string") return `schema_invalid: ${route.label}.${field}: must be a string`;',
+    from: '    if (typeof target !== "string") return `schema_invalid: ${route.key}.${field}: must be a string`;',
     to: "",
     expect: "a target that is not a string says so, naming the field",
     suite: VOICE,
@@ -196,16 +196,16 @@ export const GUARDS: Guard[] = [
   {
     name: "an unresolvable target reports the resolution error",
     file: "src/config/voice-target.ts",
-    from: '    if (resolution.kind === "invalid") return `schema_invalid: ${route.label}.${field}: ${resolution.error}`;',
-    to: '    if (resolution.kind === "invalid") return `schema_invalid: ${route.label}.${field}: bad`;',
+    from: '    if (resolution.kind === "invalid") return `schema_invalid: ${route.key}.${field}: ${resolution.error}`;',
+    to: '    if (resolution.kind === "invalid") return `schema_invalid: ${route.key}.${field}: bad`;',
     expect: "a target naming no configured provider says which name is unknown",
     suite: VOICE,
   },
   {
     name: "a provider missing the route endpoint reports which endpoint",
     file: "src/config/voice-target.ts",
-    from: "      if (endpointError) return `schema_invalid: ${route.label}.${field}: ${endpointError}`;",
-    to: "      if (endpointError) return `schema_invalid: ${route.label}.${field}: not configured`;",
+    from: "      if (endpointError) return `schema_invalid: ${route.key}.${field}: ${endpointError}`;",
+    to: "      if (endpointError) return `schema_invalid: ${route.key}.${field}: not configured`;",
     expect: "a provider that exists but lacks the route's endpoint names the endpoint",
     suite: VOICE,
   },

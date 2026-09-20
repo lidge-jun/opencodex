@@ -898,6 +898,11 @@ export interface OcxConfig {
    * served at all — opencodex has no built-in text-to-speech to fall back to.
    */
   speech?: OcxVoiceRouteConfig;
+  /**
+   * Live voice (realtime speech conversation) backend selection. Unset keeps the built-in
+   * realtime relay; a custom provider can be selected globally or per active model.
+   */
+  liveVoice?: OcxVoiceRouteConfig;
   /** /v1/alpha/search relay for codex's built-in web search client. */
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */

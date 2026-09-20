@@ -1,13 +1,20 @@
 import { createHash } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
+import {
+  liveVoiceProviderEndpointError,
+  resolveLiveVoiceHeaders,
+  resolveLiveVoiceTarget,
+  type LiveVoiceTargetResolution,
+} from "../config/live-voice";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
 import { cancelBodyOnAbort, clearableDeadline } from "../lib/abort";
 import type { AdmissionLease } from "../lib/admission";
 import { captureExplicitOpenAiCallerAuth } from "../providers/openai-sidecar";
 import type { OcxConfig } from "../types";
 import type { AudioClient } from "./audio-client";
-import { finishAudioUpstream, type AudioSocketTarget } from "./audio-dictation";
+import { dictationConversationIds, finishAudioUpstream, latestDictationModelFromEntries, type AudioSocketTarget } from "./audio-dictation";
 import { LIVE_AUDIO_MODEL, resolveAudioUpstream, type AudioUpstream } from "./audio-upstream";
+import { getRequestLogEntries } from "./request-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import {
   backendJsonBodyFromApiMultipart, buildLiveSidebandUpstreamWsUrl, forwardLiveUrl, keyedLiveUrl,
@@ -27,6 +34,24 @@ function protocolHeaders(client: AudioClient, relay: AudioUpstream, frameless: b
   for (const [name, value] of Object.entries(relay.headers)) headers.set(name, value);
   if (frameless && !headers.has("openai-alpha")) headers.set("openai-alpha", "quicksilver=v2");
   return headers;
+}
+
+/**
+ * Pick the live voice backend for one active model: exact `byModel` entry, then `liveVoice.provider`,
+ * then the reserved `"openai"` (the historical realtime relay). Resolution is the shared config
+ * helper, so the runtime reports the same unknown/registry-managed rejection the write boundary does.
+ */
+export function selectLiveVoiceBackend(config: OcxConfig, modelId: string | undefined): LiveVoiceTargetResolution {
+  const target = (modelId ? config.liveVoice?.byModel?.[modelId] : undefined) ?? config.liveVoice?.provider;
+  return resolveLiveVoiceTarget(config.providers, target);
+}
+
+/**
+ * Resolve the thread's active model from the request log, exactly as dictation does: the most
+ * recent logged request whose `conversationId` digests to one of the upgrade's thread identities.
+ */
+export function resolveLiveVoiceActiveModelId(headers: Headers): string | undefined {
+  return latestDictationModelFromEntries(getRequestLogEntries(), dictationConversationIds(headers));
 }
 
 async function parseExternalOffer(req: Request, signal: AbortSignal): Promise<{ sdp: string; session?: Record<string, unknown> } | Response> {
@@ -148,6 +173,26 @@ export async function resolveExternalLiveSocket(
 ): Promise<AudioSocketTarget | Response> {
   const binding = "callId" in target ? options.bindings.get(target.callId, client.owner) : undefined;
   if ("callId" in target && !binding) return formatErrorResponse(404, "not_found", "Live call is unavailable for this key");
+  if (!binding) {
+    // Standalone session (no call-create against the built-in relay): the live voice block can
+    // point the whole socket at a custom upstream. A session already bound to a relay call keeps
+    // the relay — the call was created there, and repointing mid-call would strand the join.
+    const selection = selectLiveVoiceBackend(config, resolveLiveVoiceActiveModelId(client.headers));
+    if (selection.kind === "invalid") {
+      return formatErrorResponse(400, "invalid_request_error", selection.error);
+    }
+    if (selection.kind === "custom") {
+      // A custom endpoint relays frames verbatim, so it never resolves a relay account.
+      const endpointError = liveVoiceProviderEndpointError(selection.providerName, selection.provider);
+      if (endpointError) return formatErrorResponse(400, "invalid_request_error", endpointError);
+      return {
+        headers: resolveLiveVoiceHeaders(selection.provider.liveHeaders),
+        upstreamWsUrl: selection.provider.liveUrl!,
+        maxSessionMs: LIVE_CALL_TTL_MS,
+        finish: () => {},
+      };
+    }
+  }
   if (binding?.callerOwned && !captureExplicitOpenAiCallerAuth(client.headers, config)) {
     return formatErrorResponse(401, "authentication_error", "Live call requires its original caller account");
   }

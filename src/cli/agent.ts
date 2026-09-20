@@ -32,6 +32,8 @@ const USAGE = `Usage:
       [--reasoning <level>] [--max-descriptions <n>] [--json]
   ocx agent dictation <status|set> [--provider <id|->] [--by-model <json|->]
       [--list] [--json]
+  ocx agent voice <status|set> [--provider <id|->] [--by-model <json|->]
+      [--list] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -215,7 +217,7 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`${section} sidecar settings updated.`]);
 }
 
-function parseDictationObject(raw: string | undefined): Record<string, unknown> | null | undefined {
+function parseBackendObject(raw: string | undefined): Record<string, unknown> | null | undefined {
   if (raw === undefined) return undefined;
   if (raw === "-") return null;
   let parsed: unknown;
@@ -225,6 +227,48 @@ function parseDictationObject(raw: string | undefined): Record<string, unknown> 
     throw new CliUsageError("expected a JSON object or -", USAGE);
   }
   return parsed as Record<string, unknown>;
+}
+
+async function voice(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const action = (args.shift() ?? "status").toLowerCase();
+  const wantsJson = takeFlag(args, "--json");
+  const wantsList = takeFlag(args, "--list");
+  if (wantsList) {
+    if (action !== "status" && action !== "set") throw new CliUsageError(`unknown voice action ${action}`, USAGE);
+    rejectArgs(args, USAGE);
+    const settings = await runtimeRequest("/api/live-voice-settings", {}, deps) as { models?: string[] };
+    const models = settings.models ?? [];
+    printData(models, wantsJson, models.length === 0 ? ["no available models"] : models);
+    return;
+  }
+  if (action === "status") {
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest("/api/live-voice-settings", {}, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  if (action !== "set") throw new CliUsageError(`unknown voice action ${action}`, USAGE);
+  const provider = clearable(takeOption(args, "--provider"));
+  const byModel = parseBackendObject(takeOption(args, "--by-model"));
+  rejectArgs(args, USAGE);
+  if (provider === undefined && byModel === undefined) {
+    throw new CliUsageError("at least one voice option is required", USAGE);
+  }
+  // PUT replaces the whole block, so merge onto the server's current value: a partial
+  // `set --provider` must not silently drop an existing byModel map.
+  const current = await runtimeRequest("/api/live-voice-settings", {}, deps) as { liveVoice?: Record<string, unknown> };
+  const merged: Record<string, unknown> = { ...(current.liveVoice ?? {}) };
+  if (provider !== undefined) {
+    if (provider === null) delete merged.provider;
+    else merged.provider = provider;
+  }
+  if (byModel !== undefined) {
+    if (byModel === null) delete merged.byModel;
+    else merged.byModel = byModel;
+  }
+  const result = await runtimeRequest("/api/live-voice-settings", { method: "PUT", body: JSON.stringify({ liveVoice: merged }) }, deps);
+  printData(result, wantsJson, ["Live voice settings updated."]);
 }
 
 async function dictation(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -248,7 +292,7 @@ async function dictation(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   if (action !== "set") throw new CliUsageError(`unknown dictation action ${action}`, USAGE);
   const provider = clearable(takeOption(args, "--provider"));
-  const byModel = parseDictationObject(takeOption(args, "--by-model"));
+  const byModel = parseBackendObject(takeOption(args, "--by-model"));
   rejectArgs(args, USAGE);
   if (provider === undefined && byModel === undefined) {
     throw new CliUsageError("at least one dictation option is required", USAGE);
@@ -279,6 +323,7 @@ export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = 
     else if (sub === "fallback") await fallback(rest, deps);
     else if (sub === "sidecar") await sidecar(rest, deps);
     else if (sub === "dictation") await dictation(rest, deps);
+    else if (sub === "voice") await voice(rest, deps);
     // Lives here rather than as a top-level verb because it is an agent-behavior feature flag:
     // it controls whether default mode may ask the operator a question mid-task.
     else if (sub === "request-user-input") {

@@ -705,6 +705,36 @@ The active model is resolved for the thread from the request log using the `thre
 `x-codex-parent-thread-id` upgrade headers; when no lookup succeeds, `provider` applies. Invalid
 `dictation` values are rejected on write by `ocx config` and by `PUT /api/dictation-settings`.
 
+### `liveVoice` (`OcxVoiceRouteConfig`)
+
+Selects the backend for live voice sessions — the realtime speech conversation sockets
+(`/v1/live?model=`, `/v1/realtime?model=`). The default `openai` target keeps the built-in
+realtime relay unchanged.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `provider?` | `string` | `openai` | Backend for a model with no `byModel` entry: `openai` or a custom provider id. |
+| `byModel?` | `Record<string, string>` | `{}` | Per active `provider/model` override (for example `zai/glm-5.3-flash`). |
+
+A custom target is a CUSTOM entry in `providers` — one that is not registry-managed — carrying the
+live voice endpoint fields:
+
+| Provider field | Type | Meaning |
+| --- | --- | --- |
+| `liveUrl?` | `string` | WebSocket endpoint (`ws://` or `wss://`). Required to use the provider as a live voice target. |
+| `liveHeaders?` | `Record<string, string>` | Extra handshake headers; each value may be a whole `${ENV_VAR}` reference resolved from the environment. |
+
+The endpoint must speak the **same frame protocol** the built-in live relay already uses.
+opencodex relays frames verbatim and never resolves a relay account for a custom target, so no
+built-in account is required there. A registry-managed provider id is rejected as a target,
+mirroring `images.provider`; `openai` is reserved even when a provider is named `openai`.
+
+The active model is resolved for the thread from the request log exactly as for `dictation`.
+A session already bound to a relay-created call keeps the relay; custom targets apply to
+standalone sessions. A custom-backend failure surfaces as an explicit client error — there is
+no silent fallback to the built-in relay. Invalid `liveVoice` values are rejected on write by
+`ocx config` and by `PUT /api/live-voice-settings`.
+
 ## Remote Hub keys and defaults
 
 `runtimeRole` defaults to `standalone`. A hub uses `hub.managementPublicOrigin`, loopback-only `hub.managementIngress` (`enabled:false` when absent), and exact `remoteGui.allowedTailscaleUsers` (empty when absent). A client data key lives in `service-api-token`, never `config.json`; rotation may temporarily create `service-api-token.prev`. Usage stores are not mirrored.

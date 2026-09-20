@@ -1,6 +1,7 @@
 /**
- * Shared target resolution for the three voice routes — dictation (mic → text over a socket),
- * transcription (a file → text) and speech (text → audio).
+ * Shared target resolution for the four voice routes — dictation (mic → text over a socket),
+ * transcription (a file → text), speech (text → audio) and live voice (a realtime
+ * speech conversation over a socket).
  *
  * All three make the same decision: a reserved built-in name, the id of a CUSTOM provider whose
  * entry carries the endpoint, or a rejection. Writing that decision once is the point. The
@@ -14,14 +15,16 @@ import { getProviderRegistryEntry } from "../providers/registry";
 import type { OcxProviderConfig } from "../types";
 import { resolveEnvValue } from "./proxy-env";
 
-export type VoiceRouteKind = "dictation" | "transcription" | "speech";
+export type VoiceRouteKind = "dictation" | "transcription" | "speech" | "live";
 
 /** Which provider fields carry one route's endpoint. */
 interface RouteFields {
   /** The reserved target meaning "keep the built-in OpenAI/ChatGPT path". */
   reserved: string;
-  url: "dictationUrl" | "transcriptionUrl" | "speechUrl";
-  headers: "dictationHeaders" | "transcriptionHeaders" | "speechHeaders";
+  /** The route's config block key (`config.<key>`), used in schema error prefixes. */
+  key: string;
+  url: "dictationUrl" | "transcriptionUrl" | "speechUrl" | "liveUrl";
+  headers: "dictationHeaders" | "transcriptionHeaders" | "speechHeaders" | "liveHeaders";
   /** WebSocket routes only. */
   protocols?: "dictationProtocols";
   /** How the route is named in error text. */
@@ -31,6 +34,7 @@ interface RouteFields {
 export const VOICE_ROUTES: Record<VoiceRouteKind, RouteFields> = {
   dictation: {
     reserved: "openai",
+    key: "dictation",
     url: "dictationUrl",
     headers: "dictationHeaders",
     protocols: "dictationProtocols",
@@ -38,15 +42,24 @@ export const VOICE_ROUTES: Record<VoiceRouteKind, RouteFields> = {
   },
   transcription: {
     reserved: "openai",
+    key: "transcription",
     url: "transcriptionUrl",
     headers: "transcriptionHeaders",
     label: "transcription",
   },
   speech: {
     reserved: "openai",
+    key: "speech",
     url: "speechUrl",
     headers: "speechHeaders",
     label: "speech",
+  },
+  live: {
+    reserved: "openai",
+    key: "liveVoice",
+    url: "liveUrl",
+    headers: "liveHeaders",
+    label: "live voice",
   },
 };
 
@@ -143,18 +156,18 @@ export function voiceConfigValueError(
 ): string | null {
   const route = VOICE_ROUTES[kind];
   if (value === undefined || value === null) return null;
-  if (!isRecord(value)) return `schema_invalid: ${route.label}: must be an object`;
+  if (!isRecord(value)) return `schema_invalid: ${route.key}: must be an object`;
   const unknown = Object.keys(value).find(key => !ROUTE_KEYS.has(key));
-  if (unknown) return `schema_invalid: ${route.label}.${unknown}: unknown key`;
+  if (unknown) return `schema_invalid: ${route.key}.${unknown}: unknown key`;
 
   const targetError = (field: string, target: unknown): string | null => {
     if (target === undefined) return null;
-    if (typeof target !== "string") return `schema_invalid: ${route.label}.${field}: must be a string`;
+    if (typeof target !== "string") return `schema_invalid: ${route.key}.${field}: must be a string`;
     const resolution = resolveVoiceTarget(providers, target, kind);
-    if (resolution.kind === "invalid") return `schema_invalid: ${route.label}.${field}: ${resolution.error}`;
+    if (resolution.kind === "invalid") return `schema_invalid: ${route.key}.${field}: ${resolution.error}`;
     if (resolution.kind === "custom") {
       const endpointError = voiceProviderEndpointError(resolution.providerName, resolution.provider, kind);
-      if (endpointError) return `schema_invalid: ${route.label}.${field}: ${endpointError}`;
+      if (endpointError) return `schema_invalid: ${route.key}.${field}: ${endpointError}`;
     }
     return null;
   };
@@ -162,7 +175,7 @@ export function voiceConfigValueError(
   if (providerError) return providerError;
   const byModel = value.byModel;
   if (byModel !== undefined) {
-    if (!isRecord(byModel)) return `schema_invalid: ${route.label}.byModel: must be an object`;
+    if (!isRecord(byModel)) return `schema_invalid: ${route.key}.byModel: must be an object`;
     for (const [model, target] of Object.entries(byModel)) {
       const error = targetError(`byModel.${model}`, target);
       if (error) return error;

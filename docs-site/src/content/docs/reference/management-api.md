@@ -245,6 +245,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/dictation-settings` | Read or update the dictation backend and its per-model overrides | 400 invalid shape, unknown target, or registry-managed provider |
+| `GET, PUT /api/live-voice-settings` | Read or update the live voice backend and its per-model overrides | 400 invalid shape, unknown target, or registry-managed provider |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
 
 ### Logs, usage, and storage

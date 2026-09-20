@@ -814,6 +814,16 @@ export interface OcxProviderConfig {
   /** Extra headers for `speechUrl`. Each value may be a whole `${ENV_VAR}` reference. */
   speechHeaders?: Record<string, string>;
   /**
+   * Live voice (realtime speech conversation) WebSocket endpoint for this provider. Setting it
+   * makes the provider a valid `liveVoice.provider` / `liveVoice.byModel` target. The endpoint
+   * must speak the same realtime frame protocol the built-in live relay already uses;
+   * opencodex relays frames verbatim and never resolves a relay account, so no provider adapter
+   * is involved.
+   */
+  liveUrl?: string;
+  /** Extra handshake headers for `liveUrl`. Each value may be a whole `${ENV_VAR}` reference. */
+  liveHeaders?: Record<string, string>;
+  /**
    * Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values.
    * Map a label to the reserved value `"__omit__"` to send no reasoning field at all for that
    * effort, so the upstream model's own default applies. The sentinel is

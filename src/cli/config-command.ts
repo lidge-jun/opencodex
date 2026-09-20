@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
 import { dictationConfigError } from "../config/dictation";
+import { liveVoiceConfigError } from "../config/live-voice";
 import { voiceConfigValueError } from "../config/voice-target";
 import type { OcxProviderConfig } from "../types";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
@@ -175,6 +176,7 @@ function validateCandidate(value: unknown): ReturnType<typeof validateConfigCand
     value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
   const error = visionReasoningError(value)
     ?? dictationConfigError(value)
+    ?? liveVoiceConfigError(value)
     ?? voiceConfigValueError(block("transcription"), providers, "transcription")
     ?? voiceConfigValueError(block("speech"), providers, "speech");
   return error ? { ok: false, error } : validateConfigCandidate(value);
