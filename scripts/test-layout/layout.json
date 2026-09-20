@@ -825,6 +825,7 @@
     "health-scoring.test.ts": "server",
     "history-migration-guardian.test.ts": "codex-integration",
     "history-ocx-compaction-recovery.test.ts": "codex-integration",
+    "history-paginated-openai-compat.test.ts": "codex-integration",
     "hub-gated-local-clients.test.ts": "cli",
     "hub-invite.test.ts": "cli",
     "hyperbolic-provider.test.ts": "providers",
