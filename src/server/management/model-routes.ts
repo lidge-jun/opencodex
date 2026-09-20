@@ -545,9 +545,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ClientPathError)) throw error;
       return jsonResponse({ error: error.message }, 400, req, config);
     }
-    if (requested === "raycast" && shouldInjectApiAuthHeader(config)) {
+    if (spec.loopbackOnly && shouldInjectApiAuthHeader(config)) {
       return jsonResponse({
-        error: "Raycast export requires an unauthenticated loopback destination; this listener requires an admission header Raycast cannot supply.",
+        error: `${requested} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
         reason: "non_loopback",
       }, 400, req, config);
     }

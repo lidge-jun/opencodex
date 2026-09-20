@@ -128,6 +128,11 @@ because they are a different plane. Upstream account response reads and OrcaRout
 The registered route set is larger than the areas described below; the code is the route SOT. What
 this document owns is which module holds which area and what invariant that area must not break.
 
+`GET /api/client-config` checks the export registry's `loopbackOnly` flag with
+`shouldInjectApiAuthHeader` before loading the model catalog. A destination requiring an admission
+header returns 400 with `reason: non_loopback` for these clients; loopback binds and enabled
+unauthenticated loopback listeners remain eligible.
+
 | Endpoint area | Responsibility |
 | --- | --- |
 | Config/settings | Read safe config/settings views; mutate supported settings only. Full `PUT /api/config` is disabled so masked secrets are not round-tripped. `PUT /api/settings` accepts `codexAutoStart`, `streamMode`, integer `appOwnedMemoryBudgetMb` (64..4096), strict boolean `codexAccountPickerEnabled`, strict boolean `fastRows`, and a validated per-account `codexQuotaAutoRefresh` toggle (each optional, at least one required). `fastRows` defaults on when absent: false is persisted, true deletes the key, and successful writes echo the effective boolean. An effective change converges the Codex catalog and refreshes enabled or already-owned client integrations after persistence. Picker enable initializes an empty UI-managed selector map, persists before one bounded catalog convergence, and reports only `catalogRefreshPending`; allocation/save failure restores every touched live field and skips convergence. Budget changes synchronously enforce the process-wide evictable retained-state cap; this is separate from RSS/native memory. `streamMode` persists the #314 stream-shape selection in config.json (Windows services need persisted input; macOS eager relay is explicit-only). |
