@@ -7,6 +7,7 @@ import {
 } from "../../src/config/voice-target";
 import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS, SPEECH_REQUEST_MAX_BYTES, SPEECH_RESPONSE_MAX_BYTES } from "../../src/server/audio-speech";
 import { handleAudioTranscriptions } from "../../src/server/audio-transcriptions";
+import { latestDictationModelFromEntries } from "../../src/server/audio-dictation";
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -643,5 +644,43 @@ describe("speech streaming", () => {
     const response = await speakWith(() => new Response(null, { status: 200 }));
     expect(response.status).toBe(502);
     expect(await response.text()).toContain("no audio");
+  });
+});
+
+describe("byModel needs a conversation", () => {
+  /**
+   * The selection is real — a thread whose last turn used one model routes
+   * speech to that model's backend — but only when the request log has a
+   * conversation id to match on, and only `/v1/responses` and the
+   * Claude-messages path record one. `/v1/chat/completions` logs the model and
+   * leaves the conversation unset, so a caller on that route can never match.
+   *
+   * Pinned here because it is invisible from the config: a `byModel` entry
+   * looks configured and does nothing, which is the same shape as a guard that
+   * is present and inert.
+   */
+  test("an entry with no conversation id can never be matched", () => {
+    const entries = [
+      { conversationId: undefined, requestedModel: "stub/model-a", model: "model-a" },
+      { conversationId: undefined, requestedModel: "stub/model-b", model: "model-b" },
+    ] as unknown as Parameters<typeof latestDictationModelFromEntries>[0];
+    expect(latestDictationModelFromEntries(entries, ["some-thread"])).toBeUndefined();
+  });
+
+  test("the most recent turn in the thread wins", () => {
+    const entries = [
+      { conversationId: "t1", requestedModel: "stub/model-a" },
+      { conversationId: "t2", requestedModel: "stub/model-b" },
+      { conversationId: "t1", requestedModel: "stub/model-c" },
+    ] as unknown as Parameters<typeof latestDictationModelFromEntries>[0];
+    expect(latestDictationModelFromEntries(entries, ["t1"])).toBe("stub/model-c");
+    expect(latestDictationModelFromEntries(entries, ["t2"])).toBe("stub/model-b");
+  });
+
+  test("no thread ids at all means no match, whatever is logged", () => {
+    const entries = [
+      { conversationId: "t1", requestedModel: "stub/model-a" },
+    ] as unknown as Parameters<typeof latestDictationModelFromEntries>[0];
+    expect(latestDictationModelFromEntries(entries, [])).toBeUndefined();
   });
 });

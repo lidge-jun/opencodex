@@ -313,4 +313,12 @@ export const GUARDS: Guard[] = [
     expect: "an upstream with no body at all is 502",
     suite: VOICE,
   },
+  {
+    name: "byModel needs a conversation id to match on",
+    file: "src/server/audio-dictation.ts",
+    from: "    if (entry.conversationId && wanted.has(entry.conversationId)) return entry.requestedModel ?? entry.model;",
+    to: "    if (wanted.size >= 0) return entry.requestedModel ?? entry.model;",
+    expect: "an entry with no conversation id can never be matched",
+    suite: VOICE,
+  },
 ];
