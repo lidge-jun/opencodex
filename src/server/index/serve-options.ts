@@ -100,6 +100,7 @@ import {
   withCors,
   withManagementCors,
 } from "../auth-cors";
+import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -1101,6 +1102,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             return disabledModels.has(id) ? [] : [{ id, metadataId }];
           })
         );
+        // What a scoped key may see, filtered by the same predicate that refuses
+        // it on the data plane, so the catalog and the send path cannot disagree.
+        // This is a convenience, never the boundary: hiding a row only stops a
+        // client that reads the catalog first, which is why the refusal lives on
+        // the request path and this filter reuses it rather than replacing it.
+        // Filtering happens where the resolved provider and model are still in
+        // hand -- a published id is a selector, and re-resolving one here would
+        // re-run combo selection just to render a list.
+        const listScope = resolveAdmissionModelScope(config, admission);
+        const listAllows = (providerName: string, modelId: string): boolean =>
+          routeAllowedByScope(listScope, { providerName, modelId });
         // The projection is opt-in. Keep the default path free of Cursor install detection,
         // and resolve the bundle table once for the whole list rather than once per row.
         const effortRowsEnabled = config.cursorEffortRows === true;
@@ -1133,7 +1145,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             effortRowKnownIds,
           ));
         };
-        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
+        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
+          .filter(m => listAllows(m.provider, m.id))
+          .map(async m => {
           // Same rule as the anthropic branch: with the global fast switch on, a client
           // that has no Fast toggle is offered the fast identity directly. An operator
           // alias is an explicit decision and still wins.
@@ -1180,8 +1194,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ));
         }));
         const data = [
-          ...visibleNatives.flatMap(id => expandedNativeModelRow(id)),
-          ...visibleAccountNatives.flatMap(({ id, metadataId }) => expandedNativeModelRow(id, metadataId)),
+          ...visibleNatives
+            .filter(id => listAllows(OPENAI_CODEX_PROVIDER_ID, id))
+            .flatMap(id => expandedNativeModelRow(id)),
+          ...visibleAccountNatives
+            .filter(({ metadataId }) => listAllows(OPENAI_CODEX_PROVIDER_ID, metadataId))
+            .flatMap(({ id, metadataId }) => expandedNativeModelRow(id, metadataId)),
           ...routedRows.flat(),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);

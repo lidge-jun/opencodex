@@ -12,6 +12,8 @@ import {
 const USAGE = `Usage:
   ocx access key [list] [--json]
   ocx access key create [name] [--json]
+  ocx access key get <id-or-name> [--json]
+  ocx access key set <id-or-name> [--allow-provider <name>]... [--allow-model <id>]... [--clear] [--json]
   ocx access key rotate <id> [--json]
   ocx access key rotate commit <id> <rotation-id> [--json]
   ocx access key rotate abort <id> <rotation-id> [--json]
@@ -65,6 +67,51 @@ function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<stri
   return footer.length > 0 ? [...lines, "", ...footer] : lines;
 }
 
+/**
+ * Repeatable option values, in the order given.
+ *
+ * takeOption removes one occurrence, so a scope with several entries needs the
+ * loop: reading it once would silently keep only the first `--allow-model` and
+ * write a narrower scope than the operator typed.
+ */
+function takeAllOptions(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (;;) {
+    const value = takeOption(args, name);
+    if (value === undefined) break;
+    values.push(value);
+  }
+  return values;
+}
+
+/**
+ * Find a key by id or by name, without ever reading the secret.
+ *
+ * The management API keys every mutation by id, so a name has to be resolved
+ * here. An ambiguous name is refused rather than resolved to the first match:
+ * silently scoping one of two keys that share a name is the kind of mistake
+ * only discovered when the wrong client stops working.
+ */
+function findKeyRow(keys: Array<Record<string, unknown>>, selector: string): Record<string, unknown> {
+  const wanted = selector.trim().toLowerCase();
+  const byId = keys.filter(entry => String(entry.id ?? "").toLowerCase() === wanted);
+  if (byId.length === 1) return byId[0]!;
+  const byName = keys.filter(entry => String(entry.name ?? "").trim().toLowerCase() === wanted);
+  if (byName.length === 1) return byName[0]!;
+  if (byName.length > 1) throw new CliUsageError("key name " + selector + " is ambiguous; use the id", USAGE);
+  throw new CliUsageError("no API key matches " + selector, USAGE);
+}
+
+function scopeLines(entry: Record<string, unknown>): string[] {
+  const list = (value: unknown): string =>
+    Array.isArray(value) && value.length > 0 ? (value as string[]).join(", ") : "(any)";
+  return [
+    "API key " + String(entry.name ?? "") + " (" + String(entry.id ?? "") + ")",
+    "  allowed providers: " + list(entry.allowedProviders),
+    "  allowed models:    " + list(entry.allowedModels),
+  ];
+}
+
 async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const action = (args.shift() ?? "list").toLowerCase();
@@ -88,6 +135,46 @@ async function key(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       `Created API key ${String(result.name ?? name)} (${String(result.id ?? "")}).`,
       `Key (shown once): ${String(result.key ?? "")}`,
     ]);
+    return;
+  }
+  if (action === "get") {
+    const selector = args.shift();
+    if (!selector) throw new CliUsageError("key id or name is required", USAGE);
+    rejectArgs(args, USAGE);
+    const result = await runtimeRequest<Record<string, unknown>>("/api/keys", {}, deps);
+    const entry = findKeyRow(Array.isArray(result.keys) ? result.keys as Array<Record<string, unknown>> : [], selector);
+    // The list response carries the masked prefix and never the secret, so the
+    // row is safe to print as-is under --json.
+    printData(entry, wantsJson, scopeLines(entry));
+    return;
+  }
+  if (action === "set") {
+    const selector = args.shift();
+    if (!selector) throw new CliUsageError("key id or name is required", USAGE);
+    const clear = takeFlag(args, "--clear");
+    const providers = takeAllOptions(args, "--allow-provider");
+    const models = takeAllOptions(args, "--allow-model");
+    rejectArgs(args, USAGE);
+    if (!clear && providers.length === 0 && models.length === 0) {
+      throw new CliUsageError("set requires --allow-provider, --allow-model, or --clear", USAGE);
+    }
+    const listed = await runtimeRequest<Record<string, unknown>>("/api/keys", {}, deps);
+    const target = findKeyRow(Array.isArray(listed.keys) ? listed.keys as Array<Record<string, unknown>> : [], selector);
+    // A set REPLACES the named dimension rather than appending to it, and
+    // --clear removes both. Naming one dimension leaves the other alone, so
+    // narrowing providers cannot accidentally widen models.
+    const body: Record<string, unknown> = { id: target.id };
+    if (clear) {
+      body.allowedProviders = null;
+      body.allowedModels = null;
+    }
+    if (providers.length > 0) body.allowedProviders = providers;
+    if (models.length > 0) body.allowedModels = models;
+    const result = await runtimeRequest<Record<string, unknown>>("/api/keys", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }, deps);
+    printData(result, wantsJson, scopeLines(result));
     return;
   }
   if (action === "rotate") {

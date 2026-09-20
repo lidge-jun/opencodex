@@ -7,6 +7,12 @@
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  assertRouteAllowedByScope,
+  resolveAdmissionModelScope,
+} from "./admission-model-scope";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
@@ -815,6 +821,13 @@ async function handleClaudeMessagesWithBudget(
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    // Same reason as the native Chat lane: this route can be sent from here, so
+    // the key's scope is applied before the wire is settled.
+    assertRouteAllowedByScope(
+      resolveAdmissionModelScope(config, logIds?.admission),
+      String(internalBody.model ?? ""),
+      route,
+    );
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.staticPolicy = captureRouteStaticPolicy(
@@ -847,6 +860,11 @@ async function handleClaudeMessagesWithBudget(
       if (ladder !== undefined && ladder.length === 0) delete internalBody.reasoning;
     }
   } catch (err) {
+    if (err instanceof AdmissionModelDeniedError) {
+      logCtx.requestedModel = requestedModel;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
+      return admissionModelDeniedResponse(err);
+    }
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 404, { closeReason: "non_stream" });

@@ -253,6 +253,21 @@ export interface OcxApiKeyEntry {
   key: string;
   createdAt: string;
   pendingRotation?: OcxPendingApiKeyRotation;
+  /**
+   * Resolved provider names this key may reach. Absent or empty means every
+   * provider, which is what every existing key has, so adding the field
+   * changes nothing until an operator sets one.
+   */
+  allowedProviders?: string[];
+  /**
+   * Resolved destinations this key may reach, as a bare model id or a
+   * `provider/model` pair. Absent or empty means every model.
+   *
+   * These name destinations, not the selectors a client sends: they are
+   * checked after alias, combo, fallback and compaction resolution, because
+   * that is the only point at which the model about to be billed is known.
+   */
+  allowedModels?: string[];
 }
 
 export interface OcxPendingApiKeyRotation {
