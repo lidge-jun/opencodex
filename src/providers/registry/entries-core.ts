@@ -657,6 +657,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Zen Go can close a Chat stream after a fully assembled function call without sending
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
+    // Muse Spark on OpenCode Go can sit silent during prolonged reasoning and close without a protocol terminal.
+    modelResponsesTerminalRepair: {
+      "muse-spark-1.2-contributor": { graceMs: 5_000 },
+      "muse-spark-1.3-contributor": { graceMs: 5_000 },
+    },
     // Go rejects reasoning.encrypted_content with previous_response_id (#3838).
     // Use explicit replay history and the existing stateless Responses policy.
     statelessResponses: true,
@@ -1253,3 +1258,4 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Serverless Inference subscription API. Live discovery exposes only kimi-k2-instruct because Vultr documents it as the sole tool-calling model.",
   },
 ];
+
