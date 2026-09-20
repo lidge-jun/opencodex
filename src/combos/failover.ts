@@ -399,6 +399,9 @@ function isRequestLocalTargetIncompatibility(status: number, message: string, co
     if (errorCode === "unsupported_value"
       && (e.param === "reasoning.effort" || e.param === "reasoning_effort")
       && e.message.startsWith("Unsupported value:") && e.message.includes("not supported")) return true;
+    if (e.code === null
+      && e.param === "reasoning_effort"
+      && /^Function tools with reasoning_effort are not supported for gpt-6-astra(?:-\d{4}-\d{2}-\d{2})? in \/v1\/chat\/completions\. To use function tools, use \/v1\/responses or set reasoning_effort to 'none'\.$/.test(e.message)) return true;
     return e.param === "input"
       && (errorCode === "" || errorCode === "invalid_request_error")
       && /^Model '[^']{1,256}' does not support image inputs\./.test(e.message);

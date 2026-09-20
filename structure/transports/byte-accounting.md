@@ -4,6 +4,8 @@ Native result continuations and function-result injection follow [the mode-speci
 
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
+Translated Chat inline-image normalization keeps retained wire bytes in its aggregate budget while process-wide native-decode admission and a decoded-pixel ceiling bound memory outside that byte accounting.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). Raised HTTP concurrency follows the separate admission contract below.
 
@@ -167,3 +169,5 @@ Schema size still determines traversal work and the cost of copying a changed br
 `tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+The [compaction routing override](responses.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.

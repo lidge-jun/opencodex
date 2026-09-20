@@ -559,3 +559,173 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
   });
 });
+
+describe("provider outbound default User-Agent", () => {
+  function userAgentDependencies(response: Response): {
+    dependencies: ProviderOutboundDependencies;
+    captured: { headers?: HeadersInit };
+  } {
+    const captured: { headers?: HeadersInit } = {};
+    return {
+      captured,
+      dependencies: {
+        resolveAddresses: mock(async () => ({
+          hostname: "provider.example",
+          addresses: [{ address: "93.184.216.34", family: 4 }],
+          privateNetwork: false,
+        })),
+        pinnedGet: mock(async (_url, _pinned, _signal, requestOptions) => {
+          captured.headers = requestOptions?.headers;
+          return response;
+        }),
+        pinnedPost: mock(async (_url, _pinned, _body, _signal, requestOptions) => {
+          captured.headers = requestOptions?.headers;
+          return response;
+        }),
+      },
+    };
+  }
+
+  test("direct GET fills opencodex when no caller names a User-Agent", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response('{"data":[]}', { status: 200 }));
+
+    const response = await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: { authorization: "Bearer test-key" } },
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("a caller User-Agent is kept without a second User-Agent beside it", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: { authorization: "Bearer test-key", "user-agent": "gateway-agent/1.0" } },
+      dependencies,
+    );
+
+    expect(Object.keys(captured.headers as Record<string, string>).filter(name => name.toLowerCase() === "user-agent"))
+      .toEqual(["user-agent"]);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("gateway-agent/1.0");
+  });
+
+  test("no headers at all still sends the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      {},
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+  });
+
+  test("the POST diagnostic path gets the same default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundPost } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    const response = await providerOutboundPost(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/discovery",
+      { headers: { authorization: "Bearer test-key" }, body: "{}" },
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+  });
+  test("a Headers object without a User-Agent gets the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: new Headers({ authorization: "Bearer test-key" }) },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("an array-form header list without a User-Agent gets the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: [["authorization", "Bearer test-key"]] },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("a Headers object keeps its own User-Agent", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: new Headers({ "user-agent": "vendor-agent/1.0" }) },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("vendor-agent/1.0");
+  });
+
+  // The pinned transport is not the only way out of this wrapper. A provider that carries its
+  // own executor bypasses `pinnedGet`/`pinnedPost` entirely, so a fill applied only on the
+  // pinned path would leave that branch UA-less and still 403 behind the same WAF. Asserting the
+  // init the executor actually receives is what keeps the default from being pinned-path-only.
+  test("a caller-owned executor receives the same default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const captured: { headers?: HeadersInit } = {};
+    const override = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured.headers = init?.headers;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+
+    await providerOutboundGet(
+      "override",
+      { baseUrl: "https://override.example/v1", fetch: override } as { baseUrl: string; fetch: typeof fetch },
+      "https://override.example/v1/models",
+      { headers: { authorization: "Bearer test-key" } },
+    );
+
+    expect(override).toHaveBeenCalledTimes(1);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+});

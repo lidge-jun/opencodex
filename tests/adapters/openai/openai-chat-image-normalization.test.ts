@@ -91,6 +91,16 @@ async function buildNoisyPngB64(width: number, height: number): Promise<string> 
   return Buffer.from(png).toString("base64");
 }
 
+function headerOnlyPngB64(width: number, height: number, base64Length: number): string {
+  const bytes = Buffer.alloc(Math.ceil(base64Length / 4) * 3);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write("IHDR", 12);
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes.toString("base64");
+}
+
 
 /** Wrap raw base64 as a data URL, the only image form this wire normalizes. */
 function dataUrl(b64: string, mediaType = "image/png"): string {
@@ -242,6 +252,40 @@ describe("openai-chat inline image normalization", () => {
     expect(parts).toHaveLength(1);
     // NaN bypasses processing tiers; this exercises failed processing, not Promise rejection.
     expect(parts[0]?.image_url?.url).toBe(original);
+    expect(getNormalizeStatsForTests().encodeCalls).toBe(0);
+  });
+
+  test("a highly compressed 100 megapixel image never reaches the decoder", async () => {
+    const bomb = headerOnlyPngB64(10_000, 10_000, OPENAI_CHAT_IMAGE_BASE64_BUDGET + 4);
+    const original = dataUrl(bomb);
+    const messages = [{
+      role: "user",
+      content: [{ type: "image_url", image_url: { url: original } }],
+    }];
+    let encodeCalls = 0;
+    await normalizeOpenAIChatImages(messages, {
+      encode: async () => {
+        encodeCalls++;
+        return { data: "unexpected", mediaType: "image/jpeg" };
+      },
+    });
+    expect(encodeCalls).toBe(0);
+    expect(imageParts(messages as ChatMsg[])[0]?.image_url?.url).toBe(original);
+  });
+
+  test("an already-cancelled oversized build does not start normalization", async () => {
+    const big = headerOnlyPngB64(1000, 1000, OPENAI_CHAT_IMAGE_BASE64_BUDGET + 4);
+    const controller = new AbortController();
+    controller.abort(new Error("client disconnected"));
+    const built = createOpenAIChatAdapter(provider).buildRequest(
+      parsedWith([imageMessage([dataUrl(big)])]),
+      {
+        headers: new Headers(),
+        translatorBudget: createTestTranslatorBudget(),
+        abortSignal: controller.signal,
+      },
+    );
+    await expect(built as Promise<unknown>).rejects.toThrow("client disconnected");
     expect(getNormalizeStatsForTests().encodeCalls).toBe(0);
   });
 

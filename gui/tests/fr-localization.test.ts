@@ -136,6 +136,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientFactoryDroid",
   "models.reasoningEffort.minimal",
   "models.reasoningEffort.max",
+  "models.reasoningEffort.ultra",
   "pws.pacingRpmUnit",
   "claudeDesktop.family.opus",
   "claudeDesktop.family.fable",

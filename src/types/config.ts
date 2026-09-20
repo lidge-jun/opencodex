@@ -403,6 +403,8 @@ export interface OcxConfig {
   client?: OcxClientConnectionConfig;
   /** Operator-facing redaction policy for management and CLI projections. */
   privacy?: OcxPrivacyConfig;
+  /** Opt-in process-local aggregate request metrics on the authenticated management plane. */
+  metricsExport?: { enabled?: boolean };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
@@ -616,6 +618,12 @@ export interface OcxConfig {
   subagentEffortCap?: string;
   /** Global model effort overrides, after provider model/wide pins; none means omission. */
   modelPinnedEfforts?: Record<string, string>;
+  compactionRouting?: {
+    model: string;
+    reasoningEffort?: string;
+    /** Compaction triggers this override covers; omission means `["manual"]`. */
+    triggers?: ("manual" | "auto")[];
+  };
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only

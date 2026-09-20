@@ -1,12 +1,13 @@
 import { mutatePersistedConfig } from "../config";
 import { projectModelRenames } from "./model-rename-migration";
 import { projectStaleContextWindows } from "./stale-context-window-migration";
+import { projectStaleVisionClassifications } from "./stale-vision-classification-migration";
 import { projectDevinCliAuthMode } from "./devin-cli-authmode-migration";
 import type { OcxConfig } from "../types";
 
 /**
- * The startup projection: registry model renames, then the context-window
- * repair. Both fix a saved row the registry can no longer reach on its own —
+ * The startup projection: registry model renames, then the context-window and
+ * vision-classification repairs. All three fix a saved row the registry can no longer reach on its own —
  * `enrichProviderFromRegistry` backfills a missing field and never rewrites a
  * present one — so they share this pass rather than adding a second boot step
  * with its own persistence, adopt, and failure handling.
@@ -14,11 +15,12 @@ import type { OcxConfig } from "../types";
 export function projectStartupConfigRepairs(config: OcxConfig): ReturnType<typeof projectModelRenames> {
   const renames = projectModelRenames(config);
   const windows = projectStaleContextWindows(renames.config);
-  const devinCli = projectDevinCliAuthMode(windows.config);
+  const vision = projectStaleVisionClassifications(windows.config);
+  const devinCli = projectDevinCliAuthMode(vision.config);
   return {
     config: devinCli.config,
-    changed: renames.changed || windows.changed || devinCli.changed,
-    warnings: [...renames.warnings, ...windows.warnings, ...devinCli.warnings],
+    changed: renames.changed || windows.changed || vision.changed || devinCli.changed,
+    warnings: [...renames.warnings, ...windows.warnings, ...vision.warnings, ...devinCli.warnings],
   };
 }
 

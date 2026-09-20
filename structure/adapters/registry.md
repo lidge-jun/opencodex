@@ -52,14 +52,28 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   adapter accepts them on return. One tool's canonical identity can be another tool's advertised
   local name, and resolving that name to either owner would dispatch the call to a tool the caller
   may not have named, so it is treated as ambiguous and fails before dispatch too.
+  Assistant reasoning replay likewise follows the Cognition wire shape. One history prompt carries
+  a single thinking/signature pair, so every block with text is replayed at #11 and #12 is attached
+  only when the text being replayed is the text that signature attests — the single-block case.
+  Several independently signed blocks send the joined chain unsigned rather than pairing one
+  block's attestation with another block's words, and rather than dropping reasoning the turn
+  produced to keep a pair. A signature-only block carries encrypted thinking that is not replayed,
+  so it contributes neither the text nor the signature. The signature is replayed only when the
+  source envelope actually carried one: the serialized reasoning item the Responses parser parks
+  on unsigned thinking parts is provider state, not an attestation, and
+  `isProviderIssuedThinkingSignature` in `src/responses/reasoning-envelope.ts` denies that one
+  shape beside the code that writes it. It is a deny-list rather than a guess at what an opaque
+  token looks like; the stricter base64 allow-list in `src/adapters/anthropic.ts` is a fact about
+  Anthropic's wire and is not assumed of Cognition's.
 
   There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
   `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's
   credential turned out to be the ordinary cloud token, so the child process bought nothing that
   importing the token did not, and it cost a placeholder `buildRequest`, a disabled
   `parseStream`, an identity-only `baseUrl`, and a subprocess running in the operator's tree.
-  `projectDevinCliAuthMode` rewrites any saved row that still names the retired adapter id,
-  alongside the merge migration that retires the `devin-cli` provider id itself.
+  The merge migration rewrites the canonical `devin-cli` provider id. A custom-named row that
+  still names the retired adapter is left on that unknown id so requests fail closed until the
+  operator explicitly selects `devin` and configures Devin authentication.
 
   Before spending a chat roundtrip the adapter runs a catalog pre-flight:
   `src/adapters/devin/cloud-direct/catalog.ts` fetches `GetCascadeModelConfigs` and preserves
@@ -163,7 +177,7 @@ Combo child requests normalize effort and thinking controls against the selected
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
-Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -217,3 +231,5 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 ## Devin image boundary
 
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
+
+A [compaction routing override](../transports/responses.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.

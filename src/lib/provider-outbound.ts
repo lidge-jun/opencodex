@@ -104,14 +104,58 @@ export async function providerRedirectError(response: Response, requestUrl: stri
   return `provider returned ${response.status} redirect to ${target}; configure the final provider URL directly`;
 }
 
+/**
+ * Default client identity for proxy-originated provider outbound requests.
+ *
+ * Every request through the provider outbound wrapper — connection tests, model
+ * discovery, quota probes — is initiated by the proxy itself, so there is no
+ * client request to inherit a User-Agent from, and the pinned Node-style
+ * transport sends none. WAF/CDN front ends commonly answer UA-less requests
+ * with a 403 that surfaced as "provider added but no models" (#5104). A caller
+ * that materializes its own User-Agent — registry static headers, provider
+ * `headers`, or a vendor-specific client fingerprint — keeps that value and is
+ * never given a second User-Agent; this only fills the name nobody claimed.
+ * The value is what survives, not its spelling: both the pinned transport and
+ * the SOCKS transport rebuild the set through `new Headers()`, which lowercases
+ * every name before it reaches the wire. Inference traffic never uses this
+ * wrapper, so the client-fingerprint rationale of #1751 is unaffected.
+ */
+const PROVIDER_OUTBOUND_DEFAULT_USER_AGENT = "opencodex";
+
+function hasUserAgentHeader(headers: HeadersInit | null | undefined): boolean {
+  if (!headers) return false;
+  if (headers instanceof Headers) return headers.has("user-agent");
+  if (Array.isArray(headers)) return headers.some(([name]) => name.toLowerCase() === "user-agent");
+  return Object.keys(headers).some(name => name.toLowerCase() === "user-agent");
+}
+
+function withDefaultOutboundUserAgent(
+  init: ProviderGetInit | ProviderPostInit,
+): ProviderGetInit | ProviderPostInit {
+  const headers = init.headers;
+  if (hasUserAgentHeader(headers)) return init;
+  if (headers instanceof Headers) {
+    const merged = new Headers(headers);
+    merged.set("User-Agent", PROVIDER_OUTBOUND_DEFAULT_USER_AGENT);
+    return { ...init, headers: merged };
+  }
+  if (Array.isArray(headers)) {
+    return { ...init, headers: [...headers, ["User-Agent", PROVIDER_OUTBOUND_DEFAULT_USER_AGENT]] };
+  }
+  return { ...init, headers: { ...(headers ?? {}), "User-Agent": PROVIDER_OUTBOUND_DEFAULT_USER_AGENT } };
+}
+
 async function providerOutboundRequest(
   name: string,
   provider: ProviderOutboundConfig,
   url: string,
   method: "GET" | "POST",
-  init: ProviderGetInit | ProviderPostInit,
+  rawInit: ProviderGetInit | ProviderPostInit,
   dependencies: ProviderOutboundDependencies = {},
 ): Promise<Response> {
+  // See PROVIDER_OUTBOUND_DEFAULT_USER_AGENT: this wrapper only carries proxy-originated
+  // diagnostic traffic, so it identifies itself unless the caller already did.
+  const init = withDefaultOutboundUserAgent(rawInit);
   const postUrl = method === "POST" ? new URL(url) : undefined;
   if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
     throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");

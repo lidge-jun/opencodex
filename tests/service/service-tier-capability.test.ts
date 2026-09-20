@@ -39,6 +39,7 @@ describe("registry capability reaches saved configs without overriding them", ()
     expect(entry.preserveResponsesReasoningContent).toBe(true);
     expect(getProviderRegistryEntry("openai-apikey")!.supportsServiceTier).toBe(true);
     expect(getProviderRegistryEntry("volcengine-agent-plan")!.supportsServiceTier).toBe(false);
+    expect(getProviderRegistryEntry("volcengine-coding-plan")!.supportsServiceTier).toBe(false);
     // Registry-only metadata (same philosophy as modelWireDefaults): NOT seeded.
     const seed = providerConfigSeed(entry);
     expect(seed.supportsServiceTier).toBeUndefined();

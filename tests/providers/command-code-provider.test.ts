@@ -750,6 +750,127 @@ describe("Command Code provider", () => {
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
   });
 
+  /*
+   * #5096: the shipped table is a default, not a ceiling configuration cannot reach past.
+   *
+   * The adapter used to read `commandCodeReasoningEfforts() ?? configuredReasoningEfforts()`,
+   * so a model WITH a row ignored `providers.command-code.modelReasoningEfforts` while a model
+   * WITHOUT one honoured it. The catalog never agreed with that: it advertises the picker from
+   * `configuredReasoningEfforts`, so an operator who widened a pinned row saw the wider ladder
+   * offered in Codex and then watched the adapter strip the rung on the way out.
+   *
+   * The seeded copy is the trap, and it is why the override is a declared flag rather than an
+   * inference. `providerConfigSeed` writes the whole shipped table into every materialized
+   * preset, and enrichment and routing both keep a persisted row over the current seed, so
+   * neither the presence of a row nor its difference from today's table proves a human wrote it.
+   * `modelReasoningEffortsAuthoritative` is never written by seeding, so its presence does.
+   */
+  test("an authoritative operator ladder reaches the wire", async () => {
+    // Shipped: deepseek/deepseek-v4.1-flash is ["high", "max"], so xhigh is aliased down to max.
+    expect(commandCodeReasoningEfforts("deepseek/deepseek-v4.1-flash")).toEqual(["high", "max"]);
+    const shipped = await builtRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "xhigh", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(shipped.body).params.reasoning_effort).toBe("max");
+
+    const widened = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEffortsAuthoritative: true,
+      modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["low", "medium", "high", "xhigh", "max"] },
+    } as OcxProviderConfig);
+    const built = await widened.buildRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "xhigh", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(built.body).params.reasoning_effort).toBe("xhigh");
+
+    // Narrowing works in the same direction: an operator who removes a rung loses it.
+    const narrowed = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEffortsAuthoritative: true,
+      modelReasoningEfforts: { "deepseek/deepseek-v4.1-flash": ["high"] },
+    } as OcxProviderConfig);
+    const stripped = await narrowed.buildRequest({
+      ...parsed("deepseek/deepseek-v4.1-flash"),
+      options: { reasoning: "max", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(stripped.body).params).not.toHaveProperty("reasoning_effort");
+
+    // ultra is aliased to max only when the ladder does NOT advertise it, matching xhigh. An
+    // authoritative ladder offering ultra therefore sends ultra rather than quietly sending max.
+    const withUltra = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEffortsAuthoritative: true,
+      modelReasoningEfforts: { "deepseek/deepseek-v4-flash": ["high", "max", "ultra"] },
+    } as OcxProviderConfig);
+    const ultra = await withUltra.buildRequest({ ...parsed(), options: { reasoning: "ultra", maxOutputTokens: 100 } });
+    expect(JSON.parse(ultra.body).params.reasoning_effort).toBe("ultra");
+  });
+
+  // The flag is what makes this safe. A preset carries the seeded table, and a row written by an
+  // older release keeps its old value through enrichment and routing, so a value comparison would
+  // start reading a stale seed as operator intent the moment the shipped table is corrected.
+  // Without the flag, a configured row — seeded, stale, or hand-written — changes nothing.
+  test("a configured ladder is inert without the authoritative flag", async () => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === "command-code")!;
+    const cases = [
+      ["deepseek/deepseek-v4.1-flash", "xhigh"],
+      ["deepseek/deepseek-v4-flash", "ultra"],
+      ["google/gemini-3.7-flash", "max"],
+      ["zai-org/GLM-5.3", "low"],
+      ["meta/muse-spark-1.3", "xhigh"],
+    ] as const;
+    const seeded = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: { ...entry.modelReasoningEfforts },
+    } as OcxProviderConfig);
+    // A stale row: every shipped ladder widened, but nobody declared it authoritative.
+    const stale = createCommandCodeAdapter({
+      ...provider,
+      modelReasoningEfforts: Object.fromEntries(
+        Object.keys(entry.modelReasoningEfforts ?? {}).map(id => [id, ["low", "medium", "high", "xhigh", "max"]]),
+      ),
+    } as OcxProviderConfig);
+    for (const [modelId, reasoning] of cases) {
+      const options = { reasoning, maxOutputTokens: 100 };
+      const expected = JSON.parse((await builtRequest({ ...parsed(modelId), options })).body).params.reasoning_effort;
+      for (const [label, adapter] of [["seeded", seeded], ["stale", stale]] as const) {
+        const built = await adapter.buildRequest({ ...parsed(modelId), options });
+        expect(JSON.parse(built.body).params.reasoning_effort, `${label} ${modelId} @ ${reasoning}`).toEqual(expected);
+      }
+    }
+  });
+
+  test("an operator-authorized rung surfaces the upstream rejection instead of replaying without it", async () => {
+    const requests: string[] = [];
+    const fetch = (async (url: string | URL | Request) => {
+      requests.push(String(url));
+      if (String(url).includes("commandcode.ai/models/")) {
+        return new Response("Reasoning efforts high are supported; no other reasoning settings.");
+      }
+      return new Response(JSON.stringify({ error: "unsupported reasoning_effort" }), { status: 400 });
+    }) as typeof globalThis.fetch;
+    const adapter = createCommandCodeAdapter({
+      ...provider,
+      fetch,
+      modelReasoningEffortsAuthoritative: true,
+      modelReasoningEfforts: { "deepseek/deepseek-v4-flash": ["low", "medium", "high", "xhigh", "max"] },
+    } as OcxProviderConfig);
+    const request = await adapter.buildRequest({ ...parsed(), options: { reasoning: "xhigh", maxOutputTokens: 100 } });
+    expect(JSON.parse(request.body).params.reasoning_effort).toBe("xhigh");
+
+    const budget = createRequestExecutionBudget();
+    const { dispose } = budgetOwner(budget);
+    try {
+      const response = await adapter.fetchResponse!(request, { sendBudget: budget });
+      expect(response.status).toBe(400);
+      // One generate call and no profile fetch: the downgrade is skipped, not merely unsuccessful.
+      expect(requests.filter(url => url.endsWith("/alpha/generate"))).toHaveLength(1);
+      expect(requests.some(url => url.includes("commandcode.ai/models/"))).toBe(false);
+    } finally { dispose(); }
+  });
+
   // Pins the profileUrl of each id added for #2647 — nothing more.
   //
   // Be clear about what this does NOT prove: the stubbed response below returns

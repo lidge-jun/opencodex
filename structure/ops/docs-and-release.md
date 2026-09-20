@@ -45,10 +45,18 @@ Proxy-format, adapter, and provider documentation distinguishes server-level SOC
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
-Provider preset totals are recounted from the current registry when a preset lands. With Crusoe the
-documented split is 94 total: 78 key-based, 12 OAuth, three local, and one default ChatGPT-forward
-preset. The English provider guide and all seven translated copies carry the same counts and the
-same fixed-host discovery limits.
+Provider preset totals are recounted from the current registry when a preset lands. The
+documented split is 95 total: 79 key-based, 12 OAuth, three local, and one default
+ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
+quickstarts carry the same counts, and the guides carry the same fixed-host discovery limits.
+
+That recount is no longer a manual obligation. Seventeen places restate these numbers and sixteen
+of them drifted once already — the English guide reached 95 while every translation and every
+quickstart, the English one included, still said 94. Both numbers read as plausible, so nothing
+caught it. `tests/ci-workflows/docs-provider-preset-counts.test.ts` now derives the total and the
+key-based split from `PROVIDER_REGISTRY` and asserts them against each page, so the next preset
+fails every locale at once instead of drifting. Each page is located by a locale-specific phrase
+rather than by its number, so rewording a sentence fails the check and asks to be re-anchored.
 
 Native retirement keeps active model/quota instructions aligned across locales with the
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers
@@ -444,7 +452,7 @@ Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#a
 
 Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
 
-Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 OpenCode launcher verification distinguishes the local management catalog request from the inference child. Its transport regressions cover proxy environment, redirects, endpoint validation, credential precedence and child-env separation on hosted CI.
 
@@ -459,3 +467,6 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+The public server configuration reference documents the optional
+[compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.

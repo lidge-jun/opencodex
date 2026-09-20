@@ -594,9 +594,32 @@ describe("runStartupReadinessSync", () => {
     expect(gate.getStatus()).toBe("failed");
   });
 
-  test("ok=true with nonempty warning → failed", async () => {
+  // #5181: a nonempty warning names a degradation of the LOCAL Codex home's artifacts that the
+  // sync itself continued past. Treating it as terminal permanently un-readied a proxy that was
+  // still serving every other provider, and in a single-replica Kubernetes deployment that
+  // removed the only Service endpoint. `ok` is the sync's verdict; `warning` is not.
+  test.each([
+    "catalog sync skipped: no Codex catalog source found; keeping Codex's native catalog.",
+    "1 combo omitted from the catalog because member capabilities are incomplete.",
+    "catalog sync skipped: refresh failed",
+    "Codex conversation-history relabel left to Codex's native writer: preflight refused.",
+  ])("ok=true with a local-artifact warning → ready (%s)", async warning => {
     const gate = createReadinessGate();
-    await runStartupReadinessSync(gate, async () => ({ ok: true, warning: "catalog sync skipped: no source" }));
+    await runStartupReadinessSync(gate, async () => ({ ok: true, warning }));
+    expect(gate.getStatus()).toBe("ready");
+  });
+
+  // The narrowing is to `warning` alone. A sync that reports the essential work unfinished is
+  // still terminal, warning or not, so a genuine startup failure cannot ride in as a degradation.
+  test("ok=false with a warning → still failed", async () => {
+    const gate = createReadinessGate();
+    await runStartupReadinessSync(gate, async () => ({ ok: false, warning: "catalog sync skipped: no source" }));
+    expect(gate.getStatus()).toBe("failed");
+  });
+
+  test("a result with no ok field at all → failed", async () => {
+    const gate = createReadinessGate();
+    await runStartupReadinessSync(gate, async () => ({ warning: "catalog sync skipped: no source" }));
     expect(gate.getStatus()).toBe("failed");
   });
 

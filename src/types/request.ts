@@ -126,6 +126,8 @@ export interface OcxParsedRequest {
    * (see src/responses/compaction.ts).
    */
   _compactionRequest?: boolean;
+  /** Manual compaction moved to another provider: summarize portably even on a canonical ChatGPT target. */
+  _portableCompaction?: boolean;
   /**
    * True when the current request newly introduced a stored compaction summary/marker. Historical
    * markers restored by previous_response_id expansion were already acknowledged and do not reset

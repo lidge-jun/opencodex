@@ -22,6 +22,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `apiKeys?` | `OcxApiKey[]` | `[]` |生成された `ocx_…` データプレーン准入資格情報（非ループバック バインド向け）。管理 API の認可には使用できません。管理アクセスには [管理 API リファレンス](/ja/reference/management-api/) に記載された独立した資格情報を使用します。ダッシュボードで管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` |排除可能なアプリ所有のログ、キャッシュ、BLOB、および継続ペイロードの MiB の上限。範囲は 64 ～ 4096。 RSSキャップではありません。 |
+| `metricsExport.enabled?` | `boolean` | `false` | 認証済み `GET /api/metrics` でプロセスローカルの集約リクエストメトリクスを有効にします。再起動が必要です。無効時は 404 となり、エクスポーター処理は開始されません。 |
 | `codexAutoStart?` | `boolean` | `true` | Codex を起動する前に、Codex シムで `ocx ensure` を実行させます。 False を指定すると、操作が行われないことが保証されます。 |
 | `codexShimAutoRestore?` | `boolean` | `true` |完了した外部 Codex アップデートによってインストールされたシムが置き換えられた後、インストールされているシムを復元します。環境オプトアウト: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | Codex App 履歴の互換性を元に戻すことができます。元のメタデータは `ocx stop` / `ocx restore` によってバックアップおよび復元されます。 |

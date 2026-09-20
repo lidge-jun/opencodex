@@ -5,6 +5,9 @@ import {
   CYBER_POLICY_FALLBACK_MESSAGE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  isTerminalRefusalCode,
+  safetyRefusalCodeFromMessage,
+  terminalRefusalFallbackMessage,
   upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -150,16 +153,61 @@ export function failedTailFrame(encoder: TextEncoder, err: unknown): Uint8Array 
   return encoder.encode(`\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`);
 }
 
-export function upstreamErrorTailFrame(encoder: TextEncoder, message: string): Uint8Array {
+/**
+ * Close a turn the upstream ended without a Responses terminal.
+ *
+ * `refusalCode` carries the upstream's own verdict when it gave one. Codex
+ * classifies this terminal by `error.code` alone and retries everything outside
+ * its fatal set (codex-rs/codex-api/src/sse/responses.rs:423-450), so stamping
+ * `upstream_server_error` on a refusal delivered it as a retryable disconnect
+ * and drove the reconnect loop in #5176. Without a refusal code the terminal is
+ * unchanged: a genuine transport failure stays retryable, which is what it is.
+ */
+export function upstreamErrorTailFrame(
+  encoder: TextEncoder,
+  message: string,
+  refusalCode?: string,
+): Uint8Array {
+  return encoder.encode(
+    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode)}\n\n`,
+  );
+}
+
+function upstreamErrorFailedPayload(message: string, refusalCode?: string): string {
   const error = {
-    type: "upstream_error",
-    code: "upstream_server_error",
+    type: refusalCode === undefined ? "upstream_error" : "invalid_request_error",
+    code: refusalCode ?? "upstream_server_error",
     message: redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
-  return encoder.encode(`event: response.failed\ndata: ${JSON.stringify({
+  return JSON.stringify({
     type: "response.failed",
-    response: { status: "failed", error, last_error: error },
-  })}\n\n`);
+    response: {
+      status: "failed",
+      error,
+      last_error: error,
+      ...(refusalCode === undefined ? {} : { retryable: false }),
+    },
+  });
+}
+
+/**
+ * Terminal for a read that failed after the upstream had already refused.
+ *
+ * Framed exactly like {@link failedTailFrame} — leading blank line to close a
+ * partial block, then the sentinel — but carrying the refusal instead of the
+ * generic reset. The refusal is the real outcome of the turn and the socket
+ * teardown that followed it is not, so reporting `upstream_reset` here would
+ * restart a turn the upstream has already ended (#5176).
+ */
+export function refusalFailedTailFrame(
+  encoder: TextEncoder,
+  message: string,
+  refusalCode: string,
+): Uint8Array {
+  const payload = upstreamErrorFailedPayload(message, refusalCode);
+  return encoder.encode(
+    `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
+  );
 }
 
 function boundedBareUpstreamErrorMessage(payload: unknown): string | undefined {
@@ -169,12 +217,57 @@ function boundedBareUpstreamErrorMessage(payload: unknown): string | undefined {
   return message ? redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS) : undefined;
 }
 
+/**
+ * A bare upstream `error` event reduced to what the synthesized terminal needs.
+ *
+ * The structured code is authoritative whenever the upstream sent one: a code
+ * that is not a refusal means the upstream did not refuse, whatever its
+ * diagnostic text happens to quote. Recognized refusal copy is read only when
+ * no code was carried anywhere on the event, which is the shape #5176 reports.
+ * A refusal code with no message still yields a terminal, because Codex accepts
+ * that shape and supplies its own copy for it.
+ *
+ * The candidate topology mirrors {@link upstreamErrorMessageFromPayload}: code
+ * and message must be read from the same places, or an event whose message is
+ * nested under `response.error` would contribute text while its verdict went
+ * unseen.
+ */
+function boundedBareUpstreamError(payload: unknown): {
+  message: string;
+  refusalCode: string | undefined;
+} | undefined {
+  const root = asJsonRecord(payload);
+  if (!root || root.type !== "error") return undefined;
+  const message = boundedBareUpstreamErrorMessage(payload);
+  const response = asJsonRecord(root.response);
+  // Precedence is {@link upstreamErrorMessageFromPayload}'s, so the envelope
+  // that supplied the message also supplies the verdict. Taking the FIRST code
+  // rather than searching for a refusal is what stops a refusal nested below a
+  // transient one from overruling it.
+  const code = [
+    asJsonRecord(root.error),
+    asJsonRecord(root.last_error),
+    asJsonRecord(response?.error),
+    asJsonRecord(response?.incomplete_details),
+    root,
+  ]
+    .map(candidate => stringField(candidate, "code"))
+    .find(candidate => candidate !== undefined);
+  const refusalCode = code !== undefined
+    ? (isTerminalRefusalCode(code) ? code : undefined)
+    : message === undefined ? undefined : safetyRefusalCodeFromMessage(message);
+  if (message !== undefined) return { message, refusalCode };
+  if (refusalCode === undefined) return undefined;
+  return { message: terminalRefusalFallbackMessage(refusalCode), refusalCode };
+}
+
 export type SseTerminalOutputBoundary = {
   feed(chunk: Uint8Array): Uint8Array;
   finish(): Uint8Array;
   terminalSeen(): boolean;
   doneSeen(): boolean;
   upstreamError(): string | undefined;
+  upstreamRefusalCode(): string | undefined;
   dispose(): void;
 };
 
@@ -197,6 +290,7 @@ export function createSseTerminalOutputBoundary(
   let pendingDone: { block: Uint8Array; delimiter: Uint8Array } | null = null;
   let disposed = false;
   let upstreamError: string | undefined;
+  let upstreamRefusalCode: string | undefined;
 
   const processFrames = (
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
@@ -210,8 +304,11 @@ export function createSseTerminalOutputBoundary(
       const parsed = payload === null ? undefined : parseSsePayload(payload);
       // Observe on the client reader itself: a tee inspection branch may lag
       // behind EOF, so its log context cannot determine the outgoing terminal.
-      const message = boundedBareUpstreamErrorMessage(parsed);
-      if (message !== undefined) upstreamError = message;
+      const bare = boundedBareUpstreamError(parsed);
+      if (bare !== undefined) {
+        upstreamError = bare.message;
+        upstreamRefusalCode = bare.refusalCode;
+      }
       const safetyBuffering = dropSafetyBuffering && parsed !== undefined
         ? codexSafetyBufferingBlockAction(parsed) : "keep";
       if (safetyBuffering === "drop") continue;
@@ -278,6 +375,7 @@ export function createSseTerminalOutputBoundary(
     terminalSeen: () => terminal,
     doneSeen: () => done,
     upstreamError: () => upstreamError,
+    upstreamRefusalCode: () => upstreamRefusalCode,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -349,7 +447,11 @@ export function relaySseWithFailedTail(
               const upstreamError = terminalBoundary.upstreamError() ?? opts?.upstreamError;
               controller.enqueue(upstreamError === undefined
                 ? adapterEofIncompleteFrame(encoder)
-                : upstreamErrorTailFrame(encoder, upstreamError));
+                : upstreamErrorTailFrame(
+                  encoder,
+                  upstreamError,
+                  terminalBoundary.upstreamRefusalCode(),
+                ));
               controller.enqueue(doneFrame(encoder));
             }
             terminalBoundary.dispose();
@@ -378,7 +480,11 @@ export function relaySseWithFailedTail(
             if (!terminalBoundary.doneSeen()) controller.enqueue(doneFrame(encoder));
           } else {
             // Leading blank line terminates a partial SSE block so the failed frame parses cleanly.
-            controller.enqueue(failedTailFrame(encoder, err));
+            const refusalCode = terminalBoundary.upstreamRefusalCode();
+            const refusalMessage = terminalBoundary.upstreamError();
+            controller.enqueue(refusalCode !== undefined && refusalMessage !== undefined
+              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode)
+              : failedTailFrame(encoder, err));
           }
           controller.close();
         } catch { /* client already torn down */ }
@@ -720,6 +826,9 @@ export function responseWithDeferredRequestLog(
           // convention for a client cancellation or upstream read failure.
           const status = reason === "cancel" ? 499 : reason === "read_error" ? 502 : response.status;
           addFinalRequestLog(requestId, start, logCtx, status, {
+            ...(reason === "eof" && logCtx.observedTerminalStatus
+              ? { terminalStatus: logCtx.observedTerminalStatus }
+              : {}),
             closeReason: reason === "cancel" ? "client_cancel" : "non_stream",
           }, addLog);
         },

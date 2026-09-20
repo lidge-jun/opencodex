@@ -14,7 +14,7 @@ ocx init
 
 `ocx init` adım adım size rehberlik eder:
 
-1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 94 önayardan birini
+1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 95 önayardan birini
    veya bir temel URL ile adaptör yazmak için `custom` seçeneğini belirleyin.
 2. **API anahtarı** — bir anahtar yapıştırın veya `${ANTHROPIC_API_KEY}` gibi
    bir ortam değişkenine başvurun.
@@ -119,4 +119,3 @@ ocx restore back  # Codex'i hala çalışan proxy üzerinden tekrar yönlendirin
 - [Nasıl Çalışır](/tr/getting-started/how-it-works/) — her isteğe ne olur?
 - [Sağlayıcılar](/tr/guides/providers/) — kimlik doğrulamanın her yolu.
 - [Yapılandırma](/tr/reference/configuration/) — tam `config.json` referansı.
-

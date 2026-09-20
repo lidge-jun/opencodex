@@ -9,7 +9,8 @@ the [bounded ingestion contract](transports/inventory.md#bounded-response-ingest
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |
 | `src/providers/registry/model-ids.ts` | Classifies every `ProviderRegistryEntry` field by what its KEYS mean for selector decoding, and derives the native model ids an entry names. The classification is exhaustive by construction: a new registry field fails typecheck until its keys are given a meaning, which is what stops an identity-bearing map from being silently left out of decoding. Imported directly rather than through the facade, which is at its file-size cap. |
 | `src/providers/derive.ts` | Enrichment from provider presets into user config. |
-| `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, hard wire pins, aliases, and explicit false/empty values with field-level provenance. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
+| `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, hard wire pins, aliases, and explicit false/empty values with field-level provenance. Provider derivation, routing, catalog hints, gather admission, and adapter selection consume its detached frozen result. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
+
 | `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
 | `src/combos/request.ts` | Clones each selected combo target request and applies the existing target capability ladder: adaptive unknown targets and explicit empty ladders receive no unsupported reasoning/thinking controls, while known ladders retain per-target resolution. |
 | `src/adapters/openai-responses.ts` | Native OpenAI/ChatGPT Responses passthrough. |
@@ -66,7 +67,37 @@ operator-supplied User-Agent authoritative.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
-remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
+remain sidecar-backed by default.
+
+OpenCode Go's `deepseek-v4.1-flash` joined them on 2026-09-19: probed against
+`https://opencode.ai/zen/go/v1/chat/completions` with this proxy's headers, the route accepts an
+`image_url` part and the model reads it, so it left `noVisionModels` and gained a positive
+`modelInputModalities` declaration. Its sibling `deepseek-v4-flash` on the same gateway still
+answers HTTP 400 "Model only supports text input" and stays sidecar-backed. The Zen tiers
+(`opencode-zen`, `opencode-free`) were not measurable (HTTP 402) and keep their existing
+classification — an unverified tier is not evidence.
+
+Because `enrichProviderFromRegistry` fills `noVisionModels` all-or-nothing and fills
+`modelInputModalities` per-key beneath the saved value, both halves of a stale classification are
+frozen into any config saved while it was current. `src/providers/stale-vision-classification-migration.ts`
+repairs exactly those two saved values and runs inside the shared startup repair pass in
+`src/providers/model-rename-startup.ts`. Correcting the registry alone fixes new installs only.
+
+It covers both states that reach a running process, because the sidecar predicate reads
+`noVisionModels` before `modelInputModalities`: the full stale pair (modalities still the stale
+declaration and the id listed, both rewritten) and the half-repaired row (modalities already
+corrected but the id still listed, where removing the name is what stops the image from being
+stripped). The paired modality declaration is the guard in both cases, which is why a name listed
+without one is left alone — that row is either a half-finished repair or a deliberate operator
+entry, and the projection does not guess which. The row must also still be the registry's own:
+identity resolves through `providerMatchesRegistryTransport`, the rule `enrichProviderFromRegistry`
+applies before it writes registry metadata, plus the entry's adapter. `opencode-go` is a pinned
+key preset without `preserveCustomDestination`, so its id alone claims a row — exactly as it does
+for enrichment — and an entry that opts into destination preservation narrows the projection with
+it. `modelCapabilities` is never written: it is the
+axis that outranks every source here, so it is where a deliberate text-only override belongs
+(`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
+restart cannot take back.
 
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
@@ -85,6 +116,36 @@ and exports only to eligible local targets. Pro detection is an advisory hint,
 not an authentication or entitlement decision.
 
 Routed Responses continuations whose local replay state is missing resolve their recovery decision from the selected wire protocol, not the model name; the contract lives in [Responses transport](transports/responses.md).
+
+Volcengine Ark Coding Plan is a native Responses preset at `/api/coding/v3/responses`. Validated
+tool continuations there reject the reasoning item the previous turn returned, so its registry
+entry sets `dropResponsesReasoningItems`, which removes replayed Responses `reasoning` items from
+continuation input before forwarding. That is lossy — summaries, item ids and `encrypted_content`
+go with the item — and an explicit `false` on the provider turns it off. The flag belongs to the
+DESTINATION rather than to the provider-wide wire, so `routedProviderConfig` fills it on the
+early-return path too: a row saved on Chat still reaches the Responses adapter when one model
+opts in through `modelAdapters`, and would otherwise forward the rejected item. Because it changes
+the continuation body, it is part of the compatibility behavior record and two routes that
+disagree about it are not the same subject.
+
+A row already saved on `openai-chat` keeps that wire. The entry is
+`preserveCustomDestination` with key auth, so `providerMatchesRegistryTransport` refuses the
+adapter mismatch and the request path returns the stored row unchanged, and the retired Chat
+destination stays an alias so that row keeps this entry's metadata. There is deliberately no
+startup config migration: the Z.AI one (`src/providers/zai-responses-migration.ts`) is
+behavior-preserving only because it gates on `providerMatchesRegistryTransport` and therefore
+rewrites rows the router already canonicalizes, which a Volcengine Chat row is not.
+
+Command Code ships its own per-model `reasoning_effort` table in
+`src/providers/command-code-efforts.ts`, and that table decides the wire effort. Configuration can
+take precedence, but only when the provider declares `modelReasoningEffortsAuthoritative`:
+`providerConfigSeed` copies the shipped table into every materialized preset and both enrichment
+and routing keep a persisted row over the current seed, so neither the presence of a configured
+row nor its difference from today's table establishes that a human wrote it. With the flag the
+ladder resolves through `configuredReasoningEfforts`, the same function that advertises the Codex
+picker, so the catalog and the wire agree; a rung the upstream then refuses is returned as that
+error rather than replayed without the effort, because the operator asked for it. The flag is part
+of the compatibility behavior record for the same reason as above.
 
 The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 

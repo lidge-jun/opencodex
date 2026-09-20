@@ -380,6 +380,47 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).not.toContain("Stop-Process");
   });
 
+  test("tray reads restart safety through the CLI instead of the admin-gated /api endpoint", () => {
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    // The management API is admin-token gated, and the tray runs without that token,
+    // so a plain GET /api/startup-health always 401s and leaves the tray stuck on the
+    // yellow warning icon. The tray must collect the same local diagnostic through the
+    // CLI's __startup-health internal command instead.
+    expect(source).toContain('@($CliPath, "__startup-health")');
+    expect(source).not.toContain('Read-JsonUrl "$origin/api/startup-health"');
+    // The local diagnostic does not re-run the Windows service-manager probe on every
+    // 3s tick, so its refresh cadence must stay throttled...
+    expect(source).toContain("$script:startupRefreshMs");
+    expect(source).toContain("$script:startupHealthCheckedAt -gt $script:startupRefreshMs");
+    // ...and it must not block the Windows Forms UI thread. The probe is a detached
+    // child whose stdout pipe is drained asynchronously; the 3s tick only touches the
+    // completed read task, so a slow or hung diagnostic can never freeze the tray menu.
+    expect(source).toContain("ReadToEndAsync()");
+    expect(source).toContain("$script:startupProbeProcess");
+    // A timed-out diagnostic must be terminated, not left to become an orphaned
+    // Bun process on the next refresh.
+    expect(source).toContain("startupProbeProcess.Kill()");
+    // A launch failure or invalid result must not start a new probe on the very next
+    // 3s tick: the refresh decides by the throttled attempt timestamp, never by a null
+    // cached health, and records the attempt before spawning the child.
+    expect(source).toContain("$script:startupHealthCheckedAt -eq 0 -or");
+    expect(source).toContain("# Record the attempt so launch failures and invalid results remain throttled.");
+    // A probe still in flight when the tray shuts down must not outlive it: the
+    // finally block kills the active probe, waits briefly, then completes it.
+    expect(source).toContain("terminating active startup-health probe on tray shutdown");
+    expect(source).toContain("startupProbeProcess.WaitForExit(3000)");
+    // Probe lifecycle maintenance runs even while the proxy is offline, so a hung
+    // diagnostic is cleaned up outside the online-only UI branch; new probes still
+    // start only while online.
+    expect(source).toContain("$script:online -and ($cameOnline -or $refreshDue)");
+    // The malformed-payload guard requires a real boolean, matching the shared
+    // server-side parser instead of accepting any non-null rebootSafe value.
+    expect(source).toContain("($parsed.rebootSafe -is [bool])");
+    // If the async pipe setup fails after the child started, the child must be
+    // terminated, not merely disposed and lost.
+    expect(source).toContain("would leave the Bun child running");
+  });
+
   // This test really does launch PowerShell, which really does launch a Bun child, and
   // then rebinds the port to prove the child did not inherit the listen socket. Those
   // processes ARE the assertion — there is no version of this proof that fakes them.

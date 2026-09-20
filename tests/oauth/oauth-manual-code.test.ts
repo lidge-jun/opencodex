@@ -38,6 +38,36 @@ function fakeAccessToken(): string {
   return `${header}.${payload}.sig`;
 }
 
+/** Mock the xAI discovery + token endpoints; records the last token request body. */
+function installXaiFetchMock(): { getTokenBody: () => URLSearchParams | null; restore: () => void } {
+  const originalFetch = globalThis.fetch;
+  let tokenRequestBody: URLSearchParams | null = null;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("openid-configuration")) {
+      return new Response(
+        JSON.stringify({
+          authorization_endpoint: "https://auth.x.ai/authorize",
+          token_endpoint: "https://auth.x.ai/oauth/token",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (url.includes("oauth/token")) {
+      tokenRequestBody = new URLSearchParams(String(init?.body ?? ""));
+      return new Response(
+        JSON.stringify({ access_token: fakeAccessToken(), refresh_token: "refresh-1", expires_in: 3600 }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  return {
+    getTokenBody: () => tokenRequestBody,
+    restore: () => { globalThis.fetch = originalFetch; },
+  };
+}
+
 describe("parseCallbackInput kinds", () => {
   test("redirect URL -> kind url with code/state", () => {
     expect(parseCallbackInput("http://127.0.0.1:56121/callback?code=abc&state=xyz")).toEqual({
@@ -185,29 +215,7 @@ describe("OAuth manual login code fallback", () => {
   });
 
   test("manual paste completes the login using the ORIGINAL flow PKCE verifier", async () => {
-    const originalFetch = globalThis.fetch;
-    let tokenRequestBody: URLSearchParams | null = null;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("openid-configuration")) {
-        return new Response(
-          JSON.stringify({
-            authorization_endpoint: "https://auth.x.ai/authorize",
-            token_endpoint: "https://auth.x.ai/oauth/token",
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url.includes("oauth/token")) {
-        tokenRequestBody = new URLSearchParams(String(init?.body ?? ""));
-        return new Response(
-          JSON.stringify({ access_token: fakeAccessToken(), refresh_token: "refresh-1", expires_in: 3600 }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return originalFetch(input, init);
-    }) as typeof fetch;
-
+    const mock = installXaiFetchMock();
     try {
       const started = await Promise.race([
         startLoginFlow("xai", { forceLogin: true }),
@@ -247,8 +255,15 @@ describe("OAuth manual login code fallback", () => {
       expect(fragmentNoState.ok).toBe(false);
       if (!fragmentNoState.ok) expect(fragmentNoState.error).toContain("missing the state");
 
+      // A raw code#state paste is state-bearing too: a mismatched suffix is
+      // rejected rather than bypassing validation.
+      const rawMismatch = submitManualLoginCode("xai", "evil-code#WRONG");
+      expect(rawMismatch.ok).toBe(false);
+      if (!rawMismatch.ok) expect(rawMismatch.error).toContain("state mismatch");
+
       // Correct paste: matching state completes the login via the original verifier.
-      const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-auth-code&state=${state}`);
+      // The raw code#state form exercises the same gate for a state-bearing raw paste.
+      const goodSubmit = submitManualLoginCode("xai", `pasted-auth-code#${state}`);
       expect(goodSubmit).toEqual({ ok: true });
 
       // Background runLogin finishes: poll status until done.
@@ -262,8 +277,8 @@ describe("OAuth manual login code fallback", () => {
       expect(status.loggedIn).toBe(true);
 
       // Token exchange used the pasted code + the ORIGINAL PKCE verifier + redirect URI.
-      expect(tokenRequestBody).not.toBeNull();
-      const body = tokenRequestBody!;
+      const body = mock.getTokenBody()!;
+      expect(body).not.toBeNull();
       expect(body.get("grant_type")).toBe("authorization_code");
       expect(body.get("code")).toBe("pasted-auth-code");
       expect(body.get("redirect_uri")).toBe(redirectUri);
@@ -276,7 +291,47 @@ describe("OAuth manual login code fallback", () => {
       expect(existsSync(authFile)).toBe(true);
       expect(readFileSync(authFile, "utf8")).toContain("refresh-1");
     } finally {
-      globalThis.fetch = originalFetch;
+      mock.restore();
+      cancelLoginFlow("xai");
+      clearLoginState("xai");
+    }
+  });
+
+  test("manual paste of the full redirect URL completes the login", async () => {
+    const mock = installXaiFetchMock();
+
+    try {
+      const started = await Promise.race([
+        startLoginFlow("xai", { forceLogin: true }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("startLoginFlow timed out")), 10_000)),
+      ]);
+      const authUrl = new URL(started.url);
+      const state = authUrl.searchParams.get("state")!;
+      const challenge = authUrl.searchParams.get("code_challenge")!;
+      const redirectUri = authUrl.searchParams.get("redirect_uri")!;
+
+      // The full redirect URL is the other accepted success form: its state
+      // parameter must match the state this attempt issued.
+      const goodSubmit = submitManualLoginCode("xai", `${redirectUri}?code=pasted-url-code&state=${state}`);
+      expect(goodSubmit).toEqual({ ok: true });
+
+      const statusDeadline = Date.now() + 10_000;
+      while (!getLoginStatus("xai").done && Date.now() < statusDeadline) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      const status = getLoginStatus("xai");
+      expect(status.done).toBe(true);
+      expect(status.error).toBeUndefined();
+      expect(status.loggedIn).toBe(true);
+
+      const body = mock.getTokenBody();
+      expect(body).not.toBeNull();
+      expect(body!.get("code")).toBe("pasted-url-code");
+      expect(body!.get("redirect_uri")).toBe(redirectUri);
+      const verifier = body!.get("code_verifier")!;
+      expect(b64url(createHash("sha256").update(verifier).digest())).toBe(challenge);
+    } finally {
+      mock.restore();
       cancelLoginFlow("xai");
       clearLoginState("xai");
     }

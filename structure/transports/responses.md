@@ -127,13 +127,42 @@ therefore remain untouched. Foreign freeform grammars never receive that compati
 
 Progressive preview for those wrappers is decoded by
 `src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
-function-call restoration. A prefix that can still become a complete outer fence stays held so
-completion never removes bytes already published in a delta; ordinary raw input remains
-progressive, fallback fields wait for a complete parse, and JSON escapes emit only complete
-decoded units. Routed restoration additionally keeps its existing hold for an unrecognized JSON
-object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that
-become invalid only after a valid prefix was emitted remain bounded exceptions: completion is
-authoritative because preserving progressive canonical input leaves no rewind mechanism.
+function-call restoration, over the classification in `src/responses/freeform-wrapper-scan.ts`.
+A prefix that can still become a complete outer fence stays held so completion never removes
+bytes already published in a delta; a body that is not shaped like a wrapper object remains
+progressive, and JSON escapes emit only complete decoded units.
+
+Which wrapper applies is decided by scanning the prefix as JSON rather than matching it against
+a literal opening. `JSON.parse` decides the completed input, and it cares about neither property
+order nor how a name is spelled, so a canonical key arriving after other properties or written
+with an escape is the same wrapper and has to preview as one (#5151). The buffering policy that
+follows is: an own `input` with a string value streams progressively, because completion gives
+it precedence over everything else in the object whatever its position; an `input` with a
+non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
+all publish their own bytes, because that is what completion returns for them; every other
+object HOLDS until it parses, because a key that has not arrived yet can still change the
+answer. Fallback fields fall out of that last rule rather than being recognized separately:
+they only unwrap as the single string field, so no prefix decides them. Classification is
+bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which keeps the work per delta from growing with
+the arguments. Past the bound nothing is previewed at all: the authoritative parse still
+unwraps the wrapper at completion, so the bound costs preview and never agreement. The parse
+that releases a held object therefore runs only where the scan SAW the object close, which is
+what keeps a buffer whose deltas happen to end on a brace from being re-read on every one of
+them.
+
+What that policy costs is worth stating plainly, because it is a real narrowing. A body that IS
+a parseable JSON object but not a wrapper — `{"code":1}` or `{"code":"a","script":"b"}` — now
+reaches the direct bridge in one delta when the object closes, where it previously streamed as
+it arrived. That is not a tuning choice: `input` can still arrive after any property, so any
+prefix published before the object closes is a prefix that completion may unwrap away. Routed
+restoration has held exactly these bodies since #5047 and this is the two paths agreeing, not a
+new restriction invented for one of them. Bodies that are not objects, which is what an `exec`
+program or an `apply_patch` envelope actually looks like, are unaffected and still stream.
+
+Routed restoration additionally keeps its existing hold for an unrecognized JSON object and its
+separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid
+only after a valid prefix was emitted remain bounded exceptions: completion is authoritative
+because preserving progressive canonical input leaves no rewind mechanism.
 
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either
@@ -652,6 +681,16 @@ Native passthrough SSE has TWO shapes, selected per request in
 Both client readers also retain a bounded, redacted message from a bare upstream
 `error` event. If EOF arrives without a real Responses terminal, they synthesize
 one `response.failed` with that message instead of replacing it with `adapter_eof`.
+That synthesized terminal also carries the upstream's own verdict. Codex classifies
+a `response.failed` by `error.code` alone and retries every code outside its fatal
+set, so a refusal stamped `upstream_server_error` reached the client as a retryable
+disconnect and drove a reconnect loop (#5176). The readers now read a refusal code
+and the message from the same candidate precedence, taking the first code present so
+a refusal nested below a transient one cannot overrule it, and fall back to
+recognized refusal copy only when the event carried no code at all. A refusal code
+with no message still produces a terminal, and a read that fails after a refusal was
+captured reports the refusal rather than a generic reset. Request-log accounting is
+unchanged: a row that ends on a refusal still records the transport-level status.
 The delivering reader owns this evidence; an asynchronous tee inspection branch
 cannot reliably supply it before EOF. Inspection independently applies the same
 bare-error rule when EOF arrives, so account health records failure instead of
@@ -897,11 +936,57 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
-Translated Chat request construction uses the [inline-image budget](streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior. Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate. Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+## Compaction routing overrides
+
+`src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
+both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
+`x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
+`/v1/responses` a `compaction_trigger` input item as well, so metadata alone cannot move an
+ordinary turn. Every supplied metadata copy must agree, both that the request is a compaction and
+on which trigger it carries; copies that name different triggers are rejected rather than reconciled.
+Malformed, absent, and ordinary-turn metadata leave the request unchanged. WebSocket requests use
+only per-frame metadata; handshake headers can describe an earlier request.
+
+`compactionRouting.triggers` names the `compaction.trigger` values the override covers, drawn
+from Codex's own `manual` and `auto`. Omission means `["manual"]`, so a block that does not
+mention triggers routes manual `/compact` only and leaves automatic compaction exactly where it
+routes today. `["auto"]` or `["manual", "auto"]` is the opt-in for #5012: an automatic
+pre-sampling compaction on a routed thread otherwise stays bound to the canonical `openai`
+reservation in `routeCompactionModel`, because that reservation releases only when no enabled
+canonical `openai` provider exists (#2901), not when its quota is exhausted. A hand-edited
+`triggers` the schema would reject disables the whole block instead of widening it, so a
+malformed edit can never route more than it names.
+
+The override changes only the model and optional reasoning effort. Existing native forwarding,
+routed summaries, capability handling, and retry budgets remain authoritative; native compact
+still removes reasoning before sending. Internal handoffs carry the override record (with the
+conversation's source model) as a recursion guard so combo children and fallback attempts
+retain their selected targets. Overrides bypass shadow interception and conversation
+combo recall, and do not publish replacement combo/handoff recall. They never change the
+conversation's configured model or any compaction request outside the configured triggers.
+
+`compactionRoutingKeepsProviderIdentity` compares the source model's concrete route with the
+selected route (provider name, Codex account mode and namespace; combos on either side never
+match, and a bare source model the lane remembers as a combo target counts as a combo source,
+recorded as `sourceCombo` when the override is applied, and a configured combo target is recorded as
+`targetCombo` so its concretely routed children stay portable too). A matching identity keeps the caller's credential and may use the native compact
+endpoint. A mismatch marks the credential domain as rewritten, exactly like a shadow
+intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
+skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
+`request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
+build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
+backend that minted it; the conversation model would otherwise resume with an omission marker
+in place of its history.
+
+`tests/responses/responses-compaction-override.test.ts` covers trigger selection, config validation,
+native and routed handlers, same-provider credential retention, cross-provider portable summaries
+and their replay, combo failover, and subsequent conversation settings.
 
 ## Core module ownership
 

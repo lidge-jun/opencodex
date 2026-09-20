@@ -1,5 +1,19 @@
 # Runtime
 
+## Resolved static model policy
+
+`src/router.ts` attaches one frozen `ResolvedModelPolicy` to every `RouteResult`. Policy/combo
+route spreads retain that object. Every initial, fallback, and recovery route is recaptured for the
+request's original inbound protocol before route-dependent normalization, and all adapter rebuilds
+consume its recorded adapter. A translated Chat or Anthropic replay therefore cannot inherit a
+Responses-only default. Credential, account, quota, health, cooldown, and observed transport
+evidence remain late and cannot widen a captured static limit.
+
+Virtual models are the sole model-identity transition: the ordinary and compact paths preserve the
+selected public id in diagnostics, rewrite `route.modelId` to the upstream wire id, and atomically
+replace `route.staticPolicy` before adapter or capability decisions continue. Model aliases are
+resolved before the route result is built, so their policy is already keyed by the native wire id.
+
 Routed Meta Muse requests use the registry-owned [Muse effort and header contract](providers-and-adapters.md); `max` reaches the provider through the existing reasoning mapper.
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
@@ -398,9 +412,9 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Translated Chat request construction uses the [inline-image budget](transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
-OpenCode catalog discovery in `src/cli/opencode.ts` uses the local admin credential and a validated numeric-loopback management origin. It dials through `src/server/direct-local-http.ts`, rejects redirects and preserves the request/body deadline. Hub ingress selection stays separate from exported inference settings.
+OpenCode catalog discovery in `src/cli/opencode.ts` derives a catalog-only bearer from the local admin credential and uses a validated numeric-loopback management origin. `src/server/management-auth.ts` accepts that derived bearer only for the exact `GET /api/models` read, so a spoofed listener cannot capture reusable administrator authority; that read can still finalize a pending initial model selection, so the bearer is catalog-scoped rather than strictly read-only. The launcher dials through `src/server/direct-local-http.ts`, rejects redirects and preserves the request/body deadline. Hub ingress selection stays separate from exported inference settings.
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture. Vision dispatch consumes those declarations together with registry/vendor metadata before any image-bearing upstream send.
 
@@ -412,7 +426,7 @@ declare `modelInputModalities: ["text", "image"]` per model for the nine Claude 
 explicit operator overrides; unknown models receive no new declaration. Client eligibility filters
 and Anthropic image wire handling remain unchanged.
 
-`src/vision/plan.ts` prevents raw image bytes from reaching any target whose effective capability is positively known to exclude image input. Evidence from the resolved runtime provider and explicit operator declarations takes precedence, followed by backend-specific/registry/vendor metadata. A proven text-only target is preprocessed through the configured Vision Sidecar; a positively image-capable target receives the image directly. Genuinely unknown custom models retain the existing compatibility path rather than being guessed text-only.
+`src/vision/plan.ts` prevents raw image bytes from reaching any target whose effective capability is positively known to exclude image input. Evidence is consulted highest-first: `modelCapabilities`, an explicit custom row for the same routed identity, `noVisionModels`, an explicit per-model modality list without `image`, then backend-specific/registry/vendor metadata. A proven text-only target is preprocessed through the configured Vision Sidecar; a positively image-capable target receives the image directly. Genuinely unknown custom models retain the existing compatibility path rather than being guessed text-only.
 
 Canonical ChatGPT Codex forwarding uses the generated `openai-codex` capability bundle rather than the public `openai` bundle. This matters when the two backends differ: for example, the vendored metadata records `gpt-5.3-codex-spark` as text-only on `openai-codex` while the public OpenAI row lists image input. The native Chat fast path and web-search image verbalization consume the same effective-capability decision.
 
@@ -433,9 +447,9 @@ adapter-local narrowing only and changes neither provider routing nor the serial
 
 `src/adapters/openai-responses.ts` omits only top-level `user` at the canonical ChatGPT Codex forward destination. Claude translation retains its original identity and prompt-cache key; public API and noncanonical gateways retain their `user` field. Input roles, tool-schema properties, safety identifiers and original replay bodies are not changed.
 
-`src/combos/failover.ts` treats three intact HTTP 400 invalid-request envelopes as request-local incompatibilities: exactly `Unsupported parameter: user`; `unsupported_value` naming `reasoning.effort` or `reasoning_effort` with an explicit unsupported-value message; and `param: input` with a bounded model-scoped `does not support image inputs` message. A null provider code is accepted only for that observed image envelope. Only the exact proxy wrapper is unwrapped, within three envelopes and 16,384 characters; conflicting codes, malformed/truncated envelopes and reflected JSON do not gain hop permission.
+`src/combos/failover.ts` treats four intact HTTP 400 invalid-request envelopes as request-local incompatibilities: exactly `Unsupported parameter: user`; `unsupported_value` naming `reasoning.effort` or `reasoning_effort` with an explicit unsupported-value message; `param: input` with a bounded model-scoped `does not support image inputs` message; and the exact null-code `gpt-6-astra` function-tool routing mismatch that tells an existing Responses request to use `/v1/responses`, allowing only the bare model name or its strict `YYYY-MM-DD` deployment suffix. A null provider code is accepted only for the two observed envelopes that require it. Only the exact proxy wrapper is unwrapped, within three envelopes and 16,384 characters; conflicting codes, malformed/truncated envelopes and reflected JSON do not gain hop permission.
 
-A `response_format` capability refusal is a fourth envelope, kept separate because it needs one code and one frame the three above do not admit. The refusal must name `response_format` AND state that it is unavailable or unsupported; a message that merely names the field, such as an invalid-schema complaint, stays terminal, because replaying a malformed request at every later target is the outcome this distinction exists to avoid. `param` may be absent or explicitly null and a param naming another field fails closed. Its code set is the shared generic one plus `invalid_parameter_error`, held separately so the `user` and image branches are not widened by it. It also unwraps a single `data:` SSE frame on a one-line body — the reported gateway answers on the stream, so the error object is never extracted and the structured code arrives undefined — while a multi-event body is left alone. The next target receives the same request with `response_format` intact: no field is dropped and the output contract the caller asked for is unchanged. Traversal stays finite because combo excludes each attempted target. This verdict records no cooldown, and cancellation, origin/cyber-policy rejection and the non-replayable post-send codes are all tested before it (#4903).
+A `response_format` capability refusal is a fifth envelope, kept separate because it needs one code and one frame the four above do not admit. The refusal must name `response_format` AND state that it is unavailable or unsupported; a message that merely names the field, such as an invalid-schema complaint, stays terminal, because replaying a malformed request at every later target is the outcome this distinction exists to avoid. `param` may be absent or explicitly null and a param naming another field fails closed. Its code set is the shared generic one plus `invalid_parameter_error`, held separately so the `user` and image branches are not widened by it. It also unwraps a single `data:` SSE frame on a one-line body — the reported gateway answers on the stream, so the error object is never extracted and the structured code arrives undefined — while a multi-event body is left alone. The next target receives the same request with `response_format` intact: no field is dropped and the output contract the caller asked for is unchanged. Traversal stays finite because combo excludes each attempted target. This verdict records no cooldown, and cancellation, origin/cyber-policy rejection and the non-replayable post-send codes are all tested before it (#4903).
 
 The combo may advance to its next eligible unattempted target before output commitment. It records no target/provider cooldown for these request-local mismatches and does not silently drop reasoning controls or raise `none` to a supported rung. Cancellation, origin/cyber-policy rejection, non-replayable post-send errors and the existing streaming commit boundary stay authoritative. Apart from the definite context overflow below, other invalid requests remain terminal.
 
@@ -472,3 +486,6 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+Codex compaction uses a request-local model override for the configured triggers; the
+[Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.

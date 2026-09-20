@@ -1,15 +1,15 @@
 # Campaign status
 
-Status: ACTIVE. Thirteen of the sixteen original issues are resolved and closed. Remaining: #5114, #5117, #5118. Supplementary sideband recovery #5161 and send-assertion follow-up #5170 are merged. Runtime ownership #5157 is merged. Strict-policy child #5167 is merged. Static-policy resolver/consumer stack #5171/#5174 and metrics #5183 remain under review and hosted verification; preview #5185 is a draft. Integration snapshot at 2026-09-19T15:27:51Z: #5167 at `96a6de86b71cf8a8f78959e0bf626dac642510a7`.
+Status: ACTIVE. Fourteen original issues are resolved and closed; #5114 and #5118 remain open. Metrics #5183 landed at fec3add6ce after exact-head run35464220426 passed all applicable jobs and source/security/public review completed; #5117 closure was verified. Consumer #5174 passed at3a5ce7d793; the one-line documentation correction e5d5462450 awaits new-head run35467320406. Server #5185 at36cdb56954 passed scoped source review. A subsequent bounded correction and regression remain pending before final hosted verification and parent cascade. Dashboard #5197 has eleven directly inspected hosted-artifact fixture captures with receipts; final parent cascade and full verification remain required. Cumulative dev run35467094926 is queued at fec3add6ce. See per-PR records for historical corrections and evidence limits.
 
 ## Owners
 
 | Lane | State | Issues |
 | --- | --- | --- |
-| Runtime | Active in an isolated worktree | #5109 #5110 #5111 #5113 #5115 #5118 #5122 #5123 #5124 |
-| Policy and operator | Active in an isolated worktree | #5112 #5114 #5116 #5117 #5119 #5120 #5121 |
+| Runtime | Active in an isolated worktree | Remaining: #5118 server, writer, routes, backend tests and documentation |
+| Policy and operator | Active in an isolated worktree | Remaining: #5114 and #5118 dashboard with its tests |
 
-Private orchestration records retain the actual task handles, model-selection evidence and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
+Private orchestration records retain the actual task handles and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
 
 ## Current evidence
 
@@ -20,8 +20,8 @@ Private orchestration records retain the actual task handles, model-selection ev
 
 ## Issue outcomes
 
-Closed: #5109, #5110, #5111, #5112, #5113, #5115, #5116, #5119, #5120, #5121, #5122, #5123, #5124.
-Open: #5114, #5117, #5118.
+Closed: #5109, #5110, #5111, #5112, #5113, #5115, #5116, #5117, #5119, #5120, #5121, #5122, #5123, #5124.
+Open: #5114, #5118.
 
 The entries below are chronological historical checkpoints. Their earlier open/closed states do not override the current summary or acceptance ledger.
 
@@ -134,3 +134,5 @@ Second ownership amendment: #5118 transferred to the existing runtime owner afte
 #5177 is integrated and #5115 closed after complete acceptance verification. Current progress is12/16; remaining issues are #5112/#5114/#5117/#5118. The independent decode-hint change landed before policy migration after a recorded source-based sequencing amendment.
 
 The current-task heartbeat was updated and read back ACTIVE with the existing twenty-minute cadence. It now reflects twelve closed issues, runtime ownership of #5118, policy ownership of #5112/#5114/#5117, and the remaining publication/visual verification duties. Other task monitors were not modified.
+
+Current verified ledger remains thirteen closed issues and three open (#5114/#5117/#5118). The policy owner now owns only the dashboard child layer of #5118 in addition to #5114/#5117; the runtime owner retains its server, writer, routes, backend tests and documentation. The runtime handoff confirmed no dashboard writer, branch or commit existed. The two-owner limit, manual parent-child delivery and actual screenshot requirement remain unchanged.

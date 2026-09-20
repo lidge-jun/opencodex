@@ -182,7 +182,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 94개 들어 있습니다. 키 방식 78개, OAuth 12개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 95개 들어 있습니다. 키 방식 79개, OAuth 12개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -257,7 +257,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 
 대부분은 bearer 키와 함께 `openai-chat` 어댑터를 사용하며, Anthropic 호환 엔드포인트만 노출하는 일부
 (예: **Xiaomi MiMo**)는 `anthropic` 어댑터(`x-api-key`)를 사용합니다.
-Volcengine Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 엔드포인트를 사용합니다.
+Volcengine Coding Plan과 Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 엔드포인트를 사용합니다. 검증된 Ark Coding Plan 도구 연속 호출에서는 직전 턴이 돌려준 Responses `reasoning` 항목을 그대로 다시 보내면 `400 InvalidParameter`가 나므로, Coding Plan 프리셋은 연속 입력을 전달하기 전에 그 항목을 제거합니다. 그 턴의 reasoning 상태는 사라지며 `dropResponsesReasoningItems: false`로 끌 수 있습니다. 이미 `openai-chat`으로 저장된 Coding Plan 설정은 덮어쓰지 않고 Chat 그대로 둡니다. 바꾸려면 `adapter`를 `openai-responses`로, `responsesPath`를 `/responses`로 직접 수정하거나 프리셋을 지우고 다시 추가하세요.
 
 > **Volcengine의 세 가지 과금 경로:** `volcengine`은 종량제 Ark API,
 > `volcengine-coding-plan`은 Coding Plan 할당량, `volcengine-agent-plan`은 Agent Plan

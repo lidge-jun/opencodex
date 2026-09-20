@@ -191,15 +191,20 @@ describe("provider registry parity", () => {
       escapeBuiltinToolNames: true,
     });
     expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
-    // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT be listed.
+    // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT
+    // be listed. deepseek-v4.1-flash was removed on 2026-09-19 after it was probed natively
+    // multimodal on this gateway; its sibling deepseek-v4-flash still rejects image_url upstream.
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4.1-flash", "deepseek-v4-flash",
+      "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ]);
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("deepseek-v4.1-flash");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].modelInputModalities?.["deepseek-v4.1-flash"])
+      .toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
     // #1338 / #1415: the Zen gateway rejects json_schema on its DeepSeek routes. The three
     // presets that share that gateway carry the narrow opt-out as a registry-only seed, so
@@ -240,7 +245,11 @@ describe("provider registry parity", () => {
 
     const zenGo = PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go");
     expect(zenGo?.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
-    expect(zenGo?.noVisionModels).toContain("deepseek-v4.1-flash");
+    // Reclassified 2026-09-19: this route reads images natively on the Zen Go gateway, so it left
+    // the sidecar list and gained a positive image declaration. Its sibling stays behind.
+    expect(zenGo?.noVisionModels).not.toContain("deepseek-v4.1-flash");
+    expect(zenGo?.noVisionModels).toContain("deepseek-v4-flash");
+    expect(zenGo?.modelInputModalities?.["deepseek-v4.1-flash"]).toEqual(["text", "image"]);
     expect(Object.keys(zenGo?.modelReasoningEfforts ?? {})).toContain("deepseek-v4.1-flash");
     expect(zenGo?.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_048_576);
 
@@ -597,11 +606,15 @@ describe("provider registry parity", () => {
     for (const model of ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"]) {
       expect(isModelVisionSidecarConsumer(provider, model)).toBe(true);
     }
-    for (const id of ["opencode-go", "opencode-zen"]) {
-      const gateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === id)!);
-      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4.1-flash")).toBe(true);
-      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4-flash")).toBe(true);
-    }
+    // Only the Go tier was probed (2026-09-19) and only for deepseek-v4.1-flash. The sibling
+    // id on the same tier still rejects image_url, and the Zen tiers could not be measured at
+    // all (HTTP 402), so an unverified tier keeps its existing classification.
+    const goGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go")!);
+    expect(isModelVisionSidecarConsumer(goGateway, "deepseek-v4.1-flash")).toBe(false);
+    expect(isModelVisionSidecarConsumer(goGateway, "deepseek-v4-flash")).toBe(true);
+    const zenGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-zen")!);
+    expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4.1-flash")).toBe(true);
+    expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4-flash")).toBe(true);
     const free = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-free")!);
     expect(isModelVisionSidecarConsumer(free, "deepseek-v4-flash-free")).toBe(true);
     // Saved providers without explicit modality overrides inherit the fix during routing.

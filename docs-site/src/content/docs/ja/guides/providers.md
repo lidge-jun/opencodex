@@ -185,7 +185,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 94 個含まれています。キー方式 78、OAuth 12、ローカル 3、
+opencodex には組み込みプリセットが 95 個含まれています。キー方式 79、OAuth 12、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -259,7 +259,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 
 大半は bearer キーと共に `openai-chat` アダプターを使い、Anthropic 互換エンドポイントのみを公開する一部
 (例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
-Volcengine Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。
+Volcengine Coding Plan と Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。検証済みの Ark Coding Plan のツール継続では、前のターンが返した Responses の `reasoning` item をそのまま返すと `400 InvalidParameter` になるため、Coding Plan プリセットは継続入力を転送する前にその item を取り除きます。そのターンの reasoning 状態は失われるので、`dropResponsesReasoningItems: false` で無効にできます。すでに `openai-chat` で保存されている Coding Plan の設定は書き換えられず Chat のままです。切り替えるときは `adapter` を `openai-responses` に、`responsesPath` を `/responses` に手動で変更するか、プリセットを削除して追加し直してください。
 
 > **Volcengine の 3 つの課金経路:** `volcengine` は従量課金 Ark API、
 > `volcengine-coding-plan` は Coding Plan の割り当て、`volcengine-agent-plan` は Agent Plan

@@ -124,6 +124,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/debug/injection-logs` | 讀取有界的 guidance-injection 除錯項目 | — |
 | `GET /api/claude/inbound-debug` | 讀取 Claude inbound 除錯狀態與項目 | — |
 | `GET /api/usage` | 依範圍與客戶端介面摘要用量 | 若儲存無法讀取則回傳 `error: "read_failed"` 摘要 |
+| `GET /api/metrics` | 回傳程序本機的 Prometheus 文字指標，涵蓋邏輯請求、實際傳送、復原種類、持續時間與 TTFT。標籤僅使用 protocol、result 與 recovery class 的封閉集合；絕不匯出請求或憑證識別碼。 | 啟動時 `metricsExport.enabled` 不為 true 則回傳 404；需要一般管理驗證，資料平面憑證不能存取 |
 | `GET /api/storage` | 依 bucket 掃描 Codex 儲存用量 | 掃描失敗時回傳 `error: "scan_failed"` payload |
 | `POST /api/storage/cleanup/preview` | 預覽已封存 session 清理並回傳綁定摘要 | 400 `invalid_json` 或 `invalid_percent` |
 | `POST /api/storage/cleanup` | 隔離或永久移除預覽的已封存集合 | 400 無效輸入；409 過時／忙碌／被參照狀態；500 檔案系統／資料庫失敗 |

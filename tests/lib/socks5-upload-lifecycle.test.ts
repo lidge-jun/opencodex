@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { createConnection, createServer as createTcpServer, type AddressInfo, type Server as TcpServer, type Socket } from "node:net";
+import { Socket, createConnection, createServer as createTcpServer, type AddressInfo, type Server as TcpServer } from "node:net";
 import { socks5Fetch } from "../../src/lib/socks5-fetch";
+
+/**
+ * The budget the transport arms for a response, mirrored from SOCKS5_RESPONSE_TIMEOUT_MS in
+ * src/lib/socks5-fetch.ts, which keeps it module-private.
+ *
+ * Mirrored rather than exported: the value is what identifies the transport's own timer among the
+ * several this exchange arms, and a test is not a reason to widen that module's surface. If the
+ * budget changes there, the assertion below stops finding it and says so.
+ */
+const RESPONSE_TIMEOUT_MS = 200_000;
 
 const openSockets = new WeakMap<object, Set<Socket>>();
 
@@ -276,4 +286,180 @@ describe("SOCKS5 upload lifecycle", () => {
       await Promise.all([close(proxy), close(target)]);
     }
   });
+  test("interim informational answers are consumed and the upload runs to completion", async () => {
+    /*
+     * A peer may answer 100 and 103 before the request body is finished, and those are not the
+     * answer. The transport consumes them and reads on for the real one while the upload keeps
+     * going; one that treated the first head it saw as final would hand the caller an empty 100
+     * and stop writing mid-body.
+     *
+     * The ordering is arranged rather than hoped for. The rest of the body is withheld until both
+     * interim heads have arrived at this side of the tunnel and the reader has had a scheduling
+     * turn to consume them, and the fetch is required to be unsettled at that moment. So
+     * everything asserted afterwards about the remainder of the upload genuinely happened after
+     * the transport had those answers in hand and had not mistaken either for the final one.
+     */
+    let received = "";
+    let receivedWhenInformed: number | undefined;
+    let markPeerClosed: () => void = () => { /* replaced below */ };
+    const peerClosed = new Promise<void>(resolve => { markPeerClosed = resolve; });
+    const target = createTcpServer(socket => {
+      socket.once("error", () => { /* teardown may reset this peer */ });
+      socket.once("close", () => markPeerClosed());
+      socket.on("data", chunk => {
+        received += chunk.toString("latin1");
+        if (receivedWhenInformed === undefined && received.includes("\r\n\r\n")) {
+          socket.write("HTTP/1.1 100 Continue\r\n\r\n");
+          socket.write("HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n");
+          receivedWhenInformed = received.length;
+        }
+        if (!received.includes("0\r\n\r\n")) return;
+        socket.write("HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nposted");
+      });
+    });
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+
+    // Both interim heads, seen arriving on this side of the tunnel rather than merely written by
+    // the peer. The reader is already in flowing mode, so this listener observes the same chunks
+    // it does and consumes nothing.
+    let clientSeen = "";
+    let markInterimAtClient: () => void = () => { /* replaced below */ };
+    const interimAtClient = new Promise<void>(resolve => { markInterimAtClient = resolve; });
+    const originalSetTimeout = Socket.prototype.setTimeout;
+    let transportSocket: Socket | undefined;
+    const observeInterim = (chunk: Buffer | string): void => {
+      clientSeen += typeof chunk === "string" ? chunk : chunk.toString("latin1");
+      if (clientSeen.includes("HTTP/1.1 100 Continue\r\n\r\n")
+        && clientSeen.includes("HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n")) {
+        markInterimAtClient();
+      }
+    };
+
+    const encoder = new TextEncoder();
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    let settled = false;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+        controller.enqueue(encoder.encode("hello "));
+      },
+      cancel() { cancelled = true; },
+    });
+    const abort = new AbortController();
+    let outcome: Promise<void> | undefined;
+
+    try {
+      Socket.prototype.setTimeout = function patched(this: Socket, ms: number, callback?: () => void) {
+        if (ms === RESPONSE_TIMEOUT_MS && transportSocket === undefined) {
+          transportSocket = this;
+          this.on("data", observeInterim);
+        }
+        return originalSetTimeout.call(this, ms, callback as never);
+      } as typeof Socket.prototype.setTimeout;
+
+      const pending = post(targetPort, proxyPort, stream, abort.signal);
+      // Both handlers are attached before waiting for receipt; outcome never rejects.
+      outcome = pending.then(() => { settled = true; }, () => { settled = true; });
+      expect(await settlesWithin(interimAtClient)).toBe(true);
+      // Complete client receipt followed by a native checkpoint drains the current parser's
+      // buffered-header promise continuations before another body chunk becomes available.
+      await new Promise<void>(resolve => { setImmediate(resolve); });
+      expect(settled).toBe(false);
+      expect(cancelled).toBe(false);
+      expect(received).not.toContain("socks");
+      expect(received).not.toContain("0\r\n\r\n");
+      bodyController.enqueue(encoder.encode("socks"));
+      bodyController.close();
+
+      expect(await settlesWithin(outcome)).toBe(true);
+      const response = await pending;
+
+      /*
+       * The final answer reaching the caller is the receipt that those heads were consumed rather
+       * than merely delivered: 200 with its body can only be read by something that read past
+       * both of them.
+       */
+      expect(response.status).toBe(200);
+      const responseText = response.text();
+      expect(await settlesWithin(responseText)).toBe(true);
+      expect(await responseText).toBe("posted");
+
+      // Upload continuity, measured against the moment the interim answers were sent rather than
+      // against the whole exchange.
+      expect(receivedWhenInformed).toBeDefined();
+      const afterInterim = received.slice(receivedWhenInformed ?? 0);
+      expect(received).toContain("hello ");
+      expect(afterInterim).toContain("socks");
+      expect(afterInterim).toContain("0\r\n\r\n");
+
+      // The exchange ends by itself, before anything here tears a peer down.
+      expect(await settlesWithin(peerClosed)).toBe(true);
+    } finally {
+      Socket.prototype.setTimeout = originalSetTimeout;
+      transportSocket?.removeListener("data", observeInterim);
+      try {
+        abort.abort(new Error("informational fixture teardown"));
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+        if (outcome) await settlesWithin(outcome);
+      }
+    }
+  });
+
+  test("the response timeout fires while a body read is pending and cleans up after itself", async () => {
+    /*
+     * The branch that matters here runs while the upload is parked on a chunk the caller will
+     * never produce. Waiting out the real budget would make this a three-minute test, so the timer
+     * is observed as the transport arms it and then fired deliberately once the peer has witnessed
+     * the stall. What runs is the transport's own callback, not a substitute for it.
+     */
+    const { server: target, uploading } = uploadObserver();
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    const body = stallingBody(new TextEncoder().encode("first chunk"));
+    const armed: number[] = [];
+    let responseTimeoutSocket: Socket | undefined;
+    let fireResponseTimeout: (() => void) | undefined;
+    const originalSetTimeout = Socket.prototype.setTimeout;
+    try {
+      Socket.prototype.setTimeout = function patched(this: Socket, ms: number, callback?: () => void) {
+        armed.push(ms);
+        if (ms === RESPONSE_TIMEOUT_MS) {
+          responseTimeoutSocket = this;
+          fireResponseTimeout = callback;
+        }
+        return originalSetTimeout.call(this, ms, callback as never);
+      } as typeof Socket.prototype.setTimeout;
+
+      const pending = post(targetPort, proxyPort, body.stream);
+      const outcome = pending.then(() => "resolved" as const, (error: unknown) => error);
+
+      // Parked on a read the caller's stream will never fulfil, which is the state this timeout
+      // exists for.
+      expect(await settlesWithin(uploading)).toBe(true);
+      expect(armed).toContain(RESPONSE_TIMEOUT_MS);
+      expect(responseTimeoutSocket).toBeDefined();
+      expect(fireResponseTimeout).toBeDefined();
+
+      // The transport's own callback, invoked where its timer would have invoked it. Nothing here
+      // substitutes for what it does.
+      fireResponseTimeout?.();
+
+      // Settlement: the caller is answered rather than left pending.
+      expect(await settlesWithin(outcome)).toBe(true);
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("timed out");
+      // Reader cleanup: the caller's stream is released rather than held open by a dead exchange.
+      expect(await settlesWithin(body.cancelled)).toBe(true);
+      // Socket cleanup: the tunnel this exchange owned is gone.
+      expect(responseTimeoutSocket?.destroyed).toBe(true);
+    } finally {
+      Socket.prototype.setTimeout = originalSetTimeout;
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
 });

@@ -398,6 +398,27 @@ describe("bounded parallel first pass (WP170)", () => {
     expect(g.stats().arrivals).toBe(10);
   });
 
+  test("the decoder concurrency limit is shared across simultaneous requests", async () => {
+    const g = gatedEncoder();
+    const first = normalizeAnthropicImages(
+      [userMsg(distinctImages(8).map(b64 => imageBlock(b64)))],
+      { encode: g.encode },
+    );
+    const second = normalizeAnthropicImages(
+      [userMsg(distinctImages(8).map(b64 => imageBlock(b64)))],
+      { encode: g.encode },
+    );
+
+    await g.waitForArrivals(IMAGE_NORMALIZE_CONCURRENCY);
+    expect(g.stats().active).toBe(IMAGE_NORMALIZE_CONCURRENCY);
+    await Bun.sleep(10);
+    expect(g.stats().arrivals).toBe(IMAGE_NORMALIZE_CONCURRENCY);
+
+    g.release();
+    await Promise.all([first, second]);
+    expect(g.stats().peak).toBe(IMAGE_NORMALIZE_CONCURRENCY);
+  });
+
   test("a thrown target callback rejects the call, settles in-flight work, and stops new pulls", async () => {
     // processAt swallows encode/validate throws into {kind:"failed"} (its own catch),
     // so the production escape hatch is a throwing target callback (drop/replace).

@@ -357,6 +357,22 @@ export interface OcxProviderConfig {
    */
   preserveResponsesReasoningContent?: boolean;
   /**
+   * Treat this provider's `modelReasoningEfforts` as authoritative at the wire, not only in the
+   * catalog. Adapters that ship their own per-model effort table (currently `command-code`)
+   * otherwise let that table win for models it knows, so a widened row is advertised in the
+   * picker and then stripped on the way out. Opt-in because presets are SEEDED with the shipped
+   * table: without a declared flag there is no way to tell an operator's row from a copy an
+   * older release persisted. A rung the upstream then refuses is returned as that error rather
+   * than silently retried without the effort, since the operator asked for it.
+   */
+  modelReasoningEffortsAuthoritative?: boolean;
+  /**
+   * Drop replayed Responses `reasoning` items from input history before forwarding.
+   * Some OpenAI-compatible Responses upstreams accept tool-call replay but reject
+   * reasoning output items when they are sent back on a continuation.
+   */
+  dropResponsesReasoningItems?: boolean;
+  /**
    * Explicit opt-in for a relay that genuinely fronts OpenAI and can decode native
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
    */

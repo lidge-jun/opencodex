@@ -915,7 +915,7 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
 }
 
 
-function normalizedBaseUrl(value: string): string | null {
+export function normalizedBaseUrl(value: string): string | null {
   try {
     const url = new URL(value);
     if (url.username || url.password || url.search || url.hash) return null;

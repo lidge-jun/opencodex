@@ -222,8 +222,17 @@ const unsupportedImage = {
   message: "Model 'gpt-5.3-codex-spark' does not support image inputs. Try again with a vision model.",
 };
 
+const responsesToolRoutingMismatch = {
+  type: "invalid_request_error", code: null, param: "reasoning_effort",
+  message: "Function tools with reasoning_effort are not supported for gpt-6-astra in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+};
+const datedResponsesToolRoutingMismatch = {
+  ...responsesToolRoutingMismatch,
+  message: responsesToolRoutingMismatch.message.replace("gpt-6-astra", "gpt-6-astra-2026-09-03"),
+};
+
 describe("request-local optional control incompatibility", () => {
-  test.each([unsupportedUser, unsupportedEffort, unsupportedImage])("hops a structured target-local request rejection without cooling: %j", error => {
+  test.each([unsupportedUser, unsupportedEffort, unsupportedImage, responsesToolRoutingMismatch, datedResponsesToolRoutingMismatch])("hops a structured target-local request rejection without cooling: %j", error => {
     const body = JSON.stringify({ error });
     for (const message of [body, `Provider error 400: ${body}`]) {
       expect(comboFailureDecision(400, message, { code: "invalid_request_error" })).toBe("hop");
@@ -241,6 +250,12 @@ describe("request-local optional control incompatibility", () => {
     { ...unsupportedEffort, param: "input" },
     { ...unsupportedEffort, code: "unknown_terminal_code" },
     { ...unsupportedEffort, code: "cyber_policy" },
+    { ...responsesToolRoutingMismatch, param: "tools" },
+    { ...responsesToolRoutingMismatch, code: "unsupported_value" },
+    { ...responsesToolRoutingMismatch, code: undefined },
+    { ...responsesToolRoutingMismatch, message: responsesToolRoutingMismatch.message.replace("gpt-6-astra", "gpt-6-astra-preview") },
+    { ...responsesToolRoutingMismatch, message: responsesToolRoutingMismatch.message.replace("gpt-6-astra", "gpt-6-astra-2026-9-3") },
+    { ...responsesToolRoutingMismatch, message: "Function tools are not supported." },
   ])("does not relax an unrelated or conflicting refusal: %j", error => {
     expect(comboFailureDecision(400, JSON.stringify({ error }))).toBe("stop");
   });
