@@ -84,6 +84,38 @@ from `pluginkit` entirely. That also settles the snapshot path: the host writes 
 `~/Library/Containers/com.opencodex.desktop.widget/Data/...` precisely because the extension reads
 its own container, and that arrangement has to stay.
 
+## What the public record says about this failure
+
+The `_EXRunningExtension` crash is not unique to this repository, and finding the precedent
+changed how much of the fix is guesswork. A forensic report on macOS 26.5 with Swift 6.3.2
+describes the same trap from the same cause — a widget extension assembled from a SwiftPM
+`.executableTarget` and wrapped into an `.appex` by hand — and records that neither Info.plist
+shape avoids it, because SwiftPM has no app-extension target and therefore never applies the
+entry-point setup Xcode's WidgetKit template provides. That project's resolution was to stop
+using SwiftPM for the extension and build a real Xcode app-extension target instead.
+
+Two other projects keep SwiftPM and supply the missing pieces by hand, which is the route taken
+here: the linker entry (`-Xlinker -e -Xlinker _NSExtensionMain`) and the compiler's
+extension-only mode (`-application-extension`, which is what Xcode spells
+`APPLICATION_EXTENSION_API_ONLY`). Both are now set, and the extension launches and answers
+`chronod` without a crash report.
+
+Three things the same record settles that were open questions here:
+
+- **Ad-hoc signing does not prevent gallery appearance.** Developer ID and notarization matter for
+  Gatekeeper, not for gallery mechanics. The containing app does have to be launched once after
+  installation, which is what makes the first-run behaviour in this branch load-bearing for more
+  than the menu bar.
+- **App Groups do not work under ad-hoc signing**, and the documented fallback is exactly what
+  this repository already does — the host writes into the extension's own container.
+- **`CFBundleVersion` must match between host and extension** or WidgetKit rejects timeline
+  reloads. Verified on the installed bundle: both read 2.61.0.
+
+If the gallery still refuses this extension after the entry point and the extension-only build,
+the remaining known cause is the Xcode app-extension target itself, and that is a larger change
+than this unit: it means adding an Xcode project for the widget and building it with
+`xcodebuild` rather than `swift build`.
+
 ## The signing defect underneath it
 
 Fixing the entry point does not make a *released* widget adoptable on someone else's machine,

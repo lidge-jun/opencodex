@@ -14,6 +14,13 @@ let package = Package(
             name: "OpenCodexWidget",
             dependencies: ["MenuBarCore"],
             path: "Sources/OpenCodexWidget",
+            swiftSettings: [
+                // Xcode sets APPLICATION_EXTENSION_API_ONLY on an app-extension target, and the
+                // two projects that have this working from SwiftPM pass its compiler spelling by
+                // hand. It restricts the target to the extension-safe API surface, which is the
+                // contract the extension host assumes it was built against.
+                .unsafeFlags(["-application-extension"]),
+            ],
             linkerSettings: [
                 // A widget extension needs both halves of what Xcode does for an app-extension
                 // target, and each half is useless alone. This flag is one of them; `@main` on
