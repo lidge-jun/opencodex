@@ -137,6 +137,11 @@ function metadataProviderKey(provider: OcxProviderConfig): string | undefined {
   return undefined;
 }
 
+/** Whether catalog synchronization should fetch models.dev metadata for this destination. */
+export function providerUsesReasoningMetadata(provider: OcxProviderConfig): boolean {
+  return metadataProviderKey(provider) !== undefined;
+}
+
 /**
  * Local mirror of `modelRecordValue()` from `src/reasoning-effort.ts`, which imports this
  * module and so cannot be imported back. Exact id, then the `family:` prefix, then a

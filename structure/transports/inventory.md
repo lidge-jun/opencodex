@@ -46,6 +46,10 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Alibaba regions | `src/providers/alibaba-region-backup.ts`, `src/providers/alibaba-region-migration.ts`, `src/providers/alibaba-region-startup.ts` | Region migration backs up before rewriting and is idempotent across restarts. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts`, `src/providers/registry.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. Provider-scoped hints fill capabilities omitted by live rosters; OpenCode Go's `deepseek-v4.1-flash` keeps its 1,048,576-token context window. The fixed-key Opper preset uses the shared OpenAI Chat adapter at `https://api.opper.ai/v3/compat`, discovers models through its conventional authenticated `/models` path, preserves an older same-named custom destination, and falls back to bare pool ids while passing vendor-prefixed ids through unchanged. Codex quota DTOs suppress retired Spark evidence under the [OpenAI scope contract](../providers/openai-tiers.md#public-provider-contract), retaining ordinary custom windows. |
 
+`src/codex/sync.ts` bootstraps models.dev effort ladders through
+`src/providers/reasoning-metadata.ts` for supported destinations before catalog gathering, never
+from the routed request transport.
+
 The registry's first-party `deepseek-flash` row declares native `text` and `image` input, so image
 requests bypass the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`

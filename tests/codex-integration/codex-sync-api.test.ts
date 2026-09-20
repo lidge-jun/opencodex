@@ -164,6 +164,42 @@ describe("GUI/CLI Codex sync backend", () => {
     expect(errors).toEqual([]);
   });
 
+  test("bootstraps reasoning metadata for gated providers before catalog gathering", async () => {
+    const calls: string[] = [];
+    const zenConfig = {
+      ...config,
+      providers: {
+        zen: {
+          ...config.providers.fixture,
+          baseUrl: "https://opencode.ai/zen/go/v1",
+        },
+      },
+    } as OcxConfig;
+
+    await syncModelsToCodex(12345, zenConfig, null, {
+      admitCodexWrite: admittedSync,
+      refreshReasoningMetadata: async () => {
+        calls.push("reasoning");
+        return { ok: true as const, reason: "refreshed", providers: 1, models: 1 };
+      },
+      refreshCodexModelCatalog: async () => {
+        calls.push("catalog");
+        return {
+          added: 1,
+          path: "/tmp/opencodex-catalog.json",
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          comboOmissions: [],
+        };
+      },
+      injectCodexConfig: async () => ({ success: true, message: "injected" }),
+      currentExternalCodexModelProvider: () => null,
+    });
+
+    expect(calls).toEqual(["reasoning", "catalog"]);
+  });
+
   test("refuses during injection preflight before catalog or cache mutation", async () => {
     let refreshCalls = 0;
     let injectCalls = 0;

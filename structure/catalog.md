@@ -171,6 +171,10 @@ irreversible credential fingerprint: a credential switch observes neither the fr
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
 the previous credential's stale roster nor suppresses the next credential's first discovery.
 
+Synchronizing a supported routed provider first refreshes its models.dev effort snapshot through
+`src/codex/sync.ts` and `src/providers/reasoning-metadata.ts`; this keeps missing-cache network work
+out of request-time ladder resolution.
+
 A Devin live row spreads its measured `inputModalities` before
 `catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy
 `modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live

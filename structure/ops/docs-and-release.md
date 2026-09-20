@@ -487,3 +487,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 The public server configuration reference documents the optional
 [compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
+
+Startup and explicit catalog synchronization in `src/codex/sync.ts` bootstrap supported-provider
+effort metadata through `src/providers/reasoning-metadata.ts`; routed requests do not trigger that
+network refresh.

@@ -250,6 +250,9 @@ final catalog merge fences pending retained rows, including delete/re-add recove
 Raw management rows remain visible as pending/OFF. Config listener bindings are
 excluded from inventory identity because live and persisted bindings may differ.
 
+Supported routed-provider reasoning snapshots are bootstrapped by `src/codex/sync.ts` through
+`src/providers/reasoning-metadata.ts`, rather than by a model request.
+
 Codex `spawn_agent` advertises only the highest-priority first five picker-visible catalog rows.
 Use at most five configured `subagentModels` ids; they may contain bare catalog ids, routed
 `provider/model` ids, or exact account-qualified `<selector>/<native-openai-model>` ids. The

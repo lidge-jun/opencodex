@@ -128,6 +128,8 @@ Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows
 [Anthropic seed image metadata](../runtime.md#capability-aware-image-admission) is provider-scoped; xAI model metadata and transport behavior remain unchanged.
 
 Provider-scoped catalog hints remain isolated by provider in `src/providers/registry/entries-core.ts`. The
+models.dev effort snapshot is likewise destination-gated by `src/providers/reasoning-metadata.ts`
+and bootstrapped from `src/codex/sync.ts`, not from a routed request.
 OpenCode Go `deepseek-v4.1-flash` 1,048,576-token context hint does not change xAI model metadata or
 transport behavior.
 The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is likewise scoped to

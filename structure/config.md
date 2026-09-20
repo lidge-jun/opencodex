@@ -474,6 +474,9 @@ management handler's own unknown-id answer, and it names the id and `ocx models 
 
 Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
+Catalog synchronization in `src/codex/sync.ts` also bootstraps reasoning metadata only when the
+configured providers contain a destination supported by `src/providers/reasoning-metadata.ts`.
+
 Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
 Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
