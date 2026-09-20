@@ -697,6 +697,17 @@ that request with a 400. A forced function selector is preserved: a selector thi
 honor is a client input error, and `src/server/responses/passthrough-dispatch.ts` already answers
 it with one.
 
+Those two omissions are not the same edit, because the scope above is read from the body this
+normalization produces. `auto` selects from the catalog, so removing it from a request with an
+empty one states nothing new. `none` is a prohibition, and on a request whose catalog this
+normalizer emptied it is the only place the turn's client-call boundary is written down. Dropping
+the word alone would let the reconstruction hand back a call the caller ruled out, and nothing
+behind it would catch that: the repair runs on the grok client surface, while the declaration
+guard stands down whenever the provider's `authMode` is `forward` — which is what the xAI OAuth
+lane is. So the prohibition is restated as the explicit empty catalog, which carries the same
+deny-all, which the scope and the declaration guard both already read that way, and which this
+destination receives unchanged whenever a caller sends one itself.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in

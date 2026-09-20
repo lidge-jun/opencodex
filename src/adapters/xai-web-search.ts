@@ -194,10 +194,18 @@ export function normalizeXaiResponsesWebSearch(
   }
 
   const normalized = normalizeToolChoice(next);
-  if ((normalized.tool_choice === "auto" || normalized.tool_choice === "none") && !hasAnyDeclaredTool(normalized)) {
-    debugProviderDiagnostic("xai", "tool-choice-omitted", { choice: normalized.tool_choice });
+  const choice = normalized.tool_choice;
+  if ((choice === "auto" || choice === "none") && !hasAnyDeclaredTool(normalized)) {
+    debugProviderDiagnostic("xai", "tool-choice-omitted", { choice });
     const { tool_choice: _toolChoice, ...rest } = normalized;
-    return rest;
+    // `auto` selects from the catalog, so a catalog with nothing in it makes it meaningless and
+    // the omission says nothing the request did not already say. `none` is the opposite: it is a
+    // prohibition, and on a request whose catalog this normalizer just emptied it is the only
+    // place the turn's client-call boundary is written down. Downstream repair reads that
+    // boundary off the final outbound body, so omitting the word alone would hand back a call the
+    // caller ruled out. Restate it as the explicit empty catalog, which carries the same deny-all
+    // and which this destination already receives whenever a caller sends one itself.
+    return choice === "none" && !Array.isArray(rest.tools) ? { ...rest, tools: [] } : rest;
   }
   return normalized;
 }
