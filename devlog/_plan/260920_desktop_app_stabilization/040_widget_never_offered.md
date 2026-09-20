@@ -77,8 +77,41 @@ This half cannot be proven here. It needs maintainer-held credentials, and the p
 notarized artifact installed on a machine that did not build it, launched once, with the gallery
 then checked. That is recorded as the outstanding verification rather than claimed.
 
+## The menu bar had the same shape of problem
+
+Start at Login was purely opt-in. Nothing enabled it on first run, so an install left the user
+with a menu bar item only for as long as the app happened to be running — and a menu bar app that
+is not running has no menu bar item. After a reboot the app was simply absent.
+
+`first_run::apply_start_at_login_default` enables it once per installation, keyed on a marker in
+the app config directory, and runs before `tray::install` so the tray checkbox reads the state it
+leaves behind. The marker is written before the login item is touched and is never removed, so a
+user who turns the setting off keeps it off. Writing afterwards would let a failed enable retry
+every launch and eventually flip the setting back under someone who had deliberately disabled it.
+
+The marker distinguishes a fresh install from a user who opted out, but it cannot distinguish
+either from an install that predates the marker. The desktop shell and the widget both landed the
+same day this was written and no release tag contains them, so there is no such population; if
+that changes, this needs a migration rather than a marker.
+
+## What was verified here
+
+Rebuilt, installed to `/Applications`, and launched:
+
+```
+LC_MAIN entryoff 5656 -> _main                    (was _NSExtensionMain)
+nm: _$s15OpenCodexWidget0abC6BundleV4bodyQrvpQOMQ  present
+pluginkit: com.opencodex.desktop.widget re-registered, parent bundle resolved
+~/Library/Application Support/com.opencodex.desktop/start-at-login-claimed  written
+~/Library/LaunchAgents/OpenCodex.plist                                      created
+```
+
+So the entry point is connected and the login item is registered, both on a real install rather
+than in a test double.
+
 ## Acceptance
 
 The entry-point half closes when the locally built widget appears in the gallery on this machine.
 The signing half closes when a release build's extension reports the team identifier, the runtime
-flag and a timestamp, and a clean install offers the widget.
+flag and a timestamp, and a clean install on a machine that did not build it offers the widget.
+That second half needs maintainer-held credentials and is recorded as outstanding.
