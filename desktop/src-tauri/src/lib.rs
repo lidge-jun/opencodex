@@ -1,39 +1,81 @@
 mod auth;
 mod discovery;
+mod exit;
 mod first_run;
 mod formatting;
 mod logging;
+mod menu;
 mod proxy;
 mod sidecar;
+mod startup;
 mod tray;
+mod tray_availability;
 mod updater;
 mod widget;
 mod window;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Mutex, MutexGuard, PoisonError,
 };
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_shell::process::CommandChild;
 
 pub struct AppState {
-    pub proxy: proxy::ProxyClient,
-    pub spawned_by_us: AtomicBool,
-    pub child: Mutex<Option<CommandChild>>,
+    /// Absent until the startup sequence has resolved a home and a port. Nothing guesses an
+    /// endpoint any more, so there is no client to hand out before that.
+    proxy: Mutex<Option<proxy::ProxyClient>>,
+    spawned_by_us: AtomicBool,
+    child: Mutex<Option<CommandChild>>,
+    /// The consumed spawn event stream of the child, if this app started one.
+    pub watch: sidecar::SidecarWatch,
 }
 
 impl AppState {
-    pub fn shutdown_child(&self) {
-        if !self.spawned_by_us.swap(false, Ordering::AcqRel) {
-            return;
+    pub fn new() -> Self {
+        Self {
+            proxy: Mutex::new(None),
+            spawned_by_us: AtomicBool::new(false),
+            child: Mutex::new(None),
+            watch: sidecar::SidecarWatch::default(),
         }
-        if let Ok(mut child) = self.child.lock() {
-            if let Some(child) = child.take() {
-                let _ = child.kill();
-            }
-        }
+    }
+
+    fn slot<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+        lock.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn proxy(&self) -> Option<proxy::ProxyClient> {
+        Self::slot(&self.proxy).clone()
+    }
+
+    pub fn attach(&self, proxy: proxy::ProxyClient) {
+        *Self::slot(&self.proxy) = Some(proxy);
+    }
+
+    pub fn owns_runtime(&self) -> bool {
+        self.spawned_by_us.load(Ordering::Acquire)
+    }
+
+    pub fn adopt(&self, child: CommandChild) {
+        *Self::slot(&self.child) = Some(child);
+        self.spawned_by_us.store(true, Ordering::Release);
+    }
+
+    /// Let go of a runtime that has already been drained.
+    ///
+    /// Dropping the handle does not signal the process — the shell plugin installs no `Drop` — so
+    /// this releases ownership without reintroducing the `kill()` that D2 removed.
+    pub fn release(&self) {
+        self.spawned_by_us.store(false, Ordering::Release);
+        let _ = Self::slot(&self.child).take();
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -51,8 +93,33 @@ fn hide_dashboard(app: tauri::AppHandle) {
     }
 }
 
+/// Everything the startup sequence has said so far, including the states it has already finished.
+///
+/// The page asks for this when it loads rather than relying only on the event stream: the first
+/// states finish in milliseconds and an event emitted before the listener exists is simply gone.
+#[tauri::command]
+fn startup_snapshot(app: tauri::AppHandle) -> Option<startup::Progress> {
+    app.try_state::<startup::Startup>()
+        .map(|startup| startup.latest())
+}
+
+/// The named states the startup sequence moves through, in order.
+///
+/// The page asks for them instead of restating them, so a state added in the shell appears in the
+/// UI and one removed cannot leave a row behind.
+#[tauri::command]
+fn startup_phases() -> Vec<startup::PhaseInfo> {
+    startup::phase_list()
+}
+
+/// Run the startup sequence again. A run already in flight is left alone.
+#[tauri::command]
+fn retry_startup(app: tauri::AppHandle) {
+    startup::begin(&app);
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 window::show(&window);
@@ -60,52 +127,59 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        // The argument is what makes a login launch recognisable. Nothing else in a bare launch
+        // distinguishes it from a person opening the app, and D7 needs the difference.
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![startup::AUTOSTART_FLAG]),
         ))
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![show_dashboard, hide_dashboard])
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    // macOS is the one platform where the event loop cannot enforce D2 on its own: Tauri's default
+    // menu carries a predefined Quit wired to Cocoa's terminate:, and the pinned tao raises no
+    // cancellable event for it. Replacing that one item is what lets Cmd+Q mean hide.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
+
+    builder
+        .invoke_handler(tauri::generate_handler![
+            show_dashboard,
+            hide_dashboard,
+            startup_snapshot,
+            startup_phases,
+            retry_startup
+        ])
         .setup(|app| {
-            let (endpoint, home) = discovery::current();
-            let proxy = proxy::ProxyClient::new(endpoint, auth::Auth::new(home))
-                .map_err(|error| error.to_string())?;
-            let child = tauri::async_runtime::block_on(sidecar::ensure_proxy(
-                app.handle(),
-                &proxy,
-                endpoint,
-            ))
-            .map_err(std::io::Error::other)?;
-            app.manage(AppState {
-                proxy: proxy.clone(),
-                spawned_by_us: AtomicBool::new(child.is_some()),
-                child: Mutex::new(child),
-            });
+            app.manage(AppState::new());
             app.manage(updater::PendingUpdate(Mutex::new(None)));
             app.manage(tray::TrayState::default());
+            app.manage(exit::ExitCoordinator::new());
+            app.manage(startup::Startup::new());
 
-            let window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::App(format!("index.html?port={}", endpoint.port).into()),
-            )
-            .title("OpenCodex")
-            .inner_size(1100.0, 720.0)
-            .visible(false)
-            .user_agent(&window::webview_user_agent())
-            .on_navigation(window::navigation_allowed(endpoint))
-            .build()?;
+            // D7: the window is created and shown before anything is registered, resolved, probed
+            // or started, so every state below has somewhere to be reported. A login launch stays
+            // hidden until the tray verdict, because R1 shows it after all when there turns out to
+            // be nowhere to hide.
+            let window =
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("OpenCodex")
+                    .inner_size(1100.0, 720.0)
+                    .visible(false)
+                    .user_agent(&window::webview_user_agent())
+                    .on_navigation(window::navigation_allowed(app.handle().clone()))
+                    .build()?;
             window::configure(&window);
-            window::set_tray_policy(app.handle(), false);
-            let dashboard = endpoint.url("/#/usage");
-            if tauri::async_runtime::block_on(proxy.is_alive()).is_ok() {
-                let _ = window.eval(format!("window.location.replace({dashboard:?})"));
+            if startup::LaunchOrigin::detect() == startup::LaunchOrigin::User {
+                window::show(&window);
+            } else {
+                window::set_tray_policy(app.handle(), false);
             }
-            // Before the tray, so its Start at Login checkbox reads the state this leaves behind
-            // rather than the state from before first run.
-            first_run::apply_start_at_login_default(app.handle());
-            tray::install(app.handle(), proxy)?;
+
+            startup::begin(app.handle());
+
             if !cfg!(debug_assertions) {
                 updater::start_background_checks(app.handle().clone());
             }
@@ -114,10 +188,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building OpenCodex desktop shell")
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
-                if let Some(state) = app.try_state::<AppState>() {
-                    state.shutdown_child();
-                }
+            // Window close and the platform quit gesture arrive here as an exit request, and until
+            // this handler existed they went straight through to a SIGKILL of the runtime. D2 makes
+            // them hide; only the tray's Quit, and an update's coordinated restart, get past.
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                exit::on_exit_requested(app, code, &api);
             }
         });
 }

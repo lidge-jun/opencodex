@@ -52,7 +52,12 @@ pub async fn install(app: &AppHandle, update: Update) -> Result<(), String> {
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|error| error.to_string())?;
-    app.restart();
+    // R2: an update restart is a coordinated restart, not a quit. D2 forbids an *uncoordinated*
+    // exit, and `AppHandle::restart` was exactly that — it ran straight into the hard kill of the
+    // runtime this app owns. Going through the exit coordinator runs the same graceful drain the
+    // tray's Quit runs, and then the app comes back.
+    crate::exit::request_restart(app);
+    Ok(())
 }
 
 pub fn update_label(version: &str) -> String {

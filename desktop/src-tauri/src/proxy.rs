@@ -2,6 +2,7 @@ use crate::{auth::Auth, discovery::ProxyEndpoint};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::Value;
 use std::time::Duration;
+use tokio::time::{timeout_at, Instant};
 
 #[derive(Clone)]
 pub struct ProxyClient {
@@ -16,6 +17,18 @@ pub enum ProxyError {
     Unauthorized,
     Http(StatusCode),
     Decode(reqwest::Error),
+}
+
+impl ProxyError {
+    /// Whether nothing is listening on the endpoint at all.
+    ///
+    /// This is the only error that says anything about the process behind the port. A timeout, an
+    /// unauthorized reply or a body that will not parse all mean the listener answered or might
+    /// still be there, and a stop that reads any of them as "gone" reports a drain that did not
+    /// happen.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(self, Self::Unreachable)
+    }
 }
 
 impl ProxyClient {
@@ -40,6 +53,21 @@ impl ProxyClient {
 
     pub async fn is_alive(&self) -> Result<Value, ProxyError> {
         self.get("/healthz").await
+    }
+
+    /// A health probe that cannot outlive the caller's deadline.
+    ///
+    /// The client's own timeout is per request and knows nothing about the budget the caller is
+    /// working to. A probe started a moment before a deadline would otherwise overrun it by that
+    /// whole timeout, which is how a stated 30-second startup ceiling quietly becomes 34.
+    /// `None` means the deadline arrived first.
+    pub async fn alive_within(&self, deadline: Instant) -> Option<Result<Value, ProxyError>> {
+        timeout_at(deadline, self.is_alive()).await.ok()
+    }
+
+    /// A stop request bounded the same way.
+    pub async fn stop_within(&self, deadline: Instant) -> Option<Result<Value, ProxyError>> {
+        timeout_at(deadline, self.stop()).await.ok()
     }
 
     pub async fn companion_settings(&self) -> Result<Value, ProxyError> {

@@ -1,4 +1,4 @@
-use crate::{auth::Auth, discovery::ProxyEndpoint};
+use crate::{auth::Auth, exit, AppState};
 use tauri::{AppHandle, Manager, Url, WebviewWindow, WindowEvent};
 
 pub fn webview_user_agent() -> String {
@@ -12,30 +12,54 @@ pub fn webview_user_agent() -> String {
     format!("{platform} {}", Auth::user_agent())
 }
 
+/// Decide what closing this window means, at the moment it is closed.
+///
+/// The answer is not known when the window is built: on Linux it depends on a session-bus probe
+/// that the startup sequence runs afterwards. So it is read here rather than captured. With a tray
+/// a close hides and the runtime keeps serving; without one there is nowhere to hide, so D6 makes
+/// the close a quit — and it takes the same graceful drain the tray's Quit does.
 pub fn configure(window: &WebviewWindow) {
     let window_for_close = window.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
-            let _ = window_for_close.hide();
-            apply_tray_policy(window_for_close.app_handle(), false);
+            let app = window_for_close.app_handle();
+            if exit::hides_to_tray(app) {
+                hide(&window_for_close);
+            } else {
+                exit::request(app, exit::ExitReason::UserQuit);
+            }
         }
     });
 }
 
-pub fn navigation_allowed(endpoint: ProxyEndpoint) -> impl Fn(&Url) -> bool {
+/// Where this window may navigate.
+///
+/// The loopback endpoint is read from the app rather than captured, because the window now exists
+/// before anything has been resolved. Until it has, an http target is refused outright instead of
+/// being handed to the browser: nothing should be navigating anywhere yet, and opening an
+/// unresolved address in the user's browser is a worse answer than doing nothing.
+pub fn navigation_allowed(app: AppHandle) -> impl Fn(&Url) -> bool {
     move |url| {
         if is_app_origin(url) {
             return true;
         }
-        if url.scheme() == "http" && url.host_str() == Some(endpoint.host) {
-            return url.port_or_known_default() == Some(endpoint.port);
+        if url.scheme() == "about" && url.as_str() == "about:blank" {
+            return true;
         }
-        if matches!(url.scheme(), "http" | "https") {
-            let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
-            return false;
+        let endpoint = app
+            .try_state::<AppState>()
+            .and_then(|state| state.proxy())
+            .map(|proxy| proxy.endpoint());
+        if let Some(endpoint) = endpoint {
+            if url.scheme() == "http" && url.host_str() == Some(endpoint.host) {
+                return url.port_or_known_default() == Some(endpoint.port);
+            }
+            if matches!(url.scheme(), "http" | "https") {
+                let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+            }
         }
-        url.scheme() == "about" && url.as_str() == "about:blank"
+        false
     }
 }
 
