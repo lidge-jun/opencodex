@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+// The schema this exercises is reached through `src/config`, the entry the
+// runtime evaluates first. Importing `config/schema/*` directly enters that
+// module cycle from the wrong end and throws a TDZ ReferenceError.
+import { loadConfig } from "../../src/config";
 import {
   admissionModelDeniedBody,
   AdmissionModelDeniedError,
@@ -9,12 +16,35 @@ import {
   resolveAdmissionModelScope,
   routeAllowedByScope,
 } from "../../src/server/admission-model-scope";
-import { apiKeyEntrySchema } from "../../src/config/schema/leaf-validators";
 import { routeModel } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const KEY = "ocx_data_" + "a".repeat(40);
 const OTHER_KEY = "ocx_data_" + "b".repeat(40);
+
+const previousHome = process.env.OPENCODEX_HOME;
+const homes: string[] = [];
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+  for (const home of homes.splice(0)) removeTreeWithRetry(home);
+});
+
+/** Load a hand-written config.json the way a startup would, and report the keys that survived. */
+function loadKeysFrom(apiKeys: unknown[]): string[] {
+  const home = mkdtempSync(join(tmpdir(), "ocx-key-scope-"));
+  homes.push(home);
+  process.env.OPENCODEX_HOME = home;
+  writeFileSync(join(home, "config.json"), JSON.stringify({
+    port: 10100,
+    defaultProvider: "allowed",
+    providers: { allowed: { adapter: "openai-chat", baseUrl: "https://allowed.test/v1", models: ["small"] } },
+    apiKeys,
+  }));
+  return (loadConfig().apiKeys ?? []).map(entry => entry.name);
+}
 
 function configWithKey(scope: { allowedProviders?: string[]; allowedModels?: string[] }): Pick<OcxConfig, "apiKeys"> {
   return {
@@ -104,21 +134,26 @@ describe("per-key model and provider scope", () => {
   });
 
   test("a malformed scope drops the key instead of widening it", () => {
-    const valid = { key: KEY, id: "scoped", name: "mail", createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["zai-discount"] };
-    expect(apiKeyEntrySchema.safeParse(valid).success).toBe(true);
+    const scoped = { key: KEY, id: "scoped", name: "mail", createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["zai-discount"] };
+    const open = { key: OTHER_KEY, id: "open", name: "coding", createdAt: "2026-01-01T00:00:00.000Z" };
+    expect(loadKeysFrom([scoped, open])).toEqual(["mail", "coding"]);
+
     // Every other field on this record degrades to a default. These two must
     // not: degrading a damaged permission field reads as "allowed everything",
-    // which is the one direction it can never fail.
+    // which is the one direction it can never fail. The damaged key is dropped
+    // and its still-valid neighbour survives, so one bad record does not take
+    // the whole array with it.
     for (const damaged of [
-      { ...valid, allowedProviders: "zai-discount" },
-      { ...valid, allowedProviders: [""] },
-      { ...valid, allowedModels: [123] },
-      { ...valid, allowedModels: ["x".repeat(257)] },
+      { ...scoped, allowedProviders: "zai-discount" },
+      { ...scoped, allowedProviders: [""] },
+      { ...scoped, allowedModels: [123] },
+      { ...scoped, allowedModels: ["x".repeat(257)] },
     ]) {
-      expect(apiKeyEntrySchema.safeParse(damaged).success).toBe(false);
+      expect(loadKeysFrom([damaged, open])).toEqual(["coding"]);
     }
+
     // A degrading neighbour still degrades, so the fail-closed choice is scoped
     // to the permission fields rather than hardening the whole record.
-    expect(apiKeyEntrySchema.safeParse({ ...valid, name: 7 }).success).toBe(true);
+    expect(loadKeysFrom([{ ...scoped, name: 7 }, open])).toHaveLength(2);
   });
 });

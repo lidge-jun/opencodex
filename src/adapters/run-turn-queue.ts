@@ -37,6 +37,11 @@ export const DEFAULT_MAX_BACKLOG_CODE_UNITS = 32 * 1024 * 1024;
  * however empty the queue is, so it must be refused even with the whole
  * aggregate free. They also report different terminal messages, so an operator
  * reading the turn's error learns which happened.
+ *
+ * Like the aggregate, this governs what the queue RETAINS. An event handed
+ * straight to a waiting consumer is never held here, so neither budget applies
+ * to it: refusing it would abort a turn over memory this queue does not own,
+ * and the consumer's own per-event bound governs that payload instead.
  */
 export const DEFAULT_MAX_EVENT_CODE_UNITS = 8 * 1024 * 1024;
 
@@ -67,6 +72,10 @@ const RETENTION_MAX_NODES = 4096;
  * of a kind and not payload anyone is buffering.
  */
 export function retainedEventCodeUnits(event: AdapterEvent): number {
+  // Defensive: this measures values an adapter produced. A malformed emission
+  // has to become a terminal event, not a TypeError thrown out of push() with
+  // the queue half-updated.
+  if (!event || typeof event !== "object") return 0;
   let total = 0;
   let nodes = 0;
   const seen = new Set<object>();

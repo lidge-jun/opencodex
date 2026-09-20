@@ -424,7 +424,9 @@ describe("run-turn adapter event queue retained-payload budgets", () => {
     const pending = iterator.next();
     queue.push(text("x".repeat(1_000)));
 
-    // The queue never held it, so neither budget has anything to say about it.
+    // The queue never held it, so neither budget has anything to say about it:
+    // both govern retained payload, and refusing this would abort a turn over
+    // memory the queue does not own.
     expect(await pending).toEqual({ done: false, value: text("x".repeat(1_000)) });
     expect(backlogExceeded).toBe(0);
     expect(queue.retainedCodeUnits()).toBe(0);
@@ -495,6 +497,10 @@ describe("run-turn adapter event queue retained-payload budgets", () => {
     expect(retainedEventCodeUnits(text("abcd"))).toBe(4);
     expect(retainedEventCodeUnits(heartbeat)).toBe(0);
     expect(retainedEventCodeUnits(phasedText("ab", "commentary"))).toBe(12);
+    // A malformed adapter emission has to become a terminal event, not a
+    // TypeError thrown out of push() with the queue half-updated.
+    expect(retainedEventCodeUnits(null as unknown as AdapterEvent)).toBe(0);
+    expect(retainedEventCodeUnits("oops" as unknown as AdapterEvent)).toBe(0);
     // Nested provider-shaped payload is counted; a cycle terminates.
     const cyclic: Record<string, unknown> = { owner: "abc" };
     cyclic.self = cyclic;

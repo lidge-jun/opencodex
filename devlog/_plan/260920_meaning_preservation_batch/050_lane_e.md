@@ -77,6 +77,29 @@ everything".
 Out of scope and deliberately not started: Redis, a full multi-tenant conversion,
 and any budget or RPM/TPM system.
 
+#### What the scope does not cover, stated rather than implied
+
+An adversarial review of the branch found authenticated data-plane endpoints that
+spend provider quota without resolving a model through the router, so the scope
+does not reach them:
+
+- `/v1/images/generations` and `/v1/images/edits`,
+- `/v1/audio/transcriptions` and its streaming form,
+- `/v1/live`, `/v1/realtime/calls` and the standalone realtime sockets,
+- the non-account-qualified branch of `/v1/alpha/search`, which forwards the caller's
+  model to a search sidecar without routing it.
+
+The account-qualified search branch does route a model and is checked. The rest
+need a destination definition this lane does not own — an image or audio endpoint
+has a fixed-purpose model rather than a routed one — and inventing one here would
+be the multi-tenant expansion this batch rules out. They are recorded so the
+contract is not read as broader than it is.
+
+The review also found that resolving an OpenAI virtual model rewrites
+`route.modelId` to the wire id after the initial check. That one was a real hole in
+the stated contract and is fixed: the settled route is re-checked after
+normalization, so the id that is billed is the id that was authorized.
+
 ## Verification
 
 Static source review plus exact-head hosted CI. No local suite, individual test,

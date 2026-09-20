@@ -115,6 +115,7 @@ import {
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
+  routeAllowedByScope,
 } from "../admission-model-scope";
 import { nativeContextLimits } from "../../codex/catalog";
 import { streamingContextOverflowResponse } from "./context-overflow";
@@ -1041,6 +1042,14 @@ export async function prepareResponsesRequest(
     inboundTransport: options.inboundTransport,
     claudeGoAffinity: options.claudeGoAffinity,
   });
+  // Normalization is the last thing that can move the destination: resolving an
+  // OpenAI virtual model rewrites route.modelId to the wire id that will
+  // actually be billed. A scope checked only before this would authorize the
+  // public selector and send the wire model, so the settled route is checked
+  // once more here.
+  if (!routeAllowedByScope(admissionScope, route)) {
+    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, route));
+  }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
