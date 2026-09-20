@@ -54,7 +54,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ja: { label: "アクセス禁止", description: "アカウントは認証済みですがこのモデルや操作の使用が許可されていません。多くはプラン/サブスクリプション制限（例: Ollama Cloud Pro）、組織ポリシー、モデル権限であり、API キーが不正とは限りません。" },
     tr: { label: "Erişim yasaklandı", description: "Hesabın kimliği doğrulandı ancak bu modeli veya işlemi kullanma izni yok. Genellikle plan/abonelik sınırı (örn. Ollama Cloud Pro), organizasyon politikası veya model izni kaynaklıdır." },
     vi: { label: "Bị cấm", description: "Tài khoản đã được xác thực nhưng không được phép dùng model hoặc thao tác này. Nguyên nhân thường là giới hạn gói hoặc thuê bao (ví dụ Ollama Cloud Pro), chính sách tổ chức hay quyền model — không nhất thiết do API key sai." },
-    "pt-BR": { label: "Acesso proibido", description: "A conta está autenticada, mas não tem permissão para usar este model ou operação. Geralmente é um bloqueio de plano/assinatura (ex: Ollama Cloud Pro), política da organização ou permissão do model." },
+    "pt-BR": { label: "Acesso proibido", description: "A conta está autenticada, mas não tem permissão para usar este model ou operação. Geralmente é um bloqueio de plano/assinatura (ex: Ollama Cloud Pro), política da organização ou permissão do model — não necessariamente uma chave de API inválida." },
   },
   404: {
     en: { label: "Not found", description: "The requested route, model, account, or upstream resource was not found. Verify the model name and opencodex provider configuration." },
