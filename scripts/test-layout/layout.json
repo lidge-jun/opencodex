@@ -1190,6 +1190,7 @@
     "reasoning-replay-scope-source.test.ts": "lib",
     "redact.test.ts": "lib",
     "failure-stage-model.test.ts": "lib",
+    "failure-attribution.test.ts": "lib",
     "relay-eager.test.ts": "server",
     "release-helper.test.ts": "ci-workflows",
     "release-notes.test.ts": "ci-workflows",

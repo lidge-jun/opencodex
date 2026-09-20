@@ -15,15 +15,19 @@ import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
 import {
   ATTEMPT_RECOVERY_KIND_ROSTER,
   ATTEMPT_RECOVERY_WITHHELD_ROSTER,
+  REQUEST_FAILURE_CAUSES,
+  REQUEST_FAILURE_STAGES,
   type AttemptRecoveryKind,
   type AttemptRecoveryWithheld,
+  type RequestFailureCause,
+  type RequestFailureStage,
   type RequestSpendTotals,
 } from "./telemetry-contract";
 
 // Re-exported so every existing importer keeps its path. The declarations moved to a leaf the
 // dashboard can import without pulling node:fs and the config barrel into the browser build.
-export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER };
-export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestSpendTotals };
+export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER, REQUEST_FAILURE_CAUSES, REQUEST_FAILURE_STAGES };
+export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestFailureCause, RequestFailureStage, RequestSpendTotals };
 
 export interface PersistedClaudeCompatibilityLog {
   decision: "shadow";
@@ -173,6 +177,16 @@ export interface PersistedUsageAttempt {
    * account identifiers.
    */
   codexWsStage?: CodexWsStageRecord;
+  /**
+   * How far this attempt's exchange got and why it failed, in the shared vocabulary (#2366).
+   *
+   * Both values are closed roster members, so the pair can be a metric label and a grouping key
+   * without a masking pass. Absent on a completed attempt and on every row written before the
+   * attribution existed. The resend verdict these two imply is NOT stored: it is derived at read
+   * time, so a stored row can never carry a verdict the current table would no longer reach.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
 }
 
 /**
@@ -318,6 +332,53 @@ export interface PersistedUsageEntry {
   routeDecision?: RouteDecisionTraceV1;
   /** Closed Claude protocol codes only; absent on older rows. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * How far this request got and why it failed (#2366). Projected from the attempt that ended
+   * the request so every surface reads the answer off the same row. Absent on a completed
+   * request and on rows written before the attribution existed.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+}
+
+/**
+ * Attribution for the logical request, projected from the attempt that ended it (#2366).
+ *
+ * Carried on the entry as well as the attempt because the three surfaces that have to agree read
+ * the entry: a projection that had to reach into `attempts` to answer "why did this fail" would
+ * be reading a different row from the exporter, which is the disagreement the landed terminal
+ * classifier already removed once.
+ */
+export interface PersistedRequestFailureAttribution {
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+}
+
+const KNOWN_REQUEST_FAILURE_STAGES: ReadonlySet<string> = new Set(REQUEST_FAILURE_STAGES);
+const KNOWN_REQUEST_FAILURE_CAUSES: ReadonlySet<string> = new Set(REQUEST_FAILURE_CAUSES);
+
+/**
+ * Same closed-set discipline as `isKnownTransportPhase`, with the set DERIVED from the roster
+ * rather than restated. The recovery vocabulary was written twice once -- as a union and as the
+ * read-back whitelist -- and a member present in only one of them is written to disk and dropped
+ * on the next read, which loses exactly the field that says why the row failed.
+ */
+export function isKnownRequestFailureStage(value: unknown): value is RequestFailureStage {
+  return typeof value === "string" && KNOWN_REQUEST_FAILURE_STAGES.has(value);
+}
+
+export function isKnownRequestFailureCause(value: unknown): value is RequestFailureCause {
+  return typeof value === "string" && KNOWN_REQUEST_FAILURE_CAUSES.has(value);
+}
+
+/** The stage/cause pair a normalizer keeps, dropping either half that is not a roster member. */
+export function normalizeRequestFailureAttribution(
+  raw: { failureStage?: unknown; failureCause?: unknown },
+): PersistedRequestFailureAttribution {
+  return {
+    ...(isKnownRequestFailureStage(raw.failureStage) ? { failureStage: raw.failureStage } : {}),
+    ...(isKnownRequestFailureCause(raw.failureCause) ? { failureCause: raw.failureCause } : {}),
+  };
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -655,6 +716,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
     ...(codexWsStage ? { codexWsStage } : {}),
+    ...normalizeRequestFailureAttribution(attempt),
   };
 }
 
@@ -831,6 +893,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...normalizeRequestFailureAttribution(entry),
   };
 }
 

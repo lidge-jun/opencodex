@@ -12,41 +12,42 @@
  * `PersistedUsageEntry` in src/usage/log.ts, and every projection below reads those structurally
  * rather than growing a parallel history.
  *
- * MUST stay a leaf. Its only imports are types, erased at runtime, so nothing here can pull the
- * usage or budget subsystems into a request path that did not already have them.
+ * MUST stay a leaf. Its one runtime import is `src/usage/telemetry-contract.ts`, which has no
+ * imports at all; everything else it names is a type, erased at runtime. So nothing here can
+ * pull the usage or budget subsystems into a request path that did not already have them.
  */
 import type { SendClass } from "./request-execution-budget";
-import type { AttemptRecoveryKind } from "../usage/telemetry-contract";
+import {
+  REQUEST_FAILURE_STAGES,
+  type AttemptRecoveryKind,
+  type RequestFailureCause,
+  type RequestFailureStage,
+  type ResendPermission,
+} from "../usage/telemetry-contract";
 
 /**
- * How far the exchange got, ordered by how much the DOWNSTREAM CLIENT observed.
+ * The vocabulary this module decides over is DECLARED in `src/usage/telemetry-contract.ts` and
+ * re-exported here, so every importer of this module keeps its path while the dashboard can
+ * reach the same rosters without pulling this file's import graph into the browser project.
  *
- * The order is by client observation rather than by upstream progress, because the question the
- * table answers is whether resending can duplicate something the caller already saw. An upstream
- * that completed a turn we never relayed has committed nothing downstream; an upstream that
- * emitted one token has.
+ * What stays here is the decision: the per-stage commitment, the per-cause evidence and
+ * disposition, and the resend permission derived from them.
  *
  * A stage is how far the OBSERVABLE progression got, not which events happened to arrive. A turn
  * that settled carrying no output -- an empty completion, a 4xx error body -- did not reach
- * `terminal`; it stalled at `protocol-prelude`, because the caller saw no answer. `terminal`
+ * `terminal`; it stalled below `semantic-output`, because the caller saw no answer. `terminal`
  * means the answer was delivered, which is why it is both last and refused.
  */
-export const REQUEST_FAILURE_STAGES = Object.freeze([
-  /** No response head exists. Whether the origin began the turn is not known from the stage alone. */
-  "pre-header",
-  /** A status line and headers exist, and no protocol body event has been parsed yet. */
-  "headers-only",
-  /** The protocol body began with control events only -- `response.created`, quota frames. */
-  "protocol-prelude",
-  /** At least one output-bearing event reached the caller. */
-  "semantic-output",
-  /** A tool call or other externally visible effect was emitted. */
-  "side-effect",
-  /** A terminal event settled the turn after its answer reached the caller. */
-  "terminal",
-] as const);
-
-export type RequestFailureStage = typeof REQUEST_FAILURE_STAGES[number];
+export {
+  REQUEST_FAILURE_CAUSES,
+  REQUEST_FAILURE_STAGES,
+  RESEND_PERMISSIONS,
+} from "../usage/telemetry-contract";
+export type {
+  RequestFailureCause,
+  RequestFailureStage,
+  ResendPermission,
+} from "../usage/telemetry-contract";
 
 /** Position in {@link REQUEST_FAILURE_STAGES}. Derived, so the order is stated exactly once. */
 export function stageRank(stage: RequestFailureStage): number {
@@ -73,61 +74,6 @@ const STAGE_COMMITMENT = {
 export function stageCommitment(stage: RequestFailureStage): StageCommitment {
   return STAGE_COMMITMENT[stage];
 }
-
-/**
- * Why the request failed, as one closed dictionary for every layer.
- *
- * Bounded on purpose: these are wire values a maintainer reads and a metric labels by, never a
- * credential, an account identifier, an upstream body or prompt content. The four that #5180 and
- * the ciphertext path insist on -- `rate-limit`, `quota-exhausted`, `policy-refusal` and
- * `ciphertext-refusal` -- are separate members because they need opposite follow-ups: wait,
- * change account, change the prompt, strip the ciphertext.
- */
-export const REQUEST_FAILURE_CAUSES = Object.freeze([
-  /** The bytes provably never reached the origin: connect refused, DNS failure, TLS handshake. */
-  "transport-unsent",
-  /** The bytes left and the connection died before a head. The origin may be running the turn. */
-  "transport-ambiguous",
-  /** The origin answered that it would not start the turn now: 503, overloaded, backpressure. */
-  "upstream-declined",
-  /** A 429 rate limit. Capacity is momentarily gone; waiting is the remedy. */
-  "rate-limit",
-  /** Plan or credit quota is gone. Waiting out a retry window does not help; the account must change. */
-  "quota-exhausted",
-  /** Credentials were rejected: 401, 403 on identity. */
-  "credential-rejected",
-  /** The origin evaluated the content and refused it. Identical bytes get the identical refusal. */
-  "policy-refusal",
-  /**
-   * The origin rejected a request PARAMETER rather than the content: an unsupported reasoning
-   * effort, an unknown field. Distinct from `policy-refusal` because the remedy is opposite --
-   * the same content succeeds once the parameter is adjusted.
-   */
-  "parameter-rejected",
-  /** Opaque replay state was rejected as unverifiable. Only a request without it can succeed. */
-  "ciphertext-refusal",
-  /**
-   * The payload exceeded a size the origin accepts. A smaller rebuild of the same turn can
-   * succeed, which is why this is not the same answer as `payload-rejected`.
-   */
-  "payload-too-large",
-  /** The payload was rejected on its merits: unsupported media, malformed part. No repair helps. */
-  "payload-rejected",
-  /**
-   * The origin returned a server-side fault. Whether it had already begun the turn is not
-   * knowable from the status, so this is the honest classification for the mixed 5xx set the
-   * transient layer retries: 503 really did decline, 500 may not have.
-   */
-  "upstream-fault",
-  /** The turn settled carrying no usable output. */
-  "empty-output",
-  /** The caller went away. */
-  "client-cancelled",
-  /** This proxy refused before dispatch: send budget, route policy, replay refusal. */
-  "local-refusal",
-] as const);
-
-export type RequestFailureCause = typeof REQUEST_FAILURE_CAUSES[number];
 
 /**
  * What the cause proves about whether the origin ran the turn.
@@ -189,24 +135,6 @@ const CAUSE_DISPOSITION = {
 export function causeDisposition(cause: RequestFailureCause): ResendDisposition {
   return CAUSE_DISPOSITION[cause];
 }
-
-/**
- * The answer this table exists to give.
- *
- * Every refusal names WHY it refused, because the three reasons need different operator
- * responses and used to arrive as one undifferentiated "no retry".
- */
-export type ResendPermission =
-  /** The same request may be sent again. */
-  | "permitted"
-  /** Only a modified request may be sent: rotated credential, stripped ciphertext. */
-  | "permitted-after-repair"
-  /** Upstream execution state is unknown. No AUTOMATIC resend; see the note below. */
-  | "refused-ambiguous"
-  /** The caller already observed output or an externally visible effect. */
-  | "refused-committed"
-  /** Identical bytes would get the identical answer. */
-  | "refused-futile";
 
 /**
  * Whether this proxy may send the request again, from the stage it failed at and the cause.

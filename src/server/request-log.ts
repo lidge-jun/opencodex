@@ -40,6 +40,7 @@ import {
   isLogicalRequestId,
   isValidReasoningWireValue,
   normalizeClaudeCompatibilityUsageLog,
+  normalizeRequestFailureAttribution,
   normalizeRequestSpend,
   readRecentUsageEntries,
   usageForFinalLog,
@@ -52,9 +53,12 @@ import {
   type PersistedUsageAttempt,
   type PersistedUsageEntry,
   type PersistedClaudeCompatibilityLog,
+  type RequestFailureCause,
+  type RequestFailureStage,
   type UsageStatus,
 } from "../usage/log";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
+import { deriveRequestFailureAttribution } from "../lib/request-failure-attribution";
 import {
   appendUsageDebug,
   isUsageDebugEnabled,
@@ -330,6 +334,13 @@ export interface RequestLogEntry {
   routeDecision?: RouteDecisionTraceV1;
   /** Closed Claude protocol codes; no request or header values. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * How far this request got and why it failed, in the shared stage and cause vocabulary
+   * (#2366). Derived once at the single finalization seam and carried on the row so the
+   * dashboard, the durable ledger and the exporter read one answer instead of three.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
 }
 
 const requestLog: RequestLogEntry[] = [];
@@ -455,6 +466,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.conversationStateScrub === "account-change"
       ? { conversationStateScrub: "account-change" }
       : {}),
+    ...normalizeRequestFailureAttribution(entry),
   };
 }
 
@@ -601,6 +613,10 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(isKnownTransportPhase(entry.transportPhase) ? { transportPhase: entry.transportPhase } : {}),
       ...(isKnownTerminalSource(entry.terminalSource) ? { terminalSource: entry.terminalSource } : {}),
       ...failureDiagnostics,
+      // Rebuilt explicitly, like every other field here: this function does not spread the
+      // entry, so a pair omitted at this line would reach /api/logs and never reach
+      // usage.jsonl, which is the surface the derived failure projection reads.
+      ...normalizeRequestFailureAttribution(entry),
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
       ...(entry.conversationStateScrub === "account-change"
@@ -1369,6 +1385,32 @@ export function addFinalRequestLog(
     if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
     else delete logCtx.activeAttempt.errorCode;
   }
+  // Derived once, here, because this is the one seam every request passes exactly once however
+  // it ended. Deriving it at each transport's own exit would give the same request a different
+  // attribution per transport, which is the disagreement the shared terminal classifier already
+  // removed once. It runs BEFORE the attempt snapshot below, so the row that reaches disk and
+  // the live attempt object carry the same pair rather than one of them being stamped too late.
+  //
+  // Every input is a closed value. `errorCode` and `upstreamError` are deliberately not read:
+  // both are assembled partly from upstream text, so a classification keyed on them varies by
+  // provider and locale, and a grouping key built from them cannot promise it carries no content.
+  const attribution = deriveRequestFailureAttribution({
+    status: effectiveStatus,
+    ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
+    ...(closeReason ? { closeReason } : {}),
+    ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
+    outputObserved: logCtx.firstOutputMs !== undefined,
+    locallyAnswered: logCtx.localTerminalReason !== undefined,
+    recoveryKinds: logCtx.activeAttempt?.recoveryKinds ?? [],
+  });
+  // The final row and the attempt that ended it describe the same exchange, so they carry the
+  // same pair rather than each deriving one from a different slice of the facts.
+  if (logCtx.activeAttempt) {
+    if (attribution?.stage) logCtx.activeAttempt.failureStage = attribution.stage;
+    else delete logCtx.activeAttempt.failureStage;
+    if (attribution?.cause) logCtx.activeAttempt.failureCause = attribution.cause;
+    else delete logCtx.activeAttempt.failureCause;
+  }
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
   // earlier send of this request as unresolved spend rather than handing its tokens back.
@@ -1493,6 +1535,8 @@ export function addFinalRequestLog(
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(attribution?.stage ? { failureStage: attribution.stage } : {}),
+    ...(attribution?.cause ? { failureCause: attribution.cause } : {}),
   });
   if (isUsageDebugEnabled()) {
     appendUsageDebug({
