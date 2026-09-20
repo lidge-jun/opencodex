@@ -247,6 +247,13 @@ export function loadConfig(): OcxConfig {
       warnDegradedCredentialGroups(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
+    // Only object-shaped configs are repairable. Spreading another JSON value
+    // into defaults can manufacture a valid config and bypass the invalid-file
+    // backup.
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      warnAndBackupInvalidConfig(configPath, result.error);
+      return getDefaultConfig();
+    }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
     // field like defaultProvider.
