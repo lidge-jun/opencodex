@@ -42,10 +42,13 @@ function choiceToTriggers(choice: string): string[] | undefined {
  * targets (#5216). `parseComboList` is the same reader the combo workspace uses, so the
  * selector rule lives in one place instead of being spelled out again here.
  */
-function readComboProviders(payload: unknown): Record<string, string[]> {
-  const result: Record<string, string[]> = {};
+function readComboProviders(payload: unknown): Map<string, string[]> {
+  // A Map, not an object: the key is a combo's public model id, which is caller-configured and
+  // free-form. Writing that into an object literal is a prototype-pollution sink, and reading it
+  // back would return an inherited member for an alias of `constructor` or `toString`.
+  const result = new Map<string, string[]>();
   for (const combo of parseComboList(payload)) {
-    result[combo.model] = [...new Set(combo.targets.map(target => target.provider).filter(Boolean))];
+    result.set(combo.model, [...new Set(combo.targets.map(target => target.provider).filter(Boolean))]);
   }
   return result;
 }
@@ -82,7 +85,7 @@ function CompactionRoutingControls({ apiBase, models }: { apiBase: string; model
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [feedback, setFeedback] = useState<"saved" | "failed" | null>(null);
-  const [comboProviders, setComboProviders] = useState<Record<string, string[]>>({});
+  const [comboProviders, setComboProviders] = useState<Map<string, string[]>>(() => new Map());
   const active = useRef(false);
   const pending = useRef<ReturnType<typeof createBoundedFetch> | null>(null);
 
@@ -102,7 +105,8 @@ function CompactionRoutingControls({ apiBase, models }: { apiBase: string; model
       const response = await fetch(`${apiBase}/api/settings`, { signal: request.signal });
       const value = readSetting(await requireJson(response));
       if (active.current && pending.current === request) accept(value);
-      const combos = await fetch(`${apiBase}/api/combos`, { signal: request.signal }).then(requireJson).then(readComboProviders).catch(() => ({}));
+      const combos = await fetch(`${apiBase}/api/combos`, { signal: request.signal })
+        .then(requireJson).then(readComboProviders).catch(() => new Map<string, string[]>());
       if (active.current && pending.current === request) setComboProviders(combos);
     } catch {
       if (active.current && pending.current === request) setLoadError(true);
@@ -167,10 +171,8 @@ function CompactionRoutingControls({ apiBase, models }: { apiBase: string; model
     || effort !== (saved?.reasoningEffort ?? "")
     || triggers !== triggersToChoice(saved?.triggers);
   // Ask what the selection resolves to instead of reading its name. An aliased combo answers
-  // here exactly like a prefixed one (#5216). `Object.hasOwn` because a combo id is free-form:
-  // an alias of `constructor` or `toString` would otherwise read an inherited member and be
-  // joined as if it were a target list.
-  const comboTargets = Object.hasOwn(comboProviders, model) ? comboProviders[model] : undefined;
+  // here exactly like a prefixed one (#5216).
+  const comboTargets = comboProviders.get(model);
   // The canonical prefix stays a combo signal of its own. It is the only one left when
   // /api/combos has not answered yet or failed, and losing it there would describe a combo as
   // an ordinary provider named "combo" — worse than the alias gap this fixes.
