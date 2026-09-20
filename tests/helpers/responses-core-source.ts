@@ -37,6 +37,7 @@ export const RESPONSES_CORE_MODULES = [
   "request-spend.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
+  "reset-replay.ts",
   "passthrough-delivery.ts",
   "sidecar-execution.ts",
   "completion-policy.ts",
