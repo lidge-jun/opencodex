@@ -1,7 +1,11 @@
-export interface ProxyStopOutcome {
-  accepted: boolean;
-  message?: string;
-}
+/**
+ * A refusal always carries the reason, so the union states it. The reporting surface used
+ * to be `alert()`, where an absent message was invisible anyway; an in-page notice would
+ * have rendered the gap, and a caller should not have to invent a status it never saw.
+ */
+export type ProxyStopOutcome =
+  | { accepted: true; message?: undefined }
+  | { accepted: false; message: string };
 
 interface ProxyStopPayload {
   success?: unknown;

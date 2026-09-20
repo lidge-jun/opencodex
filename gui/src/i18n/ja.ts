@@ -2714,6 +2714,7 @@ export const ja: Record<TKey, string> = {
   "prov.aliasPrompt": "Display name (leave empty to clear)",
   "prov.aliasSaved": "Alias saved",
   "prov.aliasSaveFailed": "Could not save alias",
+  "prov.aliasInvalid": "制御文字を含めず、80文字以内で入力してください。",
   "prov.accountId": "ID",
   "models.customAdd": "Add custom model",
   "models.customAddTitle": "Add custom model — {provider}",

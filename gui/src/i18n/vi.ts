@@ -465,6 +465,7 @@ export const vi: Record<TKey, string> = {
   "prov.aliasPrompt": "Tên hiển thị (để trống để xoá)",
   "prov.aliasSaved": "Đã lưu bí danh",
   "prov.aliasSaveFailed": "Không thể lưu bí danh",
+  "prov.aliasInvalid": "Dùng tối đa 80 ký tự, không chứa ký tự điều khiển.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Dán URL chuyển hướng hoặc mã",
   "prov.pasteRedirectHint": "Nếu trình duyệt hiển thị lỗi localhost, hãy sao chép URL đầy đủ từ thanh địa chỉ và dán nó vào đây (hoặc dán authorization code).",

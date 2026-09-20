@@ -470,6 +470,7 @@ export const ko: Record<TKey, string> = {
   "prov.aliasPrompt": "표시 이름 (비우면 삭제)",
   "prov.aliasSaved": "별칭이 저장되었습니다",
   "prov.aliasSaveFailed": "별칭을 저장하지 못했습니다",
+  "prov.aliasInvalid": "제어 문자 없이 80자 이내로 입력하세요.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "리다이렉트 URL 또는 코드 붙여넣기",
   "prov.pasteRedirectHint": "브라우저에 localhost 오류가 표시되면, 주소창의 전체 URL을 복사해 여기에 붙여넣으세요(또는 인증 코드 붙여넣기).",

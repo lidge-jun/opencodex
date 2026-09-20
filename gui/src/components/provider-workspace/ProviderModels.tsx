@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { Switch } from "../../ui";
+import { confirmAction } from "../../action-dialogs";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterFreeModelRows, freeOnlyInForce, modelPricingKnown, type ModelRow } from "../../pages/models-shared";
 import { putModelVisibility } from "../../model-visibility";
@@ -190,7 +191,12 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   const removeModel = async (row: ModelRow, button: HTMLButtonElement) => {
     const action = actionFor(row);
     if (actionsBlocked || flight.current || !action) return;
-    if (!window.confirm(t(action === "delete" ? "models.customDeleteConfirm" : "models.hideConfirm", { name: row.namespaced }))) return;
+    const consented = await confirmAction({
+      message: t(action === "delete" ? "models.customDeleteConfirm" : "models.hideConfirm", { name: row.namespaced }),
+      confirmLabel: t(action === "delete" ? "common.delete" : "common.ok"),
+      tone: "danger",
+    });
+    if (!consented) return;
     flight.current = true;
     setRequestPending(true);
     setMutation(null);

@@ -358,6 +358,7 @@ export const zhTW: Record<TKey, string> = {
   "prov.aliasPrompt": "顯示名稱（留空以清除）",
   "prov.aliasSaved": "別名已儲存",
   "prov.aliasSaveFailed": "無法儲存別名",
+  "prov.aliasInvalid": "請使用最多 80 個字元，且不含控制字元。",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "貼上重定向 URL 或授權碼",
   "prov.pasteRedirectHint": "如果瀏覽器顯示 localhost 錯誤，請複製位址列中的完整 URL 並貼上到此處（或貼上授權碼）。",

@@ -472,6 +472,7 @@ export const ru: Record<TKey, string> = {
   "prov.aliasPrompt": "Отображаемое имя (оставьте пустым для удаления)",
   "prov.aliasSaved": "Псевдоним сохранен",
   "prov.aliasSaveFailed": "Не удалось сохранить псевдоним",
+  "prov.aliasInvalid": "Не более 80 символов, без управляющих символов.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Вставьте URL перенаправления или код",
   "prov.pasteRedirectHint": "Если браузер показывает ошибку localhost, скопируйте полный URL из его адресной строки и вставьте сюда (или вставьте код авторизации).",

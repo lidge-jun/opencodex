@@ -461,6 +461,7 @@ export const de: Record<TKey, string> = {
   "prov.aliasPrompt": "Anzeigename (leer lassen zum Entfernen)",
   "prov.aliasSaved": "Alias gespeichert",
   "prov.aliasSaveFailed": "Alias konnte nicht gespeichert werden",
+  "prov.aliasInvalid": "Höchstens 80 Zeichen, ohne Steuerzeichen.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Redirect-URL oder Code einfügen",
   "prov.pasteRedirectHint": "Zeigt der Browser einen localhost-Fehler, kopiere die vollständige URL aus der Adressleiste und füge sie hier ein (oder den Autorisierungscode).",

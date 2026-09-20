@@ -471,6 +471,7 @@ export const fr: Record<TKey, string> = {
   "prov.aliasPrompt": "Nom d’affichage (laissez vide pour l’effacer)",
   "prov.aliasSaved": "Alias enregistré",
   "prov.aliasSaveFailed": "Impossible d’enregistrer l’alias",
+  "prov.aliasInvalid": "Utilisez au maximum 80 caractères, sans caractères de contrôle.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Coller l’URL de redirection ou le code",
   "prov.pasteRedirectHint": "Si le navigateur affiche une erreur localhost, copiez l’URL complète depuis sa barre d’adresse et collez-la ici (ou collez le code d’autorisation).",

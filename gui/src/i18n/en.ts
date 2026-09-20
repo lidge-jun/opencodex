@@ -484,6 +484,7 @@ export const en = {
   "prov.aliasPrompt": "Display name (leave empty to clear)",
   "prov.aliasSaved": "Alias saved",
   "prov.aliasSaveFailed": "Could not save alias",
+  "prov.aliasInvalid": "Use at most 80 characters, with no control characters.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Paste redirect URL or code",
   "prov.pasteRedirectHint": "If the browser shows a localhost error, copy the full URL from its address bar and paste it here (or paste the authorization code).",

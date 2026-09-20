@@ -467,6 +467,7 @@ export const zh: Record<TKey, string> = {
   "prov.aliasPrompt": "显示名称（留空以清除）",
   "prov.aliasSaved": "别名已保存",
   "prov.aliasSaveFailed": "无法保存别名",
+  "prov.aliasInvalid": "请使用最多 80 个字符，且不含控制字符。",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "粘贴重定向 URL 或授权码",
   "prov.pasteRedirectHint": "如果浏览器显示 localhost 错误，请复制地址栏中的完整 URL 并粘贴到此处（或粘贴授权码）。",

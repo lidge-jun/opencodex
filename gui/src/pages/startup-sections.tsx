@@ -1,4 +1,5 @@
 import { useI18n, type TKey } from "../i18n/shared";
+import { confirmAction } from "../action-dialogs";
 import { startupRiskDetailKey } from "../startup-health-ui";
 import { IconAlert, IconCheck, IconPower, IconTerminal } from "../icons";
 import type {
@@ -197,7 +198,8 @@ export function StartupTraySection({
         )}
         {!trayLoading && !trayError && tray && (tray.installed || tray.stale) && (
           <button type="button" className="btn btn-danger" disabled={trayBusy} onClick={() => {
-            if (window.confirm(t("startup.tray.uninstall"))) onTrayAction("uninstall");
+            void confirmAction({ message: t("startup.tray.uninstall"), tone: "danger" })
+              .then(consented => { if (consented) onTrayAction("uninstall"); });
           }}>{t("startup.tray.uninstall")}</button>
         )}
       </div>

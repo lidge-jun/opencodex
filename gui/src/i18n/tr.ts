@@ -475,6 +475,7 @@ export const tr: Record<TKey, string> = {
   "prov.aliasPrompt": "Görüntülenen ad (temizlemek için boş bırakın)",
   "prov.aliasSaved": "Takma ad kaydedildi",
   "prov.aliasSaveFailed": "Takma ad kaydedilemedi",
+  "prov.aliasInvalid": "En fazla 80 karakter kullanın, kontrol karakteri içermemelidir.",
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Yönlendirme URL'sini veya kodu yapıştırın",
   "prov.pasteRedirectHint": "Tarayıcı localhost hatası gösterirse adres çubuğundaki URL'yi kopyalayıp buraya yapıştırın.",
