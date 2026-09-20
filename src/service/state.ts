@@ -241,6 +241,71 @@ export interface ServiceInstallState {
   backend?: ServiceBackend;
   winswVersion?: string;
   winswSha256?: string;
+  /**
+   * Bumped by every write through {@link swapServiceInstallState}; the compare-and-swap
+   * token. Absent means a record written before this field existed, which compares equal
+   * to 0 so the first swap over it still lands.
+   */
+  revision?: number;
+  /** Who owns the running proxy. Absent means the CLI install that registered the service. */
+  ownership?: ServiceOwnership;
+}
+
+/**
+ * The two kinds of installation that can own the proxy.
+ *
+ * `cli` is the npm (or standalone) `ocx` install that registered the background service.
+ * `desktop` is the packaged app, which brings its own bundled runtime.
+ */
+export type ServiceOwner = "cli" | "desktop";
+
+/**
+ * Durable ownership, recorded in the shared service install state.
+ *
+ * Ownership used to be a boolean the desktop shell recomputed at every launch from whether
+ * it happened to spawn a child, so a restart silently demoted the app back to guest and
+ * "ask once, then own permanently" could not be expressed at all. This record is the thing
+ * that survives the restart.
+ *
+ * ABSENT IS NOT UNOWNED. Every installation that predates this field has no record, and the
+ * npm service registration is what owns the runtime there, so absence has to keep meaning
+ * exactly that.
+ */
+export interface ServiceOwnership {
+  readonly owner: ServiceOwner;
+  /**
+   * Opaque identity of the owning INSTALLATION — not of the user, the machine or the
+   * account. The desktop app keeps the same value in its own app-local store, and comparing
+   * the two through {@link ownershipGrantedTo} is how a reinstalled app tells its own prior
+   * consent from another installation's.
+   */
+  readonly installId: string;
+  /**
+   * Increments once per ownership grant. Re-recording the same owner and install id leaves
+   * it alone, so a relaunch cannot inflate it and "exactly one increment per takeover" is
+   * an assertion a test can make.
+   */
+  readonly consentGeneration: number;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Validate an ownership claim read off disk.
+ *
+ * Returns the ORIGINAL object rather than a rebuilt one: a newer writer may carry fields
+ * this version does not know about, and rebuilding would drop them on the next preserve —
+ * which is the same lost-field failure this whole record exists to stop.
+ */
+export function parseServiceOwnership(value: unknown): ServiceOwnership | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const ownership = value as Record<string, unknown>;
+  if (ownership.owner !== "cli" && ownership.owner !== "desktop") return null;
+  if (typeof ownership.installId !== "string" || ownership.installId.length === 0) return null;
+  if (!isNonNegativeInteger(ownership.consentGeneration)) return null;
+  return value as ServiceOwnership;
 }
 
 export function parseServiceInstallState(value: unknown): ServiceInstallState | null {
@@ -252,6 +317,11 @@ export function parseServiceInstallState(value: unknown): ServiceInstallState | 
   for (const key of ["codexSqliteHome", "bunPath", "cliPath", "launcherPath", "winswVersion", "winswSha256"] as const) {
     if (state[key] !== undefined && (typeof state[key] !== "string" || state[key].length === 0)) return null;
   }
+  if (state.revision !== undefined && !isNonNegativeInteger(state.revision)) return null;
+  // A malformed ownership claim invalidates the whole record instead of being dropped:
+  // silently discarding it is precisely the demotion this field is here to prevent, and a
+  // reader that cannot trust the claim must not be told the runtime is unowned.
+  if (state.ownership !== undefined && parseServiceOwnership(state.ownership) === null) return null;
   if (state.version === 1) {
     if (state.backend !== undefined) return null;
   } else if (state.backend !== "scheduler" && state.backend !== "native") {
@@ -260,10 +330,17 @@ export function parseServiceInstallState(value: unknown): ServiceInstallState | 
   return state as unknown as ServiceInstallState;
 }
 
-export function writeServiceInstallState(backend: ServiceBackend = "scheduler", launcherPath?: string | null): void {
+/**
+ * What an install bakes into the record: the homes, the provenance paths and the backend.
+ *
+ * Everything here is rebuilt from the CURRENT process on every write, which is the point —
+ * it describes the install that just ran. {@link ServiceInstallState.ownership} deliberately
+ * is not part of it.
+ */
+function installProvenanceRecord(backend: ServiceBackend, launcherPath?: string | null): ServiceInstallState {
   const { bun, cli } = cliEntry();
   const codexHome = currentCodexHome();
-  const state: ServiceInstallState = {
+  return {
     version: 2,
     codexHome,
     opencodexHome: currentOpenCodexHome(),
@@ -274,14 +351,23 @@ export function writeServiceInstallState(backend: ServiceBackend = "scheduler", 
     backend,
     ...(backend === "native" ? { winswVersion: WINSW_VERSION, winswSha256: WINSW_SHA256 } : {}),
   };
-  for (const path of serviceStateWritePaths()) {
-    const dir = dirname(path);
-    recordOwnedConfigPath(getConfigDir(), path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(path, JSON.stringify(state, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    try { chmodSync(path, 0o600); } catch { /* best-effort */ }
-    if (process.platform === "win32") hardenSecretPath(path, { required: true });
-  }
+}
+
+/**
+ * Record an install, PRESERVING whatever owns the runtime.
+ *
+ * Every install, repair, update and stop path ends here, and each one used to hand this
+ * function a freshly rebuilt record that simply replaced the file. That is why ownership
+ * cannot be an ordinary field written by whoever ran last: a repair kicked off by a tray
+ * helper, or by `ocx update`, would erase a takeover the user had consented to and hand the
+ * runtime back to the npm launcher without saying anything. Preserving it here is what makes
+ * the consent durable.
+ */
+export function writeServiceInstallState(backend: ServiceBackend = "scheduler", launcherPath?: string | null): void {
+  swapServiceInstallState(current => ({
+    ...installProvenanceRecord(backend, launcherPath),
+    ...(current?.ownership ? { ownership: current.ownership } : {}),
+  }));
 }
 
 export function readServiceInstallState(): ServiceInstallState | null {
@@ -294,6 +380,204 @@ export function readServiceInstallState(): ServiceInstallState | null {
     }
   }
   return null;
+}
+
+/** Raised when a state write kept losing its compare-and-swap; NOTHING was written. */
+export class ServiceStateConflictError extends Error {
+  constructor(readonly path: string, readonly attempts: number) {
+    super(
+      `service install state at ${path} was rewritten by another process during all ${attempts} `
+      + "compare-and-swap attempts; nothing was written. Re-run the command.",
+    );
+    this.name = "ServiceStateConflictError";
+  }
+}
+
+export interface ServiceStateSwapDeps {
+  /** Test seam: which state paths to write. Defaults to every writable state path. */
+  paths?: readonly string[];
+  /** How many times to re-read and recompute before giving up. */
+  attempts?: number;
+  /**
+   * Test seam: runs immediately before each commit. It is the only place a competing writer
+   * can be interleaved deterministically, which is what makes the revision check testable
+   * rather than a claim in a comment.
+   */
+  beforeCommit?: (attempt: number) => void;
+}
+
+const SERVICE_STATE_SWAP_ATTEMPTS = 5;
+
+/** One state path's record, or null when it is absent or unparseable. Throws if unreadable. */
+function readServiceInstallStateAt(path: string): ServiceInstallState | null {
+  const evidence = inspectServiceStateEvidence([path])[0]!;
+  // Unreadable is not absent. Treating EACCES as "no record" would compute a swap from an
+  // empty base and erase an ownership claim we were merely not allowed to look at.
+  if (evidence.kind === "unreadable") {
+    throw new Error(
+      `service install state at ${path} could not be read (${evidence.reason}), so its recorded `
+      + "owner cannot be preserved; nothing was written. Fix the file's permissions and retry.",
+    );
+  }
+  // Invalid IS overwritten: there is no claim in an unparseable record to preserve.
+  return evidence.kind === "valid" ? evidence.state : null;
+}
+
+function commitServiceStateFile(path: string, serialized: string): void {
+  const dir = dirname(path);
+  recordOwnedConfigPath(getConfigDir(), path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(path, serialized, { encoding: "utf8", mode: 0o600 });
+  try { chmodSync(path, 0o600); } catch { /* best-effort */ }
+  if (process.platform === "win32") hardenSecretPath(path, { required: true });
+}
+
+/**
+ * Read the recorded state, compute the next one from it, and commit it only if nothing else
+ * moved the record in between.
+ *
+ * `mutate` may return null to mean "nothing to change", which writes nothing and leaves the
+ * file — including its absence — exactly as it was.
+ *
+ * WHAT THE REVISION CHECK IS. The anchor is re-read immediately before the commit and the
+ * committed bytes are read back immediately after, so a writer that landed on either side of
+ * the window is DETECTED and the whole read-modify-write runs again against the new base.
+ * The comparison is over the serialized record rather than the revision number alone,
+ * because two writers racing from one base both compute the same next revision — identical
+ * bytes mean nothing was lost, and differing bytes mean something was.
+ *
+ * WHAT IT IS NOT. This is not a lock. The commit itself is a plain overwrite, so two
+ * processes can still interleave inside the write and the loser retries rather than being
+ * excluded. That is enough for the case this exists for — a repair, an update or a stop
+ * running beside an ownership write — and it is deliberately not presented as mutual
+ * exclusion against a writer that does not come through this function.
+ */
+export function swapServiceInstallState(
+  mutate: (current: ServiceInstallState | null) => ServiceInstallState | null,
+  deps: ServiceStateSwapDeps = {},
+): ServiceInstallState | null {
+  const paths = deps.paths ?? serviceStateWritePaths();
+  // The anchor is the first path, which is the state path for THIS OpenCodex home;
+  // `readServiceInstallState` reads the same list in the same order, so the record the
+  // swap compares against is the record every reader resolves. The remaining paths are
+  // legacy mirrors and receive a copy of whatever the anchor commits.
+  const anchor = paths[0];
+  if (anchor === undefined) throw new Error("refusing to swap service install state with no state path");
+  const attempts = deps.attempts ?? SERVICE_STATE_SWAP_ATTEMPTS;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const base = readServiceInstallStateAt(anchor);
+    const baseRevision = base?.revision ?? 0;
+    const candidate = mutate(base);
+    if (candidate === null) return base;
+    const next: ServiceInstallState = { ...candidate, revision: baseRevision + 1 };
+    const serialized = JSON.stringify(next, null, 2) + "\n";
+    deps.beforeCommit?.(attempt);
+    if ((readServiceInstallStateAt(anchor)?.revision ?? 0) !== baseRevision) continue;
+    for (const path of paths) commitServiceStateFile(path, serialized);
+    let committed: string | null = null;
+    try { committed = readFileSync(anchor, "utf8"); } catch { /* re-read below decides */ }
+    if (committed === serialized) return next;
+  }
+  throw new ServiceStateConflictError(anchor, attempts);
+}
+
+/** The recorded owner, or null when nothing has claimed the runtime. */
+export function serviceOwnership(state: ServiceInstallState | null = readServiceInstallState()): ServiceOwnership | null {
+  return state?.ownership ?? null;
+}
+
+/**
+ * Whether the packaged desktop app owns the runtime.
+ *
+ * This is the predicate `ocx service repair` and `ocx update` consult before they would
+ * re-enable, rewrite or restart the npm service registration. The registration itself is
+ * kept either way — the maintainer's decision is that the user's install is never deleted,
+ * so this marker is the only thing that makes the takeover durable.
+ */
+export function desktopOwnsService(state: ServiceInstallState | null = readServiceInstallState()): boolean {
+  return serviceOwnership(state)?.owner === "desktop";
+}
+
+/**
+ * THE COMPARISON RULE. An installation holds the recorded grant only when both the kind of
+ * owner and the install id match its own.
+ *
+ * The desktop app calls this at launch with the install id from its app-local store. True
+ * means this very installation already has consent and must not ask again. False with a
+ * non-null `ownership` means a DIFFERENT installation owns the runtime — a reinstalled app,
+ * or a second copy — and consent has to be asked before taking over. Null means nothing is
+ * recorded and the npm install still owns it.
+ */
+export function ownershipGrantedTo(
+  ownership: ServiceOwnership | null,
+  owner: ServiceOwner,
+  installId: string,
+): boolean {
+  return ownership !== null && ownership.owner === owner && ownership.installId === installId;
+}
+
+/**
+ * The record an ownership write lands on when no install state exists yet.
+ *
+ * Deliberately carries no `bunPath`, `cliPath` or `launcherPath`: those are baked BY AN
+ * INSTALL, and a takeover is not one. Recording the claiming process's own paths as install
+ * provenance would make `ocx service status` describe a registration nobody created.
+ */
+function ownershipBaseRecord(current: ServiceInstallState | null): ServiceInstallState {
+  if (current) return current;
+  const codexHome = currentCodexHome();
+  return {
+    version: 2,
+    codexHome,
+    opencodexHome: currentOpenCodexHome(),
+    codexSqliteHome: resolveCodexSqliteHome({ codexHome }),
+    backend: "scheduler",
+  };
+}
+
+/**
+ * Record `claim` as the runtime's owner and return what was written.
+ *
+ * Idempotent by design: re-recording the same owner and install id leaves the consent
+ * generation alone, so every relaunch of an app that already has consent is a no-op on the
+ * number. A different owner or a different install id is a new grant and increments it once.
+ */
+export function recordServiceOwner(
+  claim: { owner: ServiceOwner; installId: string },
+  deps: ServiceStateSwapDeps = {},
+): ServiceOwnership {
+  if (!claim.installId) throw new Error("refusing to record service ownership without an install id");
+  let recorded: ServiceOwnership | null = null;
+  swapServiceInstallState(current => {
+    const previous = current?.ownership ?? null;
+    recorded = {
+      owner: claim.owner,
+      installId: claim.installId,
+      consentGeneration: previous && ownershipGrantedTo(previous, claim.owner, claim.installId)
+        ? previous.consentGeneration
+        : (previous?.consentGeneration ?? 0) + 1,
+    };
+    return { ...ownershipBaseRecord(current), ownership: recorded };
+  }, deps);
+  if (recorded === null) throw new Error("service ownership was not recorded");
+  return recorded;
+}
+
+/**
+ * Drop a recorded owner and return what was dropped, or null when nothing was recorded.
+ *
+ * Writes nothing when there is no claim to release, so asking about an unowned runtime never
+ * creates an install record describing a service nobody registered.
+ */
+export function releaseServiceOwner(deps: ServiceStateSwapDeps = {}): ServiceOwnership | null {
+  let released: ServiceOwnership | null = null;
+  swapServiceInstallState(current => {
+    released = current?.ownership ?? null;
+    if (!current?.ownership) return null;
+    const { ownership: _released, ...withoutOwnership } = current;
+    return withoutOwnership;
+  }, deps);
+  return released;
 }
 
 /** What ONE state path said. Absent, unreadable and invalid are different answers. */

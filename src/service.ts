@@ -6,8 +6,8 @@
  * restore it via the command.
  */
 
-export type { ServiceBackend, ServiceInstallState, ServiceStateEvidence } from "./service/state";
-export { SERVICE_MANAGED_ENV, stableLauncherEntry, serviceLogPath, serviceStatePathsForOpenCodexHome, parseServiceInstallState, inspectServiceStateEvidence, currentServiceHomes, serviceHomeMatches, readServiceBackend, serviceReinstallArgs, serviceInstallArgs } from "./service/state";
+export type { ServiceBackend, ServiceInstallState, ServiceStateEvidence, ServiceOwner, ServiceOwnership, ServiceStateSwapDeps } from "./service/state";
+export { SERVICE_MANAGED_ENV, stableLauncherEntry, serviceLogPath, serviceStatePathsForOpenCodexHome, parseServiceInstallState, parseServiceOwnership, inspectServiceStateEvidence, currentServiceHomes, serviceHomeMatches, readServiceBackend, serviceReinstallArgs, serviceInstallArgs, ServiceStateConflictError, swapServiceInstallState, serviceOwnership, desktopOwnsService, ownershipGrantedTo, recordServiceOwner, releaseServiceOwner } from "./service/state";
 export type { ServiceApiTokenOrigin, ProvisionedServiceApiToken } from "./service/guards";
 export { ServiceOwnershipError, isServiceOwnershipError, serviceEnvironmentOwnedHere, assertServiceEnvironmentMatchesInstall, serviceRetryCommand, assertNotAdminToken, assertServiceAuthEnvironment, writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./service/guards";
 export { resolveServiceListenPort, installedServiceListenPort, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, confirmServiceServing, reportServiceServing, resolvedProxyEnv } from "./service/health";
