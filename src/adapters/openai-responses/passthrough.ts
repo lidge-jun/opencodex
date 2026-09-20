@@ -15,7 +15,7 @@ import {
   isOpenAiOperatedResponsesDestination,
 } from "../../providers/openai-tiers";
 import type { TranslatorBudget } from "../../lib/translator-budget";
-import { rewriteRoutedCustomToolsForUpstream } from "../../responses/custom-tool-compat";
+import { rewriteRoutedCustomToolsForUpstream, validateFinalCustomToolCompatibility } from "../../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../../responses/namespace-tool-compat";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -503,6 +503,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
       observeOutbound(parsed._rawBody, finalBody, headers);
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
+      }
       const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
