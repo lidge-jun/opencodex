@@ -24,12 +24,23 @@ stabilization option and does not guarantee upstream cache hits. Regression cove
 `tests/adapters/openai/openai-chat-system-order.test.ts` and
 `tests/adapters/openai/openai-chat-developer-position.test.ts`.
 
-The role that slot carries is a separate decision. `developer` is part of the Chat Completions
-message role set and is forwarded as itself on every destination. A destination that genuinely
-rejects the role sets `foldDeveloperRoleToSystem`, which converts it in place and still never
-moves the message. The role was previously decided by testing the base URL host against
-`api.openai.com`, so every OpenAI-compatible gateway was assumed not to support a standard role
-until proven otherwise, and the instruction silently lost `developer` precedence.
+The role that slot carries is a separate decision, and the setting that makes it is tri-state.
+`foldDeveloperRoleToSystem` unset sends `system`, `true` sends `system`, and `false` sends
+`developer`. Unset means nothing has been recorded about the destination; `true` records an
+upstream that rejects the role; `false` records one that accepts it. The message keeps the slot it
+arrived in in every case — only the role changes, never the position. The unrecorded state is the
+folded one because a destination that rejects the role answers
+`400 role 'developer' is not allowed` and the turn never starts, a failure that lands outside this
+repository where no test can reach it. The role was previously decided by testing the base URL host
+against `api.openai.com`, so every OpenAI-compatible gateway was assumed not to support a standard
+role until proven otherwise, and the instruction silently lost `developer` precedence.
+
+That mapping is not prose to be restated. `tests/ci-workflows/docs-developer-role-policy.test.ts`
+builds the sentence above from the role `src/adapters/openai-chat/messages.ts` serializes for each
+of the three states, and requires this document and
+`docs-site/src/content/docs/reference/configuration/providers.md` to carry it word for word, so a
+changed default fails a check rather than only a document review (INV-CHAT-01). The translated
+configuration pages and Claude Code guides are held against their English source in the same file.
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 

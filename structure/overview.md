@@ -160,6 +160,13 @@ still cover the rule, which is a judgement only review makes.
   widens a send budget: an authorised replacement still has to fit the allowance the leg already
   had.
   Enforced by `tests/lib/ambiguous-resend-gate.test.ts`.
+- **INV-CHAT-01** — One developer-role policy governs the translated Chat wire and every document
+  that describes it. `foldDeveloperRoleToSystem` unset and `true` send `system`, `false` sends
+  `developer`, and the message never leaves the slot it arrived in. The documented sentence is
+  built from the role the adapter serializes rather than written out again, and the translated
+  pages are compared against their English source, so a changed default fails a check instead of
+  leaving two documents to disagree; see [`chat-compat.md`](providers/chat-compat.md).
+  Enforced by `tests/ci-workflows/docs-developer-role-policy.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
