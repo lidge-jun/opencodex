@@ -141,9 +141,28 @@ describe("request failure attribution", () => {
       .toBe("upstream-fault");
   });
 
-  test("a request with no response head separates an unsent send from an ambiguous one", () => {
-    expect(deriveRequestFailureCause({ status: 0 })).toBe("transport-unsent");
-    expect(deriveRequestFailureCause({ status: 0, transportPhase: "mid_stream" })).toBe("transport-ambiguous");
+  test("a stream that died mid-flight is ambiguous, not an upstream fault", () => {
+    // The production shape: the relay reports a SYNTHETIC 502 after a mid-stream read failure
+    // and marks the attempt aborted. Reading the 502 in status order would claim the origin
+    // answered when it did not.
+    expect(deriveRequestFailureCause({
+      status: 502, transportPhase: "mid_stream", terminalSource: "synthetic",
+    })).toBe("transport-ambiguous");
+    expect(deriveRequestFailureCause({ status: 502, streamAborted: true })).toBe("transport-ambiguous");
+    // An upstream 502 that is genuinely upstream stays an upstream fault.
+    expect(deriveRequestFailureCause({ status: 502, terminalSource: "upstream" })).toBe("upstream-fault");
+  });
+
+  test("an unknown execution state never reads as a proven unsent send", () => {
+    // `transport-unsent` permits an automatic resend, so it is reachable only from a site that
+    // classified a pre-connect failure and can prove it. Everything else answers ambiguously,
+    // which is the safe direction.
+    expect(deriveRequestFailureCause({ status: 0 })).toBe("transport-ambiguous");
+    expect(deriveRequestFailureCause({ status: 0, causeHint: "transport-unsent" })).toBe("transport-unsent");
+  });
+
+  test("payment required is a quota problem, not a bad payload", () => {
+    expect(deriveRequestFailureCause({ status: 402 })).toBe("quota-exhausted");
   });
 
   test("a local refusal is attributed to this proxy rather than to upstream", () => {

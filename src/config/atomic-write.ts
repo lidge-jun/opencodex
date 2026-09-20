@@ -163,6 +163,27 @@ function carryHardenAcrossContentWrite(path: string): void {
   reattributeHardenedSecretPath(path);
 }
 
+/**
+ * Commit the directory entry a rename just wrote.
+ *
+ * Best effort by platform, not by importance: Windows has no directory descriptor to sync and
+ * some filesystems refuse the open, and failing a replacement that already happened would be
+ * worse than reporting it. The throw that matters is the temp's own `fsync`, which runs before
+ * the rename and stops it.
+ */
+function syncParentDirectory(target: string): void {
+  if (process.platform === "win32") return;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(dirname(target), "r");
+    fsyncSync(descriptor);
+  } catch {
+    /* the rename already landed; a directory that cannot be synced is not a reason to undo it */
+  } finally {
+    if (descriptor !== undefined) { try { closeSync(descriptor); } catch { /* already closed */ } }
+  }
+}
+
 function writePrivateTempFile(
   path: string,
   content: string,
@@ -292,6 +313,15 @@ function atomicWriteFileToTarget(
     hooks.beforeRename?.(tmp, target);
     hooks.validateBeforeRename?.(target);
     effective.rename(tmp, target);
+    // The rename is only as durable as the directory entry recording it. Fsyncing the temp's
+    // CONTENT and then losing the entry in a power cut leaves the old file in place, or the
+    // directory in an indeterminate state, while the caller was told the replacement landed.
+    //
+    // Only the streaming form does this. It is the one that makes a durability claim -- a
+    // replacement is not an append, and losing it can lose the rows it was meant to keep -- and
+    // adding a directory sync to the string form would charge every config write for a promise
+    // its callers have never been given.
+    if (typeof content === "function") syncParentDirectory(target);
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     if (!ownsTemp) throw cause;

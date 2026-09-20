@@ -86,8 +86,9 @@ export const configSchema = z.object({
   // Opt-in ledger ceiling. A hand edit below the floor, or a non-safe integer, disables only
   // this limit rather than failing the config: refusing to start because history retention was
   // mistyped would be a worse outcome than not trimming history.
-  usageLedgerMaxBytes: z.number().int().safe()
+  usageLedgerMaxBytes: z.number().int()
     .min(MIN_USAGE_LEDGER_MAX_BYTES)
+    .max(Number.MAX_SAFE_INTEGER)
     .optional()
     .catch(undefined),
   // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.

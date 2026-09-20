@@ -528,6 +528,21 @@ monitoring or protection against another process changing the path again after t
 An opt-in shadow-call rewrite persists the bounded, redacted original helper model as
 `shadowCallRewrittenFrom`, so helper traffic remains identifiable after restart without storing
 request content or inferring a helper subtype from timing.
+A failed request persists closed `failureStage` and `failureCause` members on the attempt that ended
+it and on the logical row, derived once at `addFinalRequestLog` from facts that are themselves
+closed; `errorCode` and `upstreamError` carry upstream text and are deliberately not read there. The
+resend verdict they imply is never stored — `/api/logs` computes `resendPermission` at read time, so
+a row written by an older build cannot assert a permission the current tables refuse. An attempt also
+carries `deliverySummary`: adapter events, relayed frames, semantic bytes, side effects and terminal
+frames, counted where each event is delivered rather than where it is read, so the gap between the
+first two is the loss signal. Provider debug formats one ring line per finalized attempt from those
+counts and writes no second record. `GET /api/usage?failures=1` groups failed rows by a versioned
+fingerprint over closed vocabularies only, rebuilt through the same cooperative scanner and
+inheriting its bounds, so deleting a ledger row removes it from the grouping.
+`usageLedgerMaxBytes` is unset by default; when set, an append that crosses it publishes the newest
+whole rows byte for byte through the shared atomic writer, refuses the rename unless the source is
+the exact revision that was copied, and then discards the Logs ring, the retained aggregates and the
+request-history index so no surface serves rows the ledger no longer has.
 `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
 The management route scans the ledger from its beginning in fixed 1 MiB chunks on a
@@ -625,11 +640,15 @@ log scan, or persistence. Restart creates a fresh owner, resets every counter/hi
 
 The label vocabularies are closed: protocol is `responses`, `chat`, `messages`, or `unknown`; result
 is `completed`, `failed`, `incomplete`, or `aborted`; recovery is one of the coarse classes listed in
-`REQUEST_METRICS_RECOVERY_CLASSES`, which is the roster the exporter itself iterates. The count is
+`REQUEST_METRICS_RECOVERY_CLASSES`, and cause is one of the shared failure causes in
+`REQUEST_METRICS_FAILURE_CAUSES`, which aliases the dictionary rather than copying it. Each is the
+roster the exporter itself iterates. The count is
 deliberately not restated here: it was written as eight, a bounded label value was added, and the
 documentation then contradicted the output it describes. A
 logical request increments once, physical sends sum the finalized attempt counts, and each distinct
-recovery kind already retained on an attempt contributes once to its coarse class. HTTP 200 never
+recovery kind already retained on an attempt contributes once to its coarse class.
+`opencodex_request_failures_total` counts the cause the recorder derived and never re-derives one,
+and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
 only finite nonnegative first-output values, while `opencodex_ttft_missing_total` is the complementary
 denominator. No request, credential, account, provider, model, conversation, raw error, prompt, tool,

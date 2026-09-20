@@ -12,12 +12,11 @@
  * that skips any of them makes the dashboard disagree with the ledger, which is the disagreement
  * this batch exists to remove.
  */
-import { setUsageLedgerAppendHook } from "../usage/log";
+import { currentUsageLogRevision, setUsageLedgerAppendHook } from "../usage/log";
 import { enforceUsageLedgerSizeLimit } from "../usage/ledger-retention";
 import { discardRetainedFailureProjection } from "../usage/failure-projection-cache";
 import { rehydrateRequestLogsAfterLedgerReplacement } from "./request-log";
 import type { UsageLedgerRetentionStatus } from "../usage/retention-contract";
-import { currentUsageLogRevision } from "../usage/log";
 
 let configuredMaxBytes: number | undefined;
 let enforcing = false;

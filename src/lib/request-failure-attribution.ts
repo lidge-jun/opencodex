@@ -29,6 +29,10 @@ import { classifyRequestOutcome, type RequestOutcomeFacts } from "../usage/reque
  */
 export interface RequestFailureFacts extends RequestOutcomeFacts {
   readonly transportPhase?: "pre_headers" | "mid_stream" | "terminal_sse" | undefined;
+  /** Where the status and message came from: an origin response, or a tail this proxy wrote. */
+  readonly terminalSource?: "upstream" | "synthetic" | undefined;
+  /** True when the upstream stream died after its head was committed. */
+  readonly streamAborted?: boolean | undefined;
   /** True once any output-bearing event reached the caller; `firstOutputMs` is the usual source. */
   readonly outputObserved?: boolean | undefined;
   /** True once a tool call or other externally visible effect was relayed to the caller. */
@@ -127,6 +131,16 @@ export function deriveRequestFailureCause(facts: RequestFailureFacts): RequestFa
   if (facts.causeHint !== undefined) return facts.causeHint;
 
   const status = facts.status;
+  // Transport evidence outranks the numeric status, because a stream that died mid-flight is
+  // reported as a SYNTHETIC 502 -- a tail this proxy wrote, not an answer the origin gave. Read
+  // in status order that 502 becomes `upstream-fault`, which claims the origin answered when it
+  // did not. Both causes refuse an automatic resend, so this is an accuracy fix rather than a
+  // safety one, but a label an operator cannot trust is a label they stop reading.
+  if (facts.streamAborted === true
+    || (facts.terminalSource === "synthetic"
+      && (facts.transportPhase === "mid_stream" || facts.transportPhase === "terminal_sse"))) {
+    return "transport-ambiguous";
+  }
   // A 2xx head that carried a failed terminal: the origin ran the turn and said it failed. With
   // no output relayed the useful distinction is that nothing usable came back at all.
   if (status >= 100 && status < 400) {
@@ -134,17 +148,19 @@ export function deriveRequestFailureCause(facts: RequestFailureFacts): RequestFa
   }
   if (status === 401) return "credential-rejected";
   if (status === 403) return "credential-rejected";
+  // Payment required. Waiting out a retry window does not help; the account has to change.
+  if (status === 402) return "quota-exhausted";
   if (status === 413) return "payload-too-large";
   if (status === 429) return "rate-limit";
   if (status === 451) return "policy-refusal";
   if (status === 503) return "upstream-declined";
   if (status >= 500) return "upstream-fault";
   if (status >= 400) return refinedFourHundredCause(facts) ?? "payload-rejected";
-  // No response head at all. A stream that began and died is ambiguous about whether the origin
-  // ran the turn; a request that never reached a mid-stream phase provably did not send.
-  return facts.transportPhase === "mid_stream" || facts.transportPhase === "terminal_sse"
-    ? "transport-ambiguous"
-    : "transport-unsent";
+  // No response head at all, and nothing proved the bytes never left. `transport-ambiguous` is
+  // the honest answer for an unknown execution state, and it is the safe one: it refuses an
+  // automatic resend where `transport-unsent` would permit one. `transport-unsent` is reachable
+  // only through `causeHint`, from a site that classified a pre-connect failure and can prove it.
+  return "transport-ambiguous";
 }
 
 export interface RequestFailureAttribution {

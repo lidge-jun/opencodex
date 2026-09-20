@@ -1419,6 +1419,8 @@ export function addFinalRequestLog(
     ...(meta?.terminalStatus ? { terminalStatus: meta.terminalStatus } : {}),
     ...(closeReason ? { closeReason } : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
+    ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
+    ...(logCtx.activeAttempt?.streamAborted === true ? { streamAborted: true } : {}),
     // The REQUEST's output observation, not the final attempt's.
     //
     // A request that relayed output on its first attempt and then failed over has committed
