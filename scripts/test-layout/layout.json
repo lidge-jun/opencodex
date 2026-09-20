@@ -1633,7 +1633,8 @@
     "ambiguous-resend-gate.test.ts": "lib",
     "docs-developer-role-policy.test.ts": "ci-workflows",
     "ambiguous-resend-composition.test.ts": "lib",
-    "chat-inbound-developer-position.test.ts": "responses"
+    "chat-inbound-developer-position.test.ts": "responses",
+    "release-pipeline-contract.test.ts": "ci-workflows"
   },
   "migrated": [
     "adapters",

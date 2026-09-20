@@ -155,9 +155,12 @@ jobs:
           else
             tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui
           fi
-          cd ../../..
-          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
-          else sha256sum "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          cd ../..
+          # shasum -c in attach-release runs from dist/release, where the artifact download
+          # lands these files flat; the checksum therefore records the bare file name, which
+          # sha256sum takes verbatim from its argument.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
           fi
 
       - name: Upload standalone release
@@ -345,6 +348,7 @@ jobs:
         run: bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: Rename release assets
+        shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           DESKTOP_TARGET: ${{ matrix.target }}
