@@ -38,6 +38,7 @@ const USAGE = `Usage:
  */
 function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<string, unknown>>): string[] {
   const cells: string[][] = [["ID", "NAME", "PREFIX", "REQ 7D", "TOTAL", "LAST USED"]];
+  const usageAvailable = typeof payload.attributionSince === "string";
   for (const entry of keys) {
     const usage = (entry.usage ?? {}) as Record<string, unknown>;
     const ambiguous = usage.ambiguous === true;
@@ -47,9 +48,9 @@ function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<stri
       String(entry.name ?? ""),
       String(entry.prefix ?? ""),
       // One marker spanning both numeric columns: the union guarantees neither exists.
-      ambiguous ? "ambiguous" : num(usage.requests7d),
-      ambiguous ? "" : num(usage.totalRequests),
-      ambiguous ? "" : (typeof usage.lastUsedAt === "string" ? usage.lastUsedAt : "never"),
+      !usageAvailable ? "unavailable" : ambiguous ? "ambiguous" : num(usage.requests7d),
+      !usageAvailable || ambiguous ? "" : num(usage.totalRequests),
+      !usageAvailable || ambiguous ? "" : (typeof usage.lastUsedAt === "string" ? usage.lastUsedAt : "never"),
     ]);
   }
   const widths = cells[0]!.map((_, column) => Math.max(...cells.map(row => (row[column] ?? "").length)));

@@ -216,6 +216,7 @@ describe("#2705 access key usage columns", () => {
         id: "k_9f2a", name: "ci-runner", prefix: "ocx_data_abc...",
         usage: { requests7d: 1204, totalRequests: 18330, lastUsedAt: "2026-08-27T04:11:00Z" },
       }],
+      attributionSince: "2026-07-29T00:00:00Z",
     });
     expect(out).toContain("REQ 7D");
     expect(out).toContain("1,204");
@@ -229,6 +230,7 @@ describe("#2705 access key usage columns", () => {
     // use is the dangerous answer for someone deciding what to delete.
     const out = await listOutput({
       keys: [{ id: "k_11bd", name: "laptop", prefix: "ocx_data_def...", usage: { ambiguous: true } }],
+      attributionSince: "2026-07-29T00:00:00Z",
     });
     expect(out).toContain("ambiguous");
     expect(out).not.toMatch(/\b0\b/);
@@ -237,8 +239,18 @@ describe("#2705 access key usage columns", () => {
   test("a never-used key says never rather than showing an empty cell", async () => {
     const out = await listOutput({
       keys: [{ id: "k_new", name: "fresh", prefix: "ocx_data_ghi...", usage: { requests7d: 0, totalRequests: 0 } }],
+      attributionSince: "2026-08-29T00:00:00Z",
     });
     expect(out).toContain("never");
+  });
+
+  test("unavailable attribution does not report zero usage or never used", async () => {
+    const out = await listOutput({
+      keys: [{ id: "k_unknown", name: "unknown", prefix: "ocx_data_jkl...", usage: { requests7d: 0, totalRequests: 0 } }],
+    });
+    expect(out).toContain("unavailable");
+    expect(out).not.toMatch(/\b0\b/);
+    expect(out).not.toContain("never");
   });
 
   test("dataset-level attribution and truncation print ONCE as a footer", async () => {
