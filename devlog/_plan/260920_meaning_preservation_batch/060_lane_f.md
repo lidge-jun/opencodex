@@ -1,7 +1,8 @@
 # Lane F — per-provider egress, and the CodeBuddy/native-wire disposition
 
-Status: OPEN. Branch `codex/260920-lane-f-egress-codebuddy` against `dev`, one pull request,
-ordered commits. Covers phase 2 bundles 13 and 15 from [010_phase2.md](010_phase2.md).
+Status: OPEN. PR #5289 against `dev` at exact head `40fe2ee7d8`, hosted CI green across the
+whole matrix. One branch, ordered commits, one pull request. Covers phase 2 bundles 13 and 15
+from [010_phase2.md](010_phase2.md).
 
 Lane F was scheduled after lane B because bundle 13 consumes the request-scoped route decision
 that lane B built for #5087. That landed as #5264 (`8e1fdea1`), so this lane reads
@@ -186,6 +187,36 @@ Static source review plus exact-head hosted CI. No local suite, individual test,
 build, install, live `ocx` execution or service restart was run — those are **NOT RUN**, not
 passing.
 
+Hosted CI at `40fe2ee7d8` is green: all four test shards, both macOS halves, `gates`
+(typecheck, GUI tests, privacy scan, generated skill surface), the structure gate, docker smoke,
+storage policy, api usage, the three `npm-global` smokes and the three keyring jobs.
+
+### What only CI could tell me, and what only review could
+
+Three defects reached a pushed head and were caught by adversarial review before CI ran, all in
+the same seam and all invisible to a status-code assertion:
+
+1. The route was resolved when the fetch wrapper was built, but `dispatchOverride` can rebuild a
+   queued request against a different upstream host. A host-scoped `noProxy` decision could
+   therefore be applied to a host it was not decided for, sending a bearer out an excluded route.
+   The decision moved to `sendWithConnectionPolicy` — the same boundary and the same reason
+   #4992 records for the connection policy.
+2. Refusing every `provider.fetch` as transport-owning was too broad. The xAI route installs a
+   wrapper on every request that only adds a generated request id, so an explicit route would
+   have thrown for one of the two providers #2894 names.
+3. The executor handed to an override was itself unmarked, so an ordinary provider would have
+   been refused on every overridden path — after the attempt had already been recorded. None of
+   the regressions written to that point covered the production-shaped nested send; two do now.
+
+CI then found two more that review had cleared. The zod field schemas used
+`z.unknown().superRefine(...)` without narrowing, so the parsed provider record carried
+`proxy: unknown` and failed to satisfy `OcxProviderConfig` — four typecheck errors, and a
+typecheck-based adapter contract test that asserts zero errors reported one. And the privacy
+scan reads a URL userinfo pair as an address: the fixtures that deliberately carry a credential
+to prove it never reaches a log looked like `password@host.tld`. Both are the reason this lane
+treats hosted CI as the verification and static review as the preparation for it, rather than
+the reverse.
+
 Union-defect sweep before pushing:
 
 - **File-size ratchet.** No touched source file carries a cap.
@@ -201,6 +232,10 @@ Union-defect sweep before pushing:
   what a valid proxy value is. No count in generated documentation was touched.
 - **Test layout.** Four new test files, each registered in both `scripts/test-layout/layout.json`
   and `tests/fixtures/test-layout-expected.json`.
+- **Exact-list guards.** `tests/responses/responses-fetch-helpers-boundary.test.ts` pins the
+  runtime-import list of `fetch-helpers.ts` and needed the two modules this lane adds. It is the
+  restatement class in miniature, and it is the guard working as intended: the list is a
+  deliberate classification, so adding to it is a reviewed decision rather than a silent one.
 
 ## Ownership
 
