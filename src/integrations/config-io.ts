@@ -10,7 +10,7 @@
 import { lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import type { ConfigFormat } from "../clients/config-export";
 import { MAX_JSON_NESTING } from "./serialize";
-import { atomicWriteFile } from "../config";
+import { atomicWriteFileNoFollow, isMissingPathError } from "../config/atomic-write";
 import type { JournalEntry } from "./journal";
 import type { OwnershipRecord } from "./ownership";
 import type { IntegrationClientId } from "./registry";
@@ -192,6 +192,15 @@ export type ReadResult =
 
 export type StatKind = "file" | "dir" | "other" | "missing" | "failed";
 
+function lstatKind(path: string): StatKind {
+  try {
+    const stats = lstatSync(path);
+    return stats.isFile() ? "file" : stats.isDirectory() ? "dir" : "other";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed";
+  }
+}
+
 export interface IntegrationIO {
   /**
    * ONLY a missing file yields `missing`. Every other failure (EACCES, EPERM,
@@ -234,6 +243,18 @@ export type TargetState =
  * an unreadable config gets clobbered.
  */
 export function loadTarget(io: IntegrationIO, configPath: string): TargetState {
+  // Managed client paths are a lower-trust boundary. Never inspect through a
+  // final symlink that can be retargeted between this read and the eventual
+  // write: when a no-follow probe exists, the named directory entry itself must
+  // be a regular file or absent. `missing` stays legal so a virtual pair probe
+  // (such as Cline's pair-aware statKind) can still report one absent member.
+  const named = io.lstatKind?.(configPath);
+  // A failed probe is uncertainty, not evidence about the entry's shape: it
+  // keeps the read-failed classification the follow-probe would have produced.
+  if (named === "failed") return { ok: false, why: "read-failed" };
+  if (named !== undefined && named !== "file" && named !== "missing") {
+    return { ok: false, why: "not-regular-file" };
+  }
   const kind = io.statKind(configPath);
   if (kind === "missing") return { ok: true, before: null };
   if (kind === "failed") return { ok: false, why: "read-failed" };
@@ -252,14 +273,7 @@ export function loadTarget(io: IntegrationIO, configPath: string): TargetState {
  */
 export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "dropRecord"> {
   return {
-    lstatKind: path => {
-      try {
-        const stats = lstatSync(path);
-        return stats.isFile() ? "file" : stats.isDirectory() ? "dir" : "other";
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed";
-      }
-    },
+    lstatKind,
     readText: path => {
       try {
         return { kind: "text", text: readFileSync(path, "utf8") };
@@ -277,8 +291,28 @@ export function fileIO(): Omit<IntegrationIO, "appendJournal" | "putRecord" | "d
       }
     },
     writeText: (path, text) => {
+      const kind = lstatKind(path);
+      if (kind !== "file" && kind !== "missing") {
+        throw new Error(`refusing unsafe integration write target: ${path}`);
+      }
       assertIntegrationWriteOwnership(path);
-      atomicWriteFile(path, text);
+      atomicWriteFileNoFollow(path, text, undefined, {
+        // The pre-check above rejects a symlink already in place; this one runs
+        // inside the atomic write immediately before the rename, so a link
+        // exchanged after validation is refused rather than followed. Even a
+        // swap past this point can only replace the named entry, never redirect
+        // the write through it.
+        validateBeforeRename: target => {
+          try {
+            if (lstatSync(target).isSymbolicLink()) {
+              throw new Error(`refusing to replace symbolic-link integration target: ${target}`);
+            }
+          } catch (error) {
+            if (isMissingPathError(error)) return;
+            throw error;
+          }
+        },
+      });
     },
     removeFile: path => rmSync(path, { force: true }),
     mkdirp: path => mkdirSync(path, { recursive: true, mode: 0o700 }),

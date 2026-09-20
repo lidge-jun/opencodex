@@ -10,7 +10,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import {
@@ -215,14 +215,14 @@ async function writePrivateTempFileAsync(
   carryHardenAcrossContentWrite(path);
 }
 
-export function atomicWriteFile(
+function atomicWriteFileToTarget(
   path: string,
   content: string,
+  target: string,
   io?: AtomicWriteIO,
   hooks: AtomicWriteHooks = {},
 ): void {
   recordOwnedConfigPath(getConfigDir(), path);
-  const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
@@ -285,6 +285,32 @@ export function atomicWriteFile(
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
   }
+}
+
+export function atomicWriteFile(
+  path: string,
+  content: string,
+  io?: AtomicWriteIO,
+  hooks: AtomicWriteHooks = {},
+): void {
+  atomicWriteFileToTarget(path, content, resolveWriteTarget(path), io, hooks);
+}
+
+/**
+ * Atomically replace the named directory entry without resolving a symlink at
+ * that entry. This is for files in directories writable by another process:
+ * a raced symlink is replaced, never followed to a more privileged target.
+ */
+export function atomicWriteFileNoFollow(
+  path: string,
+  content: string,
+  io?: AtomicWriteIO,
+  hooks: AtomicWriteHooks = {},
+): void {
+  // Only the final entry is no-follow: the parent still resolves, because an
+  // OS alias above the configured root (a home junction, /tmp) is legitimate
+  // and Windows cannot exclusive-create a temp through a junction.
+  atomicWriteFileToTarget(path, content, join(resolveWriteTarget(dirname(path)), basename(path)), io, hooks);
 }
 
 export interface AtomicWriteAsyncIO {
