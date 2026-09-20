@@ -46,6 +46,50 @@ async function runSuite(suite: string): Promise<{ ok: boolean; output: string }>
 }
 
 /**
+ * Refuse to run if a fixture address has something listening on it.
+ *
+ * Breaking a guard turns the suite into an unpredictable client. It is
+ * normally harmless because every test refuses before any upstream call —
+ * but that is exactly what the guard being broken undoes. When the 1 MiB cap
+ * was removed to prove a test would notice, a megabyte of "x" went out to the
+ * real text-to-speech service on this machine and wedged it for five minutes.
+ *
+ * The fixtures use port 9 now, so this should never fire. It exists because
+ * the next fixture will be written by someone who does not know that.
+ */
+async function reachable(host: string, port: number): Promise<boolean> {
+  try {
+    const socket = await Promise.race([
+      Bun.connect({ hostname: host, port, socket: { data() {}, error() {} } }),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), 300)),
+    ]);
+    if (!socket) return false;
+    socket.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const live: string[] = [];
+for (const suite of new Set(GUARDS.map(g => g.suite))) {
+  const source = await Bun.file(suite).text().catch(() => "");
+  const targets = new Set(
+    [...source.matchAll(/\b(?:https?|wss?):\/\/([\w.-]+):(\d+)/g)].map(m => `${m[1]}:${m[2]}`),
+  );
+  for (const target of targets) {
+    const [host, port] = target.split(":");
+    if (await reachable(host!, Number(port))) live.push(`${suite} -> ${target}`);
+  }
+}
+if (live.length) {
+  console.error("a fixture names an address that is listening; a broken guard could reach it:");
+  for (const entry of live) console.error(`  ${entry}`);
+  console.error("Point the fixture at port 9 (discard), or stop the service.");
+  process.exit(2);
+}
+
+/**
  * A lock, held while any guard is removed.
  *
  * This tool disables production code for a second at a time, and a
@@ -70,6 +114,10 @@ if (await Bun.file(LOCK).exists()) {
   process.exit(2);
 }
 await Bun.write(LOCK, `${process.pid}\n`);
+// Every exit, not just the ones remembered: the fixture check below used to
+// sit after the lock and its refusal leaked `.red-running`, which is the same
+// bug this lock exists to prevent, inside the tool that prevents it.
+process.on("exit", releaseLock);
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(signal, () => {
     releaseLock();
