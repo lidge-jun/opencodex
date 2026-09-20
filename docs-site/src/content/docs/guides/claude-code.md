@@ -703,7 +703,8 @@ The dashboard sidebar has a dedicated **Claude** page (below API) and a **Claude
 (label intentionally identical in every language). The page shows:
 
 - Desktop tab: **Connection mode** selector — first-party (default) or gateway — with the
-  running proxy port in first-party mode; **Save & apply** switches modes
+  running proxy port in first-party mode. Only **Save & apply** switches modes; **Save** alone
+  stores the gateway profile lanes for a later gateway apply and leaves the current mode as is
 - Inbound kill switch (enabled toggle)
 - Quickstart (`ocx claude`) and manual env block
 - Fast Mode selector (Auto / ON / OFF)
