@@ -77,6 +77,47 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   });
 }
 
+/**
+ * The names the suite actually runs.
+ *
+ * Without this, a guard pointing at a renamed or deleted test reports MISS —
+ * the same word as a guard whose break nothing noticed — and the two want
+ * opposite fixes: one is a stale entry, the other is a missing test.
+ *
+ * Read from a junit run, not from the source. The first attempt scanned for
+ * `test("...")` declarations and saw 15 of 33, because the table-driven cases
+ * are named by template literal and that name exists only at runtime.
+ */
+async function ranTests(suite: string): Promise<Set<string>> {
+  const out = `/tmp/red-listing-${process.pid}.xml`;
+  const proc = Bun.spawn(
+    ["bun", "test", suite, "--reporter=junit", `--reporter-outfile=${out}`],
+    { stdout: "ignore", stderr: "ignore" },
+  );
+  await proc.exited;
+  const xml = await Bun.file(out).text().catch(() => "");
+  await Bun.file(out).unlink().catch(() => {});
+  // Entity-decoded: junit escapes the apostrophes in names like "the
+  // caller's OpenAI model name", and two guards read as missing until this
+  // was here.
+  const decode = (name: string) =>
+    name
+      .replace(/&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
+      .replace(/&amp;/g, "&");
+  return new Set(
+    [...xml.matchAll(/<testcase[^>]*\bname="([^"]*)"/g)].map(m => decode(m[1]!)),
+  );
+}
+
+const declared = new Map<string, Set<string>>();
+for (const suite of new Set(GUARDS.map(g => g.suite))) {
+  declared.set(suite, await ranTests(suite));
+}
+
 const misses: string[] = [];
 
 for (const guard of GUARDS) {
@@ -85,6 +126,10 @@ for (const guard of GUARDS) {
   const occurrences = original.split(guard.from).length - 1;
   if (occurrences !== 1) {
     misses.push(`${guard.name}: its source appears ${occurrences} times in ${guard.file}`);
+    continue;
+  }
+  if (!declared.get(guard.suite)?.has(guard.expect)) {
+    misses.push(`${guard.name}: no test named "${guard.expect}" in ${guard.suite}`);
     continue;
   }
   await Bun.write(guard.file, original.replace(guard.from, guard.to));
