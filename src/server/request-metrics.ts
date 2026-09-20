@@ -1,9 +1,19 @@
 import type { ResponsesTerminalStatus } from "../bridge";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { type RequestFailureCause, causeForRecoveryKind } from "../lib/request-failure-model";
+import {
+  REQUEST_OUTCOME_CLASSES,
+  classifyRequestOutcome,
+  type RequestOutcomeClass,
+} from "../usage/request-outcome";
 
 export const REQUEST_METRICS_PROTOCOLS = Object.freeze(["responses", "chat", "messages", "unknown"] as const);
-export const REQUEST_METRICS_RESULTS = Object.freeze(["completed", "failed", "incomplete", "aborted"] as const);
+/**
+ * The exporter's result label set IS the shared outcome vocabulary, not a copy of it. Restating
+ * these four strings here is what let the exporter and the dashboard drift into disagreeing about
+ * the same request.
+ */
+export const REQUEST_METRICS_RESULTS = REQUEST_OUTCOME_CLASSES;
 /**
  * Closed recovery classes exported as Prometheus label values.
  *
@@ -31,7 +41,7 @@ export const REQUEST_DURATION_BUCKETS_SECONDS = Object.freeze([0.1, 0.25, 0.5, 1
 export const REQUEST_TTFT_BUCKETS_SECONDS = Object.freeze([0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30] as const);
 
 export type RequestMetricsProtocol = typeof REQUEST_METRICS_PROTOCOLS[number];
-export type RequestMetricsResult = typeof REQUEST_METRICS_RESULTS[number];
+export type RequestMetricsResult = RequestOutcomeClass;
 export type RequestMetricsRecoveryClass = typeof REQUEST_METRICS_RECOVERY_CLASSES[number];
 
 export interface RequestMetricFinalFact {
@@ -82,18 +92,6 @@ function histograms(bounds: readonly number[]): HistogramCell[][] {
       sum: 0,
     }))
   ));
-}
-
-function classifyResult(fact: RequestMetricFinalFact): RequestMetricsResult {
-  if (fact.closeReason === "client_cancel" || fact.status === 499) return "aborted";
-  if (fact.terminalStatus === "failed") return "failed";
-  if (fact.terminalStatus === "incomplete"
-    || fact.closeReason === "body_stall"
-    || fact.closeReason === "body_overflow") return "incomplete";
-  if (fact.terminalStatus === "completed") return "completed";
-  if (fact.terminalStatus === undefined
-    && (fact.status === 101 || (fact.status >= 200 && fact.status < 400))) return "completed";
-  return "failed";
 }
 
 /**
@@ -176,7 +174,7 @@ export function createRequestMetricsOwner(
   return {
     recordFinalRequest(fact): void {
       const protocol: RequestMetricsProtocol = fact.protocol ?? "unknown";
-      const result = classifyResult(fact);
+      const result = classifyRequestOutcome(fact);
       const protocolIndex = protocolCell(protocol);
       const resultIndex = resultCell(result);
       logicalRequests[protocolIndex]![resultIndex]! += 1;

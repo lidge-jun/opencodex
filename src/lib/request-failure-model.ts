@@ -16,7 +16,7 @@
  * usage or budget subsystems into a request path that did not already have them.
  */
 import type { SendClass } from "./request-execution-budget";
-import type { AttemptRecoveryKind } from "../usage/log";
+import type { AttemptRecoveryKind } from "../usage/telemetry-contract";
 
 /**
  * How far the exchange got, ordered by how much the DOWNSTREAM CLIENT observed.
