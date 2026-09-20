@@ -50,6 +50,7 @@ import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
 import { redactSecretString } from "../../lib/redact";
 import { openRouterRoutingConfigError } from "../../providers/openrouter-routing";
 import { vercelGatewayRoutingConfigError } from "../../providers/vercel-gateway-routing";
@@ -382,6 +383,14 @@ export const configSchema = z.object({
           message: sendPathError,
         });
       }
+    }
+    const tlsProfileError = providerTlsProfileConfigError(name, provider);
+    if (tlsProfileError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "tlsProfile"],
+        message: tlsProfileError,
+      });
     }
     const headersError = providerHeadersConfigError((provider as { headers?: unknown }).headers);
     if (headersError) {

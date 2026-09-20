@@ -237,6 +237,8 @@ export interface ModelCapabilities {
 }
 
 export interface OcxProviderConfig {
+  /** Optional browser-compatible outbound TLS profile; disabled by default. */
+  tlsProfile?: "antigravity-browser";
   /** Optional short provider namespace used only at request/catalog presentation time. */
   alias?: string;
   /** Native model id -> short, slash-free request alias. */
