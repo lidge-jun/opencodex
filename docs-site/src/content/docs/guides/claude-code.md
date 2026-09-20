@@ -777,12 +777,14 @@ route. Pass `"haiku"` as the model placeholder.
 Set `claudeCode.stabilizePromptCache` to `true` in `config.json` to relocate supported trailing Claude harness notices from system instructions to a trailing user message on translated routes. The default is `false`. Enable it only when this role change is appropriate for your clients. It preserves fenced examples and unmatched text; native Anthropic passthrough is unchanged. The metadata-less prompt-cache key then follows stabilized instructions. This does not create conversation identity or guarantee upstream cache hits.
 
 On every translated Chat route, timeline reminders keep their position in the
-conversation, after any pending tool results, and are forwarded with the
-`developer` role. This prevents a newly appended reminder from rewriting the
-leading system prompt, and stops a mid-conversation instruction from arriving
-ahead of the turns it was written to follow. Set `foldDeveloperRoleToSystem` on
-a provider whose upstream rejects the `developer` role; the reminder is then
-sent as `system` in the same position. This applies with or without
+conversation, after any pending tool results. This prevents a newly appended
+reminder from rewriting the leading system prompt, and stops a mid-conversation
+instruction from arriving ahead of the turns it was written to follow. The role
+that slot carries is decided separately: a reminder is sent as `system` unless
+the provider records `foldDeveloperRoleToSystem: false`, which states that the
+upstream accepts the `developer` role and forwards it in the same position. An
+upstream that does not accept it answers `400 role 'developer' is not allowed`
+and the turn never starts, so an unrecorded destination folds. This applies with or without
 `stabilizePromptCache`, and native Anthropic passthrough is unchanged. Cache
 reuse still requires stable session identity and upstream cache availability.
 Changes to earlier instructions or tools, and conversation compaction, can still

@@ -114,13 +114,19 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
-  // `developer` is part of the Chat Completions role set, so it is forwarded as itself. The
-  // host test above used to decide the role too, which assumed every OpenAI-compatible gateway
-  // rejects a standard role until proven otherwise — including gateways that proxy OpenAI —
-  // and quietly gave the instruction `system` precedence instead (#5213). A destination that
-  // really does reject it records that with `foldDeveloperRoleToSystem`, which converts the
-  // role where the message already is and never moves it.
-  const developerWireRole = provider.foldDeveloperRoleToSystem === true ? "system" : "developer";
+  // `developer` is part of the Chat Completions role set, but not every OpenAI-compatible
+  // gateway accepts it: one that does not answers `400 role 'developer' is not allowed` and the
+  // turn never starts. #5213 removed a hostname test that decided the role, which was right —
+  // a gateway proxying OpenAI accepts the role and the hostname cannot say so. Defaulting to
+  // forwarding instead was wrong in the other direction: it assumed every destination accepts a
+  // role until an operator marks it, so a gateway that rejects it broke on the next request and
+  // no test in this repository could see it, because what breaks lives outside the repository.
+  //
+  // The key is tri-state and the unset state is the safe one. Absent means nobody has recorded
+  // what this destination accepts, so the role folds to `system`; `true` means it is known to
+  // reject the role; `false` means it is known to accept it and the role is forwarded. Either
+  // way the message keeps the slot it arrived in — only the role changes, never the position.
+  const developerWireRole = provider.foldDeveloperRoleToSystem === false ? "developer" : "system";
   // A developer message keeps the slot it arrived in. Hoisting its text into the leading
   // system block moved a mid-conversation instruction ahead of every turn it was written to
   // follow, and the caller saw an ordinary answer either way (#5213). The Claude inbound mints
