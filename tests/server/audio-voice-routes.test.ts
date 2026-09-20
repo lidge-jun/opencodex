@@ -8,6 +8,8 @@ import {
 import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS, SPEECH_REQUEST_MAX_BYTES, SPEECH_RESPONSE_MAX_BYTES } from "../../src/server/audio-speech";
 import { handleAudioTranscriptions } from "../../src/server/audio-transcriptions";
 import { latestDictationModelFromEntries } from "../../src/server/audio-dictation";
+import { getRequestLogEntries } from "../../src/server/request-log";
+import { normalizeLogConversationId } from "../../src/server/request-log-conversation";
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -682,5 +684,84 @@ describe("byModel needs a conversation", () => {
       { conversationId: "t1", requestedModel: "stub/model-a" },
     ] as unknown as Parameters<typeof latestDictationModelFromEntries>[0];
     expect(latestDictationModelFromEntries(entries, [])).toBeUndefined();
+  });
+});
+
+describe("byModel routes the thread's speech to the mapped provider", () => {
+  /**
+   * The request shape that triggers selection, recorded here because proving
+   * it live needed a real `/v1/responses` turn first: the speech request
+   * carries `thread-id`; the entry it matches was recorded by the responses
+   * path with `conversationId` set to the digest of that same id and
+   * `requestedModel` set to the namespaced selector the client asked for.
+   * `byModel` is keyed by that selector and beats `speech.provider` — the
+   * physical `model` on the entry is deliberately different, so a lookup that
+   * used it would fall through and this test would catch that too.
+   */
+  const THREAD = "wlcodex-proof-a";
+  const UNSEEN = "wlcodex-never-seen";
+  const PROVIDERS_WITH_FALLBACK = {
+    ...PROVIDERS,
+    fallback: {
+      adapter: "openai",
+      baseUrl: "http://127.0.0.1:9/v1",
+      speechUrl: "http://127.0.0.1:9/fallback/speech",
+    },
+  } satisfies Record<string, OcxProviderConfig>;
+  const MAPPED = config({
+    providers: PROVIDERS_WITH_FALLBACK,
+    speech: { provider: "fallback", byModel: { "stub/model-a": "pocket" } },
+  } as Partial<OcxConfig>);
+
+  function logThreadTurn(): void {
+    getRequestLogEntries().push({
+      requestId: "req-by-model-proof",
+      timestamp: Date.now(),
+      model: "model-a",
+      provider: "stub",
+      requestedModel: "stub/model-a",
+      conversationId: normalizeLogConversationId(THREAD)!,
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+    });
+  }
+
+  async function speakForThread(thread: string | undefined): Promise<{ status: number; upstreamUrl: string }> {
+    logThreadTurn();
+    const kept = getRequestLogEntries().length - 1;
+    const real = globalThis.fetch;
+    let upstreamUrl = "";
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      upstreamUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return new Response(new Blob([new Uint8Array(64)]).stream(), { headers: { "content-type": "audio/wav" } });
+    }) as typeof fetch;
+    try {
+      const headers = thread ? { "thread-id": thread } : {};
+      const response = await handleAudioSpeech(speechRequest({ input: "hello" }, headers), MAPPED, LOG, ADMISSION);
+      await response.arrayBuffer().catch(() => undefined);
+      return { status: response.status, upstreamUrl };
+    } finally {
+      getRequestLogEntries().length = kept;
+      globalThis.fetch = real;
+    }
+  }
+
+  test("the thread's last requested model picks the byModel backend over the fallback", async () => {
+    const { status, upstreamUrl } = await speakForThread(THREAD);
+    expect(status).toBe(200);
+    expect(upstreamUrl).toBe("http://127.0.0.1:9/v1/audio/speech");
+  });
+
+  test("a thread the log has not seen falls through to speech.provider", async () => {
+    const { status, upstreamUrl } = await speakForThread(UNSEEN);
+    expect(status).toBe(200);
+    expect(upstreamUrl).toBe("http://127.0.0.1:9/fallback/speech");
+  });
+
+  test("no thread header falls through to speech.provider", async () => {
+    const { status, upstreamUrl } = await speakForThread(undefined);
+    expect(status).toBe(200);
+    expect(upstreamUrl).toBe("http://127.0.0.1:9/fallback/speech");
   });
 });
