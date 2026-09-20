@@ -212,10 +212,12 @@ CI then found two more that review had cleared. The zod field schemas used
 `z.unknown().superRefine(...)` without narrowing, so the parsed provider record carried
 `proxy: unknown` and failed to satisfy `OcxProviderConfig` — four typecheck errors, and a
 typecheck-based adapter contract test that asserts zero errors reported one. And the privacy
-scan reads a URL userinfo pair as an address: the fixtures that deliberately carry a credential
-to prove it never reaches a log looked like `password@host.tld`. Both are the reason this lane
-treats hosted CI as the verification and static review as the preparation for it, rather than
-the reverse.
+scan reads a URL userinfo pair as an address, so the fixtures that deliberately carry a
+credential to prove it never reaches a log were read as one. They moved to the `.test` host the
+scanner already allows for fixtures, with the assertions unchanged. Both are the reason this
+lane treats hosted CI as the verification and static review as the preparation for it, rather
+than the reverse — and the second one repeated itself in this very document, which first
+described the defect by quoting the shape that caused it.
 
 Union-defect sweep before pushing:
 
