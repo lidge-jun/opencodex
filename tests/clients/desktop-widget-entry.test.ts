@@ -31,6 +31,16 @@ describe("widget extension entry point", () => {
     expect(code).toContain("_NSExtensionMain");
   });
 
+  test("the target is compiled in extension-only mode", () => {
+    // Xcode's app-extension target sets APPLICATION_EXTENSION_API_ONLY; SwiftPM has no such
+    // target, so the compiler's spelling is passed by hand. It belongs beside the linker entry
+    // because the two are one contract: the projects that have a SwiftPM widget extension
+    // working supply both, and dropping either brings back a failure that the build, the
+    // signature and the registration all continue to look fine through.
+    const code = stripComments(readFileSync(PACKAGE, "utf8"));
+    expect(code).toContain("-application-extension");
+  });
+
   test("the widget bundle is the Swift entry, so the linker keeps it", () => {
     const views = readFileSync(VIEWS, "utf8");
     expect(views).toMatch(/@main\s*\n\s*struct OpenCodexWidgetBundle: WidgetBundle/);

@@ -20,13 +20,17 @@ off keeps it off; writing it afterwards would let a failed enable retry on every
 The behaviour is not macOS-only — the autostart plugin implements the Linux autostart
 entry and the current-user Windows Run registration too.
 
-The WidgetKit extension in `app/` needs both `@main` on `OpenCodexWidgetBundle` and the
-`-e _NSExtensionMain` linker entry in `app/Package.swift`. Either alone yields a widget
-that never appears: without `@main` the linker drops the bundle and the extension
-registers with nothing to offer, and without the entry override ExtensionFoundation traps
-during bootstrap. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to
-register an unsandboxed plug-in at all — which is why the shell writes its snapshot into
-the extension's own container.
+The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
+would supply on its own, and SwiftPM has no such target: `@main` on
+`OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and
+`-application-extension` — the compiler spelling of `APPLICATION_EXTENSION_API_ONLY` — all
+in `app/Package.swift`. Any one missing yields a widget that never appears: without
+`@main` the linker drops the bundle and the extension registers with nothing to offer, and
+without the entry override ExtensionFoundation traps during bootstrap. Nothing observable
+distinguishes these from a working widget, because the bundle still builds, signs and
+registers. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to register
+an unsandboxed plug-in at all — which is why the shell writes its snapshot into the
+extension's own container rather than a shared App Group, which ad-hoc signing cannot use.
 
 `desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
 Bun targets and prepares the external binary plus dashboard resources used by
