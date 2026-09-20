@@ -1,9 +1,10 @@
 /**
  * #5261: a browser that never opened must not look like a login that is working.
  *
- * The launcher used to swallow its own failure and return nothing, so the Codex login route
- * reported the same success whether a browser opened, failed to open, or was deliberately
- * skipped. The user then waited at a terminal showing a URL nobody had opened.
+ * The launcher used to swallow its own failure and return nothing, which is what left the Codex
+ * login route unable to tell a browser that opened from one that never did. These cover the
+ * launcher itself and the recovery line it feeds; the route and the CLI block that consume the
+ * result are covered where those live.
  *
  * Nothing here opens a real browser. The started case is deliberately untested rather than
  * faked: the launcher command is fixed per platform, so proving it would mean actually
@@ -11,6 +12,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { tmpdir } from "node:os";
 import { openUrl } from "../../src/lib/open-url";
 import { BROWSER_LAUNCH_FAILED_HINT } from "../../src/cli/account-auth";
@@ -28,8 +30,10 @@ describe("browser launch is reported, not swallowed (#5261)", () => {
     // Linux only, and on purpose: this empties PATH so the launcher cannot be found, and on a
     // developer machine with a real browser any weaker setup risks actually opening one.
     const priorPath = process.env.PATH;
+    let emptyDir: string | undefined;
     try {
-      process.env.PATH = mkdtempSync(`${tmpdir()}/ocx-empty-path-`);
+      emptyDir = mkdtempSync(`${tmpdir()}/ocx-empty-path-`);
+      process.env.PATH = emptyDir;
       expect(await openUrl("http://127.0.0.1:1455/auth/callback")).toEqual({
         status: "failed",
         reason: "spawn-error",
@@ -37,6 +41,7 @@ describe("browser launch is reported, not swallowed (#5261)", () => {
     } finally {
       if (priorPath === undefined) delete process.env.PATH;
       else process.env.PATH = priorPath;
+      if (emptyDir) removeTreeWithRetry(emptyDir);
     }
   });
 

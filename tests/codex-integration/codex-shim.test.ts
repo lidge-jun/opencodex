@@ -1320,7 +1320,10 @@ printf '%s\\n' child-codex
             const driverPath = join(dir, "driver.ps1");
             const realPath = join(dir, "codex-real.ps1");
             writeFileSync(join(dir, "service-api-token"), "file-token\n");
-            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 19\n");
+            // The Codex phase must isolate a Codex failure, so its ensure has to SUCCEED. It used
+            // to exit 19, which the wrapper now correctly reports as a failed autostart (#5261),
+            // making both phases indistinguishable.
+            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 0\n");
             writeFileSync(realPath, "throw 'fixture Codex failure'\n");
             writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realPath, ensurePath, "unused.ts", "process")}`);
             const emptyToken = callerToken === "" ? "$env:OPENCODEX_API_AUTH_TOKEN = ''\n" : "";

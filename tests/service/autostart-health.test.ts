@@ -415,6 +415,10 @@ describe("routing visibility (#2411)", () => {
     const shimmed = deriveStartupHealth({ ...base, shimInstalled: true, shimHealthy: true });
     expect(shimmed.status).toBe("at-risk");
     expect(injectedRoutingRestartWarningLines(shimmed).length).toBeGreaterThan(0);
+    // ...and the warning must stay true in that case: a healthy shim DOES restart the proxy, for
+    // CLI launches. Claiming nothing will would contradict the summary line printed beneath it.
+    expect(injectedRoutingRestartWarningLines(shimmed).join(" ")).not.toContain("nothing here will restart");
+    expect(injectedRoutingRestartWarningLines(shimmed).join(" ")).toContain(startupHealthSummary(shimmed));
 
     // Native routing has no opencodex restart dependency, so there is nothing to warn about.
     expect(injectedRoutingRestartWarningLines(deriveStartupHealth({ ...base, routingKind: "native" }))).toEqual([]);

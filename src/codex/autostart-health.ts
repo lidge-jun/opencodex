@@ -174,7 +174,9 @@ export function startupHealthSummary(health: StartupHealth): string {
 export function injectedRoutingRestartWarningLines(health: StartupHealth): string[] {
   if (health.status !== "at-risk") return [];
   return [
-    "⚠️  Codex routing is written to disk and survives a restart, but nothing here will restart the proxy.",
+    // Deliberately not "nothing will restart the proxy": a healthy launcher shim does restart it,
+    // for CLI launches only, and is still at-risk. The summary line below says which case this is.
+    "⚠️  Codex routing is written to disk and survives a restart; keeping the proxy running is a separate matter.",
     `   ${startupHealthSummary(health)}`,
     "   While the proxy is down Codex cannot sign in or reach a model. 'ocx restore' undoes the routing without needing it.",
   ];

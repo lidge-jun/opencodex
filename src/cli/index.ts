@@ -1616,9 +1616,10 @@ async function handleStatus() {
   console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
   // Independent of whether the proxy is up: a catalog pointer whose file is gone stops Codex
   // loading its config at all, and presents as the same blank wall as dead routing (#5261).
-  for (const line of missingCodexCatalogLines(detectMissingCodexCatalogPath())) {
-    console.log(`   ${line}`);
-  }
+  // Tagged `(local)` on its header like every other local-state line, so a connected client
+  // cannot read a finding about its own Codex home as something the hub reported.
+  missingCodexCatalogLines(detectMissingCodexCatalogPath())
+    .forEach((line, index) => console.log(`   ${line}${index === 0 ? local : ""}`));
   if (status.json.startup.routingKind === "native") {
     let retainedProviderTable = false;
     try {

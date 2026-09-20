@@ -142,6 +142,8 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
   test("an owned catalog that is missing is reported, and one that exists is not", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-pointer-"));
     try {
+      // Ownership is by basename, which is what injection already uses. Pinned here so the
+      // detector cannot start disagreeing with the code that writes and strips the same line.
       const present = join(dir, "opencodex-catalog.json");
       writeFileSync(present, "{}");
       const absent = join(dir, "gone", "opencodex-catalog.json");

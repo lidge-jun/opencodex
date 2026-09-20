@@ -15,7 +15,18 @@ function windowsRundll32(): string {
  */
 export type OpenUrlResult =
   | { status: "started" }
-  | { status: "failed"; reason: "invalid-url" | "spawn-error" };
+  | { status: "failed"; reason: "invalid-url" | "spawn-error" | "launcher-exit" };
+
+/**
+ * How long to watch a launcher that did spawn before calling it started.
+ *
+ * `spawn` only proves a process began. `xdg-open` with no desktop handler, and rundll32 given a
+ * broken association, both spawn happily and exit nonzero a moment later without opening
+ * anything — so resolving on `spawn` alone would report a launch that did not happen. Those
+ * failures are immediate, and the only caller that awaits this is a login start, so a short
+ * window buys a true answer cheaply. A launcher still running when it elapses has started.
+ */
+const LAUNCHER_SETTLE_MS = 400;
 
 /**
  * Never rejects. A browser that would not open is an inconvenience, not a login failure: the
@@ -33,9 +44,11 @@ export function openUrl(url: string): Promise<OpenUrlResult> {
     : [url];
   return new Promise<OpenUrlResult>(resolve => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (result: OpenUrlResult) => {
       if (settled) return;
       settled = true;
+      if (timer) clearTimeout(timer);
       resolve(result);
     };
     const child = spawn(cmd, args, { detached: true, stdio: "ignore", shell: false });
@@ -43,7 +56,14 @@ export function openUrl(url: string): Promise<OpenUrlResult> {
     // listener that is an uncaught exception that kills the whole proxy/login flow.
     // It is also the signal itself: on Windows this is how a missing rundll32 arrives.
     child.on("error", () => settle({ status: "failed", reason: "spawn-error" }));
-    child.on("spawn", () => settle({ status: "started" }));
+    child.on("spawn", () => {
+      // Unref'd either way: this never keeps the process alive, it only decides what to report.
+      timer = setTimeout(() => settle({ status: "started" }), LAUNCHER_SETTLE_MS);
+      timer.unref?.();
+    });
+    child.on("exit", code => settle(code === 0 || code === null
+      ? { status: "started" }
+      : { status: "failed", reason: "launcher-exit" }));
     child.unref();
   });
 }
