@@ -117,4 +117,15 @@ describe("release pipeline contract", () => {
     expect(verify!.run).toContain("shasum -a 256 -c ./*.sha256");
   });
 
+  test("publication waits for both packaging jobs", () => {
+    const publish = release.jobs?.publish;
+    expect(publish).toBeDefined();
+    expect(needsOf(publish).sort())
+      .toEqual(["package-desktop", "package-standalone", "validate-dispatch"]);
+
+    const attach = release.jobs?.["attach-release"];
+    expect(attach).toBeDefined();
+    expect(needsOf(attach).sort()).toEqual(["package-desktop", "package-standalone", "publish"]);
+  });
+
 });

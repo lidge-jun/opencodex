@@ -485,7 +485,7 @@ jobs:
           gh release upload "v${RELEASE_VERSION}" dist/release/* --clobber
 
   publish:
-    needs: validate-dispatch
+    needs: [validate-dispatch, package-standalone, package-desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
