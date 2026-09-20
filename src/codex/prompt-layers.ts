@@ -150,7 +150,7 @@ export type { Ownership } from "./prompt-layers/toml-read";
 import { activeConfigPath, activeStorePath, activeBaseVariantDir, journalPathFor, lockPathFor, type Paths } from "./prompt-layers/paths";
 import { readFileOrNull, computeRevision, updateFingerprintField } from "./prompt-layers/revision";
 import { normalizeBody, findInvalidCharacter, decodeBasicString } from "./prompt-layers/encoding";
-import { rootArrayEntries, hasRootKey, rootLines, tableLines, boolInLines, inspectOwnership } from "./prompt-layers/toml-read";
+import { rootArrayEntries, hasRootKey, rootLines, rootValue, tableLines, boolInLines, inspectOwnership } from "./prompt-layers/toml-read";
 import { setRootBool, setRootString, setTableBool, setProjection, removeUnownedProjection } from "./prompt-layers/toml-edit";
 
 /**
@@ -367,22 +367,25 @@ function readToggle(configBytes: string | null, id: ToggleId): ToggleState {
 
 function readModelInstructionsFile(configBytes: string | null): string | null {
   if (configBytes === null) return null;
+  const parsed = rootValue(configBytes, "model_instructions_file");
+  if (typeof parsed === "string") return parsed;
+  if (parsed === undefined) return null;
   for (const line of rootLines(configBytes)) {
     // Capture the whole literal INCLUDING its quotes and decode it, rather than
     // returning the raw inner text. `setRootString` writes this key through
     // `encodeBasicString`, which escapes backslashes, so on Windows the stored
-    // literal is "C:\\Users\\..." while the path is "C:\Users\...". Reading the
-    // inner text verbatim returned the doubled form: the round trip did not
-    // survive, `baseSelection` compared a doubled path against the real variant
-    // path and reported `external` for a variant this code had just selected.
+    // literal is "C:\\Users\\..." while the path is "C:\Users\...".
     //
-    // `[^"]*` cannot span an escaped quote either. That is not a new limit -- it
-    // is the same one the writer's restricted escape set is built around, and
-    // `decodeBasicString` refuses anything outside it rather than guessing.
+    // Prefer Bun's TOML decoder above so externally-authored standard escapes
+    // remain present and external. This restricted scan is only a fallback for
+    // documents Bun cannot parse. If its narrow decoder refuses a literal,
+    // preserve that literal rather than treating the setting as absent.
     const m = /^\s*model_instructions_file\s*=\s*("[^"]*")\s*(?:#.*)?$/.exec(line);
-    if (m) return decodeBasicString(m[1]!);
+    if (m) return decodeBasicString(m[1]!) ?? m[1]!;
   }
-  return null;
+  // A present non-string value or unrecognised spelling fails closed. Only
+  // `undefined` above proves that the setting is absent.
+  return "<unreadable model_instructions_file>";
 }
 
 /** Variant ids are ours to generate, so they stay in one narrow shape. */

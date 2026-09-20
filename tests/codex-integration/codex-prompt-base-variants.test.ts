@@ -61,6 +61,19 @@ describe("base variant selection", () => {
     });
   });
 
+  test("a hand-set key with standard TOML escapes stays external and cannot be overwritten", () => {
+    const config = 'model_instructions_file = "\\u002Fetc\\u002Fsomebody-elses.md"\n';
+    const paths = fixture(config);
+    expect(readPromptLayers(paths).baseSelection).toEqual({
+      kind: "external",
+      path: "/etc/somebody-elses.md",
+    });
+
+    const result = selectBaseVariant({ kind: "default" }, rev(paths), paths);
+    expect(result).toMatchObject({ ok: false, error: "developer_instructions_not_owned" });
+    expect(read(paths.configPath)).toBe(config);
+  });
+
   test("selecting a variant writes an absolute path, and the default removes the key", () => {
     const paths = fixture("model = \"x\"\n");
     const created = writeBaseVariant({ id: null, title: "Terse", body: "Be brief." }, rev(paths), paths);
