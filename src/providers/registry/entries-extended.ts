@@ -102,6 +102,11 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  STEPFUN_MODELS,
+  STEPFUN_MODEL_CONTEXT_WINDOWS,
+  STEPFUN_MODEL_INPUT_MODALITIES,
+  STEPFUN_NO_VISION_MODELS,
+  STEPFUN_REASONING_EFFORTS,
 } from "./model-seeds";
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
@@ -1361,5 +1366,21 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: CODEBUDDY_CN_NO_VISION_MODELS,
     note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. v1 disables CLI tools (--tools \"\"): text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
   },
+  {
+    id: "stepfun",
+    label: "StepFun",
+    baseUrl: "https://api.stepfun.com/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://platform.stepfun.com",
+    defaultModel: "step-5-preview",
+    models: STEPFUN_MODELS,
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelContextWindows: STEPFUN_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: STEPFUN_MODEL_INPUT_MODALITIES,
+    noVisionModels: STEPFUN_NO_VISION_MODELS,
+    reasoningEfforts: STEPFUN_REASONING_EFFORTS,
+    note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
+  },
 ];
-
