@@ -448,10 +448,10 @@ observations separate from token or API-equivalent cost totals.
 
 `src/server/hub-usage.ts` serves `GET /v1/usage` on hubs for an explicit configured data key. The authenticated key selects the aggregate; query parameters cannot select an API-key identity. Unscoped environment/admin credentials and loopback bypass are not admitted. The response projects only this client's numeric totals, provider/model/day rows and incomplete-history metadata through `src/remote/hub-usage.ts`; accounts, raw records and key IDs are omitted. Unknown fields are stripped at every object boundary and the serialized body is capped at 1 MiB.
 
-Custom usage windows are immutable bounds on the streaming accumulator, applied to each
-ledger entry before attribution and daily aggregation. The filtered aggregate cache includes
-both inclusive millisecond bounds in its identity and retains the existing ledger revision,
-overlay-version and timezone checks. Preset warming never consumes custom summaries.
+Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
+aggregation. The filtered cache includes both inclusive millisecond bounds in its identity and retains the existing ledger revision, overlay-version and timezone checks.
+At most four distinct filtered scans may run concurrently; identical requests share one scan and excess distinct
+work fails closed. Preset warming never consumes custom summaries.
 The response retains its preset range discriminator for compatibility and explicitly marks
 `customWindow`, `since`, and `until`; the chart uses the window's local calendar days with
 the existing 366-day cap. GUI custom reports bypass the held preset/session cache.
