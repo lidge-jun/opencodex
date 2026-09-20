@@ -304,6 +304,27 @@ describe("collectProjectCodexConfigWarnings", () => {
       .not.toContain(candidatePath);
   });
 
+  test("skips symlinked project configs", () => {
+    if (process.platform === "win32") return;
+    const projectDir = join(testDir, "symlink-project");
+    const projectConfigPath = join(projectDir, ".codex", "config.toml");
+    const targetPath = join(testDir, "target-config.toml");
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    writeFileSync(targetPath, 'model_provider = "anthropic"');
+    symlinkSync(targetPath, projectConfigPath);
+
+    expect(discoverProjectCodexConfigPaths({ cwd: projectDir })).not.toContain(projectConfigPath);
+  });
+
+  test("skips project configs larger than the diagnostic limit", () => {
+    const projectDir = join(testDir, "large-project");
+    const projectConfigPath = join(projectDir, ".codex", "config.toml");
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    writeFileSync(projectConfigPath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+
+    expect(discoverProjectCodexConfigPaths({ cwd: projectDir })).not.toContain(projectConfigPath);
+  });
+
   test("skips untrusted projects even when they define bypass config", () => {
     const escaped = testDir.replace(/\\/g, "\\\\");
     const projectDir = join(testDir, "proj");
