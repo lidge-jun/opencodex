@@ -47,9 +47,10 @@ That record is structurally identical to a system widget queried the same way, s
 working hypothesis — that ad-hoc signing keeps the extension from being adopted at all — is wrong
 and is recorded here as wrong. Registration is not the obstacle.
 
-**It has never been instantiated.** No `OpenCodexWidget` process has run on this machine, so
-nothing has yet asked the extension for a timeline. Registration says the system would offer it;
-it does not say the gallery has rendered it.
+**And it does not appear in the gallery.** The gallery was opened on this machine and checked:
+OpenCodex is not among the offered widgets. No `OpenCodexWidget` process has ever run here
+either, so nothing has asked the extension for a timeline. Registration and adoption are two
+different things, and only the first of them holds.
 
 **What the signing state actually costs.** The host bundle carries the linker-signed placeholder:
 
@@ -68,14 +69,32 @@ that is tolerated because the machine built the bundle itself. A distributed cop
 host for the system to validate the extension's containment against, and nothing binds the
 declared identifier to the signed one.
 
-**The verdict, then:** the widget is eligible and registered, unexercised here, and not shippable
-until the release pipeline signs the host bundle with a Developer ID identity so the declared and
-signed identifiers agree and the bundle is sealed. That is a release-signing requirement, recorded
-rather than worked around.
+**The verdict, then:** the extension is registered and the gallery does not offer it. The host
+bundle is the thing that fails a requirement — its signed identity is not the identity it
+declares, and it seals nothing — so nothing downstream can establish that this extension belongs
+to `com.opencodex.desktop`. Until the release pipeline signs the host with a Developer ID
+identity, the widget ships but cannot be added. That is the finding; it is not worked around here,
+and no part of the icon work depends on it.
 
-Visual confirmation of the gallery itself was not obtained. The menu bar and Notification Center
-are not addressable from the automation surface used here — every menu-bar coordinate is refused
-as having no window — so this records the system state rather than a screenshot.
+## What the icon check does and does not cover
+
+`bun run icons:check` compares all seventeen generated artifacts — fifteen PNGs, the `.ico` and
+the `.icns` — byte for byte against a fresh render. It needs `rsvg-convert` and `iconutil`, and
+when `iconutil` is missing it now says the `.icns` was not compared and fails, rather than
+reporting a pass over a file it never looked at.
+
+That check does not run in CI, and claiming otherwise would be the easy lie here. The renderer is
+not pinned, so two machines with different librsvg builds produce different bytes with nothing
+wrong; asserting byte identity on a hosted runner would be asserting the runner's renderer
+version. What CI runs instead is `tests/ci-workflows/build-desktop-icon-set.test.ts`, which needs
+no renderer at all and reads its expectations out of the generator: every declared size committed
+at exactly that size, the `.ico` directory carrying exactly the packed sizes with each payload a
+real PNG of its declared dimension, the `.icns` walking cleanly end to end with one image member
+per declared entry, and nothing hand-added beside the generated set. It was driven red on a
+resized raster and on a stray file before being trusted.
+
+So the split is: shape is enforced everywhere, byte identity is enforced wherever the toolchain
+exists.
 
 ## Files
 
@@ -83,9 +102,13 @@ as having no window — so this records the system state rather than a screensho
 - `desktop/scripts/generate-icons.ts` — new, renderer and `--check` verifier.
 - `desktop/package.json` — `icons` and `icons:check` scripts.
 - Seventeen regenerated raster artifacts under `desktop/src-tauri/icons/`.
+- `tests/ci-workflows/build-desktop-icon-set.test.ts` — new, the renderer-free structural guard,
+  registered in `scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`.
 
 ## Acceptance
 
-`bun run icons:check` passes on the committed tree, `bun run build:local` produces a bundle whose
-`Contents/Resources/icon.icns` is the generated one, and the widget verdict above is recorded with
-its measured identifiers.
+`bun run icons:check` passes on the committed tree over all seventeen artifacts,
+`build-desktop-icon-set.test.ts` passes and has been shown to fail on a wrong-sized raster and on
+a stray file, `bun run build:local` produces a bundle whose `Contents/Resources/icon.icns` is the
+generated one, and the widget verdict is an observation of the gallery rather than an inference
+from registration.

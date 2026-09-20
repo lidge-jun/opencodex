@@ -98,18 +98,27 @@ function buildIco(entries: Array<{ size: number; bytes: Buffer }>): Buffer {
   return Buffer.concat([header, directory, ...entries.map(entry => entry.bytes)]);
 }
 
-function generateInto(target: string): void {
+/**
+ * Render the whole set into `target`, and report which artifacts were actually produced.
+ *
+ * The return value matters: `iconutil` is macOS-only, so on another platform no `.icns` exists to
+ * compare against. Reporting that is the difference between "the icns matches" and "nothing looked
+ * at the icns", and the check must not spell the second as the first.
+ */
+function generateInto(target: string): { produced: string[]; icnsSkipped: boolean } {
   mkdirSync(target, { recursive: true });
-  for (const [name, size] of Object.entries(PNG_SIZES)) render(size, join(target, name));
+  const produced: string[] = [];
+  for (const [name, size] of Object.entries(PNG_SIZES)) {
+    render(size, join(target, name));
+    produced.push(name);
+  }
 
   const iconset = join(target, "icon.iconset");
   mkdirSync(iconset, { recursive: true });
   for (const entry of ICNS_ENTRIES) render(entry.size, join(iconset, entry.name));
   const icns = spawnSync("iconutil", ["-c", "icns", iconset, "-o", join(target, "icon.icns")]);
-  if (icns.status !== 0) {
-    // iconutil is macOS-only; elsewhere the committed .icns stays authoritative.
-    console.warn("[icons] iconutil unavailable, leaving icon.icns untouched");
-  }
+  const icnsSkipped = icns.status !== 0;
+  if (!icnsSkipped) produced.push("icon.icns");
   rmSync(iconset, { recursive: true, force: true });
 
   const icoParts: Array<{ size: number; bytes: Buffer }> = [];
@@ -120,6 +129,9 @@ function generateInto(target: string): void {
     rmSync(scratch, { force: true });
   }
   writeFileSync(join(target, "icon.ico"), buildIco(icoParts));
+  produced.push("icon.ico");
+
+  return { produced, icnsSkipped };
 }
 
 function main(): number {
@@ -129,16 +141,29 @@ function main(): number {
   }
   const check = process.argv.includes("--check");
   if (!check) {
-    generateInto(iconsDir);
-    console.log(`[icons] regenerated from ${source}`);
-    return 0;
+    // Render into scratch first so a failure half way through cannot leave the committed set
+    // partly replaced, then move the finished artifacts over in one pass.
+    const scratch = mkdtempSync(join(tmpdir(), "ocx-icons-"));
+    try {
+      const { produced, icnsSkipped } = generateInto(scratch);
+      for (const name of produced) writeFileSync(join(iconsDir, name), readFileSync(join(scratch, name)));
+      console.log(`[icons] regenerated ${produced.length} artifacts from ${source}`);
+      if (icnsSkipped) {
+        console.error("[icons] iconutil is unavailable here, so icon.icns was NOT regenerated.");
+        console.error("[icons] the committed icon.icns may now disagree with the rest of the set.");
+        return 1;
+      }
+      return 0;
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 
   const scratch = mkdtempSync(join(tmpdir(), "ocx-icons-"));
   try {
-    generateInto(scratch);
+    const { produced, icnsSkipped } = generateInto(scratch);
     const drifted: string[] = [];
-    for (const name of [...Object.keys(PNG_SIZES), "icon.ico"]) {
+    for (const name of produced) {
       const fresh = join(scratch, name);
       const committed = join(iconsDir, name);
       if (!existsSync(committed) || !readFileSync(fresh).equals(readFileSync(committed))) {
@@ -150,7 +175,11 @@ function main(): number {
       console.error("[icons] regenerate with: bun run icons");
       return 1;
     }
-    console.log("[icons] every generated icon matches the source");
+    console.log(`[icons] ${produced.length} generated icons match the source`);
+    if (icnsSkipped) {
+      console.error("[icons] iconutil is unavailable here, so icon.icns was NOT compared.");
+      return 1;
+    }
     return 0;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
