@@ -416,9 +416,14 @@ export function deferProtocolSafeResetRecovery(
         try { void reader.cancel(reason).catch(() => {}); } catch { /* already closed */ }
         try { reader.releaseLock(); } catch { /* already released */ }
         reader = undefined;
-      } else {
+      } else if (initialization === undefined) {
+        // Nothing has read the upstream yet, so this body is still ours to cancel.
         cancelBody(response.body, reason);
       }
+      // A cancel while the preflight is mid-flight falls through deliberately. That body is
+      // locked by the preflight's own reader, so cancelling it here would reject and be
+      // swallowed; `initialize` sees `closed` when it settles and releases whichever body it
+      // ended up selecting, which is the one that actually has to be let go.
     },
   }, { highWaterMark: 0 });
 

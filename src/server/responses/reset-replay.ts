@@ -89,16 +89,20 @@ export function selfContainedResponsesBody(body: unknown): boolean {
  * say WHY it refused: "the operator granted nothing" and "this request cannot be replayed" are
  * different operator problems, and folding them together is what made the old refusal a single
  * undifferentiated no.
+ *
+ * `selfContained` is a predicate rather than a body, and the getter below is why: a provider
+ * that never opted in must not pay to walk the input array, and the caller memoizes one answer
+ * across every leg of the request.
  */
 export function ambiguousResendAllowanceFor(
   provider: Pick<OcxProviderConfig, "retryOnReset">,
-  inboundBody: unknown,
+  requestIsSelfContained: () => boolean,
   claim: (limit: number) => boolean,
 ): AmbiguousResendAllowance | undefined {
   const policy = resetReplayPolicyFor(provider);
   if (policy === null) return undefined;
   return {
-    selfContained: selfContainedResponsesBody(inboundBody),
+    get selfContained(): boolean { return requestIsSelfContained(); },
     claim: () => claim(policy.replacements),
   };
 }
