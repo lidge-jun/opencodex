@@ -210,7 +210,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
       if (authUrl && !deviceCode && shouldOpenBrowserForLogin(body.openBrowser, config)) {
         const { openUrl } = await import("../../lib/open-url");
-        openUrl(authUrl);
+        void openUrl(authUrl);
       }
       return jsonResponse({ url: authUrl, instructions, deviceCode });
     } catch (err) {

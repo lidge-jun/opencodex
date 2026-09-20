@@ -47,6 +47,14 @@ The keyed path never enters `handleResponses`, so `src/server/images.ts` repeats
 `selectProactiveApiKeyTransport` inside the keyed branch and rebuilds Authorization from the
 returned clone rather than the earlier snapshot.
 
+A configured key's model and provider scope applies to whichever destination the request settles
+on: the ChatGPT forward account, the keyed provider, the xAI Imagine bridge, or the Antigravity
+fallback. It is evaluated against that destination rather than the selector in the body, because
+the bridge and the fallback choose their own model, and a body that names no model cannot satisfy
+a model list. A refusal is the same 403 the scope returns on the routed path, and a key with no
+scope reaches every destination as before. Coverage lives in
+`tests/server/api-key-scope-images.test.ts`.
+
 The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
 Responses tool surface. A complete `image_gen` namespace is lowered to safe
 `image_gen__<inner-name>` function aliases even when no hosted image tool is present, because public

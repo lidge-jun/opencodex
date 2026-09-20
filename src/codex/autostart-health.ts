@@ -154,6 +154,34 @@ export function startupHealthSummary(health: StartupHealth): string {
   return action ? `${summary}; ${action}` : summary;
 }
 
+/**
+ * What to say at the end of setup, once routing is on disk and the autostart choice is made.
+ *
+ * #5261: applying the Codex integration does not install a background service, and on Windows
+ * the scheduled task that a separate install would create is logon-triggered rather than
+ * boot-triggered. So "routing written, nothing listening" is an ordinary state after a restart
+ * rather than a corruption — and the user is never told, because setup ends on a success line.
+ *
+ * A boot trigger is not the missing piece and would be a false reassurance. The task runs as
+ * the interactive user, so before logon there is no session for it to run in; making it truly
+ * pre-logon means a different principal and a different service backend, not another trigger.
+ * What is actually missing is that nobody says the dependency exists, which is cheap to fix and
+ * true on every platform.
+ *
+ * Reuses the existing health model rather than re-deriving the condition, so this cannot drift
+ * from what `ocx status` and `ocx doctor` report about the same install.
+ */
+export function injectedRoutingRestartWarningLines(health: StartupHealth): string[] {
+  if (health.status !== "at-risk") return [];
+  return [
+    // Deliberately not "nothing will restart the proxy": a healthy launcher shim does restart it,
+    // for CLI launches only, and is still at-risk. The summary line below says which case this is.
+    "⚠️  Codex routing is written to disk and survives a restart; keeping the proxy running is a separate matter.",
+    `   ${startupHealthSummary(health)}`,
+    "   While the proxy is down Codex cannot sign in or reach a model. 'ocx restore' undoes the routing without needing it.",
+  ];
+}
+
 function classifyStartupHealthSummary(health: StartupHealth): string {
   if (health.status === "native") return health.routingKind === "custom-remote"
     ? "custom remote Codex routing (no local restart dependency)"

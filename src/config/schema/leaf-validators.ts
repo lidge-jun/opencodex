@@ -17,6 +17,7 @@ import { isCodexAccountPriorityKey } from "../../codex/account-priority";
 import { parseAccountPriority } from "../../codex/pool-rotation";
 import { credentialGroupIssues } from "../../routing/identity-domains";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerEgressConfigError } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -222,6 +223,25 @@ const modelCapabilitiesSchema = z.unknown().superRefine((value, ctx) => {
 }).transform(value => mergeModelCapabilities(undefined, value));
 
 /**
+ * Per-provider egress fields, validated by the resolver the transports themselves use.
+ *
+ * Calling `providerEgressConfigError` rather than restating the accepted forms keeps one
+ * definition of a usable value: a proxy the config loader admits is one the transport can
+ * carry, and a value rejected here is rejected at request time for the identical reason.
+ * Each field is checked on its own because neither depends on the other's value to be
+ * well-formed; how they combine is decided per request against the destination.
+ */
+const providerProxySchema = z.unknown().superRefine((value, ctx) => {
+  const error = providerEgressConfigError({ proxy: value as string | null | undefined });
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as string | null | undefined);
+
+const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
+  const error = providerEgressConfigError({ noProxy: value as string | string[] | undefined });
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as string | string[] | undefined);
+
+/**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
  */
@@ -258,6 +278,7 @@ export const providerConfigSchema = z.object({
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
   requiresPairedResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
+  foldDeveloperRoleToSystem: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
@@ -268,6 +289,10 @@ export const providerConfigSchema = z.object({
   decodesNativeCompactionBlobs: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  // Per-provider egress (#2894): absent inherits the global proxy decision, "direct"/null
+  // refuses it, and an http(s) or socks5 URL replaces it for this provider only.
+  proxy: providerProxySchema.optional(),
+  noProxy: providerNoProxySchema.optional(),
   // The management API accepts `null` as "clear this", so a config written before the POST
   // canonicalization below can hold one on disk. Rejecting it here would send the operator
   // through invalid-config recovery for a value the API told them was fine.

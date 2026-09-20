@@ -92,9 +92,30 @@ function userContentToBlocks(content: unknown): Rec[] {
       continue;
     }
     const videoUrl = videoUrlFromPart(raw);
-    if (videoUrl) blocks.push({ type: "input_video", video_url: videoUrl });
+    if (videoUrl) {
+      blocks.push({ type: "input_video", video_url: videoUrl });
+      continue;
+    }
+    const file = fileFromPart(raw);
+    if (file) blocks.push(file);
   }
   return blocks;
+}
+
+/**
+ * A Chat Completions `file` part carrying inline bytes, as the Responses `input_file` block.
+ *
+ * Nothing here recognized the shape, so the part reached the end of the loop with no branch and
+ * was dropped in silence (#5212). A part with no inline bytes is still not translatable and is
+ * left to the untranslated-media refusal, which runs before this loop.
+ */
+function fileFromPart(part: Rec): Rec | null {
+  if (part.type !== "file" && part.type !== "input_file") return null;
+  const file = isRec(part.file) ? part.file : part;
+  const fileData = file.file_data;
+  if (typeof fileData !== "string" || fileData.length === 0) return null;
+  const filename = typeof file.filename === "string" && file.filename.length > 0 ? file.filename : undefined;
+  return { type: "input_file", file_data: fileData, ...(filename ? { filename } : {}) };
 }
 
 /**
@@ -218,9 +239,65 @@ function toolChoiceToResponses(choice: unknown, body: Rec): void {
     body.tool_choice = { type: "function", name };
     return;
   }
+  if (choice.type === "allowed_tools") {
+    body.tool_choice = allowedToolsChoiceToResponses(choice);
+    return;
+  }
   if (isRec(choice.function) && typeof choice.function.name === "string") {
     body.tool_choice = { type: "function", name: choice.function.name };
   }
+}
+
+/**
+ * Chat Completions nests the subset under `allowed_tools`, Responses carries `mode`/`tools`
+ * on the choice itself, and each entry names its tool under a member keyed by its own type
+ * (`{"type":"function","function":{"name"}}`) rather than a flat `name`. Neither level lines up
+ * with `mapToolChoice`, so an unflattened choice fell past every branch and the caller's subset
+ * was dropped while the full catalogue was still advertised (#5211).
+ *
+ * An entry nobody can name is refused rather than skipped: dropping one widens the very subset
+ * the caller sent this field to narrow.
+ */
+function allowedToolsChoiceToResponses(choice: Rec): Rec {
+  const spec = isRec(choice.allowed_tools) ? choice.allowed_tools : choice;
+  if (!Array.isArray(spec.tools) || spec.tools.length === 0) {
+    throw new ChatCompletionsRequestError("tool_choice.allowed_tools requires a non-empty tools array");
+  }
+  return {
+    type: "allowed_tools",
+    mode: spec.mode === "required" ? "required" : "auto",
+    tools: spec.tools.map(allowedToolEntryToResponses),
+  };
+}
+
+/** Hosted entries are named by their type alone; a function or custom entry must carry a name. */
+const HOSTED_ALLOWED_TOOL_TYPES = new Set([
+  "web_search",
+  "web_search_preview",
+  "image_generation",
+  "image_gen",
+  "tool_search",
+]);
+const NAMED_ALLOWED_TOOL_TYPES = new Set(["function", "custom"]);
+
+function allowedToolEntryToResponses(raw: unknown): Rec {
+  if (!isRec(raw)) {
+    throw new ChatCompletionsRequestError("tool_choice.allowed_tools.tools entries must be objects");
+  }
+  const type = typeof raw.type === "string" && raw.type.length > 0 ? raw.type : "function";
+  if (!NAMED_ALLOWED_TOOL_TYPES.has(type) && !HOSTED_ALLOWED_TOOL_TYPES.has(type)) {
+    // An unknown selector kind is not a narrower subset, it is a subset nobody can evaluate.
+    throw new ChatCompletionsRequestError(`unsupported tool_choice.allowed_tools.tools entry type: ${type}`);
+  }
+  const nested = isRec(raw[type]) ? raw[type] as Rec : undefined;
+  const name = typeof raw.name === "string" && raw.name.length > 0
+    ? raw.name
+    : nested !== undefined && typeof nested.name === "string" && nested.name.length > 0
+      ? nested.name
+      : undefined;
+  if (name !== undefined) return { type, name };
+  if (HOSTED_ALLOWED_TOOL_TYPES.has(type)) return { type };
+  throw new ChatCompletionsRequestError("tool_choice.allowed_tools.tools entries require a name");
 }
 
 function responseFormatToText(format: unknown): Rec | undefined {

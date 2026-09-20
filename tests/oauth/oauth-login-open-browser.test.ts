@@ -33,7 +33,7 @@ async function startLogin(flow: { url: string; instructions?: string; deviceCode
   const openUrlMod = await import("../../src/lib/open-url");
   const opened: string[] = [];
   const startSpy = spyOn(oauth, "startLoginFlow").mockResolvedValue(flow);
-  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation((url: string) => { opened.push(url); });
+  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async (url: string) => { opened.push(url); return { status: "started" as const }; });
   try {
     const req = loginRequest("kimi");
     const response = await handleOauthAccountRoutes({

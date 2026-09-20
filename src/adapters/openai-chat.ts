@@ -1,4 +1,5 @@
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
+import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import { modelInList } from "../types";
@@ -249,19 +250,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
 
         if (tools) {
-          if (provider.parallelToolCalls === false) {
-            // NIM documents the Boolean defaulting to false and kimi rejects true; pin the
-            // wire bit so Codex cannot opt in via request.options. Other opted-out providers
-            // omit the field by default so strict OpenAI-compatible hosts never see an
-            // unsupported knob, but a self-hosted gateway that DOES honor the field and keeps
-            // emitting parallel calls without it can opt in via pinParallelToolCallsFalse.
-            if (provider.baseUrl === "https://integrate.api.nvidia.com/v1"
-                || provider.pinParallelToolCallsFalse === true) {
-              body.parallel_tool_calls = false;
-            }
-          } else if (provider.parallelToolCalls === true) {
-            body.parallel_tool_calls = parsed.options.parallelToolCalls !== false;
-          }
+          const parallelToolCalls = chatParallelToolCallsWireValue(provider, parsed.options.parallelToolCalls);
+          if (parallelToolCalls !== undefined) body.parallel_tool_calls = parallelToolCalls;
         }
         if (parsed.stream) body.stream_options = { include_usage: true };
 

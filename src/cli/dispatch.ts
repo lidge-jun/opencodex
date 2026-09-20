@@ -615,7 +615,11 @@ const commandRunners: Record<string, CommandRunner> = {
         const guiUrl = selectDefaultGuiUrl(config, live, deps.probeHostname);
         console.log(`Opening ${guiUrl}`);
         const { openUrl } = await import("../lib/open-url");
-        openUrl(guiUrl);
+        // Awaited so a launcher that never opened anything is said out loud (#5261). Still exit
+        // 0: the proxy is serving and the URL above is reachable, only the launch did not happen.
+        if ((await openUrl(guiUrl)).status === "failed") {
+          console.error("⚠️  No browser could be opened here; open the URL above yourself.");
+        }
         return 0;
       },
     });

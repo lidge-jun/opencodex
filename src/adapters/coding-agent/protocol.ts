@@ -332,7 +332,7 @@ function formatMessageForHistory(message: OcxMessage): string {
   if (message.role === "user") {
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(p => (p.type === "text" ? p.text : `[${p.type}]`)).join("\n");
+      : message.content.map(p => (p.type === "text" || p.type === "document" ? p.text : `[${p.type}]`)).join("\n");
     return `USER:\n${text}`;
   }
   if (message.role === "assistant") {
@@ -352,7 +352,7 @@ function formatMessageForHistory(message: OcxMessage): string {
   if (message.role === "toolResult") {
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(p => (p.type === "text" ? p.text : "[image]")).join("");
+      : message.content.map(p => (p.type === "text" || p.type === "document" ? p.text : "[image]")).join("");
     const status = message.isError ? " (error)" : "";
     return `TOOL RESULT (call_id: ${message.toolCallId})${status}:\n${text}`;
   }
@@ -379,6 +379,8 @@ export function buildInputLines(message: OcxMessage): string[] {
         else if (part.type === "image") {
           const image = imagePart(part.imageUrl);
           if (image) content.push(image);
+        } else if (part.type === "document") {
+          content.push(textPart(part.text));
         } else {
           content.push(textPart("[video]"));
         }
@@ -402,7 +404,7 @@ export function buildSystemPrompt(parsed: OcxParsedRequest): string | undefined 
     if (message.role !== "developer") continue;
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(part => (part.type === "text" ? part.text : "")).join("");
+      : message.content.map(part => (part.type === "text" || part.type === "document" ? part.text : "")).join("");
     if (text.trim()) parts.push(text);
   }
   return parts.length > 0 ? parts.join("\n\n") : undefined;
@@ -464,6 +466,8 @@ export function buildConversationInput(parsed: OcxParsedRequest, options: { maxH
           const image = imagePart(part.imageUrl);
           if (image) currentImageBlocks.push(image);
           else textParts.push("[image omitted: unsupported reference]");
+        } else if (part.type === "document") {
+          textParts.push(part.text);
         } else {
           textParts.push("[video]");
         }
@@ -487,6 +491,7 @@ export function buildConversationInput(parsed: OcxParsedRequest, options: { maxH
           else segments.push("[image omitted: unsupported reference]");
           continue;
         }
+        if (part.type === "document") { segments.push(part.text); continue; }
         segments.push("[video]");
       }
       text = segments.join("");

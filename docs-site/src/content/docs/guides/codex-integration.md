@@ -35,9 +35,9 @@ Codex's built-in `openai` provider id and points that provider at opencodex:
 ```toml
 # root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"
 
 # only when fastMode is set; unset adds no [features] table
@@ -299,7 +299,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # appended at the end of the file
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -719,6 +719,22 @@ Check the failure boundary before changing provider settings:
 See [The parser and bridge](/reference/architecture/#the-parser) for the explicit wire mapping.
 There is no provider-level setting that can add a missing `tool_search` declaration; ordinary
 code-mode discovery remains a separate path.
+
+### Cache-read diagnostics
+
+Set `OPENCODEX_CACHE_DEBUG=1` before starting the proxy to write one diagnostic record per
+finalized request to `<config-dir>/cache-debug.jsonl`. The switch is off by default; set it to `0`
+or remove it to disable capture. The file is owner-only (`0600`) in the hardened config directory
+and rolls after 200 lines, retaining the newest 100.
+
+Each JSONL record contains the protocol, routed provider/model, cache-counter presence and
+provenance, process-local equality tags for the account, prompt-cache key, and allowlisted session
+headers, plus ordered fingerprints for instructions, tools, and message/input blocks. Prefix
+sections retain at most 128 tags and identify only the first divergent section/index. The
+diagnostic never stores prompt or message text, tool names, raw headers, raw cache/session/account
+identifiers, or a durable tag derived from them. Its random HMAC key is created at process start,
+separate from other debug keys, and is never persisted; tags therefore compare values only within
+one proxy process.
 
 ### Catalog troubleshooting
 

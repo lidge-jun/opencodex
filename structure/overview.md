@@ -136,6 +136,13 @@ still cover the rule, which is a judgement only review makes.
   there, reported as an unidentified holder otherwise. A configured `port: 0` still asks the OS for a
   port, and an explicit `--port` still waits for its pin instead of hopping.
   Enforced by `tests/cli/cli-dispatch.test.ts`.
+- **INV-RESEND-01** — One vocabulary in `src/lib/request-failure-model.ts` states how far a failed
+  request got, why it failed, and whether it may be sent again. Once the caller has observed output
+  or an externally visible effect, no cause automatically permits a resend, and a cause whose
+  upstream execution state is unknown is not made replayable by having budget left. A refusal names
+  which of the three refusals it is. The decision is derived from per-stage and per-cause facts
+  rather than written out as a stage-by-cause matrix, so a new member cannot leave a stale cell.
+  Enforced by `tests/lib/failure-stage-model.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

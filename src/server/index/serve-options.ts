@@ -49,8 +49,8 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
-  resolveCodexModelEntitlements,
 } from "../../codex/model-entitlements";
+import { resolveAdmittedCodexModelEntitlements } from "../../codex/model-entitlement-admission";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import {
   registerCodexWebSocket,
@@ -820,7 +820,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).
-            resolveCodexModelEntitlements(config, { clientVersion: url.searchParams.get("client_version") }),
+            // The request signal fences the credential phase too: a client that has already
+            // gone away must not keep a native-main token refresh alive, and its late result
+            // must not commit on behalf of a request that no longer exists.
+            resolveAdmittedCodexModelEntitlements(config, {
+              clientVersion: url.searchParams.get("client_version"),
+              signal: req.signal,
+            }),
           ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {
@@ -1264,7 +1270,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease);
+          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
         }, { requestId, start, logCtx });
@@ -1552,7 +1558,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = audioClient
             ? await handleExternalLive(req, config, logCtx, { client: audioClient, lease: turnAdmissionLease, bindings: liveCallBindings })
-            : await handleLive(req, config, logCtx, turnAdmissionLease);
+            : await handleLive(req, config, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(
             requestId,
             start,
@@ -1627,7 +1633,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             : liveSidebandTarget && audioClient
               ? await resolveExternalLiveSocket(audioClient, config, logCtx, liveSidebandTarget, { lease: turnAdmissionLease, bindings: liveCallBindings, signal: acquisition?.signal })
               : liveSidebandTarget
-                ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease)
+                ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease, admission)
                 : formatErrorResponse(401, "authentication_error", "opencodex API key required");
         } catch (error) {
           try { releaseAcquisition(); }

@@ -4,6 +4,7 @@ import {
   UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE,
   UPSTREAM_NO_RESPONSE_CODE,
 } from "../../lib/upstream-retry";
+import type { RequestFailureCause, RequestFailureStage } from "../../lib/request-failure-model";
 import { readFileSync } from "node:fs";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
@@ -208,6 +209,37 @@ export function classifyCodexWsFailure(stage: CodexWsFailureStage): CodexWsFailu
   if (stage.relayedEvents > 0) return "after-response-started";
   if (stage.upstreamFrames === 0) return "no-upstream-frame";
   return "no-response-event";
+}
+
+/**
+ * The same four outcomes said in the shared stage-and-cause vocabulary (#4191).
+ *
+ * A projection, not a second classifier: {@link classifyCodexWsFailure} stays the one place that
+ * reads the counters, and this only restates its answer in the words the durable log, the metrics
+ * projection and the HTTP path already use. Without it the WebSocket transport is the one surface
+ * whose failures cannot be compared with anything else, which is the reported symptom -- every
+ * such failure reached the user as one of two bare sentences.
+ *
+ * It does not relax the transport's own rule. The no-replay-after-send contract in
+ * `codex-ws-exchange.ts` holds regardless of what this returns, and the stage below is
+ * deliberately not consulted as a fallback-eligibility signal; it reports where the exchange got
+ * to, and `resendPermission` happens to agree that everything past `before-send` is refused.
+ */
+export const CODEX_WS_FAILURE_PROJECTION = {
+  /** The create frame never left, so the origin provably never saw this turn. */
+  "before-send": { stage: "pre-header", cause: "transport-unsent" },
+  /** The frame left and the socket said nothing at all. The turn may be running upstream. */
+  "no-upstream-frame": { stage: "pre-header", cause: "transport-ambiguous" },
+  /** Control frames only: the peer is alive and answered, but no Responses event arrived. */
+  "no-response-event": { stage: "protocol-prelude", cause: "transport-ambiguous" },
+  /** Events already reached the caller, so a resend would duplicate output they have seen. */
+  "after-response-started": { stage: "semantic-output", cause: "transport-ambiguous" },
+} as const satisfies Record<CodexWsFailureCause, { stage: RequestFailureStage; cause: RequestFailureCause }>;
+
+export function projectCodexWsFailure(
+  stage: CodexWsFailureStage,
+): { stage: RequestFailureStage; cause: RequestFailureCause } {
+  return CODEX_WS_FAILURE_PROJECTION[classifyCodexWsFailure(stage)];
 }
 
 /**

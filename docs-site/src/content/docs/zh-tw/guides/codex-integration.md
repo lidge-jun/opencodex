@@ -19,7 +19,7 @@ bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marke
 ```toml
 # 根級鍵，必須位於第一個 table 之前
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # 僅在設定 fastMode 時寫入；未設定時不新增 [features] table
@@ -107,7 +107,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # 追加到檔案末尾
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"

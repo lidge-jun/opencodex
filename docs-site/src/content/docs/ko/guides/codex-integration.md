@@ -20,9 +20,9 @@ Pool 모드에서는 선택된 저장 계정이 쿨다운 중이고 사용 가�
 ```toml
 # root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"
 
 # fastMode를 설정했을 때만 들어갑니다. 설정하지 않으면 [features] 자체가 생기지 않습니다
@@ -169,7 +169,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # appended at the end of the file
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"

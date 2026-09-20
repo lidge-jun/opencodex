@@ -290,6 +290,13 @@ boundary. Histogram buckets are cumulative and end with `le="+Inf"`, equal to th
 | `opencodex_ttft_missing_total` | `protocol`, `result` | Complementary count for requests without observed TTFT. |
 | `opencodex_metrics_process_start_time_seconds` | none | Process-local reset boundary. |
 
+The `recovery` label takes one of a fixed set of classes: `transient`, `connection`, `credential`,
+`rate_limit`, `quota`, `policy`, `ciphertext`, `payload`, `empty_completion`, `effort_downgrade` and
+`other`. The set is closed, so no model, account, user or request identifier can ever appear in a
+series. `rate_limit`, `quota`, `policy` and `ciphertext` are separate because the operator response
+differs: wait out the limit, move to another account, change the prompt, or drop stale encrypted
+state. A rejected opaque reasoning blob counts as `ciphertext` rather than `payload`.
+
 If a scanned row exceeds the existing parser size limit, `GET /api/usage` and `GET /api/keys`
 keep the readable-row aggregates and add `usageIncomplete: true` with
 `usageIncompleteReason: "oversized_rows"` at response level. This diagnostic survives cached

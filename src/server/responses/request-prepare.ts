@@ -52,7 +52,7 @@ import { parseRequest } from "../../responses/parser";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
-import { requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
+import { observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
@@ -157,6 +157,14 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  observeCacheDiagnosticInbound(
+    logCtx,
+    body,
+    req.headers,
+    options.promptCacheKeyIsSharedCohort === true
+      ? "system-derived"
+      : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
+  );
   if (!options.comboAttempt && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
       endpoint: "responses",
@@ -300,6 +308,10 @@ export async function prepareResponsesRequest(
   try {
     parsed = parseRequest(body);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
+    // The body may have been rebuilt since the inbound observation (previous-response
+    // expansion); alias the parsed raw body to the same draft so the outbound
+    // observation at the adapter seam still finds it.
+    rebindCacheDiagnosticBody(parsed._rawBody, logCtx.cacheDiagnosticDraft);
     // Captured before any parser mutates it, so both grammars see the client's id.
     const { fastRow, effortRow } = parseSyntheticRowId(parsed.modelId, config);
     if (fastRow) {

@@ -245,7 +245,9 @@ export function parseRequest(
           case "system": {
             pendingReasoning.length = 0;
             const text = inputContentParts(msg.content);
-            const flat = typeof text === "string" ? text : text.map(p => (p.type === "text" ? p.text : "")).join("");
+            const flat = typeof text === "string"
+              ? text
+              : text.map(p => (p.type === "text" || p.type === "document" ? p.text : "")).join("");
             if (flat.length > 0) systemPrompt.push(flat);
             break;
           }

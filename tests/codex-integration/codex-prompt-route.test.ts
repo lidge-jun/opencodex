@@ -21,9 +21,13 @@ import {
 import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
-const MARKER = "# Auto-injected by opencodex";
+// Prompt layers deliberately keep the BARE ownership marker: 'ocx restore' is not their undo,
+// so the recovery hint that routing keys carry (#5261) does not belong here. Derived from the
+// constant rather than restated, so the two scopes cannot drift apart silently.
+const MARKER = OCX_SECTION_MARKER;
 const config = { port: 10100, defaultProvider: "openai", providers: {} } as OcxConfig;
 const roots: string[] = [];
 

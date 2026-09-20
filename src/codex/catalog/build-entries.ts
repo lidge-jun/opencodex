@@ -1,4 +1,4 @@
-import { CODEX_REASONING_LEVELS } from "../../reasoning-effort";
+import { CODEX_REASONING_LEVELS, type CodexReasoningLevel } from "../../reasoning-effort";
 import { clearModelCache } from "../model-cache";
 import { routedSlug, slugEquivalenceKey } from "../../providers/slug-codec";
 import { COMBO_NAMESPACE } from "../../combos";
@@ -872,7 +872,7 @@ export function mergeCatalogEntriesFromObservedState({
     // (luna: no ultra) stay intact.
     if (!freshCustomEntries.has(m) && !exactCombo && !reserveProjection && !String(e.slug ?? "").startsWith("opencode-go/")) {
       const levels = Array.isArray(e.supported_reasoning_levels)
-        ? e.supported_reasoning_levels as Array<{ effort?: string }>
+        ? e.supported_reasoning_levels as Array<Partial<CodexReasoningLevel>>
         : [];
       if (levels.length > 0
         && !suppressedSyntheticMaxSlugs.has(String(e.slug ?? ""))

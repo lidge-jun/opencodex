@@ -359,6 +359,11 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
                   }, transportRecovery),
+                  // Reselection can replace the provider transport and the wire shape, so the
+                  // egress route is bound to the provider this send actually uses. Omitting it
+                  // here would let a provider transport bypass its configured route entirely,
+                  // because that transport wins over the executor that carries the binding.
+                  { providerName: route.providerName, provider: activeProvider },
                 );
                 if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
                 return dispatched;

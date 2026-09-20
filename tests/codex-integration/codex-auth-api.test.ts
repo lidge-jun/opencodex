@@ -170,7 +170,7 @@ async function completeMockCodexOAuth(options: {
     done: true,
     loggedIn: true,
   } as ReturnType<typeof oauth.getLoginStatus>);
-  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
   // Mirrors the login-status poll delay in login-flow.ts; other timers are intentionally dropped.
   const CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
   const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
@@ -4593,7 +4593,7 @@ describe("codex-auth API", () => {
       instructions: "Enter code: ABCD-EFGH",
       deviceCode: "ABCD-EFGH",
     }));
-    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     try {
       const req = new Request("http://localhost/api/codex-auth/login", {
         method: "POST",
@@ -4699,7 +4699,7 @@ describe("codex-auth API", () => {
       controller.onAuth({ url: "https://example.test/oauth" });
       throw new Error("late failure at /home/alice/.opencodex/auth.json.ocx-tmp sk-secret-provider-key");
     };
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
       delay?: number,
@@ -4747,7 +4747,7 @@ describe("codex-auth API", () => {
     const { OAuthMutationBusyError } = await import("../../src/oauth/store");
     const openUrlMod = await import("../../src/lib/open-url");
     const originalLogin = oauth.OAUTH_PROVIDERS.chatgpt.login;
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
       delay?: number,
@@ -4834,7 +4834,7 @@ describe("codex-auth API", () => {
         done: false,
         loggedIn: false,
       } as ReturnType<typeof oauth.getLoginStatus>);
-      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
       const req = new Request("http://localhost/api/codex-auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5161,7 +5161,7 @@ describe("codex-auth API", () => {
       loggedIn: false,
       error: "test-stop",
     } as ReturnType<typeof oauth.getLoginStatus>);
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
 
     try {
       const req = new Request("http://localhost/api/codex-auth/login", {

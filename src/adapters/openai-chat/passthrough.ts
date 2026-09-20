@@ -9,6 +9,7 @@ import { debugProviderDiagnostic } from "../../lib/debug";
 import { isDebugEnabled } from "../../lib/debug-settings";
 import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
+import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
 
 const CHAT_PASSTHROUGH_FIELDS = [
   "audio",
@@ -108,12 +109,12 @@ export function buildOpenAIChatPassthroughRequest(
     body.prompt_cache_key = rawBody.prompt_cache_key;
   }
   if (Array.isArray(rawBody.tools) && rawBody.tools.length > 0) {
-    if (provider.parallelToolCalls === true) {
-      body.parallel_tool_calls = rawBody.parallel_tool_calls !== false;
-    } else if (provider.parallelToolCalls === false
-        && (provider.baseUrl === "https://integrate.api.nvidia.com/v1" || provider.pinParallelToolCallsFalse === true)) {
-      body.parallel_tool_calls = false;
-    }
+    // Same three provider states as the translated path, and the same defect in the unset one:
+    // a caller's explicit false was dropped here too (#5211). The native route reads the bit off
+    // the raw request rather than the parsed options, since nothing projects this body.
+    const requested = typeof rawBody.parallel_tool_calls === "boolean" ? rawBody.parallel_tool_calls : undefined;
+    const parallelToolCalls = chatParallelToolCallsWireValue(provider, requested);
+    if (parallelToolCalls !== undefined) body.parallel_tool_calls = parallelToolCalls;
   }
   if (stream) {
     const callerOptions = rawBody.stream_options !== null

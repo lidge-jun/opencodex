@@ -331,6 +331,9 @@ function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): st
   for (const part of content) {
     if (part.type === "text" && part.text) {
       out.push({ type: "text", text: part.text });
+    } else if (part.type === "document") {
+      // No Devin document field; the marker keeps the turn from disappearing entirely.
+      out.push({ type: "text", text: part.text });
     } else if (part.type === "image") {
       const m = part.imageUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (m) out.push({ type: "image", mimeType: m[1]!, base64Data: m[2]! });

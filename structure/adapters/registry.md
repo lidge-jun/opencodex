@@ -16,8 +16,9 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.
 
-The OpenCode Go [chronological instruction exception](../providers/chat-compat.md#opencode-go-chronological-instructions)
-uses the provider registry's destination identity inside the Chat adapter; it adds no adapter factory.
+[Chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
+is now uniform across destinations, so the Chat adapter no longer consults the provider registry's
+destination identity for it; it adds no adapter factory.
 
 `src/server/adapter-resolve.ts` may resolve a provider/model onto an adapter id, but it does not maintain a second adapter factory inventory. The selected persisted/configured adapter id remains an untrusted string until the registry lookup succeeds. Unknown ids fail with the existing `Unknown adapter: <id>` error instead of widening configuration types around a closed compile-time union.
 
@@ -196,8 +197,18 @@ variant; unrelated model families retain their existing suffix precedence.
 
 `src/responses/input-media.ts` inspects actual content blocks and typed tool-output arrays
 without parsing text or function arguments, copying attachment payloads, resolving file IDs,
-or fetching URLs. Audio, files/documents and file-ID-only images have no lossless normalized
-carrier. The scanner returns only an input-kind name, never client content.
+or fetching URLs. Audio and file-ID-only images have no lossless normalized carrier, and
+neither does a file or document reference that carries no bytes. The scanner returns only an
+input-kind name, never client content.
+
+A document that carries its own base64 bytes is the one exception, and only in user or
+developer message content: `src/responses/inline-document.ts` decodes it into the
+`OcxDocumentContent` part, which the Anthropic, OpenAI Chat and Gemini wires emit as a native
+document, file part and `inline_data` respectively. Every other position — tool output, system
+and assistant content — is still refused, because those converters reduce their content to text
+and exempting them would restore the silent drop the scanner exists to prevent. The scanner and
+the decoder share one predicate so a request cannot be exempted here and reduced to a marker
+there.
 
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
 wire selection. A translated `buildRequest` refuses these inputs through the existing 400

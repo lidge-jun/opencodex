@@ -29,6 +29,7 @@ import {
   upstreamHttpVersionConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { providerEgressConfigError } from "../lib/provider-egress";
 import { redactSecretString } from "../lib/redact";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
@@ -780,6 +781,13 @@ export function providerManagementConfigError(
   if (upstreamHttpVersionError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${upstreamHttpVersionError}`;
   }
+  // Per-provider egress shares one definition with the transports and the config loader, so a
+  // value the dashboard accepts is one a request can actually leave by. The message never
+  // echoes the value: a proxy URL routinely embeds `user:password@`.
+  const egressError = providerEgressConfigError(typed);
+  if (egressError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${egressError}`;
+  }
   const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
   if (modelCostsError) {
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
@@ -947,6 +955,13 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   decodesNativeCompactionBlobs: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
+  // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and
+  // the editor may not write it. `ocx config set` and the config file remain the way to set
+  // it, which is the same boundary `apiKey` sits behind and for the same reason.
+  proxy: "redacted",
+  // A bypass list names destinations, carries no credential, and is only meaningful next to a
+  // route the operator can already see.
+  noProxy: "editor",
   upstreamHttpVersion: "editor",
   upstreamWebsocket: "editor",
   directGeminiWireRenames: "editor",
@@ -1024,6 +1039,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   pinParallelToolCallsFalse: "editor",
   terminalContinuationGuard: "editor",
   openaiChatEofTolerance: "editor",
+  foldDeveloperRoleToSystem: "editor",
   promptCacheKey: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",

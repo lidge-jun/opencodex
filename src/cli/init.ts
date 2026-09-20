@@ -253,6 +253,14 @@ export async function runInit(): Promise<void> {
     }
 
     console.log(`\n🚀 Setup complete! Run 'ocx start' to start the proxy.`);
+    // Said after the autostart choice, because the choice is what decides whether it applies.
+    // Setup otherwise ends on a success line while leaving a restart dependency unmentioned.
+    try {
+      const { collectStartupHealth, injectedRoutingRestartWarningLines } = await import("../codex/autostart-health");
+      for (const line of injectedRoutingRestartWarningLines(collectStartupHealth(config))) console.log(line);
+    } catch {
+      // A diagnostic that cannot be computed must not fail a completed setup.
+    }
     for (const line of modelSelectionGuidance(providerName)) console.log(line);
   } catch (error) {
     if (error instanceof InitCancelledError) {

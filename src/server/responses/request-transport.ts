@@ -409,7 +409,16 @@ export async function prepareResponsesTransport(
           // Either way the send crosses the physical boundary, so the connection policy is
           // applied around whichever implementation was just selected (#4992).
           commitKeyAttemptSend();
-          const response = await sendWithConnectionPolicy(fetchImpl, destination, { ...dispatchInit, redirect: "manual" });
+          // The binding travels with the send, so a rebuilt request resolves its provider route
+          // against the destination it is actually going to rather than the one this dispatch
+          // started with. Account reselection can move the upstream host, which would otherwise
+          // apply a host-scoped decision to a different host.
+          const response = await sendWithConnectionPolicy(
+            fetchImpl,
+            destination,
+            { ...dispatchInit, redirect: "manual" },
+            { providerName: route.providerName, provider: route.provider },
+          );
           if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header

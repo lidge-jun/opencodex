@@ -37,6 +37,11 @@ export interface ScopedRoute {
 
 const normalize = (value: string): string => value.trim().toLowerCase();
 
+/** Does this scope admit this provider on its own terms? */
+function providerAllowedByScope(scope: AdmissionModelScope, providerName: string): boolean {
+  return scope.providers.length === 0 || scope.providers.includes(normalize(providerName));
+}
+
 function normalizedList(values: readonly string[] | undefined): readonly string[] {
   if (!Array.isArray(values)) return [];
   const seen = new Set<string>();
@@ -88,11 +93,10 @@ export function routeAllowedByScope(
   route: ScopedRoute,
 ): boolean {
   if (!scope) return true;
-  const provider = normalize(route.providerName);
   const model = normalize(route.modelId);
-  if (scope.providers.length > 0 && !scope.providers.includes(provider)) return false;
+  if (!providerAllowedByScope(scope, route.providerName)) return false;
   if (scope.models.length === 0) return true;
-  return scope.models.includes(model) || scope.models.includes(provider + "/" + model);
+  return scope.models.includes(model) || scope.models.includes(normalize(route.providerName) + "/" + model);
 }
 
 /**
@@ -118,6 +122,16 @@ export class AdmissionModelDeniedError extends Error {
 
 /** Stable wire type for a scope refusal. */
 export const MODEL_NOT_ALLOWED_FOR_KEY = "model_not_allowed_for_key";
+
+/**
+ * How a refusal names a destination whose model nobody stated.
+ *
+ * This is message vocabulary, never a model id. It is not compared against
+ * `allowedModels`, so an operator who copies it out of a refusal into a list
+ * cannot grant "whatever the upstream picks" — the one destination a model list
+ * is unable to describe.
+ */
+export const UNNAMED_DESTINATION_MODEL = "(unnamed)";
 
 /** The HTTP body a scope refusal returns. 403: authenticated, not permitted. */
 export function admissionModelDeniedBody(error: AdmissionModelDeniedError): {
@@ -163,4 +177,43 @@ export function assertRouteAllowedByScope(
   if (!routeAllowedByScope(scope, route)) {
     throw new AdmissionModelDeniedError(requestedModel, route);
   }
+}
+
+/**
+ * The refusal a non-routed data-plane surface returns, or undefined when the
+ * destination is permitted.
+ *
+ * The Responses path resolves a route inside a try/catch and throws from the
+ * point the destination becomes concrete. The endpoints beside it -- images,
+ * audio, voice and the search relay -- have no router and no such boundary:
+ * each picks its own upstream inline and returns a Response. This is the same
+ * predicate against the same kind of resolved destination, shaped for that
+ * control flow, so a key that may not reach a provider is refused identically
+ * whichever surface it asked through.
+ *
+ * `destination.modelId` is undefined when nobody named the model this request
+ * will run: the relay copies the body and the upstream picks, or a voice join
+ * attaches to a call this process never recorded. A key with a model list is
+ * then refused, because no entry in that list can describe the destination; a
+ * key scoped only by provider is judged on the provider alone.
+ */
+export function admissionScopeDenial(
+  config: Pick<OcxConfig, "apiKeys">,
+  admission: DataPlaneAdmission | undefined,
+  requestedModel: string | undefined,
+  destination: { readonly providerName: string; readonly modelId: string | undefined },
+): Response | undefined {
+  const scope = resolveAdmissionModelScope(config, admission);
+  if (!scope) return undefined;
+  const allowed = destination.modelId === undefined
+    ? providerAllowedByScope(scope, destination.providerName) && scope.models.length === 0
+    : routeAllowedByScope(scope, { providerName: destination.providerName, modelId: destination.modelId });
+  if (allowed) return undefined;
+  return admissionModelDeniedResponse(new AdmissionModelDeniedError(
+    requestedModel ?? UNNAMED_DESTINATION_MODEL,
+    {
+      providerName: destination.providerName,
+      modelId: destination.modelId ?? UNNAMED_DESTINATION_MODEL,
+    },
+  ));
 }
