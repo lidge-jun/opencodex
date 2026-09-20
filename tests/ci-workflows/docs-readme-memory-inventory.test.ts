@@ -25,6 +25,11 @@
  *
  * The numbers moved while this guard was written, so the diff that adds it also corrects the
  * documents; the test would otherwise land red.
+ *
+ * One locale needed a word changed and not only a digit: Russian agrees its numeral with the
+ * noun, and `регистрации` was the right genitive for the 24 the page used to claim while
+ * `регистраций` is the right one for 28. The anchor here follows the corrected wording, so a
+ * page that reverts to the stale number has to revert the inflection too, and this fails.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -85,7 +90,7 @@ const PAGES = [
     path: "readme/README.ru.md",
     retained: /(\d+) удерживаемых хранилищ/,
     observed: /(\d+) наблюдаемых буфера/,
-    stateStores: /(\d+) регистрации state-store/,
+    stateStores: /(\d+) регистраций state-store/,
     totalSentence: "удерживаемое процессом",
   },
   {
