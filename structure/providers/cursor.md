@@ -108,10 +108,18 @@ does not expose authoritative cache_read_tokens.
 
 ## External tool continuations
 
-`src/adapters/cursor/protobuf-request.ts` repeats the latest nonblank user request in the active
-external-model tool continuation so root pruning cannot replace its scope with an older goal.
-Grok 4.6 code-mode continuations treat completed `text()`/`notify()` output as observations and
-instruct the model to produce the requested answer without re-emitting intermediate output.
+`src/adapters/cursor/protobuf-request.ts` repeats the latest actual user request in the active
+external-model tool continuation. Canonical compaction summaries, opaque-compaction notes and
+standalone ambient-browser wrappers stay in history without being promoted to that request.
+Blank or image-only user input stops the search instead of reviving an older goal.
+Grok 4.6 code-mode continuations distinguish emitted observations from an empty completed cell:
+the latter is not proof of failure and never authorizes replay of a completed side effect.
+Copyable shell examples emit results through `text()`. Missing output is recovered with a
+read-only state check; existing observations inform the next action or requested final answer.
+Repetition maxima reset at user/developer boundaries, including a fresh active user action.
+Counts produce conditional advice, not a failure verdict: requested polling remains valid.
+`tests/providers/cursor/cursor-continuation-invariants.test.ts` covers scope preservation through
+repeated summaries, result-normalization idempotence, and executable code-mode examples.
 On an envelope-echo corrective retry, tool evidence uses the user wire role with an explicit
 system instruction to treat it as data; truncation and argument restoration preserve that role.
 These are adapter guidance and replay repairs, not a guarantee of identical provider answers.
