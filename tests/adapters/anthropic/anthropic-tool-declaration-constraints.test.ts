@@ -100,13 +100,15 @@ describe("wires without an allowed_callers counterpart refuse rather than widen"
     expect(sent.tools[0]!.allowed_callers).toEqual(["code_execution_20260120"]);
   });
 
-  test('the unrestricted ["direct"] default is not treated as a restriction', () => {
+  test('the unrestricted ["direct"] default is not treated as a restriction', async () => {
     const adapter = createRegisteredAdapter({
       adapter: "openai-chat",
       baseUrl: "https://gateway.example.internal/v1",
       apiKey: "k",
     } as unknown as OcxProviderConfig);
-    const built = JSON.parse((adapter.buildRequest(parsedFromClaude(unrestricted), incoming) as { body: string }).body) as {
+    // Registered adapters may wrap buildRequest in a promise; await rather than assume a shape.
+    const { body } = await adapter.buildRequest(parsedFromClaude(unrestricted), incoming);
+    const built = JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as {
       tools: Array<{ function: { name: string } }>;
     };
     expect(built.tools.map(tool => tool.function.name)).toEqual(["tool_a"]);
