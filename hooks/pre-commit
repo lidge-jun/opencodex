@@ -1,0 +1,10 @@
+#!/bin/sh
+# 2.6s for the whole thing, which is the only reason a hook like this survives:
+# typecheck, the structural gates, and the red tests that prove each voice
+# guard would be noticed if it were deleted.
+#
+# Not the full suite — that is 24,000 tests and about four minutes. Run
+# `bun run test:changed` before pushing, and read it without a pipe.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+bun run check
