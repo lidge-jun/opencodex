@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../../src/clients/config-export";
@@ -93,6 +95,14 @@ function installOmp(): string {
   return configPath;
 }
 
+function installOmo(): string {
+  const spec = INTEGRATION_CLIENTS.omo;
+  mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
+  const configPath = spec.configPath(TEST_ENV, home);
+  mkdirSync(dirname(configPath), { recursive: true });
+  return configPath;
+}
+
 function installDsh(): string {
   const spec = INTEGRATION_CLIENTS.dsh;
   mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
@@ -149,6 +159,44 @@ function reverseJsonObjectKeys(value: unknown): unknown {
 }
 
 describe("apply", () => {
+  test.skipIf(process.platform === "win32")("refuses an omo catalog symlink without changing its target", () => {
+    const configPath = installOmo();
+    const victim = join(dirname(home), "victim.json");
+    const original = '{"security":{"mode":"strict"}}\n';
+    writeFileSync(victim, original);
+    symlinkSync(victim, configPath);
+
+    expect(readIntegrationState(input({ clientId: "omo" })).state).toBe("unsafe");
+    const result = applyIntegration(input({ clientId: "omo" }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(victim, "utf8")).toBe(original);
+    expect(store.listOperations("omo")).toHaveLength(0);
+  });
+
+  test.skipIf(process.platform === "win32")("an omo symlink swap before commit cannot replace its target", () => {
+    const configPath = installOmo();
+    const checked = '{"notes":"client-owned"}\n';
+    writeFileSync(configPath, checked);
+    const victim = join(dirname(home), "victim.json");
+    const original = '{"security":{"mode":"strict"}}\n';
+    writeFileSync(victim, original);
+    const captureSnapshot = store.captureSnapshot.bind(store);
+    store.captureSnapshot = (clientId, opId, before) => {
+      const snapshot = captureSnapshot(clientId, opId, before);
+      unlinkSync(configPath);
+      symlinkSync(victim, configPath);
+      return snapshot;
+    };
+
+    const result = applyIntegration(input({ clientId: "omo" }));
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(victim, "utf8")).toBe(original);
+    expect(store.readRecords().omo).toBeUndefined();
+  });
+
   test("refuses Kimi TOML date rewrites without changing the file or ownership store", () => {
     const spec = INTEGRATION_CLIENTS.kimi;
     mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });

@@ -20,6 +20,7 @@ export {
   AtomicWriteSecretResidualError,
   atomicWriteFile,
   atomicWriteFileAsync,
+  atomicWriteFileNoFollow,
   renameAtomicFile,
   resolveWriteTarget,
   type AtomicRenameIO,
