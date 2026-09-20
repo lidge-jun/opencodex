@@ -26,6 +26,21 @@ bun run prepare-widget
 bunx tauri build
 ```
 
+## Building locally without signing keys
+
+`bunx tauri build` always produces the updater archive and then refuses to finish without
+`TAURI_SIGNING_PRIVATE_KEY`, so a local build ends on `A public key has been found, but no private
+key` **after** writing `OpenCodex.app` and the dmg. That exit code is right for a release and
+misleading on a workstation.
+
+```sh
+bun run build:local
+```
+
+This asks for the app and dmg only, so no updater archive is produced and none is expected to be
+signed. It prints the bundle path and exits zero. The release path below is unchanged: a published
+updater artifact still has to be signed.
+
 ## Release packaging and updates
 
 The release workflow builds a macOS DMG, Windows MSI, Linux AppImage, and Debian package.

@@ -579,6 +579,7 @@
     "codex-shim-readiness.test.ts": "codex-integration",
     "codex-shim.test.ts": "codex-integration",
     "codex-signin-lockout.test.ts": "codex-integration",
+    "server-gui-bundle-freshness.test.ts": "server",
     "codex-spark-visibility.test.ts": "codex-integration",
     "codex-sqlite-home.test.ts": "codex-integration",
     "codex-sync-api.test.ts": "codex-integration",

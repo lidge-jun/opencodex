@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:local": "bun scripts/build-local.ts",
     "prepare-sidecar": "bun scripts/prepare-sidecar.ts",
     "prepare-widget": "bash scripts/build-widget.sh"
   },

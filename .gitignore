@@ -77,3 +77,8 @@ desktop/src-tauri/resources/
 desktop/src-tauri/widget/
 desktop/src-tauri/gen/
 desktop/src-tauri/target/
+# Running `bun install` inside desktop/ writes a second lockfile that shadows the root one for
+# any command run from that directory. CI installs the desktop workspace with --frozen-lockfile
+# on an older Bun, so a shadowing lockfile written by a newer Bun fails the job with "Unknown
+# lockfile version" before anything is built. The root lockfile is the only one this repo keeps.
+desktop/bun.lock
