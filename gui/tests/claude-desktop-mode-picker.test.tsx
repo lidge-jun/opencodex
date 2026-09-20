@@ -203,6 +203,34 @@ test("activeProfile=false only demotes the status bar in gateway mode", async ()
   expect(container.querySelector(".claude-status-bar")!.className).toContain("not-applied");
 });
 
+test("no radio is checked and the picker is disabled until /status answers", async () => {
+  // A gateway install must never see the first-party default flash while /status is in flight.
+  let releaseStatus: () => void = () => {};
+  const gate = new Promise<void>(resolve => { releaseStatus = resolve; });
+  const gatewayStatus = statusPayload({ mode: "gateway", activeProfile: true, firstParty: undefined });
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      if (path.includes("/status")) await gate;
+      const body = path.includes("/status") ? gatewayStatus : profilePayload();
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response;
+    },
+  });
+  await mount();
+  expect(radio("first-party").checked).toBe(false);
+  expect(radio("gateway").checked).toBe(false);
+  expect((container.querySelector(".claude-mode-picker") as HTMLFieldSetElement).disabled).toBe(true);
+  expect(container.querySelector(".claude-mode-current")).toBeNull();
+  expect(container.querySelector(".claude-mode-switch-note")).toBeNull();
+
+  releaseStatus();
+  await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+  expect(radio("gateway").checked).toBe(true);
+  expect(radio("first-party").checked).toBe(false);
+  expect((container.querySelector(".claude-mode-picker") as HTMLFieldSetElement).disabled).toBe(false);
+});
+
 test("an unknown mode in /status is rejected as malformed", async () => {
   installFetch(statusPayload({ mode: "proxy" }));
   await mount();

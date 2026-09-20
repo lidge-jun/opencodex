@@ -335,9 +335,12 @@ export default function ClaudeDesktop({
   const statusState = statusResource.state;
   const status = statusState.data ?? cachedStatus;
   const statusFailed = statusState.showError;
+  // Until /status answers, the effective mode is unknown: the picker renders unchecked and
+  // disabled instead of flashing the first-party default at a gateway install.
+  const modeKnown = status !== null;
   const effectiveMode: DesktopMode = status?.mode ?? "first-party";
   const selectedMode: DesktopMode = chosenMode ?? effectiveMode;
-  const modeDirty = selectedMode !== effectiveMode;
+  const modeDirty = modeKnown && selectedMode !== effectiveMode;
 
   const moveModel = (route: string, family: Family) => {
     if (!profile || profile.assignments[route]?.family === family) return;
@@ -479,21 +482,21 @@ export default function ClaudeDesktop({
         </div>
       </div>
 
-      <fieldset className="claude-mode-picker" disabled={pending !== null}>
+      <fieldset className="claude-mode-picker" disabled={pending !== null || !modeKnown}>
         <legend>{t("claudeDesktop.mode.legend")}</legend>
         {DESKTOP_MODES.map(mode => (
-          <label key={mode} className={`claude-mode-option${selectedMode === mode ? " active" : ""}`}>
+          <label key={mode} className={`claude-mode-option${modeKnown && selectedMode === mode ? " active" : ""}`}>
             <input
               type="radio"
               name="claude-desktop-mode"
               value={mode}
-              checked={selectedMode === mode}
+              checked={modeKnown && selectedMode === mode}
               onChange={() => setChosenMode(mode)}
             />
             <span className="claude-mode-title">
               {mode === "first-party" ? t("claudeDesktop.mode.firstParty") : t("claudeDesktop.mode.gateway")}
               {mode === "first-party" && <span className="claude-mode-default">{t("claudeDesktop.mode.defaultBadge")}</span>}
-              {effectiveMode === mode && status && <span className="claude-mode-current">{t("claudeDesktop.mode.current")}</span>}
+              {modeKnown && effectiveMode === mode && <span className="claude-mode-current">{t("claudeDesktop.mode.current")}</span>}
             </span>
             <span className="claude-mode-hint">
               {mode === "first-party" ? t("claudeDesktop.mode.firstPartyHint") : t("claudeDesktop.mode.gatewayHint")}
