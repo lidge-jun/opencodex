@@ -285,6 +285,7 @@ boundary. Histogram buckets are cumulative and end with `le="+Inf"`, equal to th
 | `opencodex_logical_requests_total` | `protocol`, `result` | One observation per finalized logical request. |
 | `opencodex_physical_sends_total` | `protocol` | Actual upstream sends summed from finalized attempts. |
 | `opencodex_recoveries_total` | `protocol`, `recovery` | Distinct recovery kinds observed per attempt, projected to a closed class. |
+| `opencodex_request_failures_total` | `protocol`, `cause` | Finalized requests that did not deliver an answer, by the cause the recorder derived. Counter only; no histogram carries a cause. |
 | `opencodex_request_duration_seconds` | `protocol`, `result` | Fixed-bucket duration histogram for finalized requests. |
 | `opencodex_ttft_seconds` | `protocol`, `result` | Fixed-bucket TTFT histogram for requests with observed first output. |
 | `opencodex_ttft_missing_total` | `protocol`, `result` | Complementary count for requests without observed TTFT. |

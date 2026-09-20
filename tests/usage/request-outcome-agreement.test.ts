@@ -191,7 +191,9 @@ describe("the dashboard recovery roster cannot drift from the durable one", () =
 
   test("the page derives the union rather than restating it", () => {
     const page = readFileSync(repoPath("gui", "src", "pages", "Logs.tsx"), "utf8");
-    expect(page).toContain("import type { AttemptRecoveryKind");
+    // Matched without depending on how the import is wrapped: the property is that the name
+    // arrives from the contract leaf, not that it sits first on a single line.
+    expect(/import type \{[^}]*\bAttemptRecoveryKind\b[^}]*\}\s*from\s*"[^"]*usage\/telemetry-contract"/s.test(page)).toBe(true);
     expect(page).not.toContain('type AttemptRecoveryKind =');
   });
 

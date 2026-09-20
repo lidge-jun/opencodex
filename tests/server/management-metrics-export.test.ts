@@ -21,6 +21,7 @@ import {
   REQUEST_DURATION_BUCKETS_SECONDS,
   REQUEST_METRICS_PROTOCOLS,
   REQUEST_METRICS_RECOVERY_CLASSES,
+  REQUEST_METRICS_FAILURE_CAUSES,
   REQUEST_METRICS_RESULTS,
   REQUEST_TTFT_BUCKETS_SECONDS,
 } from "../../src/server/request-metrics";
@@ -462,6 +463,7 @@ describe("request metrics aggregation", () => {
       cells
       + REQUEST_METRICS_PROTOCOLS.length
       + REQUEST_METRICS_PROTOCOLS.length * REQUEST_METRICS_RECOVERY_CLASSES.length
+      + REQUEST_METRICS_PROTOCOLS.length * REQUEST_METRICS_FAILURE_CAUSES.length
       + cells * perHistogram(REQUEST_DURATION_BUCKETS_SECONDS)
       + cells * perHistogram(REQUEST_TTFT_BUCKETS_SECONDS)
       + cells
@@ -480,10 +482,15 @@ describe("request metrics aggregation", () => {
       .toBeLessThan(output.indexOf("opencodex_request_duration_seconds_bucket"));
     const helpLines = output.split("\n").filter(line => line.startsWith("# HELP "));
     const typeLines = output.split("\n").filter(line => line.startsWith("# TYPE "));
-    expect(helpLines).toHaveLength(7);
-    expect(typeLines).toHaveLength(7);
-    expect(new Set(helpLines.map(line => line.split(" ")[2])).size).toBe(7);
-    expect(new Set(typeLines.map(line => line.split(" ")[2])).size).toBe(7);
+    // Every metric name the exporter emits, read from the exposition rather than counted by
+    // hand: the literal was correct until a metric was added, which is the same staleness the
+    // sample arithmetic above avoids.
+    const metricNames = new Set(helpLines.map(line => line.split(" ")[2]));
+    expect(helpLines).toHaveLength(metricNames.size);
+    expect(typeLines).toHaveLength(metricNames.size);
+    expect(new Set(typeLines.map(line => line.split(" ")[2]))).toEqual(metricNames);
+    // Each name appears exactly once in each group, which is what deterministic grouping means.
+    expect(helpLines.length).toBeGreaterThan(REQUEST_METRICS_PROTOCOLS.length);
     expect(sampleValue(output, 'opencodex_request_duration_seconds_bucket{protocol="responses",result="completed",le="+Inf"}'))
       .toBe(sampleValue(output, 'opencodex_request_duration_seconds_count{protocol="responses",result="completed"}'));
     expect(metrics.snapshot()).toBe(output);
