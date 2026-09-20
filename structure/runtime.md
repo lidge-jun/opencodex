@@ -515,3 +515,32 @@ Unicode pattern normalization uses [copy-on-write traversal](transports/byte-acc
 
 Codex compaction uses a request-local model override for the configured triggers; the
 [Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.
+
+## Background-service runtime ownership
+
+`src/service/state.ts` records who owns the running proxy in the shared service install
+state, beside the install provenance. The claim carries an `owner` (`cli` or `desktop`), an
+opaque `installId` naming the owning installation rather than the user or the machine, and a
+`consentGeneration`. An absent claim means the CLI install that registered the service owns
+the runtime, which is what every record written before the field existed says.
+
+Every write goes through `swapServiceInstallState`. It re-reads the anchor record
+immediately before committing and compares the committed bytes afterwards, and it runs the
+whole read-modify-write again when another writer landed inside that window; `revision` is
+the compare-and-swap token. It is a retry loop rather than a lock, so a writer outside this
+function is detected rather than excluded. `writeServiceInstallState` rebuilds only the
+install provenance and carries the ownership claim across unchanged, which is what keeps an
+install, a repair, an update or a stop from dropping it.
+
+`recordServiceOwner` is idempotent on the same owner and install id, so a relaunch leaves the
+generation alone and a grant moves it exactly once.
+`ownershipGrantedTo(ownership, owner, installId)` is the comparison an installation applies
+to its own locally stored install id: true means this installation already holds consent,
+false against a recorded claim means a different installation owns the runtime and consent
+has to be asked again, and a null claim means the CLI install still owns it.
+
+`src/service/repair.ts` stops before it asserts, writes, stops or starts anything when the
+recorded owner is not `cli`, and `src/update/runtime-ownership.mjs` vetoes both the
+pre-update stop and the post-update service refresh on the same condition for both updaters —
+`src/update/index.ts` and `bin/ocx.mjs`. The service registration is never deleted;
+`ocx service install` is the one verb that releases the marker and takes the runtime back.
