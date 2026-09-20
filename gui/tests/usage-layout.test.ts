@@ -50,6 +50,9 @@ test("the usage models table scrolls sideways with model and provider pinned", a
   expect(css).not.toMatch(/^\.usage-models-tbl/m);
   expect(css).toContain("left: calc(-1 * var(--space-3));");
   expect(css).toContain("left: calc(var(--usage-models-model-col) - var(--space-3));");
+  // `--hover` is a 3% overlay, so a pinned cell that takes it as its whole background turns
+  // nearly transparent and the scrolled columns read through it.
+  expect(css).toContain("background: linear-gradient(var(--hover), var(--hover)), var(--surface);");
   // The excluded-request caption is a line under the amount, not a wrap of the same line.
   expect(page).toContain("usage-cost-note");
   expect(css).toMatch(/\.usage-cost-note \{[^}]*display: block/);

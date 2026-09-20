@@ -379,10 +379,16 @@
   box-shadow: inset -1px 0 0 var(--border-soft);
 }
 
-/* A pinned cell has to stay opaque on hover, and `.tbl tbody tr:hover td` outranks the fill above. */
+/*
+  A pinned cell has to stay opaque on hover. Two separate reasons, and missing either one lets
+  the scrolled columns read straight through the pinned pair: `.tbl tbody tr:hover td` outranks
+  the opaque fill above on its own, and `--hover` is a 3% overlay rather than a colour, so
+  assigning it alone replaces the surface with something almost entirely transparent. Paint the
+  overlay as a layer over the surface instead of in place of it.
+*/
 .tbl.usage-models-tbl tbody tr:hover td:nth-child(1),
 .tbl.usage-models-tbl tbody tr:hover td:nth-child(2) {
-  background: var(--hover);
+  background: linear-gradient(var(--hover), var(--hover)), var(--surface);
 }
 
 /* The corner cells sit above both the scrolling body and the rest of the sticky header row. */
