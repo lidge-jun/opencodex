@@ -6,7 +6,7 @@ import {
   voiceProviderEndpointError,
 } from "../../src/config/voice-target";
 import { handleAudioSpeech } from "../../src/server/audio-speech";
-import { safeConfigDTO } from "../../src/server/auth-cors";
+import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -228,5 +228,48 @@ describe("management DTO", () => {
       port: 1, providers: {}, defaultProvider: "x",
     } as unknown as OcxConfig) as Record<string, unknown>;
     expect("speech" in dto).toBe(false);
+  });
+});
+
+describe("redacted field presence", () => {
+  test("a provider carrying route headers no longer reports none", () => {
+    // Through safeConfigDTO, not the helper: the first version of this asserted
+    // on `redactedFieldPresence` directly and stayed green with the DTO put
+    // back to its two hardcoded flags, which is the bug it exists to catch.
+    const dto = safeConfigDTO({
+      port: 1, defaultProvider: "handy",
+      providers: {
+        handy: {
+          adapter: "openai",
+          dictationHeaders: { authorization: "Bearer x" },
+          transcriptionHeaders: { authorization: "Bearer x" },
+        },
+      },
+    } as unknown as OcxConfig) as { providers: Record<string, Record<string, unknown>> };
+    const handy = dto.providers.handy!;
+    expect(handy.hasDictationHeaders).toBe(true);
+    expect(handy.hasTranscriptionHeaders).toBe(true);
+    expect(handy.hasSpeechHeaders).toBe(false);
+  });
+
+  test("every redacted field gets a flag", () => {
+    const flags = redactedFieldPresence({} as OcxProviderConfig);
+    for (const field of REDACTED_PROVIDER_FIELDS) {
+      expect(flags[`has${field[0]!.toUpperCase()}${field.slice(1)}`]).toBe(false);
+    }
+  });
+
+  test("an empty value is not presence", () => {
+    const flags = redactedFieldPresence({
+      apiKey: "", headers: {},
+    } as unknown as OcxProviderConfig);
+    expect(flags.hasApiKey).toBe(false);
+    expect(flags.hasHeaders).toBe(false);
+  });
+
+  test("the old flags keep their names", () => {
+    const flags = redactedFieldPresence({ apiKey: "k" } as OcxProviderConfig);
+    expect(flags.hasApiKey).toBe(true);
+    expect("hasHeaders" in flags).toBe(true);
   });
 });

@@ -1103,8 +1103,8 @@ const PROVIDER_EDITOR_DERIVED_FIELDS = [
   ...RUNTIME_PROVIDER_FIELDS,
   ...FORBIDDEN_PROVIDER_RUNTIME_FIELDS,
   "fetch",
-  "hasApiKey",
-  "hasHeaders",
+  // One `has*` per redacted field — see `redactedFieldPresence`.
+  ...REDACTED_PROVIDER_FIELDS.map(field => `has${field[0]!.toUpperCase()}${field.slice(1)}`),
   "xaiResponsesOptInState",
 ] as const;
 
@@ -1205,14 +1205,42 @@ export function parseProviderEditorConfigDTO(value: unknown): ProviderEditorConf
 }
 
 /** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
+/** Whether a redacted field is carrying anything, for the `has*` flags. */
+function carriesValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value !== "";
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as object).length > 0;
+  return true;
+}
+
+/**
+ * A `has*` flag for every redacted field, derived from the policy rather than
+ * listed by hand.
+ *
+ * Listed by hand, it drifted: `hasApiKey` and `hasHeaders` were the only two,
+ * so a provider carrying `dictationHeaders` and `transcriptionHeaders`
+ * reported `hasHeaders: false` — a GUI reading that DTO tells you a provider
+ * holding two bearer tokens has no credentials. `apiKeyPool`, `mcpServers`
+ * and `desktopExecutor` were invisible for the same reason. Derived, a new
+ * redacted field cannot be added without its flag.
+ */
+export function redactedFieldPresence(provider: OcxProviderConfig): Record<string, boolean> {
+  const flags: Record<string, boolean> = {};
+  for (const field of REDACTED_PROVIDER_FIELDS) {
+    flags[`has${field[0]!.toUpperCase()}${field.slice(1)}`] =
+      carriesValue(provider[field]);
+  }
+  return flags;
+}
+
 export function safeConfigDTO(config: OcxConfig): unknown {
   const editor = providerEditorConfigDTO(config);
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
     const dto: Record<string, unknown> = {
       ...editor.providers[name],
-      hasApiKey: !!provider.apiKey,
-      hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
+      ...redactedFieldPresence(provider),
     };
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
