@@ -14,7 +14,7 @@
 import { formatErrorResponse } from "../bridge";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { admissionScopeDenial, UNNAMED_DESTINATION_MODEL } from "../server/admission-model-scope";
+import { admissionScopeDenial } from "../server/admission-model-scope";
 import type { DataPlaneAdmission } from "../server/auth-cors";
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
 import { runAnthropicWebSearch } from "./anthropic-executor";
@@ -279,7 +279,7 @@ export async function handleAlphaSearchSidecarFallback(
   const denial = admissionScopeDenial(
     config,
     admission,
-    typeof requestedModel === "string" && requestedModel.trim() ? requestedModel : UNNAMED_DESTINATION_MODEL,
+    typeof requestedModel === "string" && requestedModel.trim() ? requestedModel : undefined,
     {
       providerName: resolved.backend === "exa" ? resolved.backend : resolved.providerName,
       modelId: settings.model,

@@ -34,7 +34,7 @@ import { getProviderRegistryEntry } from "../providers/registry";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { DataPlaneAdmission } from "./auth-cors";
-import { admissionScopeDenial, UNNAMED_DESTINATION_MODEL } from "./admission-model-scope";
+import { admissionScopeDenial } from "./admission-model-scope";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
@@ -119,10 +119,15 @@ export async function readImageResponseBytes(
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
 const XAI_IMAGE_BRIDGE_MODEL = "grok-imagine-image-quality";
 
-/** The selector to echo in a refusal: the string the caller itself sent. */
-function requestedImageSelector(body: unknown): string {
+/**
+ * The model this request names, or undefined when it names none.
+ *
+ * An absent `model` is relayed as an absent `model`: the upstream picks, so
+ * there is no destination to echo and none a model list can allow.
+ */
+function requestedImageSelector(body: unknown): string | undefined {
   const model = (body as { model?: unknown } | null)?.model;
-  return typeof model === "string" && model.trim() ? model : UNNAMED_DESTINATION_MODEL;
+  return typeof model === "string" && model.trim() ? model : undefined;
 }
 
 /**

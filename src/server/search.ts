@@ -27,7 +27,6 @@ import { isCodexReserveRequestEligible } from "../codex/loopback-target";
 import type { DataPlaneAdmission } from "./auth-cors";
 import {
   admissionScopeDenial,
-  UNNAMED_DESTINATION_MODEL,
 } from "./admission-model-scope";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
@@ -162,7 +161,7 @@ export async function handleSearch(
     // relayed to whichever ChatGPT account this upstream resolved to, and that
     // account is billed for it. The qualified branch above was already judged
     // against the route it resolved, so it is not judged twice here.
-    const searchModel = typeof model === "string" && model.trim() ? model : UNNAMED_DESTINATION_MODEL;
+    const searchModel = typeof model === "string" && model.trim() ? model : undefined;
     const denial = admissionScopeDenial(config, admission, searchModel, {
       providerName: upstream.providerName,
       modelId: searchModel,

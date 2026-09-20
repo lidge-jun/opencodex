@@ -130,6 +130,22 @@ test("a body that names no model cannot satisfy a model list", async () => {
   expect(upstreamCalls).toEqual([]);
 });
 
+test("naming the refusal marker in a scope grants nothing", async () => {
+  // The marker is how a refusal says "nobody named a model". An operator who
+  // copies it out of that refusal into allowedModels must not thereby allow
+  // whatever the upstream would have picked.
+  const response = await handleImages(
+    imagesRequest({ prompt: "a cat" }),
+    config({ allowedModels: [UNNAMED_DESTINATION_MODEL] }),
+    "generations",
+    logContext(),
+    undefined,
+    SCOPED,
+  );
+  expect(response.status).toBe(403);
+  expect(upstreamCalls).toEqual([]);
+});
+
 test("the xAI image bridge is a destination the scope covers", async () => {
   const response = await handleImages(
     imagesRequest({ model: "gpt-image-1", prompt: "a cat" }),
