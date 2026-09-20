@@ -32,7 +32,15 @@ export function mapFill<T>(
   operator: Readonly<Record<string, T>> | undefined,
 ): [Record<string, T> | undefined, StaticPolicySource] {
   if (!registry && !operator) return [undefined, "unknown"];
-  return [detachedClone({ ...(registry ?? {}), ...(operator ?? {}) }), operator ? "operator" : "registry"];
+  // Per-model lookups fold case (legacyModelValue), so a case-varied operator key must claim the
+  // registry row here; leaving both keys lets the earlier registry entry shadow the override.
+  const claimed = new Set(Object.keys(operator ?? {}).map(key => key.toLowerCase()));
+  const merged: Record<string, T> = {};
+  for (const [key, value] of Object.entries(registry ?? {})) {
+    if (!claimed.has(key.toLowerCase())) merged[key] = value;
+  }
+  for (const [key, value] of Object.entries(operator ?? {})) merged[key] = value;
+  return [detachedClone(merged), operator ? "operator" : "registry"];
 }
 
 export function nestedMapFill(
