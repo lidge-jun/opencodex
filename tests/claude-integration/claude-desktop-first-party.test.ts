@@ -214,7 +214,9 @@ test("native toggle: enabling into explicit first-party pivots an applied gatewa
 });
 
 test("native toggle: enabling into gateway saves the gateway mode marker like the apply route", async () => {
-  const chosen = config({ claudeCode: { desktopMode: "gateway" } });
+  // No explicit mode: the disabled intercept is what implies gateway, so the saved marker
+  // can only come from the toggle itself.
+  const chosen = config({ claudeCode: { intercept: { enabled: false } } });
   writeFileSync(join(root, "config.json"), JSON.stringify(chosen));
   const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, chosen);
   expect(enabled.status).toBe(200);
@@ -222,6 +224,7 @@ test("native toggle: enabling into gateway saves the gateway mode marker like th
   expect(existsSync(join(claudeDir, "settings.json"))).toBe(false);
   const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
   expect(saved.claudeCode?.desktopMode).toBe("gateway");
+  expect(resolveClaudeDesktopMode(saved)).toBe("gateway");
 });
 
 test("ensure warns instead of touching a gateway profile that contradicts an explicit first-party marker", () => {
