@@ -1,0 +1,41 @@
+{
+  "_comment": "Failures that are not this branch's. Verified by running the same files on upstream/dev in a worktree and seeing the same four. Without this, a full-suite run reports a number instead of an answer, and the next real failure hides among the tolerated ones.",
+  "verifiedAgainst": {
+    "ref": "upstream/dev",
+    "commit": "e37ee40ad",
+    "date": "2026-09-20",
+    "platform": "darwin-arm64"
+  },
+  "failures": [
+    {
+      "test": "Codex discovery exposes the observed native as a selector row plus one global bare row",
+      "file": "tests/claude-integration/claude-models-discovery.test.ts",
+      "reason": "fails identically on upstream/dev; model discovery, untouched by this branch"
+    },
+    {
+      "test": "the request's client_version reaches entitlement discovery (#2886)",
+      "file": "tests/claude-integration/claude-models-discovery.test.ts",
+      "reason": "fails identically on upstream/dev"
+    },
+    {
+      "test": "with no inbound or runtime version, /v1/models still exposes the gated rows (#3022)",
+      "file": "tests/claude-integration/claude-models-discovery.test.ts",
+      "reason": "fails identically on upstream/dev"
+    },
+    {
+      "test": "version-manager shim destruction (#2412) > a destroyed shim diagnostic does not open a non-file launcher",
+      "file": "tests/codex-integration/codex-shim-destroyed-probe.test.ts",
+      "reason": "fails identically on upstream/dev; times out at 5s, so likely environmental"
+    },
+    {
+      "test": "remote workspace Linux command sandbox > builds a minimal bubblewrap argv with one writable workspace",
+      "file": "tests/remote-workspace",
+      "reason": "bubblewrap is Linux-only; this host is macOS"
+    },
+    {
+      "test": "remote workspace Linux command sandbox > revalidates approved toolchain roots and rejects a later symlink substitution",
+      "file": "tests/remote-workspace",
+      "reason": "bubblewrap is Linux-only; this host is macOS"
+    }
+  ]
+}

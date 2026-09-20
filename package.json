@@ -47,6 +47,7 @@
     "test": "bun scripts/test.ts",
     "test:changed": "bun scripts/test.ts --changed=dev",
     "test:red": "bun tests/red.ts",
+    "test:known-failures": "bun scripts/check-known-failures.ts",
     "typecheck": "bun x tsc --noEmit",
     "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
     "privacy:scan": "bun scripts/privacy-scan.ts",
