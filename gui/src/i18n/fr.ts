@@ -1875,7 +1875,7 @@ export const fr: Record<TKey, string> = {
   "integrations.plan.change.replace": "Remplacer",
   "integrations.plan.change.remove": "Supprimer",
   "integrations.plan.change.snapshot": "Enregistrer une sauvegarde",
-  "integrations.plan.change.ownership": "Mettre à jour la propriété",
+  "integrations.plan.change.ownership": "Mettre à jour l’enregistrement de propriété",
   "integrations.plan.change.journal": "Enregistrer l’entrée de restauration",
   "integrations.plan.foreign.none": "Aucune modification externe détectée.",
   "integrations.plan.foreign.unowned": "Un bloc de paramètres n’appartenant pas à opencodex sera remplacé.",

@@ -30,7 +30,9 @@ let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let container: HTMLElement;
 let root: Root | null = null;
-let requests: Array<{ url: string; method: string; body: unknown }> = [];
+type RecordedRequest = { url: string; method: string; body: unknown };
+
+let requests: RecordedRequest[] = [];
 /**
  * `useDataSurface` caches by key, and the key includes `apiBase`. Reusing one
  * base across tests replayed the previous test's response, so a fixture change
@@ -53,7 +55,7 @@ type JournalRow = {
 
 let stateResponse: () => Response;
 let journalRows: JournalRow[];
-let putResponse: () => Response;
+let putResponse: (request: RecordedRequest) => Response;
 let codexRoutingResponse: () => Response;
 let codexDesiredEnabled = true;
 let deleteResponse: () => Response;
@@ -83,6 +85,10 @@ function status(overrides: Record<string, unknown> = {}) {
     retentionDegraded: false,
     ...overrides,
   };
+}
+
+function asideStatus(overrides: Record<string, unknown> = {}) {
+  return status({ clientId: "aside", configPath: "/tmp/aside/profiles.json", ...overrides });
 }
 
 function previewPlan(operation: "apply" | "overwrite" | "disable" | "restore", overrides: Record<string, unknown> = {}) {
@@ -138,11 +144,12 @@ beforeEach(() => {
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const method = (init?.method ?? "GET").toUpperCase();
-    requests.push({
+    const request = {
       url,
       method,
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
-    });
+    };
+    requests.push(request);
     if (url.endsWith("/api/client-integrations/restore/preview")) return json(previewPlan("restore"));
     if (url.endsWith("/api/client-integrations/preview")) {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
@@ -205,7 +212,7 @@ beforeEach(() => {
     if (url.includes("/api/grok")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ present: false, models: [] });
     }
-    if (method === "PUT") return putResponse();
+    if (method === "PUT") return putResponse(request);
     if (url.includes("/restore")) return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
     return stateResponse();
   }) as typeof fetch;
@@ -746,6 +753,209 @@ test("a failed first read does not claim nothing is installed either", async () 
   expect(text).toContain("Could not load integration state.");
   expect(text).not.toContain("No installed clients were detected");
   expect(text).toContain("Hermes");
+});
+
+test("the aggregate Aside overview toggle stays unbound", async () => {
+  let applied = true;
+  stateResponse = () => json({ clients: [asideStatus({ state: applied ? "current" : "absent" })] });
+  previewResponse = body => body.clientId === "aside"
+    ? json({ error: "aggregate Aside previews require a profile", code: "invalid_aside_profile" }, 400)
+    : json(previewPlan("disable", { clientId: body.clientId }));
+  putResponse = request => {
+    const body = request.body as Record<string, unknown>;
+    if (body.operation !== undefined || body.planFingerprint !== undefined) {
+      return json({ error: "a confirmed plan applies to one profile", code: "invalid_aside_profile" }, 400);
+    }
+    applied = body.enabled === true;
+    return json({ ok: true, results: [{ profileId: 7, ok: true, state: applied ? "current" : "absent" }] });
+  };
+
+  await mountOverview();
+  await act(async () => { switchFor("aside")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  expect(requests.filter(request => request.url.endsWith("/api/client-integrations/preview"))).toHaveLength(0);
+  const puts = requests.filter(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/aside/profiles"));
+  expect(puts).toHaveLength(1);
+  expect(puts[0]?.body).toEqual({ enabled: false });
+});
+
+test("aggregate Aside overview failures stay on the card without an unhandled rejection", async () => {
+  stateResponse = () => json({ clients: [asideStatus()] });
+  putResponse = request => {
+    const body = request.body as Record<string, unknown>;
+    if (body.operation !== undefined || body.planFingerprint !== undefined) {
+      return json({ error: "a confirmed plan applies to one profile", code: "invalid_aside_profile" }, 400);
+    }
+    return json({
+      ok: false,
+      message: "one profile failed",
+      results: [{ profileId: 7, ok: false, reason: "write_failed", message: "disk full" }],
+    }, 207);
+  };
+  let unhandled = 0;
+  testWindow.addEventListener("unhandledrejection", () => { unhandled += 1; });
+
+  await mountOverview();
+  await act(async () => { switchFor("aside")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  const card = container.querySelector('[data-client="aside"]')!;
+  expect(card.querySelectorAll(".notice-err")).toHaveLength(1);
+  expect(card.textContent).toContain("disk full");
+  expect(switchFor("aside")?.disabled).toBe(false);
+  expect(unhandled).toBe(0);
+
+  await act(async () => { switchFor("aside")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/aside/profiles"))).toHaveLength(2);
+  expect(unhandled).toBe(0);
+});
+
+test("Aside-only and mixed bulk disable keep aggregate Aside unbound", async () => {
+  let clients = [asideStatus()];
+  stateResponse = () => json({ clients });
+  previewResponse = body => body.clientId === "aside"
+    ? json({ error: "aggregate Aside previews require a profile", code: "invalid_aside_profile" }, 400)
+    : json(previewPlan("disable", {
+        clientId: body.clientId,
+        fingerprint: body.clientId === "pi" ? `p1:${"5".repeat(32)}` : `p1:${"3".repeat(32)}`,
+      }));
+  putResponse = request => {
+    const body = request.body as Record<string, unknown>;
+    if (request.url.endsWith("/api/client-integrations/aside/profiles")) {
+      if (body.operation !== undefined || body.planFingerprint !== undefined) {
+        return json({ error: "a confirmed plan applies to one profile", code: "invalid_aside_profile" }, 400);
+      }
+      clients = clients.filter(client => client.clientId !== "aside");
+      return json({ ok: true, results: [{ profileId: 7, ok: true, state: "absent" }] });
+    }
+    clients = clients.filter(client => client.clientId !== "pi");
+    return json({ ok: true, clientId: "pi", changed: true, state: "absent", message: "disabled" });
+  };
+
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  expect(buttonByText("Disable all")?.disabled).toBe(false);
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  expect(requests.filter(request => request.url.endsWith("/api/client-integrations/preview"))).toHaveLength(0);
+  expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: false });
+
+  if (root) {
+    const current = root;
+    await act(async () => { current.unmount(); });
+    root = null;
+  }
+  mountCount += 1;
+  apiBase = `http://ocx-test-${mountCount}.invalid`;
+  requests = [];
+  clients = [asideStatus(), status({ clientId: "pi", configPath: "/tmp/pi.json" })];
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  expect(requests.filter(request => request.url.endsWith("/api/client-integrations/preview")).map(request => request.body)).toEqual([
+    { clientId: "pi", operation: "disable" },
+  ]);
+  expect(requests.filter(request => request.method === "PUT").map(request => request.body)).toEqual([
+    { enabled: false },
+    { enabled: false, operation: "disable", planFingerprint: `p1:${"5".repeat(32)}` },
+  ]);
+});
+
+test("bulk confirmation is disabled when every planned target is refused", async () => {
+  stateResponse = () => json({ clients: [status()] });
+  previewResponse = body => json(previewPlan("disable", {
+    clientId: body.clientId,
+    canApply: false,
+    willChange: false,
+    changes: [],
+    refusalReason: "unsafe",
+  }));
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(buttonByText("Disable all")?.disabled).toBe(true);
+  expect(requests.filter(request => request.method === "PUT")).toHaveLength(0);
+});
+
+test("bulk stale plans require reconfirmation without repeating completed disables", async () => {
+  const applied = new Set(["hermes", "pi", "dsh"]);
+  stateResponse = () => json({ clients: [
+    status({ clientId: "hermes", state: applied.has("hermes") ? "current" : "absent" }),
+    status({ clientId: "pi", configPath: "/tmp/pi.json", state: applied.has("pi") ? "current" : "absent" }),
+    status({ clientId: "dsh", configPath: "/tmp/dsh.yaml", state: applied.has("dsh") ? "current" : "absent" }),
+  ] });
+  previewResponse = body => json(previewPlan("disable", {
+    clientId: body.clientId,
+    fingerprint: `p1:${body.clientId === "pi" ? "5".repeat(32) : body.clientId === "dsh" ? "6".repeat(32) : "3".repeat(32)}`,
+    ...(body.clientId === "dsh" ? { canApply: false, willChange: false, changes: [], refusalReason: "unsafe" } : {}),
+  }));
+  let piAttempts = 0;
+  putResponse = request => {
+    const clientId = request.url.split("/").pop()!;
+    if (clientId === "pi" && piAttempts++ === 0) {
+      return json({
+        code: "integration_preview_stale",
+        plan: previewPlan("disable", { clientId: "pi", fingerprint: `p1:${"9".repeat(32)}` }),
+      }, 409);
+    }
+    applied.delete(clientId);
+    return json({ ok: true, clientId, changed: true, state: "absent", message: "disabled" });
+  };
+
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  expect(container.textContent).toContain("Review the updated plan");
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/hermes"))).toHaveLength(1);
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/pi"))).toHaveLength(1);
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/dsh"))).toHaveLength(0);
+
+  const staleDialog = container.querySelector("dialog")!;
+  const reconfirm = Array.from(staleDialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Disable all",
+  ) as HTMLButtonElement;
+  const close = Array.from(staleDialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Close",
+  ) as HTMLButtonElement;
+  expect(staleDialog.getAttribute("aria-busy")).toBe("false");
+  expect(reconfirm.disabled).toBe(false);
+  expect(close.disabled).toBe(false);
+
+  await act(async () => { reconfirm.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  const hermesPuts = requests.filter(request => request.method === "PUT" && request.url.endsWith("/hermes"));
+  const piPuts = requests.filter(request => request.method === "PUT" && request.url.endsWith("/pi"));
+  expect(hermesPuts).toHaveLength(1);
+  expect(piPuts).toHaveLength(2);
+  expect(piPuts[1]?.body).toEqual({ enabled: false, operation: "disable", planFingerprint: `p1:${"9".repeat(32)}` });
+  expect(container.querySelector("dialog")).toBeNull();
+  expect(container.textContent).toContain("dsh");
+});
+
+test("overview stale replacement does not persist a card failure", async () => {
+  stateResponse = () => json({ clients: [status()] });
+  putResponse = () => json({
+    code: "integration_preview_stale",
+    plan: previewPlan("disable", { fingerprint: `p1:${"9".repeat(32)}` }),
+  }, 409);
+  await mountOverview();
+  await act(async () => { switchFor("hermes")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await confirmDialog("Disable");
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(container.querySelector('[data-client="hermes"] .notice')).toBeNull();
+  expect(container.querySelector("dialog")?.textContent).toContain("Review the updated plan");
 });
 
 test("bulk disable confirms the result with the server before claiming success", async () => {

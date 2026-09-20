@@ -97,6 +97,27 @@ const BULK_DISABLE_COPY: ConsequenceCopy = {
   confirmKey: "integrations.bulk.confirm",
 };
 
+interface BulkDisableAction {
+  clientId: IntegrationStatus["clientId"];
+  label: string;
+  /** Aggregate Aside mutations intentionally stay unbound; one fingerprint cannot describe every profile. */
+  plan: IntegrationMutationPlan | null;
+}
+
+interface BulkDisableState {
+  actions: BulkDisableAction[];
+  loading: boolean;
+  failure: string | null;
+  stale: boolean;
+  failures: string[];
+}
+
+function labeledPlansFor(actions: readonly BulkDisableAction[]): LabeledIntegrationPlan[] {
+  return actions.flatMap(item => item.plan
+    ? [{ clientId: item.clientId, label: item.label, plan: item.plan }]
+    : []);
+}
+
 function isApplied(status: IntegrationStatus): boolean {
   return status.state === "current" || status.state === "stale";
 }
@@ -231,7 +252,7 @@ export default function IntegrationsOverview({
     loading: boolean;
     failure: string | null;
   } | null>(null);
-  const [bulkPlans, setBulkPlans] = useState<{ plans: LabeledIntegrationPlan[]; loading: boolean; failure: string | null } | null>(null);
+  const [bulkPlans, setBulkPlans] = useState<BulkDisableState | null>(null);
   const cardPreviewAbortRef = useRef<AbortController | null>(null);
   const cardPreviewGenerationRef = useRef(0);
   const bulkPreviewAbortRef = useRef<AbortController | null>(null);
@@ -425,16 +446,19 @@ export default function IntegrationsOverview({
     bulkPreviewGenerationRef.current = generation;
     bulkPreviewAbortRef.current?.abort();
     bulkPreviewAbortRef.current = controller;
-    setBulkPlans({ plans: [], loading: true, failure: null });
+    setBulkPlans({ actions: [], loading: true, failure: null, stale: false, failures: [] });
     try {
-      const plans = await Promise.all(appliedClients.map(async client => {
-        const plan = await previewIntegrationMutation(apiBase, client.clientId, "disable", controller.signal);
+      const actions = await Promise.all(appliedClients.map(async client => {
         const row = rows.find(candidate => candidate.status?.clientId === client.clientId);
+        if (client.clientId === "aside") {
+          return { clientId: client.clientId, label: row ? t(row.labelKey) : client.clientId, plan: null };
+        }
+        const plan = await previewIntegrationMutation(apiBase, client.clientId, "disable", controller.signal);
         return { clientId: client.clientId, label: row ? t(row.labelKey) : client.clientId, plan };
       }));
       if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
       bulkPreviewAbortRef.current = null;
-      setBulkPlans({ plans, loading: false, failure: null });
+      setBulkPlans({ actions, loading: false, failure: null, stale: false, failures: [] });
     } catch (error) {
       if (controller.signal.aborted || generation !== bulkPreviewGenerationRef.current) return;
       bulkPreviewAbortRef.current = null;
@@ -443,7 +467,7 @@ export default function IntegrationsOverview({
         refresh();
         return;
       }
-      setBulkPlans({ plans: [], loading: false, failure: t("integrations.preview.failed") });
+      setBulkPlans({ actions: [], loading: false, failure: t("integrations.preview.failed"), stale: false, failures: [] });
     }
   };
 
@@ -454,11 +478,12 @@ export default function IntegrationsOverview({
     setBulkPlans(null);
   };
 
-  const disableAll = async (plans: readonly LabeledIntegrationPlan[]) => {
-    if (bulkPending || plans.length === 0) return;
+  const disableAll = async (state: BulkDisableState) => {
+    if (bulkPending || state.actions.length === 0) return;
     setBulkPending(true);
     setBulkResult(null);
-    const failed: string[] = [];
+    const failed = [...state.failures];
+    const staleActions: BulkDisableAction[] = [];
     /*
      * Sequential ON PURPOSE — do not convert this to `Promise.all`.
      *
@@ -473,23 +498,38 @@ export default function IntegrationsOverview({
      * Six loopback requests are cheap; a lost ownership record is not.
      */
     // Bulk disable remains file-clients-only; Grok must keep its consequence gate.
-    for (const item of plans) {
-      if (!item.plan.canApply) {
+    for (const item of state.actions) {
+      if (item.plan && !item.plan.canApply) {
         failed.push(`${item.clientId}: ${t("integrations.plan.refused")}`);
         continue;
       }
       try {
         // react-doctor-disable-next-line react-doctor/async-await-in-loop -- serial on purpose; see the block comment above
-        await toggleIntegration(apiBase, item.clientId, { enabled: false, binding: bindingFor(item.plan) });
+        await toggleIntegration(apiBase, item.clientId, {
+          enabled: false,
+          ...(item.plan ? { binding: bindingFor(item.plan) } : {}),
+        });
       } catch (error) {
+        if (item.plan && error instanceof IntegrationApiError && error.stalePlan) {
+          staleActions.push({ ...item, plan: error.stalePlan });
+          continue;
+        }
         // Report which clients survived rather than a single opaque failure:
         // a partial result the user cannot see is worse than none.
         // `describeRefusal` keeps the snapshot path and the residual warning,
         // which a bare message would drop for exactly the clients that need
         // manual recovery.
-        failed.push(`${item.clientId}: ${error instanceof IntegrationApiError && error.stalePlan
-          ? t("integrations.preview.stale") : describeRefusal(t, error)}`);
+        failed.push(`${item.clientId}: ${describeRefusal(t, error)}`);
       }
+    }
+    if (staleActions.length > 0) {
+      refresh();
+      setBulkPending(false);
+      setBulkPlans({ actions: staleActions, loading: false, failure: null, stale: true, failures: failed });
+      setBulkResult(failed.length === 0
+        ? null
+        : { tone: "err", text: t("integrations.bulk.partial", { clients: failed.join("; ") }) });
+      return;
     }
     /*
      * Confirm the outcome against the server before claiming it.
@@ -548,11 +588,13 @@ export default function IntegrationsOverview({
     setCardResult(row.id, null);
     try {
       if (row.status) {
-        if (!plan) return;
+        if (!plan && row.status.clientId !== "aside") return;
         await toggleIntegration(apiBase, row.status.clientId, {
           enabled: next,
-          overwriteConflict: plan.operation === "overwrite",
-          binding: bindingFor(plan),
+          ...(plan ? {
+            overwriteConflict: plan.operation === "overwrite",
+            binding: bindingFor(plan),
+          } : {}),
         });
         refresh();
       } else if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex" || row.toggle === "claude-desktop") {
@@ -570,13 +612,13 @@ export default function IntegrationsOverview({
         refreshNativeDetails();
       }
     } catch (error) {
+      if (row.status && error instanceof IntegrationApiError && error.stalePlan) throw error;
       setCardResult(row.id, {
         tone: "err",
         text: describeRefusal(t, error, undefined, row.togglePath ?? undefined),
       });
       if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex" || row.toggle === "claude-desktop") refreshNativeDetails();
       if (row.status) {
-        if (error instanceof IntegrationApiError && error.stalePlan) throw error;
         throw new Error(describeRefusal(t, error, undefined, row.togglePath ?? undefined), { cause: error });
       }
     } finally {
@@ -617,8 +659,14 @@ export default function IntegrationsOverview({
   };
 
   const requestToggle = (row: OverviewRow, next: boolean) => {
-    if (row.status) {
+    if (row.status && row.status.clientId !== "aside") {
       void requestFilePlan(row, next ? "apply" : "disable");
+      return;
+    }
+    if (row.status?.clientId === "aside") {
+      // Aggregate Aside mutations have no confirmation dialog to consume a rejection.
+      // toggleCard already stores the visible refusal and clears cardPending in finally.
+      void toggleCard(row, next).catch(() => {});
       return;
     }
     if (next || row.id === "claude" || row.toggle === null) {
@@ -863,11 +911,13 @@ export default function IntegrationsOverview({
       {bulkPlans && (
         <ConsequenceDialog
           copy={BULK_DISABLE_COPY}
-          plans={bulkPlans.plans}
+          plans={labeledPlansFor(bulkPlans.actions)}
+          hasUnboundAction={bulkPlans.actions.some(item => item.plan === null)}
+          planStale={bulkPlans.stale}
           planLoading={bulkPlans.loading}
           planFailure={bulkPlans.failure}
           onClose={closeBulkPlans}
-          onConfirm={async () => { await disableAll(bulkPlans.plans); }}
+          onConfirm={async () => { await disableAll(bulkPlans); }}
         />
       )}
     </section>

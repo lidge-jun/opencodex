@@ -31,6 +31,8 @@ export default function ConsequenceDialog({
   copy,
   plan = null,
   plans,
+  hasUnboundAction = false,
+  planStale = false,
   planLoading = false,
   planFailure = null,
   onConfirm,
@@ -39,6 +41,8 @@ export default function ConsequenceDialog({
   copy: ConsequenceCopy;
   plan?: IntegrationMutationPlan | null;
   plans?: readonly LabeledIntegrationPlan[];
+  hasUnboundAction?: boolean;
+  planStale?: boolean;
   planLoading?: boolean;
   planFailure?: string | null;
   onConfirm: (plan?: IntegrationMutationPlan) => Promise<void> | void;
@@ -59,6 +63,9 @@ export default function ConsequenceDialog({
     ? staleOverride.plan
     : plan;
   const stale = staleOverride?.sourceFingerprint === (plan?.fingerprint ?? null);
+  const noActionableBulkTarget = plans !== undefined
+    && !hasUnboundAction
+    && !plans.some(item => item.plan.canApply);
   const showUndo = !planRequired
     || (activePlan ? planHasRollback(activePlan) : plans?.some(item => planHasRollback(item.plan)) === true);
   const dismiss = useCallback(() => {
@@ -90,10 +97,10 @@ export default function ConsequenceDialog({
     } catch (error) {
       if (error instanceof IntegrationApiError && error.stalePlan) {
         setStaleOverride({ sourceFingerprint: plan?.fingerprint ?? null, plan: error.stalePlan });
-        setPending(false);
         return;
       }
       setFailure(error instanceof Error ? error.message : t("integrations.error.generic"));
+    } finally {
       setPending(false);
     }
   }, [activePlan, onConfirm, pending, plan?.fingerprint, t]);
@@ -133,13 +140,13 @@ export default function ConsequenceDialog({
         <div role="status" aria-live="polite" aria-atomic="true">
           {planLoading && <p>{t("integrations.preview.loading")}</p>}
           {pending && <p>{t("integrations.mutation.pending")}</p>}
-          {stale && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
+          {(stale || planStale) && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
           {planFailure && <Notice tone="err">{planFailure}</Notice>}
         </div>
         <IntegrationPlanDetails plan={activePlan} plans={plans} />
         {failure && <Notice tone="err">{failure}</Notice>}
         <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void confirm()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && (!plans || plans.length === 0)) || activePlan?.canApply === false}>
+          <button type="button" className="btn btn-primary" onClick={() => void confirm()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
             {t(copy.confirmKey)}
           </button>
         </div>

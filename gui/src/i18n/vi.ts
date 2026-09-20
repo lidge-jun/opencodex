@@ -1892,7 +1892,7 @@ export const vi: Record<TKey, string> = {
   "integrations.plan.change.replace": "Thay thế",
   "integrations.plan.change.remove": "Xóa",
   "integrations.plan.change.snapshot": "Lưu bản sao",
-  "integrations.plan.change.ownership": "Cập nhật quyền sở hữu",
+  "integrations.plan.change.ownership": "Cập nhật bản ghi quyền sở hữu",
   "integrations.plan.change.journal": "Ghi mục khôi phục",
   "integrations.plan.foreign.none": "Không phát hiện chỉnh sửa bên ngoài.",
   "integrations.plan.foreign.unowned": "Một khối cài đặt không thuộc opencodex sẽ bị thay thế.",

@@ -1,8 +1,8 @@
 {
-  "status": "FINAL/CORRECTED-HEAD",
-  "proofType": "fixture-rendered GUI proof from the exact-head hosted build; not a live backend",
+  "status": "HISTORICAL/CORRECTED-GUI-TREE",
+  "proofType": "fixture-rendered GUI proof from a hosted PR merge-ref build associated with the source head and GUI-tree-equivalent to the reviewed GUI; not a live backend or a literal PR-head build",
   "sourceArtifact": {
-    "name": "PR #5197 corrected-head hosted GUI build",
+    "name": "PR #5197 hosted merge-ref GUI build associated with source head 07bf0a4dbe",
     "artifactId": 10595174777,
     "artifactName": "dashboard-preview-6c9576edb372200efec9d6ad4fea7b1e0dc35fb4",
     "workflowRun": 35481230775,
@@ -159,7 +159,7 @@
       "browserZoomPercent": 125,
       "pngWidth": 976,
       "pngHeight": 1716,
-      "dimensionNote": "Observed CSS viewport and DPR imply a nominal 975x1715 raster; the actual PNG is 976x1716 because the browser/native capture rounded each physical dimension by one pixel.",
+      "dimensionNote": "Observed CSS viewport and DPR imply a nominal 975x1715 raster; the actual PNG is 976x1716, one physical pixel per axis larger. The capture did not independently isolate the cause of that rounding difference.",
       "files": ["ko-restore-drift-390.png","ko-stale-reconfirm-390.png","ko-profile-disable-noop-390.png"]
     }
   ],
