@@ -8,6 +8,10 @@ const families = fontStack.split(",").map(family =>
   family.trim().replace(/^(["'])(.*)\1$/, "$2"),
 );
 
+test("product fonts retain priority in the UI font stack", () => {
+  expect(families.slice(0, 3)).toEqual(["OpenAI Sans", "Pretendard Variable", "Pretendard"]);
+});
+
 // Keep system fonts ahead of Apple SD Gothic Neo, which also covers Latin.
 // This guards fallback order; actual glyph selection requires a browser check.
 test.each(["system-ui", "-apple-system", "BlinkMacSystemFont"])(
