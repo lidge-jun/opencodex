@@ -11,6 +11,23 @@ navigates the webview to the proxy's loopback dashboard
 Only the bootstrap page has Tauri IPC capability; the loopback dashboard never
 does because `dangerousRemoteDomainIpcAccess` is not configured.
 
+`desktop/src-tauri/src/first_run.rs` turns Start at Login on once per installation,
+before the tray is built so its checkbox reads the resulting state. A menu bar app
+that is not running has no menu bar item, so leaving autostart off by default left an
+installed app absent after a reboot. The marker in the app config directory is written
+before the login item is touched and is never removed, so a user who turns the setting
+off keeps it off; writing it afterwards would let a failed enable retry on every launch.
+The behaviour is not macOS-only — the autostart plugin implements the Linux autostart
+entry and the current-user Windows Run registration too.
+
+The WidgetKit extension in `app/` needs both `@main` on `OpenCodexWidgetBundle` and the
+`-e _NSExtensionMain` linker entry in `app/Package.swift`. Either alone yields a widget
+that never appears: without `@main` the linker drops the bundle and the extension
+registers with nothing to offer, and without the entry override ExtensionFoundation traps
+during bootstrap. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to
+register an unsandboxed plug-in at all — which is why the shell writes its snapshot into
+the extension's own container.
+
 `desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
 Bun targets and prepares the external binary plus dashboard resources used by
 Tauri. Generated files under desktop/src-tauri/binaries/ and
