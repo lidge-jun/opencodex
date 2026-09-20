@@ -1623,7 +1623,8 @@
     "claude-intercept-integration.test.ts": "server",
     "management-provider-reset-replay.test.ts": "server",
     "responses-reset-replay.test.ts": "responses",
-    "ambiguous-resend-gate.test.ts": "lib"
+    "ambiguous-resend-gate.test.ts": "lib",
+    "ambiguous-resend-composition.test.ts": "lib"
   },
   "migrated": [
     "adapters",

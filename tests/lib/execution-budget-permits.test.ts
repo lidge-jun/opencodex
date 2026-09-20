@@ -494,9 +494,13 @@ describe("the ambiguous-resend allowance", () => {
     expect(parent.claimAmbiguousResend?.(1)).toBe(true);
     expect(child.claimAmbiguousResend?.(1)).toBe(false);
     expect(parent.claimAmbiguousResend?.(1)).toBe(false);
-    // Raising the ceiling releases exactly the difference, not a fresh grant.
-    expect(child.claimAmbiguousResend?.(2)).toBe(true);
+    // A later leg cannot raise the ceiling, either. Each leg reads its number from the
+    // provider row it is running against, and that row is reassigned mid-request by rotation,
+    // refresh, transport resolution and each combo target -- so releasing the difference meant
+    // the count of duplicate inferences depended on which row happened to ask last. The
+    // request keeps the smallest ceiling any leg presented.
     expect(child.claimAmbiguousResend?.(2)).toBe(false);
+    expect(parent.claimAmbiguousResend?.(2)).toBe(false);
   });
 
   test("a grant is not a send, and a spent send budget is not a spent grant", () => {
