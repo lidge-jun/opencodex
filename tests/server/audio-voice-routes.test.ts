@@ -102,6 +102,34 @@ describe("voice target resolution", () => {
     expect(voiceConfigValueError({ byModel: { m: "bare" } }, PROVIDERS, "speech")).toContain("speech.byModel.m");
   });
 
+  // The three sites where a wrong message means the config blames the wrong
+  // thing rather than saying nothing. Everywhere else a bad message is a
+  // missing diagnosis; here it is a misleading one, and a misleading one
+  // sends you to the wrong file. The third of these is the exact shape of a
+  // failure that cost an hour: a request reached a backend that could not
+  // serve it, and the error named something else.
+  test("a target that is not a string says so, naming the field", () => {
+    const error = voiceConfigValueError({ provider: 7 }, PROVIDERS, "speech");
+    expect(error).toContain("speech.provider");
+    expect(error).toContain("must be a string");
+  });
+
+  test("a target naming no configured provider says which name is unknown", () => {
+    const error = voiceConfigValueError({ provider: "nope" }, PROVIDERS, "speech");
+    expect(error).toContain("speech.provider");
+    expect(error).toContain("not configured");
+  });
+
+  test("a provider that exists but lacks the route's endpoint names the endpoint", () => {
+    // `handy` is configured and serves transcription; naming it for speech has
+    // to say `speechUrl`, not "not configured", or you go looking for a typo
+    // in a provider name that is perfectly correct.
+    const error = voiceConfigValueError({ provider: "handy" }, PROVIDERS, "speech");
+    expect(error).toContain("speech.provider");
+    expect(error).toContain("speechUrl");
+    expect(error).not.toContain("not configured");
+  });
+
   test("an unknown key in a route block is refused", () => {
     expect(voiceConfigValueError({ nope: 1 }, PROVIDERS, "speech")).toContain("unknown key");
   });

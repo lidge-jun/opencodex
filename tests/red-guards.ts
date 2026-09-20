@@ -185,4 +185,28 @@ export const GUARDS: Guard[] = [
     expect: "refuses a language tag that is not BCP-47 shaped",
     suite: VOICE,
   },
+  {
+    name: "a non-string target is named as such",
+    file: "src/config/voice-target.ts",
+    from: '    if (typeof target !== "string") return `schema_invalid: ${route.label}.${field}: must be a string`;',
+    to: "",
+    expect: "a target that is not a string says so, naming the field",
+    suite: VOICE,
+  },
+  {
+    name: "an unresolvable target reports the resolution error",
+    file: "src/config/voice-target.ts",
+    from: '    if (resolution.kind === "invalid") return `schema_invalid: ${route.label}.${field}: ${resolution.error}`;',
+    to: '    if (resolution.kind === "invalid") return `schema_invalid: ${route.label}.${field}: bad`;',
+    expect: "a target naming no configured provider says which name is unknown",
+    suite: VOICE,
+  },
+  {
+    name: "a provider missing the route endpoint reports which endpoint",
+    file: "src/config/voice-target.ts",
+    from: "      if (endpointError) return `schema_invalid: ${route.label}.${field}: ${endpointError}`;",
+    to: "      if (endpointError) return `schema_invalid: ${route.label}.${field}: not configured`;",
+    expect: "a provider that exists but lacks the route's endpoint names the endpoint",
+    suite: VOICE,
+  },
 ];
