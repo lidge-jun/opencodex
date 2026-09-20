@@ -19,7 +19,7 @@ parsing and ownership rules below.
 | Module | Responsibility |
 | --- | --- |
 | `src/clients/config-export.ts` | Pure per-client config builders and the exact managed fragments each client receives. It never writes files. |
-| `src/integrations/registry.ts` | Canonical config/detection paths, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
+| `src/integrations/registry.ts` | Canonical config/detection paths, the superseded-store resolver, source-preserving YAML declarations, writer-lock behavior, and client IDs. |
 | `src/integrations/config-io.ts` | Bounded file loading and parsing. Values that cannot round-trip through the target serializer are rejected before mutation. |
 | `src/integrations/state.ts` | The single `absent` / `current` / `stale` / `conflict` / `unsafe` classifier used by status and every writer operation. |
 | `src/integrations/ownership.ts` | Durable ownership records: file, generated contribution, protected contribution, exact fragment paths, and operation identity. |
@@ -208,6 +208,31 @@ catalog also changed, the old record cannot distinguish catalog drift from a for
 fail closed. A successful refresh writes the new operation-scoped policy.
 
 > Decision record: [ADR-0092](../decisions/ADR-0092-zcode-runtime-metadata.md)
+
+## A store the client no longer reads
+
+A client may move its provider list to a different file between releases and keep the old one
+reachable only through a one-shot import. That import runs on an install that has never created the
+new file and never again, so every later write to the old path is read by nobody. ZCode 3.14 is the
+instance this rule was written for: the apply was correct, the ownership record was correct, the
+journal row was correct, and no model appeared in the client.
+
+A client in that position declares `supersededBy` in the registry, naming the file whose presence
+proves the move. Three properties are load-bearing:
+
+- The predicate is observed through the same `IntegrationIO` seam as the config file, so status and
+  mutation cannot disagree about whether a write can land. Only a regular file counts; a failed stat
+  is not evidence of a migration.
+- It is bound into the plan fingerprint, so a confirmation taken before the client created its new
+  store cannot be committed afterwards.
+- It refuses apply, overwrite and refresh, and leaves disable alone. Removing bytes this project
+  wrote to this file is unaffected by where the client reads, and refusing it would leave the block
+  unremovable through the tool.
+
+Naming the new store is not permission to write it. Writing a store whose schema this project has
+not observed, into a file that holds the user's other providers and that the client rewrites on its
+own, would trade a silent no-op for a silent loss. Status reports the store beside the file state
+rather than folding it into the state: `current` remains the truth about the file.
 
 ## Verification
 

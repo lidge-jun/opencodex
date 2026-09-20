@@ -165,6 +165,20 @@ OAuth 或 API key，並拒絕 `--api-key`、`--base-url` 與 `--region` 覆寫�
 
 客戶端細節是針對各專案自己的設定格式驗證過的；檢查了什麼、何時檢查，請見 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` 中的研究筆記。
 
+## ZCode 3.14 以後
+
+ZCode 3.14 把自訂供應商移到 `~/.zcode/v2/provider_config.json`，而本整合寫入的
+`~/.zcode/v2/config.json` 只剩下一次性匯入會讀取，而那次匯入只在新檔案不存在時執行。ZCode 首次啟動
+就會建立新檔案，因此只要曾經啟動過的安裝，匯入早已用掉，之後寫入 `config.json` 不會被任何東西讀到。
+
+當 opencodex 發現該檔案時，開關會拒絕，而不是回報一個沒有任何模型會跟進的成功；狀態頁也會在檔案狀態
+旁一併說明。停用仍然有效：它移除 opencodex 寫入的區塊，這與 ZCode 從哪裡讀取無關。
+
+若要在 ZCode 3.14 使用此 proxy，請在 ZCode 自己的設定中新增供應商：base URL 為
+`http://127.0.0.1:10100/v1`（請依實際繫結調整連接埠）、任意非空白金鑰，以及
+`ocx export --client zcode` 列出的模型 ID。不支援刪除 `provider_config.json` 來重新觸發 ZCode 的
+匯入：那會丟掉 ZCode 存放在其中的所有供應商。
+
 ## Cline CLI
 
 Cline CLI 使用 providers.json 與 models.json。修改或同步前請結束 Cline，完成後重新啟動。復原會還原兩個原始檔案，預設供應商保持不變。此整合不會遷移舊版 VS Code 擴充功能的儲存資料。

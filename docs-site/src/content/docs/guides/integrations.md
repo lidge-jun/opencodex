@@ -375,6 +375,23 @@ catalogs are refused; the existing explicit overwrite and drift-confirmation con
 available. Fully quit and reopen Aside to load changed model files.
 
 
+## ZCode 3.14 and later
+
+ZCode 3.14 moved its custom providers to `~/.zcode/v2/provider_config.json` and left
+`~/.zcode/v2/config.json` — the file this integration writes — reachable only through a one-shot
+import that runs when the new file is missing. ZCode creates the new file the first time it runs,
+so on any install that has ever been launched the import is already spent and a write to
+`config.json` reaches nothing.
+
+Where opencodex finds that file, the switch refuses instead of reporting a success no model would
+follow, and status says so beside the file state. Disabling still works: it removes the block
+opencodex wrote, which is unaffected by where ZCode reads.
+
+To use the proxy from ZCode 3.14, add the provider in ZCode's own settings: base URL
+`http://127.0.0.1:10100/v1` (adjust the port to your bind), any non-empty key, and the model ids
+from `ocx export --client zcode`. Deleting `provider_config.json` to re-trigger ZCode's import is
+not supported — it discards every provider ZCode keeps there.
+
 ## Cline CLI
 
 This integration targets Cline's current CLI/shared SDK provider store, whose native schema has

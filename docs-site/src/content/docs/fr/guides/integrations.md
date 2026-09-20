@@ -254,6 +254,24 @@ Les détails des clients ont été vérifiés par rapport au format de configura
 consultez les notes de recherche dans
 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` pour savoir ce qui a été contrôlé et quand.
 
+## ZCode 3.14 et versions ultérieures
+
+ZCode 3.14 a déplacé ses fournisseurs personnalisés vers `~/.zcode/v2/provider_config.json` et ne
+lit plus `~/.zcode/v2/config.json` — le fichier que cette intégration écrit — qu'au travers d'un
+import unique, exécuté seulement quand le nouveau fichier est absent. ZCode crée ce nouveau fichier
+au premier lancement : sur toute installation déjà démarrée une fois, l'import a donc déjà eu lieu
+et une écriture dans `config.json` n'atteint plus rien.
+
+Lorsque opencodex trouve ce fichier, l'interrupteur refuse au lieu d'annoncer une réussite qu'aucun
+modèle ne suivrait, et l'état l'indique à côté de celui du fichier. La désactivation continue de
+fonctionner : elle retire le bloc écrit par opencodex, ce que l'endroit où ZCode lit ne change pas.
+
+Pour utiliser le proxy depuis ZCode 3.14, ajoutez le fournisseur dans les réglages de ZCode : URL de
+base `http://127.0.0.1:10100/v1` (ajustez le port à votre écoute), une clé non vide quelconque, et
+les identifiants de modèle donnés par `ocx export --client zcode`. Supprimer
+`provider_config.json` pour relancer l'import de ZCode n'est pas pris en charge : cela détruit tous
+les fournisseurs que ZCode y conserve.
+
 ## Cline CLI
 
 Cline CLI utilise providers.json et models.json. Quittez Cline avant toute modification ou synchronisation, puis redémarrez-le. Annuler restaure les deux originaux. Le fournisseur par défaut reste inchangé. Cette intégration ne migre pas le stockage des anciennes extensions VS Code.
