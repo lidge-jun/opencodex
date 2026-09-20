@@ -48,6 +48,7 @@ import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspec
 import { configuredAdminToken } from "../../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../../src/lib/local-provider-reload-contract";
+import { LOCAL_ASIDE_SYNC_CAPABILITY_VERSION } from "../../src/lib/local-aside-sync-contract";
 import { GUI_PAIR_CAPABILITY_VERSION } from "../../src/lib/gui-pair-capability";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
@@ -1164,6 +1165,7 @@ describe("server local API auth", () => {
       expect(health.status).toBe(200);
       const healthBody = await health.json() as Record<string, unknown>;
       expect(Object.keys(healthBody).sort()).toEqual([
+        "asideSyncCapability",
         "guiPairCapability",
         "pid",
         "port",
@@ -1176,6 +1178,7 @@ describe("server local API auth", () => {
       ]);
       expect(healthBody.restartCapability).toBe(SYSTEM_RESTART_CAPABILITY_VERSION);
       expect(healthBody.providerReloadCapability).toBe(LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION);
+      expect(healthBody.asideSyncCapability).toBe(LOCAL_ASIDE_SYNC_CAPABILITY_VERSION);
       expect(healthBody.guiPairCapability).toBe(GUI_PAIR_CAPABILITY_VERSION);
       expect("rss" in healthBody).toBe(false);
     } finally {

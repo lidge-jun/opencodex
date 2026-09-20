@@ -166,8 +166,11 @@ async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Prom
       status: ctx.req.method === "GET" ? 200 : 404, headers: { "cache-control": "no-store" },
     });
   }
-  if (ctx.req.method !== "GET" && ctx.principal !== "gui-session") {
-    return Response.json({ error: "A dashboard session is required for Remote Workspace changes." }, { status: 403 });
+  if (ctx.req.method !== "GET" && (
+    ctx.principal !== "gui-session"
+    || ctx.sessionControl?.isPaired(ctx.req, ctx.config) !== true
+  )) {
+    return Response.json({ error: "A paired dashboard session is required for Remote Workspace changes." }, { status: 403 });
   }
   const { handleRemoteWorkspaceRoutes } = await import("./management/remote-workspace-routes");
   return handleRemoteWorkspaceRoutes(ctx);

@@ -75,6 +75,11 @@ contains no provider object, API key, OAuth value, custom header, reusable manag
 credential, or config digest. Both the proof and reload request use the direct local
 transport so environment HTTP proxies cannot observe or fabricate the exchange.
 
+Aside refresh from `ocx sync` also uses a one-shot process-bound capability for its
+exact POST route. It never sends the reusable management credential to a listener
+selected through public liveness discovery, and configured-port-only legacy proxies
+must be restarted before they can own this mutation.
+
 > Decision record: [ADR-0073](decisions/ADR-0073-authentication-boundaries.md)
 
 Management authentication never has a loopback bypass. If no management credential is available, or

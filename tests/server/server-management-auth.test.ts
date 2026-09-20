@@ -17,6 +17,7 @@ import type { OcxConfig } from "../../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../../src/server/auth-cors";
 import {
+  createManagementSessionControl,
   initializeManagementAuthState,
   issueGuiSession,
   managementPrincipal,
@@ -1550,6 +1551,12 @@ describe("management and data-plane credential separation", () => {
     expect(session.expiresAt).toBe(before);
     expect(authorizeGuiSessionRequest(request({}, "POST"), config, state, issuedAt + 5)).toMatchObject({ ok: true, principal: "gui-session" });
     expect(session.expiresAt).toBe(issuedAt + 5 + REMOTE_GUI_SESSION_TTL_MS);
+    const sessionControl = createManagementSessionControl(state);
+    expect(sessionControl.isPaired(request({}, "POST"), config)).toBe(true);
+    const storedSession = state.sessions.get(session.token)!;
+    storedSession.issuance = "tailscale-identity";
+    expect(sessionControl.isPaired(request({}, "POST"), config)).toBe(false);
+    storedSession.issuance = "pairing";
     session.expiresAt = issuedAt + 6;
     expect(authorizeGuiSessionRequest(request(), config, state, issuedAt + 7)).toMatchObject({ ok: false, reason: "expired" });
     expect(state.sessions.has(session.token)).toBe(false);
