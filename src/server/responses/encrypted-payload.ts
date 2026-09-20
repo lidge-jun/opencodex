@@ -98,6 +98,19 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 
 
 export function looksLikeBackendCiphertext(payload: string): boolean {
+  // Unknown replay history has no authenticity proof. Require the key-independent Fernet wire
+  // structure instead of granting ciphertext authority to any long base64-like model output.
+  // Proven backend bytes still remain opaque and byte-identical; malformed/plaintext slots are
+  // lowered by the compatibility path below rather than poisoning every later native replay.
+  return isStructurallyValidFernetToken(payload);
+}
+
+/**
+ * Pre-route compatibility keeps an encoded-looking unknown slot opaque until the destination is
+ * known. A routed destination strips that slot instead of exposing possible truncated ciphertext;
+ * the canonical backend later applies the stricter structural classifier.
+ */
+function looksLikeUnknownOpaqueSlot(payload: string): boolean {
   return payload.length >= 64 && /^[A-Za-z0-9+/=_-]+$/.test(payload);
 }
 
@@ -480,7 +493,10 @@ function contentWithoutCiphertext(content: unknown[]): unknown[] {
 
 
 
-export function sanitizeEncryptedContentInPlace(input: unknown): number {
+export function sanitizeEncryptedContentInPlace(
+  input: unknown,
+  options: { preserveUnknownOpaqueSlots?: boolean } = {},
+): number {
   if (!Array.isArray(input)) return 0;
   let rewritten = 0;
   const protectedFragments = new WeakSet<object>();
@@ -512,7 +528,9 @@ export function sanitizeEncryptedContentInPlace(input: unknown): number {
         && typeof (child as { encrypted_content?: unknown }).encrypted_content === "string"
       ) {
         const payload = (child as { encrypted_content: string }).encrypted_content;
-        if (!protectedFragments.has(child) && !looksLikeBackendCiphertext(payload)) {
+        const preserveUnknown = options.preserveUnknownOpaqueSlots === true
+          && looksLikeUnknownOpaqueSlot(payload);
+        if (!protectedFragments.has(child) && !looksLikeBackendCiphertext(payload) && !preserveUnknown) {
           const parts = encryptedSlotParts(payload);
           frame.node.splice(frame.index, 1, ...parts);
           rewritten += 1;

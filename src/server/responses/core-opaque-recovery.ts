@@ -88,6 +88,7 @@ export function isEncryptedFunctionOutputRejection(bodyText: string): boolean {
   try {
     const payload = JSON.parse(bodyText) as unknown;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    if (upstreamErrorMessageFromPayload(payload) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
     const record = payload as { detail?: unknown; message?: unknown; error?: unknown };
     if (record.detail === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
     if (record.message === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;

@@ -273,10 +273,14 @@ export async function prepareResponsesRequest(
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
   // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
   // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
+  // verbatim). Structurally valid backend ciphertext stays byte-identical; encoded-looking unknown
+  // slots remain opaque only until final-route handling can preserve or strip them safely.
   {
     const rewritten = sanitizeEncryptedContentInPlace(
       (body as { input?: unknown } | undefined)?.input,
+      // The final destination is not known yet. Keep ambiguous encoded slots opaque until route
+      // selection can either strip them for a third party or apply strict native classification.
+      { preserveUnknownOpaqueSlots: true },
     );
     if (rewritten > 0)
       console.warn(
@@ -890,6 +894,17 @@ export async function prepareResponsesRequest(
   }
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
+
+  if (inboundWire === "responses" && isCanonicalOpenAiForwardProvider(route.provider)) {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0) {
+      console.warn(
+        `[opencodex] rewrote ${rewritten} non-Fernet encrypted_content part(s) before canonical native replay`,
+      );
+    }
+  }
 
   // Encrypted child tasks may reach the canonical native backend or an explicitly trusted
   // direct Responses route. This runs against the FINAL route so native-only fallback can

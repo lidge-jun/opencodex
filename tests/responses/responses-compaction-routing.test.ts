@@ -2316,9 +2316,13 @@ describe("computer screenshot output translation boundary", () => {
 
 describe("external task-input envelopes (#3735)", () => {
   beforeEach(takeSpendHome);
-  // Synthetic charset/length fixture: short plaintext in this slot is deliberately
-  // normalized to input_text before parsing, so it cannot exercise opaque rejection.
-  const opaqueOutput = `g${"A".repeat(127)}`;
+  const opaqueOutput = `${Buffer.concat([
+    Buffer.from([0x80]),
+    Buffer.alloc(8),
+    Buffer.alloc(16),
+    Buffer.alloc(16),
+    Buffer.alloc(32),
+  ]).toString("base64url")}==`;
   const external = (output: unknown = "external task input") => ({
     type: "function_call_output", id: "external-fixture", name: "handoff_input", namespace: "task_inbox", output,
   });
@@ -2326,8 +2330,9 @@ describe("external task-input envelopes (#3735)", () => {
     model: "gw/model", stream: false, input: [item],
   });
 
-  test("opaque negative fixtures survive the plaintext-slot classifier", () => {
+  test("only canonical Fernet structure survives the plaintext-slot classifier", () => {
     expect(looksLikeBackendCiphertext(opaqueOutput)).toBe(true);
+    expect(looksLikeBackendCiphertext(`gAAAAA${"A".repeat(189)}`)).toBe(false);
   });
 
   test("sends a complete envelope as user text without an orphan-tool marker", async () => {

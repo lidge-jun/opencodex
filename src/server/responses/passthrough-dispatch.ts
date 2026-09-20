@@ -143,6 +143,7 @@ import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import {
   attemptOpaqueBlobRecovery,
+  isEncryptedFunctionOutputRejection,
   outboundResponsesBodyCarriesEncryptedFunctionOutput,
   resetStreamedOpaqueBlobLogContext,
   consoleGoUploadRejectionBody,
@@ -1474,8 +1475,13 @@ export async function preparePassthroughExchange(
         payload => {
           if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
           const type = (payload as { type?: unknown }).type;
-          return (type === "error" || type === "response.failed" || type === "response.incomplete")
-            && upstreamErrorMessageFromPayload(payload) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
+          const decryptRejection = (type === "error" || type === "response.failed" || type === "response.incomplete")
+            && isEncryptedFunctionOutputRejection(JSON.stringify(payload));
+          // `detail` is a real WebSocket error shape but the generic preflight failure projector
+          // intentionally understands only Responses error/message fields. Preserve only this
+          // exact identity so the projected 502 can enter the existing single-shot recovery.
+          if (decryptRejection) preflightLog.upstreamError = ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
+          return decryptRejection;
         }, {
           allowMissingContentType: !recoveryContentType && parsed.stream,
           replayReadErrors: true,
