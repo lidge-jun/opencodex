@@ -697,6 +697,20 @@ describe("020 coverage completions", () => {
     expect(editDefault.status).toBe(400);
     expect(editDefault.body.code).toBe("unknown_layer");
 
+    // A string id is edit-only. It cannot bypass the creation cap by naming a
+    // syntactically valid file that the server did not generate.
+    const editMissing = await call("PUT", "/api/codex-prompt/base", fx, {
+      id: "aaaaaa", title: "Missing", body: "b", revision: rev0,
+    });
+    expect(editMissing.status).toBe(400);
+    expect(editMissing.body.code).toBe("unknown_layer");
+
+    const oversized = await call("PUT", "/api/codex-prompt/base", fx, {
+      id: null, title: "Too large", body: "x".repeat(64 * 1024 + 1), revision: rev0,
+    });
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.code).toBe("body_too_large");
+
     // An unknown variant would leave the key naming a file Codex cannot read.
     const unknown = await call("PUT", "/api/codex-prompt/base/select", fx, {
       kind: "variant", id: "zzzzzz", revision: rev0,

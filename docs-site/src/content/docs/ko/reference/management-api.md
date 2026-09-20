@@ -141,6 +141,21 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 대상 전략, cooldown, alias, 라우팅 실패는 [Combos](/guides/combos/)를 참고하십시오.
 
+### Codex 프롬프트 레이어
+
+| Method and path | 목적 | 주요 오류 |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | 프롬프트 레이어 스냅샷(레이어, 기본 변형, 선택, drift 상태)을 읽습니다 | — |
+| `GET /api/codex-prompt/text` | `codex debug prompt-input`으로 모델에 표시되는 프롬프트 텍스트를 조사합니다 | fail-soft: 사용할 수 없는 probe는 HTTP 오류가 아니라 본문의 상태로 저하됩니다 |
+| `PUT /api/codex-prompt/toggle` | 전환 가능한 레이어 하나를 켜거나 끕니다 | 400 잘못된 본문 또는 알 수 없는 레이어; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | 사용자 지정 레이어 집합을 교체합니다 | 400 잘못된 본문, `invalid_characters`, 정규화된 UTF-8 레이어가 65,536바이트를 넘으면 `body_too_large`, 131,072바이트를 넘으면 `composed_too_large`; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | 기본 프롬프트 또는 저장된 변형 하나를 선택합니다 | 400 잘못된 본문, 저장된 변형과 일치하지 않는 id에는 `unknown_layer`; 409 `stale_revision`, 현재 base가 외부이면 `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | 기본 변형 하나를 생성(`id` 생략 또는 `id: null`), 편집 또는 삭제(`delete: true`)합니다. 제공된 `id`는 편집 전용이며 저장된 변형을 참조해야 합니다. `body`는 측정·저장 전에 정규화됩니다(탭 확장, CR/CRLF를 LF로 변환) | 400 잘못된 본문, `default` id 또는 저장된 변형과 일치하지 않는 id에는 `unknown_layer`, 정규화된 UTF-8 본문이 65,536바이트를 넘으면 `body_too_large`; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | `config.toml`의 `developer_instructions`를 사용자 지정 레이어로 가져옵니다 | 400 잘못된 본문, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | `config.toml`과 소유 projection 사이의 drift를 복구합니다 | 400 잘못된 본문; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+레이어 모델과 각 레이어가 쓰는 키는 [Codex 프롬프트 레이어](/guides/codex-prompt/)를 참고하십시오.
+
 ### 구성, 시작, 동기화, 업데이트
 
 | Method and path | 목적 | 주요 오류 |

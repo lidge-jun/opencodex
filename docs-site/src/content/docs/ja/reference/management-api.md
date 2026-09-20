@@ -138,6 +138,21 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 
 ターゲット戦略、クールダウン、エイリアス、およびルーティングの失敗については、[コンボ](/guides/combos/) を参照してください。
 
+### Codex プロンプトレイヤー
+
+|メソッドとパス |目的 |注目すべきエラー |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | プロンプトレイヤーのスナップショット(レイヤー、基本バリアント、選択、drift 状態)を読み取ります | — |
+| `GET /api/codex-prompt/text` | `codex debug prompt-input` を介してモデルに表示されるプロンプトテキストをプローブします | fail-soft: 利用できないプローブは HTTP エラーではなく本文のステータスに低下します |
+| `PUT /api/codex-prompt/toggle` | 切り替え可能な 1 つのレイヤーを有効または無効にします | 400 無効な本文または不明なレイヤー; 409 `stale_revision`、`layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | カスタムレイヤーセットを置き換えます | 400 無効な本文、`invalid_characters`、正規化された UTF-8 レイヤーが 65,536 バイトを超えると `body_too_large`、131,072 バイトを超えると `composed_too_large`; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | デフォルトの基本プロンプトまたは保存された 1 つのバリアントを選択します | 400 無効な本文、保存されたバリアントに一致しない id には `unknown_layer`; 409 `stale_revision`、現在の base が外部の場合は `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | 1 つの基本バリアントを作成(`id` 省略または `id: null`)、編集、または削除(`delete: true`)します。指定された `id` は編集専用で、保存されたバリアントを参照する必要があります。`body` は測定・保存前に正規化されます(タブ展開、CR/CRLF を LF に折りたたみ) | 400 無効な本文、`default` id または保存されたバリアントに一致しない id には `unknown_layer`、正規化された UTF-8 本文が 65,536 バイトを超えると `body_too_large`; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | `config.toml` の `developer_instructions` をカスタムレイヤーとしてインポートします | 400 無効な本文、`invalid_characters`、`body_too_large`、`composed_too_large`; 409 `config_unreadable`、`nothing_to_adopt`、`adopt_unsupported_form`、`stale_revision` |
+| `POST /api/codex-prompt/repair` | `config.toml` と所有された projection 間の drift を修復します | 400 無効な本文; 409 `config_unreadable`、`nothing_to_repair`、`repair_unsupported`、`stale_revision` |
+
+レイヤーモデルと各レイヤーが書き込むキーについては、[Codex プロンプトレイヤー](/guides/codex-prompt/) を参照してください。
+
 ### 設定、起動、同期、更新
 
 |メソッドとパス |目的 |注目すべきエラー |

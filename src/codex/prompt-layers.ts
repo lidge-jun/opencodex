@@ -875,7 +875,10 @@ export function writeBaseVariant(
     ? input.id
     : input.id ?? newBaseVariantId(existing);
   if (!BASE_VARIANT_ID.test(targetId)) return { ok: false, error: "unknown_layer", detail: targetId };
-  if (deleting && !existing.some(v => v.id === targetId)) {
+  // A caller-supplied id is an edit (or delete), never an alternate create path.
+  // Requiring it to exist keeps the generated-id path as the sole place where a
+  // new variant can enter, and therefore makes the cap impossible to bypass.
+  if (input.id !== null && !existing.some(v => v.id === targetId)) {
     return { ok: false, error: "unknown_layer", detail: targetId };
   }
   if (!deleting && input.id === null && existing.length >= MAX_BASE_VARIANTS) {

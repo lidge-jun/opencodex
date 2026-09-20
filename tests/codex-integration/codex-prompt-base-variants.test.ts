@@ -181,6 +181,15 @@ describe("base variant selection", () => {
     expect(writeBaseVariant({ id, title: "edited", body: "b2" }, rev(paths), paths).ok).toBe(true);
   });
 
+  test("a caller-supplied id cannot create a variant", () => {
+    const paths = fixture("model = \"x\"\n");
+    expect(writeBaseVariant({ id: "aaaaaa", title: "Injected", body: "b" }, rev(paths), paths)).toMatchObject({
+      ok: false,
+      error: "unknown_layer",
+    });
+    expect(readBaseVariants(paths)).toEqual([]);
+  });
+
   test("a stale revision is refused", () => {
     const paths = fixture("model = \"x\"\n");
     const stale = rev(paths);
