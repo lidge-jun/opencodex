@@ -273,4 +273,20 @@ export const GUARDS: Guard[] = [
     expect: "refuses an empty file",
     suite: VOICE,
   },
+  {
+    name: "the 1 MiB speech body cap is enforced",
+    file: "src/server/audio-speech.ts",
+    from: '  if (raw instanceof Response) return invalid("Speech request exceeds 1 MiB", 413);',
+    to: "  if (raw instanceof Response) return raw;",
+    expect: "refuses a body past the 1 MiB cap",
+    suite: VOICE,
+  },
+  {
+    name: "the 32 MiB read cap holds when no content-length warns of it",
+    file: "src/server/audio-transcriptions.ts",
+    from: '    if (body instanceof Response) return invalid("Audio request exceeds 32 MiB", 413);',
+    to: "    if (body instanceof Response) return body;",
+    expect: "refuses a body past the 32 MiB read cap, with no content-length to warn of it",
+    suite: VOICE,
+  },
 ];

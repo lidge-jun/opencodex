@@ -5,7 +5,7 @@ import {
   voiceConfigValueError,
   voiceProviderEndpointError,
 } from "../../src/config/voice-target";
-import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS } from "../../src/server/audio-speech";
+import { handleAudioSpeech, SPEECH_INPUT_MAX_CHARS, SPEECH_REQUEST_MAX_BYTES } from "../../src/server/audio-speech";
 import { handleAudioTranscriptions } from "../../src/server/audio-transcriptions";
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
@@ -387,6 +387,19 @@ describe("speech request validation", () => {
       expect: "A nonempty",
     },
     {
+      why: "a body past the 1 MiB cap",
+      // The real limit, with a real body. No injectable constant needed: a
+      // megabyte of JSON is cheap to build and this proves the number that
+      // actually ships rather than a test-only stand-in.
+      request: new Request("http://127.0.0.1/v1/audio/speech", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: "x".repeat(SPEECH_REQUEST_MAX_BYTES) }),
+      }),
+      expect: "exceeds 1 MiB",
+      status: 413,
+    },
+    {
       why: "an input past the character cap",
       request: speechRequest({ input: "x".repeat(SPEECH_INPUT_MAX_CHARS + 1) }),
       expect: "characters",
@@ -481,6 +494,30 @@ describe("transcription request validation", () => {
         f.append("prompt", "x".repeat(17_000));
       }),
       expect: "no larger than 16 KiB",
+      status: 413,
+    },
+    {
+      why: "a body past the 32 MiB read cap, with no content-length to warn of it",
+      // Streamed in 64 KiB chunks so nothing allocates 32 MiB at once, and
+      // sent without a content-length — the header check at the top cannot
+      // see this, so only the read cap stops it. Two sites, one message, and
+      // this is the one that has to hold when the header lies.
+      request: new Request("http://127.0.0.1/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=b" },
+        body: new ReadableStream({
+          start(controller) {
+            const chunk = new Uint8Array(64 * 1024);
+            for (let sent = 0; sent < 33 * 1024 * 1024; sent += chunk.length) {
+              controller.enqueue(chunk);
+            }
+            controller.close();
+          },
+        }),
+        // @ts-expect-error duplex is required for a streaming request body
+        duplex: "half",
+      }),
+      expect: "exceeds 32 MiB",
       status: 413,
     },
     {
