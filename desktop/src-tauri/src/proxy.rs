@@ -24,6 +24,10 @@ impl ProxyClient {
             client: Client::builder()
                 .timeout(Duration::from_secs(4))
                 .user_agent(Auth::user_agent())
+                // The admin token attached to these requests is for loopback only.
+                // reqwest honours system proxy configuration by default, which would
+                // route the credential through whatever proxy the machine declares.
+                .no_proxy()
                 .build()?,
             endpoint,
             auth,
