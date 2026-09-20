@@ -3,6 +3,7 @@ import { isDeclaredReasoningEffort } from "../../reasoning-effort";
 import { COMPACTION_TRIGGERS } from "../../config/schema/compaction-triggers";
 import { routeConcreteModel, type RouteResult } from "../../router";
 import { resolveComboId } from "../../combos/identifiers";
+import { resolvePolicyProfileId } from "../../routing/profile";
 import { recallComboForLane } from "./combo-session-recall";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 
@@ -99,6 +100,11 @@ export function compactionRoutingKeepsProviderIdentity(
   route: RouteResult,
 ): boolean {
   if (route.combo || override.sourceCombo || override.targetCombo || resolveComboId(config, override.sourceModel)) return false;
+  // A policy selector does not identify one stable serving backend: its route depends on
+  // request evidence and live candidate state that this post-rewrite check no longer has.
+  // Treat it as crossing identity rather than reconstructing it through concrete routing,
+  // which deliberately bypasses policy evaluation and may fall through to defaultProvider.
+  if (resolvePolicyProfileId(config, override.sourceModel) !== null) return false;
   let source: RouteResult;
   try {
     source = routeConcreteModel(config, override.sourceModel);
