@@ -28,6 +28,14 @@ keep credentials and audio content out of redirects, request logs and durable st
 `tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
 `tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
 
+`src/server/audio-upstream.ts` is also where a configured key's model and provider scope is
+applied, once for every audio surface that resolves through it: the model it is handed is the one
+the upstream will run — the transcription model, the live session model, or the model a standalone
+socket names in its own query — and a refused forward request releases its probe lease. The native
+voice path in `src/server/live.ts` applies the same predicate, reading the model from the
+call-create session or the socket query and the provider from the upstream it settles on. Coverage
+lives in `tests/server/api-key-scope-audio.test.ts` and `tests/server/api-key-scope-live.test.ts`.
+
 ## Streaming audio
 
 `src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
