@@ -123,6 +123,9 @@ function looksLikeUnknownOpaqueSlot(payload: string): boolean {
  */
 const FERNET_TOKEN_CANDIDATE = /g[A-Za-z0-9_-]{97,}={0,2}/g;
 const FERNET_TOKEN_BOUNDARY_CHAR = /[A-Za-z0-9_=-]/;
+// A normal mixed agent task contains one encrypted body. Keep pathological slots
+// from amplifying into an attacker-controlled number of request parts.
+const MAX_EMBEDDED_FERNET_RUNS_PER_SLOT = 64;
 
 interface FernetTokenRun {
   index: number;
@@ -173,6 +176,7 @@ function fernetTokenRuns(payload: string): FernetTokenRun[] {
     if (after && FERNET_TOKEN_BOUNDARY_CHAR.test(after)) continue;
     if (!isStructurallyValidFernetToken(token)) continue;
     runs.push({ index, token });
+    if (runs.length >= MAX_EMBEDDED_FERNET_RUNS_PER_SLOT) break;
   }
   return runs;
 }
