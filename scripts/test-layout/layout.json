@@ -303,6 +303,7 @@
     "bridge-terminal-singleness.test.ts": "adapters",
     "bridge.test.ts": "adapters",
     "buffered-response-shape-guards.test.ts": "adapters",
+    "brand-favicons.test.ts": "ci-workflows",
     "build-desktop-icon-set.test.ts": "ci-workflows",
     "build-release-changelog.test.ts": "ci-workflows",
     "bump-dev-version.test.ts": "ci-workflows",
