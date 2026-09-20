@@ -335,7 +335,8 @@ describe("GET /api/system/memory", () => {
       delete process.env.OCX_BUN_RUNTIME_PATH;
     }
     // Two route reads only: each one walks the JSC heap via heapStats(), which is what made nine of them exceed the budget on loaded macOS runners; the env matrix is covered on the pure function above.
-  }, 20_000);
+    // Even two reads have taken ~28s on a saturated macOS shard, so the budget is generous.
+  }, 60_000);
 
   test("GET system memory includes privacy-safe appOwnedBytes scalars", async () => {
     registerDefaultAppOwnedMemoryStores();
