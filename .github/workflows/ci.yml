@@ -1205,7 +1205,13 @@ jobs:
       - name: Verify WidgetKit appex and desktop app
         run: |
           app=desktop/src-tauri/target/release/bundle/macos/OpenCodex.app
-          test -x "$app/Contents/MacOS/OpenCodex"
+          # Tauri renames the main binary only when `mainBinaryName` is set, and this config
+          # does not set it, so the bundled executable keeps the Cargo bin name rather than
+          # the product name. Read the name the bundle itself declares instead of restating
+          # it here, so this check follows the config instead of drifting from it.
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          test -n "$executable"
+          test -x "$app/Contents/MacOS/$executable"
           test -x "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget"
           test -x "$app/Contents/MacOS/ocx"
           codesign -dv "$app/Contents/PlugIns/OpenCodexWidget.appex"
