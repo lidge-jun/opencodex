@@ -13,7 +13,7 @@ import { resolveServiceListenPort, reportServiceServing } from "./health";
 import { platformOps, proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand, installServiceSafely, installFreshWindowsSchedulerSafely, removeServiceInstallState, isServiceInstalled } from "./orchestration";
 import { repairService } from "./repair";
 import type { ServiceRepairVerb } from "./repair";
-import { TASK, plistPath, readServiceBackend } from "./state";
+import { TASK, plistPath, readServiceBackend, releaseServiceOwner } from "./state";
 import type { ServiceBackend } from "./state";
 import { unitPath } from "./systemd";
 import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask } from "./windows-scheduler";
@@ -233,6 +233,19 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "install":
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
+      // `install` is the one verb that takes the runtime back. `repair` and `restart` refuse
+      // under a foreign owner precisely because they run incidentally — from a tray helper,
+      // from `ocx update`, from a doctor suggestion — and undoing a takeover the user
+      // consented to must be something the user asked for in as many words.
+      {
+        const released = releaseServiceOwner();
+        if (released) {
+          console.log(
+            `ℹ️  The desktop app owned the background runtime (install ${released.installId}, `
+            + `consent generation ${released.consentGeneration}); installing hands it back to this CLI.`,
+          );
+        }
+      }
       // A manually started proxy can still own the configured port while the service
       // registration is absent or unloaded. Stop both the registered manager and any
       // tracked standalone listener before loading the freshly written service assets.
