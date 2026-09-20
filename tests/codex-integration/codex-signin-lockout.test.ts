@@ -11,16 +11,20 @@
  * test that needed one running would be testing the wrong state.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   OCX_ROUTING_MARKER_LINE,
   OCX_SECTION_MARKER,
   hasInjectedCodexRouting,
   hasInjectedOpenaiBaseUrl,
 } from "../../src/codex/injected-marker";
-import { setRootOpenaiBaseUrl, setRootRealtimeWsBaseUrl } from "../../src/codex/inject/config-toml";
+import { missingOwnedCatalogPath, setRootOpenaiBaseUrl, setRootRealtimeWsBaseUrl } from "../../src/codex/inject/config-toml";
 import { stripOpencodexConfig } from "../../src/codex/inject/remove";
-import { deadProxyRoutingAdviceLines } from "../../src/cli/status";
+import { deadProxyRoutingAdviceLines, missingCodexCatalogLines } from "../../src/cli/status";
 import { findCommand } from "../../src/cli/registry";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /** A Windows catalog path as TOML stores it: a basic string doubles the separators (#1798). */
 const WINDOWS_CATALOG = JSON.stringify(String.raw`C:\Users\example\.codex\opencodex-catalog.json`);
@@ -127,5 +131,53 @@ describe("Codex sign-in lockout behind a stopped proxy (#5261)", () => {
     expect(findCommand(named!)).toBeDefined();
     expect(deadProxyRoutingAdviceLines({ proxyUp: false, routingKind: "opencodex-local" }).join(" "))
       .toContain(`ocx ${named}`);
+  });
+});
+
+describe("a Codex catalog pointer whose file is gone (#5261)", () => {
+  /** Builds a root config naming `catalogPath`, in the escaped form TOML actually stores. */
+  const configNaming = (catalogPath: string) =>
+    `model = "gpt-5.5"\nmodel_catalog_json = ${JSON.stringify(catalogPath)}\n`;
+
+  test("an owned catalog that is missing is reported, and one that exists is not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-pointer-"));
+    try {
+      const present = join(dir, "opencodex-catalog.json");
+      writeFileSync(present, "{}");
+      const absent = join(dir, "gone", "opencodex-catalog.json");
+
+      expect(missingOwnedCatalogPath(configNaming(absent))).toBe(absent);
+      expect(missingOwnedCatalogPath(configNaming(present))).toBeNull();
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("a catalog the user named is theirs, present or not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-user-"));
+    try {
+      // Same missing file, a name we never write. Claiming it would put opencodex's recovery
+      // advice in front of a problem that is not opencodex's to explain.
+      const userOwned = join(dir, "gone", "my-catalog.json");
+      expect(missingOwnedCatalogPath(configNaming(userOwned))).toBeNull();
+      expect(missingOwnedCatalogPath('model = "gpt-5.5"\n')).toBeNull();
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("the report names the file and both ways out", () => {
+    const lines = missingCodexCatalogLines("/somewhere/opencodex-catalog.json");
+    expect(lines.length).toBeGreaterThan(0);
+    const joined = lines.join(" ");
+    expect(joined).toContain("/somewhere/opencodex-catalog.json");
+    // Regenerating and removing are different outcomes; the user picks, so both are offered.
+    expect(joined).toContain("ocx start");
+    expect(joined).toContain("ocx restore");
+    expect(missingCodexCatalogLines(null)).toEqual([]);
+  });
+
+  test("the commands it names are real", () => {
+    for (const name of ["start", "restore"]) expect(findCommand(name)).toBeDefined();
   });
 });
