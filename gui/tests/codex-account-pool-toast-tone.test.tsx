@@ -70,6 +70,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     activeNeedsReauth: false,
     activePinnedId: null,
     refreshing: false,
+    refreshFailed: false,
     initialLoading: false,
     load: async () => true,
     switchAccount: async () => ({ ok: true, activeId: null }),

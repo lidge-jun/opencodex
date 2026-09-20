@@ -153,6 +153,13 @@ still cover the rule, which is a judgement only review makes.
   cause that refuses an automatic resend rather than to one that permits it, and the resend verdict
   the pair implies is computed at read time and never persisted.
   Enforced by `tests/lib/failure-attribution.test.ts`.
+- **INV-RESEND-02** — One logical request holds one operator-granted replacement for an ambiguous
+  failure, however many stages ask for it. `src/lib/request-resend-gate.ts` is the only place
+  that override is applied, it claims the grant at the moment it authorises rather than earlier,
+  and a stage the caller observed something at refuses without spending it. The grant never
+  widens a send budget: an authorised replacement still has to fit the allowance the leg already
+  had.
+  Enforced by `tests/lib/ambiguous-resend-gate.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

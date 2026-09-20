@@ -715,7 +715,9 @@
     "desktop-3p.test.ts": "clients",
     "desktop-app-restart.test.ts": "clients",
     "desktop-profile.test.ts": "clients",
+    "desktop-widget-entry.test.ts": "clients",
     "desktop-remote-store.test.ts": "clients",
+    "desktop-start-at-login-default.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",
     "devin-adapter.test.ts": "providers",
     "devin-cli-authmode-migration.test.ts": "providers",
@@ -825,6 +827,7 @@
     "health-scoring.test.ts": "server",
     "history-migration-guardian.test.ts": "codex-integration",
     "history-ocx-compaction-recovery.test.ts": "codex-integration",
+    "history-paginated-openai-compat.test.ts": "codex-integration",
     "hub-gated-local-clients.test.ts": "cli",
     "hub-invite.test.ts": "cli",
     "hyperbolic-provider.test.ts": "providers",
@@ -1031,6 +1034,7 @@
     "oauth-first-add-hint.test.ts": "gui",
     "oauth-health.test.ts": "oauth",
     "oauth-log.test.ts": "oauth",
+    "oauth-login-cli-browser-launch.test.ts": "oauth",
     "oauth-login-cli-live-update.test.ts": "oauth",
     "oauth-login-open-browser.test.ts": "oauth",
     "oauth-login-summary.test.ts": "oauth",
@@ -1615,7 +1619,10 @@
     "claude-intercept-settings.test.ts": "claude-integration",
     "claude-desktop-first-party.test.ts": "claude-integration",
     "claude-desktop-mode-explanation.test.ts": "claude-integration",
-    "claude-intercept-integration.test.ts": "server"
+    "claude-intercept-integration.test.ts": "server",
+    "management-provider-reset-replay.test.ts": "server",
+    "responses-reset-replay.test.ts": "responses",
+    "ambiguous-resend-gate.test.ts": "lib"
   },
   "migrated": [
     "adapters",

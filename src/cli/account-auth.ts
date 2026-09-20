@@ -2,6 +2,7 @@ import { writeSync } from "node:fs";
 import { modelSelectionGuidance, modelSelectionNextSteps } from "./model-selection-guidance";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
+import { BROWSER_LAUNCH_FAILED_NOTICE } from "../lib/browser-launch-notice";
 import {
   CliUsageError,
   printData,
@@ -80,9 +81,12 @@ interface LoginStart {
  * either way, so the user waits at a terminal that looks like it is working. Names the fixed
  * callback port because that is the part people cannot guess — ChatGPT supplies the redirect
  * URI, so the flow cannot move to a free port, and `--device` is the way around it.
+ *
+ * Extends the shared notice rather than repeating it: only the second line is specific to this
+ * flow, and the first is the sentence every other login prints for the same failure.
  */
 export const BROWSER_LAUNCH_FAILED_HINT =
-  "⚠️  No browser could be opened here — open the URL above yourself."
+  BROWSER_LAUNCH_FAILED_NOTICE
   + "\n   If nothing on this machine can reach http://localhost:1455, rerun with --device instead.";
 
 /** `-` means "read it from stdin", the documented way to pass a code silently. */

@@ -509,6 +509,101 @@ describe("ambiguous reset safety", () => {
   });
 });
 
+describe("operator-granted replacement of an ambiguous reset", () => {
+  test("no claim callback keeps the refusal and never sends again", async () => {
+    const mock = mockDoFetch([bunResetError(), new Response("duplicate")]);
+    const response = await fetchWithResetRetry(mock.doFetch, { attempts: 3 });
+    expect(response.status).toBe(429);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  test("a granted claim buys exactly one more send and is asked exactly once", async () => {
+    silenceWarn();
+    const reports: number[] = [];
+    let asked = 0;
+    const mock = mockDoFetch([bunResetError(), new Response("ok")]);
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3,
+      onSendsConsumed: count => reports.push(count),
+      claimAmbiguousResend: () => { asked += 1; return asked === 1; },
+    });
+    expect(await response.text()).toBe("ok");
+    expect(mock.calls).toHaveLength(2);
+    expect(asked).toBe(1);
+    expect(reports).toEqual([1, 1]);
+  });
+
+  test("a spent grant settles as the refusal rather than sending again", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([bunResetError(), bunResetError(), new Response("duplicate")]);
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3,
+      // The shape a request-wide allowance of one produces on its second question.
+      claimAmbiguousResend: (() => { let left = 1; return () => left-- > 0; })(),
+    });
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("the grant never widens the send budget it was given", async () => {
+    const mock = mockDoFetch([bunResetError(), new Response("duplicate")]);
+    let asked = 0;
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 1,
+      claimAmbiguousResend: () => { asked += 1; return true; },
+    });
+    expect(response.status).toBe(429);
+    expect(mock.calls).toHaveLength(1);
+    // Asking would have spent the request's one replacement on a send there was no room for.
+    expect(asked).toBe(0);
+  });
+
+  test("a replay-safe operation never consults the grant", async () => {
+    silenceWarn();
+    let asked = 0;
+    const mock = mockDoFetch([bunResetError(), new Response("ok")]);
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3, replaySafe: true, claimAmbiguousResend: () => { asked += 1; return true; },
+    });
+    expect(await response.text()).toBe("ok");
+    expect(asked).toBe(0);
+  });
+
+  test("a non-reset failure after a replacement settles as the refusal, not a rejection", async () => {
+    silenceWarn();
+    // The hazard the refusal exists for: a thrown transport error here becomes a 502 at the
+    // caller, and a 502 is what the Codex client retries -- so the turn whose first send may
+    // already have run would be sent again, four more times.
+    const mock = mockDoFetch([bunResetError(), new Error("upstream fetch failed")]);
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3, claimAmbiguousResend: () => true,
+    });
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("the transient layer carries the grant into its inner reset layer", async () => {
+    silenceWarn();
+    const reports: number[] = [];
+    const mock = mockDoFetch([
+      new Response("busy", { status: 503 }), bunResetError(), new Response("ok"),
+    ]);
+    const response = await fetchWithTransientRetry(mock.doFetch, {
+      attempts: 3,
+      onSendsConsumed: count => reports.push(count),
+      claimAmbiguousResend: () => true,
+    });
+    expect(await response.text()).toBe("ok");
+    expect(mock.calls).toHaveLength(3);
+    // One report, from the one layer that owns the budget: three sends, counted once each.
+    expect(reports).toEqual([3]);
+  });
+});
+
 describe("ambiguous reset safety through error formatting", () => {
   test("every terminal code survives formatting without advertising Retry-After", async () => {
     for (const code of ["upstream_no_response", "upstream_closed_before_response", "upstream_reset_replay_refused"]) {

@@ -1154,6 +1154,8 @@ export const en = {
   "usage.col.cacheHits": "Cache hits",
   "usage.col.cacheWrites": "Cache writes",
   "usage.col.cacheHitRate": "Hit rate",
+  "usage.cacheHitRate.partial": "Averaged over {measured} of {total} input tokens; the remaining requests reported no cache detail.",
+  "usage.cacheHitRate.unmeasured": "No request for this row reported cache detail, so there is no hit rate to average.",
   "usage.unavailable": "—",
   "usage.col.tokens": "Tokens",
   "usage.col.apiListPrice": "API list-price",
@@ -2293,6 +2295,7 @@ export const en = {
 
   "codexAuth.switched": "{email} is selected for the next request",
   "codexAuth.loadFailed": "Codex account settings could not be loaded.",
+  "codexAuth.accountsRefreshFailed": "The latest account refresh failed. The accounts below are the last ones confirmed.",
   "codexAuth.switchFailed": "The account could not be switched. Your previous selection is unchanged.",
   "codexAuth.removeConfirm": "Remove {id}?",
   "codexAuth.removeFailed": "The account could not be removed. Nothing was changed.",

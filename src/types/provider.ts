@@ -68,6 +68,31 @@ export interface TransientRetryPolicy {
 }
 
 /**
+ * Opt-in replacement of a native Responses send whose upstream connection closed while the
+ * caller had observed nothing (`providers.<name>.retryOnReset`).
+ *
+ * Covers both ambiguous stages the proxy can be in: no response head at all, and a head whose
+ * SSE body carried only control events. Disabled unless the object is present; a bare `{}`
+ * opts in with defaults. Only a request the proxy can judge self-contained is ever replaced;
+ * see `src/server/responses/reset-replay.ts`. The replacement inference may still be billed if
+ * the origin had already started the first one, which is what makes this opt-in rather than
+ * default.
+ */
+export interface ResetReplayPolicy {
+  /** Master switch. Presence of the object also enables the policy (default true). */
+  enabled?: boolean;
+  /**
+   * Replacement sends one LOGICAL request may make, across every leg and every combo child
+   * (1..2, default 1).
+   *
+   * Not a per-leg retry count and not a send budget. A request that resets before the head and
+   * again after it draws on this one number, and each replacement still has to fit inside the
+   * send allowance the leg already had.
+   */
+  replacements?: number;
+}
+
+/**
  * Same-target 429 wait-and-retry policy (`providers.<name>.retryOn429`). When present and not
  * explicitly disabled, the proxy waits and replays the identical request on the same key before
  * any key failover. All fields optional; the runtime applies defaults (attempts=3,
@@ -914,6 +939,12 @@ export interface OcxProviderConfig {
    * with defaults. Key-auth `openai-chat` only.
    */
   transientRetryOn5xx?: TransientRetryPolicy;
+  /**
+   * Opt-in replacement of a native Responses send that died while the caller had observed
+   * nothing (`providers.<name>.retryOnReset`). Disabled unless present; a bare `{}` opts in
+   * with defaults. Native Responses sends only, and only for self-contained requests.
+   */
+  retryOnReset?: ResetReplayPolicy;
   /**
    * Model ids whose OpenAI-compatible chat endpoint accepts `reasoning_split: true` and returns
    * thinking separately in `reasoning_content` / `reasoning_details` instead of visible content.

@@ -81,6 +81,17 @@ const transientRetryOn5xxPolicySchema = z.object({
   attempts: z.number().int().min(1).max(10).optional(),
 }).strict();
 
+/**
+ * `retryOnReset` accepts only these keys. `replacements` counts DUPLICATE inferences the
+ * operator is willing to risk for one logical request, so the ceiling is two rather than a
+ * send budget: this is the one send the proxy otherwise refuses outright, and a third of them
+ * says the connection, not the retry policy, is the problem.
+ */
+export const retryOnResetPolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  replacements: z.number().int().min(1).max(2).optional(),
+}).strict();
+
 const requestPacingRuleSchema = z.object({
   // Keep the RPM-derived timer within the same one-hour bound as minIntervalMs.
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
@@ -331,6 +342,10 @@ export const providerConfigSchema = z.object({
     .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
+  // Degrades to "absent" like `webSearchBridge`: a malformed hand edit of an opt-in feature
+  // that is off by default must not send the operator through invalid-config recovery. The
+  // management write boundary still rejects it loudly (`retryOnResetPolicyConfigError`).
+  retryOnReset: retryOnResetPolicySchema.optional().catch(undefined),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be

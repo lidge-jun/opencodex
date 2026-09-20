@@ -66,8 +66,10 @@ plutil -replace CFBundleShortVersionString -string "$version_core" "$output_dir/
 plutil -replace CFBundleVersion -string "$version_core" "$output_dir/Contents/Info.plist"
 
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
+  # Hardened runtime and a secure timestamp are both required for notarized Developer ID
+  # software, and an extension that lacks either fails notarization with the host around it.
   codesign --force --sign "$MACOS_SIGN_IDENTITY" --entitlements "$package_dir/Widget.entitlements" \
-    --timestamp "$output_dir"
+    --options runtime --timestamp "$output_dir"
 else
   codesign --force --sign - --entitlements "$package_dir/Widget.entitlements" \
     --timestamp=none "$output_dir"

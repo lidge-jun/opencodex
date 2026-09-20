@@ -7,6 +7,15 @@
   <key>CFBundleIdentifier</key><string>com.opencodex.desktop.widget</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>OpenCodex</string>
+  <key>CFBundleDisplayName</key><string>OpenCodex</string>
+  <!--
+    Every widget macOS itself ships declares a supported platform, and no third-party guidance
+    mentions it because Xcode writes it for you. A SwiftPM-assembled appex has no build system to
+    write it, and an extension bundle that does not say which platform it supports gives the
+    system no reason to consider it on this one.
+  -->
+  <key>CFBundleSupportedPlatforms</key>
+  <array><string>MacOSX</string></array>
   <key>CFBundlePackageType</key><string>XPC!</string>
   <key>CFBundleShortVersionString</key><string>0.0.0</string>
   <key>CFBundleVersion</key><string>0.0.0</string>

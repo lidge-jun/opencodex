@@ -301,3 +301,119 @@
   .usage-companion-control > .usage-segmented { width: 100%; }
   .usage-companion-control > .usage-segmented .usage-segmented-btn { flex: 1 1 0; min-width: 0; padding-inline: 6px; }
 }
+
+/* ── Models table ─────────────────────────────────────── */
+
+/*
+  `.tbl` is `width: 100%`, which divides the shell's width across this table's twelve columns
+  until an eight-digit token total folds onto a second line. Give the table the width its content
+  asks for and let the shell scroll sideways instead; `.tbl-wrap` is already `overflow-x: auto`,
+  so `min-width: 100%` is what keeps the table filling a shell wide enough to hold it.
+
+  Every selector here is doubled as `.tbl.usage-models-tbl`, which is not decoration. This file is
+  `@import`ed from the top of `styles.css`, so the whole of `styles.css` cascades after it: a bare
+  `.usage-models-tbl { width: max-content }` ties `.tbl { width: 100% }` on specificity and loses
+  on source order, and the squeeze comes straight back. The rules that already lived in this file
+  buy the same margin with a descendant `.usw-section` prefix.
+*/
+.tbl.usage-models-tbl {
+  --usage-models-model-col: 14rem;
+  --usage-models-provider-col: 11rem;
+  width: max-content;
+  min-width: 100%;
+}
+
+.tbl.usage-models-tbl th,
+.tbl.usage-models-tbl td {
+  white-space: nowrap;
+}
+
+/* The share bar carries no text, so its column has no intrinsic width to size to. */
+.tbl.usage-models-tbl th:nth-child(3),
+.tbl.usage-models-tbl td:nth-child(3) {
+  min-width: 9rem;
+}
+
+/*
+  Model and provider stay legible while the numbers scroll under them. The scrollport is
+  `.tbl-wrap`, whose own `var(--space-3)` padding scrolls with the content, so — the same trick
+  the sticky header above plays with `top` — each offset is one padding step negative and the
+  stuck cell repaints that strip with its own background. The widths are fixed because the second
+  column's offset is the first column's width, and `box-sizing: border-box` is global, so the
+  declared width is the rendered width. A value too long for its column clips and keeps its full
+  text in the cell's `title`.
+*/
+.tbl.usage-models-tbl th:nth-child(1),
+.tbl.usage-models-tbl td:nth-child(1),
+.tbl.usage-models-tbl th:nth-child(2),
+.tbl.usage-models-tbl td:nth-child(2) {
+  position: sticky;
+  z-index: 2;
+  background: var(--surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tbl.usage-models-tbl th:nth-child(1),
+.tbl.usage-models-tbl td:nth-child(1) {
+  left: calc(-1 * var(--space-3));
+  width: var(--usage-models-model-col);
+  min-width: var(--usage-models-model-col);
+  max-width: var(--usage-models-model-col);
+}
+
+.tbl.usage-models-tbl th:nth-child(2),
+.tbl.usage-models-tbl td:nth-child(2) {
+  left: calc(var(--usage-models-model-col) - var(--space-3));
+  width: var(--usage-models-provider-col);
+  min-width: var(--usage-models-provider-col);
+  max-width: var(--usage-models-provider-col);
+}
+
+/*
+  Seam between the pinned pair and the scrolling columns, on the body rows only: the sticky
+  header cells already carry a `box-shadow` that repaints the header strip, and a second
+  declaration here would replace it rather than add to it.
+*/
+.tbl.usage-models-tbl tbody td:nth-child(2) {
+  box-shadow: inset -1px 0 0 var(--border-soft);
+}
+
+/*
+  A pinned cell has to stay opaque on hover. Two separate reasons, and missing either one lets
+  the scrolled columns read straight through the pinned pair: `.tbl tbody tr:hover td` outranks
+  the opaque fill above on its own, and `--hover` is a 3% overlay rather than a colour, so
+  assigning it alone replaces the surface with something almost entirely transparent. Paint the
+  overlay as a layer over the surface instead of in place of it.
+*/
+.tbl.usage-models-tbl tbody tr:hover td:nth-child(1),
+.tbl.usage-models-tbl tbody tr:hover td:nth-child(2) {
+  background: linear-gradient(var(--hover), var(--hover)), var(--surface);
+}
+
+/* The corner cells sit above both the scrolling body and the rest of the sticky header row. */
+.tbl.usage-models-tbl thead th:nth-child(1),
+.tbl.usage-models-tbl thead th:nth-child(2) {
+  z-index: 3;
+}
+
+/* The exclusion caption is a line under the amount, never a wrap of the same line. */
+.usage-cost-note {
+  display: block;
+}
+
+/* Narrower than this, two pinned columns cost more reading room than scrolling the table does. */
+@media (max-width: 720px) {
+  .tbl.usage-models-tbl th:nth-child(1),
+  .tbl.usage-models-tbl td:nth-child(1),
+  .tbl.usage-models-tbl th:nth-child(2),
+  .tbl.usage-models-tbl td:nth-child(2) {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .tbl.usage-models-tbl tbody td:nth-child(2) {
+    box-shadow: none;
+  }
+}

@@ -382,6 +382,35 @@ describe("provider outbound GET transport", () => {
     }
   });
 
+  test("a SOCKS scheme-matched variable admits and binds the proxy instead of pin-connecting to fake-IP", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTPS_PROXY = "socks5://127.0.0.1:9";
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+    const resolveOptions: { allowMihomoIpv6FakeIp?: boolean }[] = [];
+    dependencies.resolveAddresses = mock(async (_url: string, options?: { allowMihomoIpv6FakeIp?: boolean }) => {
+      resolveOptions.push({ allowMihomoIpv6FakeIp: options?.allowMihomoIpv6FakeIp });
+      return {
+        hostname: "provider.example",
+        addresses: [{ address: "fdfe:dcba:9876::1", family: 6 }],
+        privateNetwork: false,
+      };
+    }) as ProviderOutboundDependencies["resolveAddresses"];
+
+    // Admission and transport must name the same proxy: the request rides the
+    // SOCKS binding the admission assumed, so the unreachable proxy rejects
+    // here. Pin-connecting to the fake-IP instead would be the inconsistency.
+    await expect(providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      {},
+      dependencies,
+    )).rejects.toThrow();
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: true }]);
+    expect(captured.address).toBeUndefined();
+  });
+
   test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
@@ -737,12 +766,15 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(http, { all_proxy: "http://p:13" })).toBe("http://p:13");
     expect(effectiveProxyFor(http, { ALL_PROXY: "ftp://p:8" })).toBeNull();
     expect(effectiveProxyFor(http, { ALL_PROXY: "http://" })).toBeNull();
-    // A malformed or non-http(s) scheme-matched variable is not a proxy Bun fetch
-    // can use either: it must not count as "the proxy that applies".
+    // A SOCKS URL in a scheme-matched variable is a usable proxy: admission
+    // binds it explicitly and the transport follows, so it counts as applying.
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "socks5://p:9" })).toBe("socks5://p:9");
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "socks5h://p:14" })).toBe("socks5h://p:14");
+    // A malformed or non-proxy-scheme scheme-matched variable is not a proxy
+    // Bun fetch can use either: it must not count as "the proxy that applies".
     expect(effectiveProxyFor(http, { HTTP_PROXY: "http://" })).toBeNull();
     expect(effectiveProxyFor(http, { HTTP_PROXY: "not a url" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "http://" })).toBeNull();
-    expect(effectiveProxyFor(https, { HTTPS_PROXY: "socks5://p:9" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
     // A present-but-unusable scheme-matched variable fails closed rather than
     // falling through to ALL_PROXY: no usable proxy is guaranteed either way,
