@@ -110,6 +110,30 @@ describe("policy candidate fallback", () => {
     expect(cloneCalls).toBe(0);
   });
 
+  test("retries from an immutable snapshot of the initially parsed body", async () => {
+    const trace = policyTrace();
+    const logCtx = { routeDecision: trace } as RequestLogContext;
+    const seenInputs: unknown[] = [];
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls += 1;
+        const body = await req.json() as { input: unknown; model: string };
+        options.onRequestBodyParsed?.(body);
+        seenInputs.push(body.input);
+        context.routeDecision = trace;
+        if (calls === 1) {
+          body.input = "recovered plaintext";
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenInputs).toEqual(["hello", "hello"]);
+  });
+
   test("a local input-admission refusal hops instead of ending the chain (#1524)", async () => {
     // #1524: a candidate whose context window cannot fit the request used to TERMINATE the
     // fallback chain. It is a local preflight verdict about ONE candidate, not about the
