@@ -68,6 +68,17 @@ it, nor does it record the refusal as rate-limit or quota evidence against the c
 was holding. Tool-call side requests such as vision and web search are replayed normally, because
 repeating them cannot duplicate a turn.
 
+A native Responses provider can opt into replacing that send with
+[`retryOnReset`](providers.md#provider-entries-ocxproviderconfig). The same grant covers the
+case where the connection survives the header and the SSE body then dies carrying only control
+events, because the caller has observed nothing in either one. A replacement happens only when
+the request is self-contained (`store: false`, complete input, client-executed tools only, no
+server-side continuation state), and one logical request gets the configured number of
+replacements in total — across every recovery leg and every combo child, not one each. The
+refusal returns as soon as that grant is spent, the leg has no send left, or a replacement fails
+for any other reason. A request that already emitted output or a tool call keeps the refusal
+regardless. A caller that cancels mid-replacement gets the cancellation, not the refusal.
+
 `noProxy` accepts either a comma-separated string or an array. Both forms add entries without
 replacing an inherited `NO_PROXY`:
 
