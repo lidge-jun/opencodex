@@ -1,13 +1,13 @@
 # Campaign status
 
-Status: ACTIVE. Fourteen original issues are resolved and closed; #5114 and #5118 remain open. Metrics #5183 landed at fec3add6ce after exact-head run35464220426 passed all applicable jobs and source/security/public review completed; #5117 closure was verified. Consumer #5174 passed at3a5ce7d793; the one-line documentation correction e5d5462450 awaits new-head run35467320406. Server #5185 at36cdb56954 passed scoped source review. A subsequent bounded correction and regression remain pending before final hosted verification and parent cascade. Dashboard #5197 has eleven directly inspected hosted-artifact fixture captures with receipts; final parent cascade and full verification remain required. Cumulative dev run35467094926 is queued at fec3add6ce. See per-PR records for historical corrections and evidence limits.
+Status: IMPLEMENTATION COMPLETE. The active regression and release follow-up is tracked in [its separate open unit](../../_plan/260920_regression_release/000_scope.md). All sixteen original implementation issues are now closed. Final dashboard #5197 landed as `ed44e04a933f6d4d62d2e049bf7606f08d347b06`; #5118 was closed after ancestry/tree checks and current source/fixture evidence. The owner explicitly requested immediate integration while macOS verification remained unfinished, and that timing exception is recorded on the PR. No full-platform pass is claimed for that incomplete run. Complete hosted regression, main/preview promotion, release publication and post-publication verification remain outstanding. Two non-blocking review observations are retained for follow-up. The heartbeat remains active.
 
 ## Owners
 
 | Lane | State | Issues |
 | --- | --- | --- |
-| Runtime | Active in an isolated worktree | Remaining: #5118 server, writer, routes, backend tests and documentation |
-| Policy and operator | Active in an isolated worktree | Remaining: #5114 and #5118 dashboard with its tests |
+| Runtime | Delivered | All assigned implementation work landed |
+| Policy and operator | Delivered | Final dashboard landed; release remains coordinator-owned |
 
 Private orchestration records retain the actual task handles and wake cursors. The current coordinator heartbeat is ACTIVE at a 20-minute interval. It follows the two existing implementation owners; it must not duplicate them. The coordinator owns integration and issue closure.
 
@@ -20,8 +20,8 @@ Private orchestration records retain the actual task handles and wake cursors. T
 
 ## Issue outcomes
 
-Closed: #5109, #5110, #5111, #5112, #5113, #5115, #5116, #5117, #5119, #5120, #5121, #5122, #5123, #5124.
-Open: #5114, #5118.
+Closed: #5109, #5110, #5111, #5112, #5113, #5114, #5115, #5116, #5117, #5118, #5119, #5120, #5121, #5122, #5123, #5124.
+Open implementation issues: none. Regression, promotion and release remain open.
 
 The entries below are chronological historical checkpoints. Their earlier open/closed states do not override the current summary or acceptance ledger.
 
@@ -136,3 +136,19 @@ Second ownership amendment: #5118 transferred to the existing runtime owner afte
 The current-task heartbeat was updated and read back ACTIVE with the existing twenty-minute cadence. It now reflects twelve closed issues, runtime ownership of #5118, policy ownership of #5112/#5114/#5117, and the remaining publication/visual verification duties. Other task monitors were not modified.
 
 Current verified ledger remains thirteen closed issues and three open (#5114/#5117/#5118). The policy owner now owns only the dashboard child layer of #5118 in addition to #5114/#5117; the runtime owner retains its server, writer, routes, backend tests and documentation. The runtime handoff confirmed no dashboard writer, branch or commit existed. The two-owner limit, manual parent-child delivery and actual screenshot requirement remain unchanged.
+
+Fourth public checkpoint #5218 was opened at449d1144 after independent six-file publication review and the requested wording corrections. It records fourteen verified closures and remaining work; hosted controls/public review remain pending. All fourteen recorded merge ancestors and closed issue states were freshly rechecked against devfec3add6ce.
+
+Fourth checkpoint revision: public review identified detailed unshipped working notes in the preview record. The full notes were retained in ignored scratch; neutral progress/evidence wording replaced them and passed re-review. PR5218 now uses b6c0cd02224de03b62e25034f2c7d32bf02a1b64; the finding was answered and resolved. New-head hosted/public review remains pending, and no claim is made that prior remote objects were erased.
+
+Latest execution update: #5174 e5d is held after macOS shard1 reported actual fixture assertions and subprocess timeouts before its job deadline; diagnosis is active. #5185 ea8 exact-head run35467605982 completed successfully and public review is active. The dashboard final source cascade is prepared locally; its final-parent publication and fresh hosted-artifact captures follow verified server integration.
+
+Fourth public checkpoint #5218 merged as1883f2fff9b395dea5d849730997dac683e59939 at2026-09-19T20:55:23Z. Final headfb978cc2eb passed applicable hosted run35468644496 and controls; both public findings were resolved. Actual dev ancestry and merged tree11341f4cf66d2963847c05d1c3fe1e74e705e87f were verified. The fourteen-closure checkpoint is now public; later source/CI updates remain active working records.
+
+Final server run35471595302 succeeded at3a8e73d417, and the tested merge tree was verified equal to the accepted union. A subsequent public canonical-route consistency finding is being corrected before server integration. The earlier pass is not reused for a future changed head.
+
+Final-audit correction: the earlier fifteen-closure checkpoint was an accurate GitHub state, but original transport verification rows remained weak. #5109/#5110 are now explicitly open until a focused regression follow-up executes and lands. Existing implementation and successful receipts remain valid for the scenarios they cover. No acceptance criterion was removed or weakened.
+
+The dashboard delivery owner encountered a terminal execution-capacity failure after source and capture completion. The same existing task was resumed with available capacity, preserving its worktree and scoped ownership. No duplicate delivery lane or third main task was created. Remaining work is final capture-asset publication, independent visual evidence, applicable hosted checks and coordinator integration.
+
+Later verification: run35483995896 attempt1 completed SUCCESS at source278513a79e, including all event-applicable jobs and both macOS shards. The earlier integration timing exception remains a historical fact; the formerly pending source-PR platform checks are now complete. Full main-through-candidate regression, promotion and release remain separate follow-up work.

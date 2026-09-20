@@ -121,6 +121,7 @@ import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import {
+  isOpenCodeGoDestination,
   rateLimitRetryPolicyFor,
   rateLimitRetryDelayMs,
   transientRetryPolicyFor,
@@ -142,6 +143,7 @@ import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import {
   attemptOpaqueBlobRecovery,
+  isEncryptedFunctionOutputRejection,
   outboundResponsesBodyCarriesEncryptedFunctionOutput,
   resetStreamedOpaqueBlobLogContext,
   consoleGoUploadRejectionBody,
@@ -841,7 +843,15 @@ export async function preparePassthroughExchange(
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(adoptObservedResponse);
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends },
+        { abortSignal: upstream.signal, label: safeHostLabel(request.url),
+          attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends,
+          // The OpenCode Go destination stalls-then-drops inference sends (ambiguous
+          // pre-header resets surfacing as refused 429s); its subscription traffic is
+          // inference-only, so a bounded reset replay here absorbs the blip instead of
+          // failing the turn. Recovery legs keep the fail-closed refusal; only this
+          // initial send is replay-eligible. Attempts stay budget-bounded via attempts.
+          replaySafe: isOpenCodeGoDestination(route.provider),
+        },
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -863,7 +873,7 @@ export async function preparePassthroughExchange(
       recovery: AttemptRecoveryKind,
     ): Promise<Response | { failed: Response }> => {
       const retryAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+        resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
       if (!("passthrough" in retryAdapter) || !retryAdapter.passthrough) {
@@ -989,7 +999,7 @@ export async function preparePassthroughExchange(
       route.provider = replay.provider;
       requestState.selectedForwardHeaders = withClaudeNativeSession(replay.headers, replay.provider, options.claudeNativeSessionId);
       const replayAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire),
+        resolveWireProtocolOverride(route.providerName, route.modelId, replay.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
       if (!("passthrough" in replayAdapter) || !replayAdapter.passthrough) {
@@ -1110,7 +1120,7 @@ export async function preparePassthroughExchange(
       );
       route.provider = refreshedProvider;
       const refreshedAdapter = resolveSelectionAdapter(
-        resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+        resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
         config.cacheRetention,
       );
       if (!("passthrough" in refreshedAdapter) || !refreshedAdapter.passthrough) {
@@ -1465,8 +1475,13 @@ export async function preparePassthroughExchange(
         payload => {
           if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
           const type = (payload as { type?: unknown }).type;
-          return (type === "error" || type === "response.failed" || type === "response.incomplete")
-            && upstreamErrorMessageFromPayload(payload) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
+          const decryptRejection = (type === "error" || type === "response.failed" || type === "response.incomplete")
+            && isEncryptedFunctionOutputRejection(JSON.stringify(payload));
+          // `detail` is a real WebSocket error shape but the generic preflight failure projector
+          // intentionally understands only Responses error/message fields. Preserve only this
+          // exact identity so the projected 502 can enter the existing single-shot recovery.
+          if (decryptRejection) preflightLog.upstreamError = ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
+          return decryptRejection;
         }, {
           allowMissingContentType: !recoveryContentType && parsed.stream,
           replayReadErrors: true,

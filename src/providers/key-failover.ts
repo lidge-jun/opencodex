@@ -298,7 +298,7 @@ const OPENCODE_GO_RATE_LIMIT_RETRY = {
 } as const satisfies Required<RateLimitRetryPolicy>;
 
 /** True when the provider row points at the OpenCode Go destination. */
-function isOpenCodeGoDestination(
+export function isOpenCodeGoDestination(
   provider: Partial<Pick<OcxProviderConfig, "baseUrl" | "authMode">>,
 ): boolean {
   const raw = typeof provider.baseUrl === "string" ? provider.baseUrl : "";

@@ -86,6 +86,43 @@ Authorization: Bearer <admin-token>
 | `GET /api/client-integrations/journal?client=...` | 列出回滚操作，也可限定为单个客户端。每一项都包含由服务器计算的 `deletable` 字段。 | 400 客户端无效 |
 | `DELETE /api/client-integrations/journal?opId=...` | 停用一条较旧的回滚操作，并在可能时删除其快照。成功响应中的 `snapshotRemoved: false` 表示清理任务已保留，等待维护重试。 | 400 缺少 `opId`；404 操作不存在或已停用；409 该客户端的最新操作 |
 
+## 预览集成变更
+
+预览只展示变更会做什么，而不会执行它。这些路由不写入任何内容：不留快照、不留归属记录、不留
+日志行、不加锁、不做维护和恢复。
+
+| 方法与路径 | 用途 | 主要错误 |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | 为一个客户端规划 `apply`、`overwrite` 或 `disable`；请求体为 `{ "clientId": "...", "operation": "..." }` | 400 客户端或操作无效；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | 规划一次撤销；请求体为 `{ "opId": "...", "confirmDrift": false }` | 404 操作不存在；400 `invalid_aside_profile_path`；409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | 规划单个 Aside 配置档的变更；`restore` 需要 `opId` | 400 请求体无效或未指定配置档；404 配置档或操作不存在；409 `integration_preview_unavailable` |
+
+计划包含 `version`、`clientId`、`operation`、`state`、`foreignEdit`，由 `kind` 与 `path` 组成的
+`changes` 列表，不透明的 `fingerprint`，以及 `canApply` 和 `willChange`；`refusalReason` 与
+`profileId` 为可选。路径要么是受管理的结构路径，要么是 `$snapshot`、`$ownership`、`$journal`
+这三个固定标记；运行时才确定的位置显示为 `*`。不会返回任何配置值、文件位置或所选条目的名称。
+
+`canApply` 为真而 `willChange` 为假，表示操作会成功，但受管理的客户端文档不会有任何改动，例如
+重复应用已经应用过的内容。
+
+Aside 配置档的变更在这种情况下仍会保存一件事：确认之后，会先记录该配置档的同步偏好，然后才去动
+客户端文档。因此关闭一个受管理区块已经不存在的配置档，只会保存偏好，文档及其历史保持不变。
+
+`integration_preview_unavailable` 表示当前没有可用的模型清单：代理刚启动是一种情况，因配置或
+提供方缓存变化而弃用了原有清单也是一种情况。读取 `GET /api/client-integrations` 会在探测成功
+且能确认配置时建立清单，因此这通常是解决办法，但并非必然建立。
+
+## 确认已预览的变更
+
+变更路由接受与原有请求体并列的 `operation` 和 `planFingerprint`。两者要么都发送，要么都省略：
+只带其中一个会被拒绝，`operation` 与所请求的变更不一致也会被拒绝。Aside 的绑定只针对单个配置
+档，因为一个指纹无法描述多个各自独立变化的文件。
+
+服务器在写入前会重新规划，若确认的内容已不再符合实际，会返回 `409 integration_preview_stale`
+并附上重新计算的 `plan`。请根据新计划再做一次决定；请求不会自动重试。
+
+指纹只是乐观校验，不是授权。变更是否被允许，仍由管理 API 的认证和归属规则决定。
+
 删除操作会追加墓碑记录，而不会重写日志。服务器会保护每个客户端的最新操作，
 以保留当前的撤销点。
 

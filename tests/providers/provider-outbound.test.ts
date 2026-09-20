@@ -54,6 +54,33 @@ function directDependencies(
 }
 
 describe("provider outbound GET transport", () => {
+  test("a written fetch value is configuration, not an executor to call", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response('{"data":[]}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+
+    /*
+     * A provider entry keeps unknown configuration keys, so an operator can write `fetch` into
+     * config.json and it arrives here as a string. Treating a present value as callable threw
+     * inside discovery and failed that provider for a reason nothing in its configuration
+     * explains. A configured value means the built-in transport, which is what pins the peer.
+     */
+    const written = { baseUrl: "https://provider.example/v1", fetch: "https://not-an-executor.example" };
+    const response = await providerOutboundGet(
+      "written-fetch",
+      written as unknown as Parameters<typeof providerOutboundGet>[1],
+      "https://provider.example/v1/models",
+      { headers: { authorization: "Bearer test-key" } },
+      dependencies,
+    );
+
+    expect(await response.json()).toEqual({ data: [] });
+    expect(captured.address).toBe("93.184.216.34");
+  });
+
   test("direct HTTPS connects only to the validated address with TLS verification", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");

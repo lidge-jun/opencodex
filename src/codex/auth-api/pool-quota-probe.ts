@@ -1,4 +1,4 @@
-import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
+import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
 import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
@@ -227,6 +227,13 @@ export async function recoverPoolQuotaFrom401(ctx: {
     // A refresh that failed terminally is the one case where the credential really is gone.
     // Everything else is unknown, and unknown is not proof.
     if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
+      // Persist the same verdict the token guardian writes: the in-memory mark dies with
+      // this process, and only the stored terminal failure keeps a cached listing from
+      // calling the dead grant healthy after a restart.
+      markCodexAccountValidationFailed(accountId, `refresh_${e.reason}`, {
+        expectedGeneration: rejectedGeneration,
+        terminal: true,
+      });
       markAccountNeedsReauth(accountId, captureConfigGeneration(), rejectedGeneration);
       return { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: rejectedGeneration };
     }
@@ -401,7 +408,21 @@ export async function fetchFreshPoolAccountQuota(
         quotaProbeSkipped: true,
       }, quotaProbeEvidence);
     }
-    if (e instanceof TokenRefreshError) {
+    // Terminal means the grant itself is dead or missing; an `unknown` refresh failure (a
+    // token-endpoint 5xx, a transport blip) may clear, so it reports transient like the
+    // 401-recovery path instead of quarantining a healthy account (#2887). A revoked or
+    // expired grant is also written to the record as a terminal validation failure, the same
+    // verdict the token guardian persists: the in-memory mark dies with this process, and
+    // the stored verdict is what keeps a cached listing from calling the dead grant healthy
+    // after a restart.
+    if (isTerminalCodexPoolRefreshFailure(e)) {
+      if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
+        markCodexAccountValidationFailed(accountId, `refresh_${e.reason}`, {
+          expectedGeneration: requestCredentialGeneration,
+          terminal: true,
+        });
+      }
+      markAccountNeedsReauth(accountId, captureConfigGeneration(), requestCredentialGeneration);
       return withQuotaProbeEvidence(
         { quota: existing ?? null, needsReauth: true, reauthReason: "refresh_failed", credentialGeneration: requestCredentialGeneration },
         quotaProbeEvidence,

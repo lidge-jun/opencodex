@@ -315,16 +315,17 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
   }
 
   test("parses bare, per-scheme, and socks-only ProxyServer values", () => {
-    expect(parseWindowsProxyServer("127.0.0.1:7890")).toEqual({ kind: "proxy", url: "http://127.0.0.1:7890" });
-    expect(parseWindowsProxyServer("http=10.0.0.5:3128;https=10.0.0.6:3129;ftp=x:1")).toEqual({ kind: "proxy", url: "http://10.0.0.6:3129" });
-    expect(parseWindowsProxyServer("http=10.0.0.5:3128")).toEqual({ kind: "proxy", url: "http://10.0.0.5:3128" });
+    expect(parseWindowsProxyServer("127.0.0.1:7890")).toEqual({ kind: "proxy", httpUrl: "http://127.0.0.1:7890", httpsUrl: "http://127.0.0.1:7890" });
+    expect(parseWindowsProxyServer("http=10.0.0.5:3128;https=10.0.0.6:3129;ftp=x:1")).toEqual({ kind: "proxy", httpUrl: "http://10.0.0.5:3128", httpsUrl: "http://10.0.0.6:3129" });
+    expect(parseWindowsProxyServer("http=10.0.0.5:3128")).toEqual({ kind: "proxy", httpUrl: "http://10.0.0.5:3128" });
+    expect(parseWindowsProxyServer("https=10.0.0.6:3129")).toEqual({ kind: "proxy", httpsUrl: "http://10.0.0.6:3129" });
     expect(parseWindowsProxyServer("socks=127.0.0.1:1080")).toEqual({ kind: "socks-only" });
     expect(parseWindowsProxyServer("")).toEqual({ kind: "disabled" });
   });
 
   test("readWindowsSystemProxy honors ProxyEnable and platform", () => {
     const on = () => ({ proxyEnable: "0x1", proxyServer: "127.0.0.1:7893" });
-    expect(readWindowsSystemProxy(on, "win32")).toEqual({ kind: "proxy", url: "http://127.0.0.1:7893" });
+    expect(readWindowsSystemProxy(on, "win32")).toEqual({ kind: "proxy", httpUrl: "http://127.0.0.1:7893", httpsUrl: "http://127.0.0.1:7893" });
     expect(readWindowsSystemProxy(() => ({ proxyEnable: "0x0", proxyServer: "127.0.0.1:7893" }), "win32")).toEqual({ kind: "disabled" });
     expect(readWindowsSystemProxy(() => null, "win32")).toEqual({ kind: "unreadable" });
     expect(readWindowsSystemProxy(on, "darwin")).toEqual({ kind: "unsupported" });
@@ -340,6 +341,27 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
     expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
     expect(lines.join("\n")).toContain("http://127.0.0.1:7893");
     expect(lines.join("\n")).not.toContain("secret-pass-91");
+  });
+
+  test("auto preserves per-scheme Windows proxy scope", () => {
+    const lines = capture(() => applyProxyEnvWith(configWithProxy("auto"), {
+      platform: "win32",
+      reader: () => ({ proxyEnable: "0x1", proxyServer: "http=proxy-a:8080;https=user:secret-pass-92@proxy-b:8443" }),
+    }));
+    expect(process.env.HTTP_PROXY).toBe("http://proxy-a:8080");
+    expect(process.env.HTTPS_PROXY).toBe("http://user:secret-pass-92@proxy-b:8443");
+    expect(process.env.ALL_PROXY).toBeUndefined();
+    expect(lines.join("\n")).toContain("HTTP http://proxy-a:8080");
+    expect(lines.join("\n")).toContain("HTTPS http://proxy-b:8443");
+    expect(lines.join("\n")).not.toContain("secret-pass-92");
+
+    delete process.env.HTTP_PROXY; delete process.env.HTTPS_PROXY;
+    capture(() => applyProxyEnvWith(configWithProxy("auto"), {
+      platform: "win32",
+      reader: () => ({ proxyEnable: "0x1", proxyServer: "https=proxy-b:8443" }),
+    }));
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBe("http://proxy-b:8443");
   });
 
   test("auto never leaks the literal into HTTP_PROXY when discovery yields nothing", () => {

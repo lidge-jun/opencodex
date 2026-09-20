@@ -111,8 +111,6 @@ export interface NormalizeTarget {
 }
 
 export interface NormalizeTargetsOptions extends NormalizeOptions {
-  /** Cancels queued native decode work and stops pulling more images. */
-  abortSignal?: AbortSignal;
   /** Total base64 budget across all targets. Default: TOTAL_IMAGE_BASE64_BUDGET. */
   budget?: number;
   /**
@@ -144,6 +142,9 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
     if (abortSignal?.aborted) throw abortSignal.reason ?? new DOMException("Aborted", "AbortError");
     const leave = await enterImageDecode(abortSignal);
     try {
+      // Re-check after admission: an abort landing between dequeue and decode-start
+      // must not begin decoding (an in-flight native decode cannot be interrupted).
+      if (abortSignal?.aborted) throw abortSignal.reason ?? new DOMException("Aborted", "AbortError");
       const result = await processAt(b64, pos, mediaType, encode, validate);
       if (abortSignal?.aborted) throw abortSignal.reason ?? new DOMException("Aborted", "AbortError");
       return result;

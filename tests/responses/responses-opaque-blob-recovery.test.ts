@@ -21,8 +21,15 @@ import { markBodyNonPersistable, rememberResponseState, previousResponseProvider
 const originalFetch = globalThis.fetch;
 const originalOpenCodexHome = process.env.OPENCODEX_HOME;
 const BLOB = "provider-minted-opaque-state";
-// Synthetic Fernet-shaped data must survive the outbound ciphertext shape gate.
-const FUNCTION_OUTPUT_BLOB = `g${"A".repeat(127)}`;
+// Canonical key-independent Fernet structure; authenticity is deliberately not needed in tests.
+const FUNCTION_OUTPUT_BLOB = `${Buffer.concat([
+  Buffer.from([0x80]),
+  Buffer.alloc(8),
+  Buffer.alloc(16),
+  Buffer.alloc(16),
+  Buffer.alloc(32),
+]).toString("base64url")}==`;
+const FERNET_SHAPED_PLAINTEXT = `gAAAAA${"A".repeat(189)}`;
 const FUNCTION_OUTPUT_DECRYPT_MESSAGE = "Encrypted function output content could not be decrypted or decoded.";
 const OPENAI_BLOB_ERROR = JSON.stringify({
   error: {
@@ -370,6 +377,13 @@ function streamedFunctionOutputDecryptErrorEvent(
   );
 }
 
+function streamedFunctionOutputDecryptDetailEvent(): Response {
+  return decryptStreamResponse(
+    `event: error\ndata: ${JSON.stringify({ type: "error", detail: FUNCTION_OUTPUT_DECRYPT_MESSAGE })}\n\n`,
+    "text/event-stream",
+  );
+}
+
 function streamedSuccess(id: string): Response {
   const completed = {
     type: "response.completed",
@@ -544,6 +558,44 @@ describe("opaque blob recovery trigger", () => {
 });
 
 describe("opaque blob recovery through /v1/responses", () => {
+  test("lowers Fernet-shaped agent plaintext before native dispatch", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return success("resp-agent-plaintext");
+    }) as typeof fetch;
+
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "thread-agent-plaintext",
+        authorization: "Bearer caller-codex-token",
+      },
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        stream: false,
+        store: false,
+        input: [{
+          type: "agent_message",
+          author: "/root/child_task",
+          recipient: "/root",
+          content: [{ type: "encrypted_content", encrypted_content: FERNET_SHAPED_PLAINTEXT }],
+        }],
+      }),
+    });
+
+    const response = await handleResponses(request, nativeConfig(), { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]?.input).toEqual([{
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: FERNET_SHAPED_PLAINTEXT }],
+    }]);
+  });
+
   test("recovers a zero-output streamed function-output decrypt failure before client relay", async () => {
     const outbound: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -787,6 +839,27 @@ describe("opaque blob recovery through /v1/responses", () => {
     expect(outbound).toHaveLength(2);
     const retriedInput = outbound.at(1)?.input as Array<Record<string, unknown>> | undefined;
     expect(retriedInput?.at(1)).toEqual(recoveredFunctionOutput());
+  });
+
+  test("recovers a WebSocket-style detail decrypt error before client relay", async () => {
+    const outbound: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return outbound.length === 1
+        ? streamedFunctionOutputDecryptDetailEvent()
+        : streamedSuccess("resp-stream-detail-recovered");
+    }) as typeof fetch;
+
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(functionOutputRequest(true), config(), logCtx);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain("response.completed");
+    expect(body).not.toContain(FUNCTION_OUTPUT_DECRYPT_MESSAGE);
+    expect(outbound).toHaveLength(2);
+    expect(JSON.stringify(outbound[1])).not.toContain(FUNCTION_OUTPUT_BLOB);
+    expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["opaque-blob-rejection"]);
   });
 
   for (const streamMode of ["legacy-tee", "eager-relay"] as const) {

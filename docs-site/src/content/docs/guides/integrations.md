@@ -200,6 +200,24 @@ undoable. The switch itself stays locked, because the switch cannot know which e
 you meant to keep — only you can say so. Nothing else is relaxed: a file we cannot
 parse, or one whose structure we cannot reason about, still refuses.
 
+## Preview and confirm changes
+
+Apply, Replace, Disable, and Restore now begin with a preview. The dialog shows exactly which
+managed settings will change, including the bounded change paths and whether each change adds,
+updates, or removes a value. Review that plan before confirming.
+
+When a plan reports no changes, it means the managed client document already has the requested
+state. For a selected Aside profile, confirming can still save that profile's sync preference even
+though the managed document does not change.
+
+If the file changes after you review it, the write is refused as stale. The dialog replaces the
+old plan with the updated one and asks you to confirm again; it never retries the write
+automatically. If a preview is temporarily unavailable, reload the page normally and start the
+action again.
+
+Aside uses the same preview and confirmation flow for one selected profile at a time. **Sync all
+profiles** remains a separate bulk action and is not bound to one combined preview.
+
 ## What to expect, honestly
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back

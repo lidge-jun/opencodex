@@ -22,7 +22,8 @@ parsing and ownership rules below.
 | `src/integrations/state.ts` | The single `absent` / `current` / `stale` / `conflict` / `unsafe` classifier used by status and every writer operation. |
 | `src/integrations/ownership.ts` | Durable ownership records: file, generated contribution, protected contribution, exact fragment paths, and operation identity. |
 | `src/integrations/ownership-policy.ts` | Client-scoped declarations for fields a client is documented to derive after apply. It must never contain a broad format-wide exemption. |
-| `src/integrations/writer.ts` | Apply, refresh, disable, and restore transactions, including snapshot-first ordering, compare-before-commit, and compensation. |
+| `src/integrations/writer.ts` | Apply, refresh, disable, and restore transactions, including snapshot-first ordering, compare-before-commit, and compensation. Freezing an input copies the proxy configuration and the model roster as plain data before the first await, so the plan a revalidation approves and the document that follows it read one input; an input that cannot be copied is refused rather than read twice. Aside captures the same configuration copy when its context is created, because its preference write edits the live configuration between the check and the profile writes. |
+| `src/integrations/mutation-plan.ts` | The shared observation both a preview and a mutation read, and the value-free plan an operator confirms. It owns no IO of its own, takes no lock, and must never import `writer.ts`. |
 | `src/integrations/store.ts` / `journal.ts` | One-root persistence for ownership records, operation history, snapshots, and retention maintenance. |
 
 ## Data Flow
@@ -42,6 +43,60 @@ client registry + export context
 Status and mutation must use the same classifier. A special case added only to a status endpoint
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
+
+## Read-only mutation plans
+
+An operator confirming apply, overwrite, disable or undo is agreeing to consequences they were
+never shown. A plan is what shows them, and it is only trustworthy if it describes the operation
+that will actually run.
+
+One observation serves both. `mutation-plan.ts` owns the read, parse, contribution build, record
+selection and classification that the writer used to perform itself, so a preview and the mutation
+it authorizes cannot disagree. The direction is strict: state, ownership and merge feed the plan;
+the plan feeds the writer and the preview routes. The plan module must never import the writer.
+
+Preview and mutation differ in exactly two ways, and both are declared rather than implied.
+Pending-prune maintenance and client transaction recovery each write, so they are explicit options
+with no default that a preview passes as false. And a preview takes its model roster from the
+retained export snapshot instead of gathering one, because discovery refreshes credentials and
+writes the provider cache. With no usable snapshot the request is refused, which covers a cold
+process and equally a snapshot retired because the configuration or the provider cache moved. The
+roster is gathered and projected from a detached copy of the configuration
+(`src/config/admitted-identity.ts`) taken before the gather, so an edit that lands mid-load changes
+neither half of the result; the same admission is revalidated against the resident object and the
+configuration file before anything is retained, so such an edit leaves no snapshot rather than one
+recorded under a state its rows never had. The identity a caller carries between a preview and the
+mutation that confirms it is process-local and opaque, and describes nothing about the
+configuration. The
+Integrations collection read populates one when discovery succeeds and the configuration can be
+identified, so the page an operator opens before confirming anything is the usual way back rather
+than a guarantee.
+
+Each operation is decided the way that operation decides it. Apply checks installation and
+admission before the classifier and reports a conflict ahead of unsafe; disable asks neither,
+because removing what we wrote from a file that still exists is meaningful regardless of
+installation; restore reads the journal row and the target's bytes and never parses, so a file
+that is readable but unparseable is still restorable. An operation that would write nothing says
+so and names no places.
+
+Published paths are declared, not inferred. Every client states where its managed fragments live,
+a path is emitted only on an exact template match, and the string emitted is the template rather
+than the observed path, so a dynamic position renders as a wildcard and a value cannot leak. A
+path outside the declaration is refused rather than described: an ownership record accepts
+arbitrary strings and is not a validation authority.
+
+The fingerprint covers every input the decision rests on, including the roster, the observed
+install kind and the admission predicate, and for restore the snapshot's actual bytes rather than
+only its operation id. A confirmed mutation re-plans the coordinator's frozen input with the lock
+held, before any snapshot, write or journal row, and separately checks that the snapshot it
+captured is still current; the roster and that identity are read together so the check cannot
+validate one snapshot while the mutation writes another. Aside is the exception that proves the
+placement: it persists preferences and imports journal rows before any writer lock, so its check
+runs once profile and path selection is frozen and before those writes.
+
+The fingerprint is an optimistic token, never authorization. Management authentication and every
+ownership rule still decide whether a mutation may happen, and the writer's own
+compare-before-commit guard is unchanged.
 
 Gajae export and managed refresh share the loopback-only provider builder. It writes the
 non-secret `LOOPBACK_API_KEY_PLACEHOLDER` as `apiKey`, so the client can activate the provider

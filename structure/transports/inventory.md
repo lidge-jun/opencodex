@@ -48,7 +48,9 @@ surface is listed here so a maintainer can find the owner without grepping:
 The registry's first-party `deepseek-flash` row declares native `text` and `image` input, so image
 requests bypass the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
-remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update. Zen `mimo-v2.5-free` and `longcat-2.0-free` now carry positive `modelInputModalities` image evidence rather than relying on absence from the text-only list.
+remain sidecar-backed by default. The Zen tiers (`opencode-zen`, `opencode-free`) could not be measured in this update (HTTP 402) and keep their existing classifications. Zen `mimo-v2.5-free` and `longcat-2.0-free` now carry positive `modelInputModalities` image evidence rather than relying on absence from the text-only list.
+OpenCode Go's `deepseek-v4.1-flash` was reclassified as native vision on 2026-09-19 (probed on
+that gateway); its sibling `deepseek-v4-flash` stays sidecar-backed.
 
 > Decision record: [ADR-0072](../decisions/ADR-0072-transport-inventory.md)
 

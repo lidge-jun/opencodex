@@ -26,6 +26,7 @@ function buildRequest(
   modelId: string,
   rawBody: Record<string, unknown>,
   configuredProvider = provider(),
+  replayPrefixLength?: number,
 ) {
   return createResponsesPassthroughAdapter(configuredProvider).buildRequest({
     modelId,
@@ -33,6 +34,7 @@ function buildRequest(
     stream: true,
     options: {},
     _rawBody: { model: modelId, input: "ping", ...rawBody },
+    ...(replayPrefixLength === undefined ? {} : { _replayPrefixLen: replayPrefixLength }),
   }, { headers: new Headers() });
 }
 
@@ -199,6 +201,26 @@ describe("OpenCode Go additional_tools placement", () => {
     });
     expect(build("grok-4.6", { input: [{ type: "additional_tools", tools: [web] }], tool_choice: "required" }))
       .toMatchObject({ input: [], tools: [], tool_choice: "none" });
+  });
+
+  test("does not promote additional tools restored from continuation history", () => {
+    const historicalWeb = { type: "web_search" };
+    const request = buildRequest("gpt-5.6-luna", {
+      tools: [],
+      input: [
+        { type: "additional_tools", tools: [historicalWeb] },
+        { type: "message", role: "assistant", content: "history" },
+        { type: "message", role: "user", content: "continue" },
+      ],
+    }, provider(), 2);
+
+    expect(JSON.parse(request.body)).toMatchObject({
+      input: [
+        { type: "message", role: "assistant", content: "history" },
+        { type: "message", role: "user", content: "continue" },
+      ],
+      tools: [],
+    });
   });
 
   test("activates tools loaded by tool search before moving their catalog", () => {

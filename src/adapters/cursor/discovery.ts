@@ -305,15 +305,18 @@ export function isCursorRouterModelId(modelId: string): boolean {
 export function filterCursorConfiguredModelsByLiveDiscovery<T extends { id: string }>(
   configured: readonly T[],
   liveIds: readonly string[],
+  maxModeLiveIds: readonly string[] = [],
 ): T[] {
-  return configured.filter(model =>
-    !CURSOR_KNOWN_UNCALLABLE_MODEL_IDS.has(model.id)
-    && (
-      isCursorRouterModelId(model.id)
-      // Synthetic ultra rows ride their base model's account availability.
-      || isCursorModelAvailableForAccount(cursorUltraBaseModelId(model.id) ?? model.id, liveIds)
-    ),
-  );
+  return configured.filter(model => {
+    if (CURSOR_KNOWN_UNCALLABLE_MODEL_IDS.has(model.id)) return false;
+    if (isCursorRouterModelId(model.id)) return true;
+    const ultraBase = cursorUltraBaseModelId(model.id);
+    return isCursorModelAvailableForAccount(ultraBase ?? model.id, liveIds)
+      // Successful discovery is authoritative: synthetic ultra rows additionally require the
+      // account-specific Max Mode capability. Discovery failures bypass this filter and retain
+      // the static seed under the caller's existing degraded-catalog policy.
+      && (ultraBase === undefined || isCursorModelAvailableForAccount(ultraBase, maxModeLiveIds));
+  });
 }
 
 /**

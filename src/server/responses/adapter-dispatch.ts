@@ -586,7 +586,7 @@ export async function prepareAdapterExchange(
         route.provider = refreshedProvider;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
           config.cacheRetention,
         );
         bindRouteReasoningReplayScope({
@@ -619,7 +619,7 @@ export async function prepareAdapterExchange(
         route.provider = rotated;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
           config.cacheRetention,
         );
         bindRouteReasoningReplayScope({
@@ -719,7 +719,7 @@ export async function prepareAdapterExchange(
         route.provider = rotated;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
           config.cacheRetention,
         );
         bindRouteReasoningReplayScope({
@@ -762,7 +762,7 @@ export async function prepareAdapterExchange(
           invalidateSameTargetRequest();
           logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
           transportState.activeAdapter = resolveSelectionAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
@@ -837,7 +837,7 @@ export async function prepareAdapterExchange(
           }
           invalidateSameTargetRequest();
           transportState.activeAdapter = resolveSelectionAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);

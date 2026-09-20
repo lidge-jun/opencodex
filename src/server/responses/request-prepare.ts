@@ -55,6 +55,7 @@ import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../re
 import { requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
 import type { RouteResult } from "../../router";
 import {
+  captureRouteStaticPolicy,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
@@ -272,10 +273,14 @@ export async function prepareResponsesRequest(
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
   // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
   // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
+  // verbatim). Structurally valid backend ciphertext stays byte-identical; encoded-looking unknown
+  // slots remain opaque only until final-route handling can preserve or strip them safely.
   {
     const rewritten = sanitizeEncryptedContentInPlace(
       (body as { input?: unknown } | undefined)?.input,
+      // The final destination is not known yet. Keep ambiguous encoded slots opaque until route
+      // selection can either strip them for a third party or apply strict native classification.
+      { preserveUnknownOpaqueSlots: true },
     );
     if (rewritten > 0)
       console.warn(
@@ -406,16 +411,26 @@ export async function prepareResponsesRequest(
 
   let route: RouteResult;
   let credentialDomainWasRewritten = false;
+  const captureInboundRoutePolicy = (candidate: RouteResult): RouteResult => {
+    candidate.staticPolicy = captureRouteStaticPolicy(
+      candidate.providerName,
+      candidate.modelId,
+      candidate.provider,
+      candidate.staticPolicy.effectiveAlias,
+      inboundWire,
+    );
+    return candidate;
+  };
   try {
     // A `compaction_trigger` turn may name a bare native model the operator has
     // no canonical OpenAI route for (#2901). Only the initial compaction route
     // may fall back to the configured default provider; combo attempts and the
     // later fallback/recovery re-routes keep the ordinary reservation.
-    const resolveRoute = (modelId: string) => options.comboAttempt
+    const resolveRoute = (modelId: string) => captureInboundRoutePolicy(options.comboAttempt
       ? routeConcreteModel(config, modelId)
       : parsed._compactionRequest === true
         ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
-        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody)));
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
     if (!options.compactionRoutingOverride && _sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
@@ -652,7 +667,9 @@ export async function prepareResponsesRequest(
 
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
-        route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+        route = captureInboundRoutePolicy(
+          routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+        );
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
@@ -850,7 +867,9 @@ export async function prepareResponsesRequest(
 
           if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
             try {
-              route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+              route = captureInboundRoutePolicy(
+                routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody)),
+              );
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
@@ -875,6 +894,17 @@ export async function prepareResponsesRequest(
   }
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
+
+  if (inboundWire === "responses" && isCanonicalOpenAiForwardProvider(route.provider)) {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0) {
+      console.warn(
+        `[opencodex] rewrote ${rewritten} non-Fernet encrypted_content part(s) before canonical native replay`,
+      );
+    }
+  }
 
   // Encrypted child tasks may reach the canonical native backend or an explicitly trusted
   // direct Responses route. This runs against the FINAL route so native-only fallback can
@@ -921,6 +951,7 @@ export async function prepareResponsesRequest(
       route.modelId,
       route.provider,
       inboundWire,
+      route.staticPolicy,
     );
     if (wireProvider.adapter === "openai-responses" && !isCanonicalOpenAiForwardProvider(wireProvider)) {
       const repaired = stripAgentMessageCiphertextInPlace((body as { input?: unknown } | undefined)?.input);
@@ -949,7 +980,7 @@ export async function prepareResponsesRequest(
   }
 
   if (hasUnexpandedPreviousResponse) {
-    const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+    const continuationProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy);
     // Can the DESTINATION see the history this process failed to restore? Only the native
     // Responses passthrough can: it forwards previous_response_id to a backend that stored the
     // chain. Every translated wire rebuilds the conversation from this request's input alone —

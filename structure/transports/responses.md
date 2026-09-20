@@ -333,6 +333,18 @@ including the compaction turn the proxy itself drives. With `store: false`, requ
 strips ids from every input item, including compact-wire items, matching codex-rs
 (`core/src/client.rs:918-925`). Compact-wire items remain exempt from response-side field backfill.
 
+For replayed `encrypted_content` slots whose minting provenance is unavailable after a restart or
+full-history resend, the plaintext-compatibility boundary requires canonical key-independent Fernet
+structure (version byte, timestamp, IV, block-aligned ciphertext and HMAC layout). A long
+base64-like agent message does not gain ciphertext authority from its spelling. Structure is not
+authentication: it is only the minimum legacy fallback needed to avoid corrupting genuine opaque
+history. If the canonical backend still rejects an encrypted function or agent output, the exact
+decrypt/decode identity enters one request-budgeted sanitize-and-rebuild attempt for HTTP and
+pre-commit SSE/WebSocket terminal envelopes; the single-shot guard remains armed on the rebuilt
+send.
+
+> Decision record: [ADR-5236](../decisions/ADR-5236-responses-http-sse.md)
+
 Codex pool account changes are a separate portability question from destination serving identity.
 `src/codex/routing.ts` remembers, in process memory and keyed like thread affinity, which pool
 account minted a conversation's carried state (`previous_response_id`, encrypted reasoning, and

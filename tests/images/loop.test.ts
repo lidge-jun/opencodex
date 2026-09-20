@@ -880,9 +880,13 @@ describe("runWithImageBridge", () => {
     let fetchCalls = 0;
     let rotations = 0;
     let activeAdapter: ProviderAdapter | undefined;
+    let retryState: Pick<OcxParsedRequest, "_kiroAuthContext" | "_providerContinuation"> | undefined;
     const makeRotatingAdapter = (label: string): ProviderAdapter => ({
       name: label,
-      buildRequest: async () => ({ url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" }),
+      buildRequest: async requestParsed => {
+        if (label === "after-rotate") retryState = requestParsed;
+        return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+      },
       fetchResponse: async () => {
         fetchCalls++;
         if (fetchCalls === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
@@ -897,13 +901,19 @@ describe("runWithImageBridge", () => {
     const firstAdapter = makeRotatingAdapter("before-rotate");
     const secondAdapter = makeRotatingAdapter("after-rotate");
     activeAdapter = firstAdapter;
+    const outerParsed = makeParsed();
+    outerParsed._kiroAuthContext = { apiRegion: "eu-west-1", profileArn: "account-a" };
+    outerParsed._providerContinuation = { kiro: { conversationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } };
     const response = await runWithImageBridge({
-      parsed: makeParsed(),
+      parsed: outerParsed,
       adapter: firstAdapter,
       plan,
-      on429: async () => {
+      on429: async (_retryAfter, _responseHeaders, retryParsed) => {
         rotations++;
         await Promise.resolve();
+        if (!retryParsed) throw new Error("the loop must pass the iteration request to on429");
+        retryParsed._kiroAuthContext = { apiRegion: "ap-southeast-2", profileArn: "account-b" };
+        delete retryParsed._providerContinuation;
         activeAdapter = secondAdapter;
         return secondAdapter;
       },
@@ -912,6 +922,8 @@ describe("runWithImageBridge", () => {
     expect(rotations).toBe(1);
     expect(fetchCalls).toBe(2);
     expect(activeAdapter).toBe(secondAdapter);
+    expect(retryState?._kiroAuthContext).toEqual({ apiRegion: "ap-southeast-2", profileArn: "account-b" });
+    expect(retryState?._providerContinuation).toBeUndefined();
     expect(sse).toContain("after rotate");
   });
 });

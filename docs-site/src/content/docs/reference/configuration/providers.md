@@ -1130,6 +1130,20 @@ The raw provider editor and provider API expose this map. POST/PUT replace an ex
 
 An explicit `modelCapabilities.<id>.inputModalities` now takes precedence over legacy modality hints for that exact routed model. A text-only declaration uses the existing vision sidecar to replace images with descriptions; if no sidecar is available, the request receives an explicit omission marker before dispatch. Native Chat image requests divert through this path. The catalog can still advertise image attachment support because the proxy provides the description step. Context-tier and video processing declarations remain inert pending their transport support.
 
+An input-modality declaration on a **custom model row** — the Input modalities checkboxes in the
+Models tab, or `inputModalities` on `customModels[]` — also takes precedence over the provider's
+legacy vision hints (`noVisionModels`, `modelInputModalities`) for that exact provider and model
+id. Declare `text, image` on a custom row and images reach that model even when the provider row
+lists it as text-only; declare only `text` and it is routed through the vision sidecar. This is
+the same precedence the catalog already applied, so the advertised row and the request now agree.
+`modelCapabilities` stays above it, because that is the dedicated per-model capability axis —
+including the write made by `ocx provider edit <provider> --model <id> --text-only`. A custom row
+that leaves the modalities blank inherits the provider row instead of claiming text-only.
+Every consumer that answers "can this model take an image" applies one rule to the declaration:
+image is absent from the list. A row declaring only `audio` or `video` therefore counts as
+image-incapable, rather than being treated as a text model by one predicate and an image target
+by the other.
+
 ### Renamed API-key presets
 
 A provider saved under another name, such as `CommandCode`, inherits missing reasoning-effort metadata when its adapter and fixed API-key endpoint match a registry preset. Your explicit per-model lists, including `[]`, remain authoritative. An omitted provider-wide list inherits the preset default; an explicit list remains unchanged. This does not match OAuth, unrelated endpoints, or templated/custom endpoint presets.

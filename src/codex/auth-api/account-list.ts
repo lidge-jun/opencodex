@@ -82,9 +82,9 @@ export function mainQuotaWithCarriedResetCredits(
 /**
  * Why an account needs the operator. `missing_credential`, `refresh_failed`, and
  * `quota_unauthorized` are the three causes this surface tells apart on its own. `unauthorized`
- * and `forbidden` exist because the shared health projection may return them; today
- * `projectCodexAccountHealth` only ever produces `refresh_failed`, so accepting the full union
- * keeps this field correct if that projection widens rather than silently dropping a reason.
+ * and `forbidden` come from the shared health projection: `projectCodexAccountHealth` maps a
+ * stored verification failure's `http_status:401`/`http_status:403` to them, so the union has
+ * to accept every reason the projection can emit rather than silently dropping one.
  */
 export type CodexAccountReauthReason =
   | "missing_credential"
@@ -107,15 +107,15 @@ export function poolAccountDto(
   const runtimeReauth = isAccountNeedsReauth(account.id);
   const rawReauthReason: CodexAccountReauthReason | undefined = !hasCredential
     ? "missing_credential"
-    : quotaResult.reauthReason
-      ? quotaResult.reauthReason
-      : runtimeReauth
-        ? "refresh_failed"
-        : undefined;
+    : quotaResult.reauthReason;
   const needsReauth = !hasCredential || quotaResult.needsReauth || runtimeReauth;
+  // An in-memory reauth mark carries no cause of its own, so it must not name one: passing
+  // a caller reason here would outrank the stored verdict's http_status inside the
+  // projection and hide unauthorized/forbidden until the mark is gone. With no caller
+  // reason the projection falls back to the persisted cause, then to refresh_failed.
   const healthReason = rawReauthReason === "quota_unauthorized" || rawReauthReason === "missing_credential"
     ? "unauthorized"
-    : "refresh_failed";
+    : rawReauthReason;
   const health = projectCodexAccountHealth({
     accountId: account.id,
     needsReauth,

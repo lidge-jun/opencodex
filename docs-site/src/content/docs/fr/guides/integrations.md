@@ -134,6 +134,24 @@ Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML rééc
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
+## Prévisualiser et confirmer les modifications
+
+Appliquer, Remplacer, Désactiver et Restaurer commencent désormais par un aperçu. La boîte de dialogue
+indique exactement quels réglages gérés vont changer, avec les chemins concernés dans les limites prévues
+et la nature de chaque modification : ajout, mise à jour ou suppression. Examinez ce plan avant de confirmer.
+
+Lorsqu’un plan n’indique aucune modification, cela signifie que le document client géré est déjà dans l’état
+demandé. Pour un profil Aside sélectionné, la confirmation peut tout de même enregistrer sa préférence de
+synchronisation, même si le document géré ne change pas.
+
+Si le fichier change après votre examen, l'écriture est refusée car le plan est devenu obsolète. La boîte de
+dialogue remplace l'ancien plan par le nouveau et vous demande de confirmer à nouveau ; elle ne relance jamais
+l'écriture automatiquement. Si l'aperçu est temporairement indisponible, rechargez normalement la page et
+recommencez l'action.
+
+Aside utilise le même flux d'aperçu et de confirmation pour un seul profil sélectionné à la fois. **Synchroniser
+tous les profils** reste une action groupée distincte et n'est pas liée à un aperçu combiné unique.
+
 ## À quoi s'attendre, en toute transparence
 
 **Le formatage n'est généralement pas préservé.** L'application analyse une configuration avant de la

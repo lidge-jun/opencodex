@@ -1377,7 +1377,7 @@ describe("sanitizeEncryptedContentInPlace", () => {
   };
 
   test("plaintext parked in encrypted slots becomes input_text; real blobs survive", () => {
-    const blob = "gAAAAAB".padEnd(120, "Qw1_-=");
+    const blob = fernetFixture();
     const input = [
       { type: "message", role: "user", content: [
         { type: "encrypted_content", encrypted_content: "[CXC-LEAF-GUARD] plain text with spaces" },

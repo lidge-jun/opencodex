@@ -338,7 +338,7 @@ export async function prepareResponsesTransport(
       route.provider = current;
     }
     adapter = activeAdapter = runTurnAdapter = resolveSelectionAdapter(
-      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
     );
     invalidateSameTargetRequest();
     return adapter;
@@ -619,7 +619,7 @@ export async function prepareResponsesTransport(
       ? resolveCopilotApiBaseUrl(sentOAuthSnapshot?.apiBaseUrl)
       : undefined,
   );
-  let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy);
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
     && !isCanonicalOpenAiForwardProvider(adapterProvider)
     && ((adapterProvider.adapter === "openai-responses" && adapterProvider.authMode === "forward")

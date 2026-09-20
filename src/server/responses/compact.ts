@@ -125,7 +125,7 @@ import { slugsEquivalent } from "../../providers/slug-codec";
 import { decideTier, tierValueAfterDecision } from "../../providers/fastwire";
 import { fastPolicyForModel } from "../../providers/service-tier";
 import { parseFastOnlyRowId } from "../fast-row";
-import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
+import { captureOpenAiVirtualWirePolicy, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import {
   applyCompactionRoutingOverride,
   compactionRoutingKeepsProviderIdentity,
@@ -695,6 +695,7 @@ export async function handleResponsesCompact(
   const virtual = resolveOpenAiCompactModel(route.providerName, selectedModelId);
   if (virtual) {
     route.modelId = virtual.wireModelId;
+    captureOpenAiVirtualWirePolicy(route, virtual);
     logCtx.model = virtual.selectedModelId;
     logCtx.resolvedModel = virtual.wireModelId;
   } else {
