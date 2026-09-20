@@ -849,6 +849,29 @@ compact, and native Chat — are deliberately not opted in. Adapters with their 
 `fetchResponse` (kiro, cursor, google) keep their own retry policies; kiro imports the shared
 abort/sleep helpers from this module.
 
+## Ambiguous-resend gate
+
+A model POST that fails with the caller having observed nothing is one question asked at two
+points: before any response head, and after a head whose SSE body carried only control events.
+`src/lib/request-resend-gate.ts` is the single answer. It derives stage, cause, permission and
+send class from `src/lib/request-failure-model.ts` and adds exactly one thing the table names
+but does not implement — the narrowly scoped operator override for `refused-ambiguous`.
+
+The override is bounded on three axes at once. The provider opts in with
+`providers.<name>.retryOnReset`; the request must be one
+`src/server/responses/reset-replay.ts` can judge self-contained, meaning nothing stored, no
+server-side continuation state, complete input and only client-executed tools; and the whole
+logical request holds one replacement grant, whichever stage asks for it. The grant lives on the
+request's execution budget, so a combo child that derives its own scope draws on the same
+counter rather than holding a second. A replacement never widens a send budget: it still has to
+fit inside the allowance the leg already had, and it is charged to the same counter every other
+send goes through.
+
+A committed or futile failure refuses without touching the grant, so a turn that already emitted
+output cannot drain the replacement a later ambiguous reset would have been entitled to. The
+cause is derived from the `AttemptRecoveryKind` the send will be recorded as, which is what
+keeps the reason in the log and the reason the gate weighed from being two different values.
+
 ## Console upload rejection recovery
 
 `src/providers/opencode-zen-rate-limit.ts` recognizes the complete Console upload-rejection envelope only at the effective HTTPS opencode.ai Zen/Go generation endpoint. A provider row name cannot authorize another destination. The two recovery loops in `src/server/responses/core.ts` wait 800 ms and replay the captured serialized request once; cancellation, nonreplayable responses, other errors and a second upload rejection keep their failure semantics. The recovery kind is persisted as `console-go-upload-retry` and has a localized Logs label.
@@ -898,6 +921,13 @@ fabricated.
 An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's
 downstream Responses SSE through `src/server/responses/combo-stream-preflight.ts`, which owns one
 reader and buffers only until one of these boundaries:
+
+Native post-header reset recovery shares that boundary, because it is asking the same question
+about the same bytes. With `replayReadErrors`, the preflight reports the stage it observed —
+`headers-only` before any parsed event, `protocol-prelude` after `response.created`,
+`semantic-output` once anything else arrives, including a payload it could not parse — and the
+resend gate decides. A `response.created` whose snapshot already carries output items is not a
+prelude.
 
 - a non-control Responses event begins client-visible output or a tool/action item, after which the
   target is committed and cross-target replay is forbidden;
@@ -1012,7 +1042,8 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. |
 | `request-sidecar-auth.ts` | Sidecar credential resolution and vision preprocessing. |
 | `response-effects.ts` | Completion notification, replay publication and live request-tool aliases. |
-| `request-send-budget.ts` | Request-wide send accounting, remaining allowance and the pending recovery permit. |
+| `request-send-budget.ts` | Request-wide send accounting, remaining allowance, the pending recovery permit and the shared ambiguous-resend grant. |
+| `reset-replay.ts` | The operator opt-in for replacing an ambiguous native Responses send, and the per-request grant both stages claim from. |
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
 | `passthrough-execution.ts` | Native host-lease transfer and the enclosing dispatch/delivery `finally`. |
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
@@ -1250,7 +1281,11 @@ turn up to four more times, and a 429 is where the client stops.
 `upstream_reset_replay_refused`. No response headers is not evidence that the model POST
 was never processed, so the decision not to replay is ours, made before any response
 existed — the same shape as `request_send_budget_exhausted`, and it takes the same status
-for the same reason. Only an explicitly replay-safe operation opts into reset retries.
+for the same reason. An explicitly replay-safe operation retries instead, and a provider that
+opted into `retryOnReset` may spend the request's single replacement grant; once that grant is
+gone, or the leg has no send left, or a later attempt fails any other way, the leg settles as
+this same refusal. Nothing on that path hands the client a status that invites the whole turn
+to be sent again. See [ambiguous-resend gate](#ambiguous-resend-gate).
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the

@@ -174,6 +174,14 @@ export function sendWithConnectionPolicy(
 }
 
 export interface ProviderFetchOptions {
+  /**
+   * Keep this send on HTTP even where the WebSocket upstream would normally be selected.
+   *
+   * Set by a caller replacing an HTTP stream that already failed: a WS create frame is a
+   * different send on a different transport, and the replacement has to be the same kind of
+   * exchange the client is already reading.
+   */
+  httpOnly?: boolean;
   nativeControl?: NativeResponseControl;
   providerName?: string;
   modelId?: string;
@@ -261,7 +269,8 @@ export function providerFetch(
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket === true;
-    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
+    if (!options.httpOnly && typeof input === "string" && init
+      && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
       const egress = egressFor(input);
       if (providerEgressIsExplicit(egress)) {
         warnEgressWebsocketDowngradeOnce(providerName, describeProviderEgressForLog(egress));

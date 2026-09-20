@@ -72,7 +72,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   // but stays inert (no load, no polling) whenever a shared controller was injected.
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
-  const { accounts, activeId, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, pausingExhausted, activePinnedId, load } = controller;
+  const { accounts, activeId, loadState, refreshFailed, switchingId, pauseUpdatingId, priorityUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   // #3898: the native-main device reauth drives the dedicated namespace; a
   // completed flow refreshes the account list so the card leaves reauth state.
   const mainReauth = useMainDeviceReauth(apiBase, () => { void load(); });
@@ -476,6 +476,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       <CodexAccountPoolLoadStates
         t={t}
         loadState={loadState}
+        refreshFailed={refreshFailed}
         accountsCount={accounts.length}
         onRetry={() => { void load(); }}
       />

@@ -41,6 +41,7 @@ import {
   writeJournal,
 } from "./journal";
 import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "./history-provider";
+import { applyPaginatedOpenaiCompat } from "./inject/paginated-openai-compat";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -347,12 +348,13 @@ async function injectCodexConfigImpl(
   // first-line repair cannot grow "openai" into "opencodex" without pre-existing padding, and
   // codex re-appends that stale first line whenever it writes git or memory-mode metadata.
   //
-  // Authless is excluded on purpose: its whole point is a provider that carries
-  // requires_openai_auth = false, and admission-token forms cannot use the root key at all.
-  // Those two forms therefore keep their existing behaviour, forward-tagging resume history with
-  // originals backed up, and that includes the case where a user enables authless and client
-  // compaction together. Only the compaction-only form skips the history unit.
-  const keepRootOverrideAlongsideTable = providerTableMode
+  // Authless is excluded here on purpose: its whole point is a provider that carries
+  // requires_openai_auth = false, so it forward-tags resume history with originals backed up
+  // instead, and that includes the case where a user enables authless and client compaction
+  // together. Only the compaction-only form skips the history unit up front. When forward
+  // tagging turns out to be impossible because Codex already paginated those rows, the same
+  // retention is selected below from the preflight verdict rather than from the routing form.
+  let keepRootOverrideAlongsideTable = providerTableMode
     && routingTarget.clientCompaction === true
     && routingTarget.desktopAuthless !== true
     && routingTarget.requiresAdmissionToken !== true;
@@ -472,14 +474,15 @@ async function injectCodexConfigImpl(
     if (observed && observed !== HISTORY_RELABEL_STANDS_DOWN) throw new CodexHistoryPreflightRefusal(observed);
     return observed;
   };
-  const observedHistoryRefusal = historyPreflight();
+  const compat = applyPaginatedOpenaiCompat(historyPreflight(), routingTarget, content, eol);
+  content = compat.content;
+  keepRootOverrideAlongsideTable ||= compat.retainedRootOverride;
+  const observedHistoryRefusal = compat.refusal;
   if (observedHistoryRefusal && observedHistoryRefusal !== HISTORY_RELABEL_STANDS_DOWN) {
     return {
       success: false,
       historyPreflightFailureReason: observedHistoryRefusal,
-      message: `Codex config injection refused: ${observedHistoryRefusal}. `
-        + "Existing provider definitions and conversation files were preserved. "
-        + "Paginated history requires native-writer coordination; do not run legacy recovery or retry this transition blindly.",
+      message: compat.message,
     };
   }
   let historyRelabelRefusal = observedHistoryRefusal;
@@ -607,11 +610,11 @@ async function injectCodexConfigImpl(
     atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
     markJournalInjectedState(content, profileContent, {
       // A root override is ours whenever we wrote one and no user-owned value won. That is
-      // loopback Design B, and now also the client-compaction form, which keeps the same
-      // marker-owned root line beside its provider table. Journaling it matters because the
-      // marker comment is not durable: the Codex app can reserialize config.toml and drop
-      // comments, and restore then has only the journaled value to tell our line from a user's
-      // (#1798). The other table forms never write the key, so they still record null.
+      // loopback Design B, the client-compaction form, and any table form that retained the
+      // root line for a paginated openai row, all of which keep the marker-owned line beside
+      // the table. Journaling it matters because the marker comment is not durable: the Codex
+      // app can reserialize config.toml and drop comments, and restore then has only the
+      // journaled value to tell our line from a user's (#1798). Other table forms record null.
       injectedOpenaiBaseUrl: (providerTableMode && !keepRootOverrideAlongsideTable) || keptUserBaseUrl
         ? null
         : rootTomlString(content, "openai_base_url"),

@@ -124,21 +124,39 @@ test("Usage model table renders cache breakdown and marks unavailable telemetry"
   expect(table).not.toBeNull();
   // Header labels come from the catalog the page renders, so a copy change stays a
   // one-place edit and this case keeps asserting the column ORDER it cares about --
-  // the five cache columns sitting between Measured and Tokens.
+  // identity, then the three comparison figures, then the per-request detail with the
+  // five cache columns last.
   expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
-    "logs.col.model", "logs.col.provider", "usage.col.requests", "usage.col.measured",
+    "logs.col.model", "logs.col.provider", "usage.col.share", "usage.col.tokens",
+    "usage.col.apiListPrice", "usage.col.requests", "usage.col.measured",
     "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.cacheHits",
-    "usage.col.cacheWrites", "usage.col.cacheHitRate", "usage.col.tokens",
-    "usage.col.apiListPrice", "usage.col.share",
+    "usage.col.cacheWrites", "usage.col.cacheHitRate",
   ].map(key => en[key as keyof typeof en]));
   const rows = table!.querySelectorAll("tbody tr");
   expect(rows).toHaveLength(3);
-  const measured = [...rows[0]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
-  expect(measured?.slice(4, 9)).toEqual(["1000", "120", "600", "100", "60%"]);
-  const partial = [...rows[1]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
-  expect(partial?.slice(6, 9)).toEqual(["450", "0", "—"]);
-  const unavailable = [...rows[2]!.querySelectorAll("td")].map(cell => cell.textContent?.trim());
-  expect(unavailable?.slice(6, 9)).toEqual(["—", "—", "—"]);
+  const cells = (row: Element) => [...row.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  // The hit-rate cell carries the rate and, when coverage is partial or absent, the same
+  // sentence twice over: a `title` for a pointer and an `sr-only` span for everyone else.
+  const hitRateCell = (row: Element) => row.querySelectorAll("td")[11]!;
+  const hitRate = (row: Element) => hitRateCell(row).querySelector(".usage-hit-rate")?.textContent?.trim();
+  const coverageNote = (row: Element) => hitRateCell(row).querySelector(".sr-only")?.textContent ?? null;
+  expect(cells(rows[0]!).slice(7, 11)).toEqual(["1000", "120", "600", "100"]);
+  expect(hitRate(rows[0]!)).toBe("60%");
+  // A row whose cache detail covers its whole input needs no coverage caveat.
+  expect(hitRateCell(rows[0]!).getAttribute("title")).toBeNull();
+  expect(coverageNote(rows[0]!)).toBeNull();
+  // Half this row's input never reported cache detail. The rate is still an average over the
+  // half that did, so it is reported with its coverage rather than withheld.
+  const partialNote = en["usage.cacheHitRate.partial"].replace("{measured}", "500").replace("{total}", "1000");
+  expect(cells(rows[1]!).slice(9, 11)).toEqual(["450", "0"]);
+  expect(hitRate(rows[1]!)).toBe("90%");
+  expect(hitRateCell(rows[1]!).getAttribute("title")).toBe(partialNote);
+  expect(coverageNote(rows[1]!)).toBe(partialNote);
+  // Nothing in this row reported cache detail at all, which is the one case with no basis.
+  expect(cells(rows[2]!).slice(9, 11)).toEqual(["—", "—"]);
+  expect(hitRate(rows[2]!)).toBe("—");
+  expect(hitRateCell(rows[2]!).getAttribute("title")).toBe(en["usage.cacheHitRate.unmeasured"]);
+  expect(coverageNote(rows[2]!)).toBe(en["usage.cacheHitRate.unmeasured"]);
 });
 
 async function respond(index: number, marker: string, date?: string) {

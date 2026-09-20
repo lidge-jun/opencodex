@@ -2,7 +2,6 @@ import SwiftUI
 import WidgetKit
 import MenuBarCore
 
-@available(macOS 14, *)
 struct OpenCodexWidgetView: View {
     let entry: SnapshotEntry
     @Environment(\.widgetFamily) private var family
@@ -301,14 +300,13 @@ struct OpenCodexWidgetView: View {
     }
 }
 
-@available(macOS 14, *)
+@main
 struct OpenCodexWidgetBundle: WidgetBundle {
     var body: some Widget {
         OpenCodexWidget()
     }
 }
 
-@available(macOS 14, *)
 struct OpenCodexWidget: Widget {
     let kind = "OpenCodexWidget"
 

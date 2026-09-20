@@ -1215,6 +1215,12 @@ jobs:
           test -x "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget"
           test -x "$app/Contents/MacOS/ocx"
           codesign -dv "$app/Contents/PlugIns/OpenCodexWidget.appex"
+          # The widget is only offered in the gallery when its bundle is actually linked in, and
+          # nothing else here would notice its absence: the appex builds, signs and registers
+          # exactly the same way with the WidgetBundle dropped by the linker.
+          nm -a "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget" \
+            | grep -q "OpenCodexWidget0abC6BundleV" \
+            || { echo "::error::the widget bundle is not linked into the extension"; exit 1; }
 
   desktop-shell:
     name: desktop shell

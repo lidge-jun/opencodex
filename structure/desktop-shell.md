@@ -11,6 +11,27 @@ navigates the webview to the proxy's loopback dashboard
 Only the bootstrap page has Tauri IPC capability; the loopback dashboard never
 does because `dangerousRemoteDomainIpcAccess` is not configured.
 
+`desktop/src-tauri/src/first_run.rs` turns Start at Login on once per installation,
+before the tray is built so its checkbox reads the resulting state. A menu bar app
+that is not running has no menu bar item, so leaving autostart off by default left an
+installed app absent after a reboot. The marker in the app config directory is written
+before the login item is touched and is never removed, so a user who turns the setting
+off keeps it off; writing it afterwards would let a failed enable retry on every launch.
+The behaviour is not macOS-only — the autostart plugin implements the Linux autostart
+entry and the current-user Windows Run registration too.
+
+The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
+would supply on its own, and SwiftPM has no such target: `@main` on
+`OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and
+`-application-extension` — the compiler spelling of `APPLICATION_EXTENSION_API_ONLY` — all
+in `app/Package.swift`. Any one missing yields a widget that never appears: without
+`@main` the linker drops the bundle and the extension registers with nothing to offer, and
+without the entry override ExtensionFoundation traps during bootstrap. Nothing observable
+distinguishes these from a working widget, because the bundle still builds, signs and
+registers. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to register
+an unsandboxed plug-in at all — which is why the shell writes its snapshot into the
+extension's own container rather than a shared App Group, which ad-hoc signing cannot use.
+
 `desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
 Bun targets and prepares the external binary plus dashboard resources used by
 Tauri. Generated files under desktop/src-tauri/binaries/ and

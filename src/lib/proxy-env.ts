@@ -127,6 +127,9 @@ export function effectiveProxyFor(
   if (socksProxy) return socksProxy;
   const schemeValue = env[key]?.trim() || env[key.toLowerCase()]?.trim();
   if (schemeValue) {
+    // A SOCKS URL in a scheme-matched variable is a usable proxy: admission
+    // binds it explicitly and the transport follows, so it applies here too.
+    if (isSocks5ProxyUrl(schemeValue)) return schemeValue;
     // A present but unusable scheme-matched variable fails closed: it is not a
     // proxy Bun fetch can use, and it must not fall through to ALL_PROXY either.
     // If Bun would have used ALL_PROXY here, keeping the DNS-pinned transport is
