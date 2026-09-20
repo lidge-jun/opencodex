@@ -3,6 +3,7 @@ import {
   comboStreamPayloadCommitsOutput,
   preflightComboStreamResponse,
 } from "../../src/server/responses/combo-stream-preflight";
+import { stageCommitment } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 
@@ -538,7 +539,7 @@ describe("combo stream preflight", () => {
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
   });
 
-  test("replayReadErrors accepts a reconstructed prefix and the same reader.read error", async () => {
+  test("replayReadErrors returns a reconstructed prefix, the same read error, and the observed stage", async () => {
     const readError = new Error("preflight-read-reset");
     const source = prefixThenReadError(createdPrefix, readError);
     const result = await preflightComboStreamResponse(
@@ -547,7 +548,14 @@ describe("combo stream preflight", () => {
       undefined,
       { replayReadErrors: true },
     );
-    expect(result.kind).toBe("accepted");
+    expect(result.kind).toBe("read-error");
+    if (result.kind === "read-error") {
+      expect(result.error).toBe(readError);
+      // response.created and nothing else: the failure model puts that in the prelude, and a
+      // prelude is a stage at which the caller has observed nothing.
+      expect(result.stage).toBe("protocol-prelude");
+      expect(stageCommitment(result.stage)).toBe("nothing-observed");
+    }
     expect(source.cancelSpy()).toBeDefined();
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
     const reader = result.response.body!.getReader();
@@ -557,6 +565,46 @@ describe("combo stream preflight", () => {
     await expect(reader.read()).rejects.toBe(readError);
     expect(source.cancelSpy()).toBeDefined();
     expect(source.cancelSpy()!.mock.calls).toHaveLength(0);
+  });
+
+  test("a read error before any event is headers-only, and after output is committed", async () => {
+    const readError = new Error("preflight-read-reset");
+    const bare = await preflightComboStreamResponse(
+      prefixThenReadError(new TextEncoder().encode(""), readError).response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(bare.kind).toBe("read-error");
+    if (bare.kind === "read-error") {
+      expect(bare.stage).toBe("headers-only");
+      expect(stageCommitment(bare.stage)).toBe("nothing-observed");
+    }
+
+    const outputPrefix = new TextEncoder().encode(`data: ${JSON.stringify({
+      type: "response.output_text.delta", delta: "hi",
+    })}\n\n`);
+    const committed = await preflightComboStreamResponse(
+      prefixThenReadError(outputPrefix, readError).response,
+      { model: "m1", provider: "a" },
+      undefined,
+      { replayReadErrors: true },
+    );
+    expect(committed.kind).toBe("read-error");
+    if (committed.kind === "read-error") {
+      expect(committed.stage).toBe("semantic-output");
+      expect(stageCommitment(committed.stage)).not.toBe("nothing-observed");
+    }
+  });
+
+  test("a response.created carrying output is not a prelude", () => {
+    expect(comboStreamPayloadCommitsOutput({
+      type: "response.created", response: { id: "r1", output: [] },
+    })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({
+      type: "response.created",
+      response: { id: "r1", output: [{ type: "message", role: "assistant" }] },
+    })).toBe(true);
   });
 
 });
