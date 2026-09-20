@@ -26,10 +26,8 @@ import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
 import type { DataPlaneAdmission } from "./auth-cors";
 import {
-  admissionModelDeniedResponse,
-  AdmissionModelDeniedError,
-  resolveAdmissionModelScope,
-  routeAllowedByScope,
+  admissionScopeDenial,
+  UNNAMED_DESTINATION_MODEL,
 } from "./admission-model-scope";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
@@ -96,9 +94,8 @@ export async function handleSearch(
       // This branch resolves a model through the router and bills the account it
       // names, so a scoped key is held to the same destination rule it is held
       // to on the inference path.
-      if (!routeAllowedByScope(resolveAdmissionModelScope(config, admission), route)) {
-        return admissionModelDeniedResponse(new AdmissionModelDeniedError(model, route));
-      }
+      const denial = admissionScopeDenial(config, admission, model, route);
+      if (denial) return denial;
       exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
       logCtx.provider = `${route.providerName}-${accountNamespace}`;
       logCtx.routeDecision = route.routeDecision;
@@ -120,7 +117,7 @@ export async function handleSearch(
   }
   const candidates = listOpenAiForwardSidecarCandidates(config);
   if (candidates.length === 0) {
-    return handleAlphaSearchSidecarFallback(body, config, req.signal, logCtx);
+    return handleAlphaSearchSidecarFallback(body, config, req.signal, logCtx, admission);
   }
 
   let upstream: Awaited<ReturnType<typeof resolveFirstUsableOpenAiSidecar>>;
@@ -158,6 +155,22 @@ export async function handleSearch(
     if (err instanceof CodexModelAvailabilityError) return codexModelAvailabilityErrorResponse(err);
     if (err instanceof CodexPoolAuthenticationError) return formatErrorResponse(401, "authentication_error", err.message);
     throw err;
+  }
+
+  if (!accountNamespace) {
+    // An unqualified search model is never routed: the caller's own string is
+    // relayed to whichever ChatGPT account this upstream resolved to, and that
+    // account is billed for it. The qualified branch above was already judged
+    // against the route it resolved, so it is not judged twice here.
+    const searchModel = typeof model === "string" && model.trim() ? model : UNNAMED_DESTINATION_MODEL;
+    const denial = admissionScopeDenial(config, admission, searchModel, {
+      providerName: upstream.providerName,
+      modelId: searchModel,
+    });
+    if (denial) {
+      upstream.releaseProbeLease?.();
+      return denial;
+    }
   }
 
   const headers: Record<string, string> = { "content-type": "application/json" };

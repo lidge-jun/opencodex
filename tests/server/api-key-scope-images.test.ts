@@ -10,9 +10,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MODEL_NOT_ALLOWED_FOR_KEY } from "../../src/server/admission-model-scope";
+import { MODEL_NOT_ALLOWED_FOR_KEY, UNNAMED_DESTINATION_MODEL } from "../../src/server/admission-model-scope";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
-import { handleImages, UNNAMED_IMAGE_MODEL } from "../../src/server/images";
+import { handleImages } from "../../src/server/images";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -126,7 +126,7 @@ test("a body that names no model cannot satisfy a model list", async () => {
     SCOPED,
   );
   expect(response.status).toBe(403);
-  expect((await denial(response)).model).toBe(UNNAMED_IMAGE_MODEL);
+  expect((await denial(response)).model).toBe(UNNAMED_DESTINATION_MODEL);
   expect(upstreamCalls).toEqual([]);
 });
 
@@ -184,4 +184,3 @@ test("a key with no scope keeps reaching every image destination", async () => {
   expect(response.status).toBe(200);
   expect(upstreamCalls).toHaveLength(1);
 });
-

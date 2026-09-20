@@ -119,6 +119,18 @@ export class AdmissionModelDeniedError extends Error {
 /** Stable wire type for a scope refusal. */
 export const MODEL_NOT_ALLOWED_FOR_KEY = "model_not_allowed_for_key";
 
+/**
+ * What a request that names no model resolves to for a scope decision.
+ *
+ * The relays beside the router — images and the search relay — copy the caller's
+ * body upstream, so a missing model leaves the provider to pick one and there is
+ * no destination a scoped key could be shown to be allowed to reach. A key with
+ * a model list is refused rather than sent to whatever the upstream defaults to.
+ * A key scoped only by provider is unaffected, and an unscoped key never reaches
+ * this at all.
+ */
+export const UNNAMED_DESTINATION_MODEL = "(unnamed)";
+
 /** The HTTP body a scope refusal returns. 403: authenticated, not permitted. */
 export function admissionModelDeniedBody(error: AdmissionModelDeniedError): {
   error: { type: string; message: string; model: string };

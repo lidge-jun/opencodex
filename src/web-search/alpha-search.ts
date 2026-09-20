@@ -14,6 +14,8 @@
 import { formatErrorResponse } from "../bridge";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import { admissionScopeDenial, UNNAMED_DESTINATION_MODEL } from "../server/admission-model-scope";
+import type { DataPlaneAdmission } from "../server/auth-cors";
 import type { OcxConfig, OcxProviderConfig, OcxWebSearchSidecarConfig } from "../types";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runExaWebSearch } from "./exa-executor";
@@ -252,6 +254,7 @@ export async function handleAlphaSearchSidecarFallback(
   config: OcxConfig,
   signal?: AbortSignal,
   logCtx?: { provider: string },
+  admission?: DataPlaneAdmission,
 ): Promise<Response> {
   const resolution = resolveAlphaSearchSidecar(config);
   if (resolution.status === "missing-credential") {
@@ -266,6 +269,24 @@ export async function handleAlphaSearchSidecarFallback(
   const resolved = resolution.sidecar;
   if (logCtx) logCtx.provider = resolved.backend;
 
+  // This backend is a paid destination like any other, and the operator's
+  // configuration -- not the caller -- decides which one and which model. A key
+  // scoped away from it must not spend it by asking the search endpoint instead
+  // of the inference one. Exa has no configured provider entry, so its own
+  // backend name is the destination.
+  const settings = sidecarSettingsForAlphaSearch(resolved.backend, config);
+  const requestedModel = (body as { model?: unknown } | null)?.model;
+  const denial = admissionScopeDenial(
+    config,
+    admission,
+    typeof requestedModel === "string" && requestedModel.trim() ? requestedModel : UNNAMED_DESTINATION_MODEL,
+    {
+      providerName: resolved.backend === "exa" ? resolved.backend : resolved.providerName,
+      modelId: settings.model,
+    },
+  );
+  if (denial) return denial;
+
   const queries = extractAlphaSearchQueries(body);
   if (queries.length === 0) {
     return formatErrorResponse(
@@ -275,7 +296,6 @@ export async function handleAlphaSearchSidecarFallback(
     );
   }
 
-  const settings = sidecarSettingsForAlphaSearch(resolved.backend, config);
   const sidecarExit = sidecarEnter("search");
   try {
     const texts: string[] = [];
