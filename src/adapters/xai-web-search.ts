@@ -1,4 +1,5 @@
 import type { OcxProviderConfig } from "../types";
+import { debugProviderDiagnostic } from "../lib/debug";
 import { isXaiResponsesDestination } from "../providers/xai-transport";
 
 const CODEX_WEB_SEARCH_TOOL = "web_search";
@@ -192,7 +193,13 @@ export function normalizeXaiResponsesWebSearch(
     if (inputChanged) next = { ...next, input };
   }
 
-  return normalizeToolChoice(next);
+  const normalized = normalizeToolChoice(next);
+  if ((normalized.tool_choice === "auto" || normalized.tool_choice === "none") && !hasAnyDeclaredTool(normalized)) {
+    debugProviderDiagnostic("xai", "tool-choice-omitted", { choice: normalized.tool_choice });
+    const { tool_choice: _toolChoice, ...rest } = normalized;
+    return rest;
+  }
+  return normalized;
 }
 
 function isLiveWebSearchTool(tool: unknown): boolean {

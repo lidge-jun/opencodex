@@ -1556,6 +1556,7 @@
     "ws-upstream.test.ts": "responses",
     "ws-upstream-socks5.test.ts": "responses",
     "xai-client.test.ts": "images",
+    "xai-empty-catalog-tool-choice.test.ts": "providers/xai",
     "xai-oauth-retry.test.ts": "providers/xai",
     "xai-refresh-lock.test.ts": "providers/xai",
     "xai-responses-adjacency.test.ts": "providers/xai",
