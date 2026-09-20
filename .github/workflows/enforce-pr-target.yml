@@ -551,8 +551,8 @@ jobs:
                   other =>
                     other.number !== pull_number &&
                     other.head?.ref === pr.base.ref &&
-                    (other.base?.repo?.owner?.login ?? owner) === baseOwner &&
-                    (other.base?.repo?.name ?? repo) === baseName
+                    other.head?.repo?.owner?.login === baseOwner &&
+                    other.head?.repo?.name === baseName
                 );
                 if (stackedBase) {
                   core.info(

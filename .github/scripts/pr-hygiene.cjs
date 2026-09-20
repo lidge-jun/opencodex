@@ -87,28 +87,56 @@ function isTestPath(path) {
 // writing tests, weakening the gate everywhere it actually matters.
 //
 // Deliberately narrow: a single non-comment line anywhere in the file's patch
-// makes the whole file count as behavior again. Block-comment CONTINUATION
-// lines are recognized only in the common leading-asterisk form; anything more
-// clever than that reads as code and keeps the requirement.
+// makes the whole file count as behavior again. Block-comment state is tracked
+// line by line so #private fields and *generator methods are not mistaken
+// for comment text; anything ambiguous reads as code and keeps the requirement.
 function isCommentOnlyChange(patch) {
   if (typeof patch !== "string") return false;
-  const changed = patch
-    .split("\n")
-    .filter(
-      (line) =>
-        (line.startsWith("+") && !line.startsWith("+++")) ||
-        (line.startsWith("-") && !line.startsWith("---")),
-    )
-    .map((line) => line.slice(1).trim());
-  if (changed.length === 0) return false;
-  return changed.every(
-    (line) =>
+  let changed = 0;
+  let oldInBlockComment = false;
+  let newInBlockComment = false;
+
+  const isComment = (text, inBlockComment) => {
+    const line = text.trim();
+    const blockComment = inBlockComment || line.startsWith("/*");
+    const blockEnd = blockComment ? line.indexOf("*/") : -1;
+    const comment =
       line === "" ||
       line.startsWith("//") ||
-      line.startsWith("/*") ||
-      line.startsWith("*") ||
-      line.startsWith("#"),
-  );
+      (blockComment && (blockEnd === -1 || line.slice(blockEnd + 2).trim() === ""));
+    const nextInBlockComment = blockComment && blockEnd === -1;
+    return { comment, nextInBlockComment };
+  };
+
+  for (const diffLine of patch.split("\n")) {
+    if (diffLine.startsWith("@@")) {
+      oldInBlockComment = false;
+      newInBlockComment = false;
+      continue;
+    }
+    if (diffLine.startsWith("+++") || diffLine.startsWith("---")) continue;
+
+    const marker = diffLine[0];
+    if (marker !== "+" && marker !== "-" && marker !== " ") continue;
+    const text = diffLine.slice(1);
+    if (marker !== "-") {
+      const result = isComment(text, newInBlockComment);
+      newInBlockComment = result.nextInBlockComment;
+      if (marker === "+") {
+        changed += 1;
+        if (!result.comment) return false;
+      }
+    }
+    if (marker !== "+") {
+      const result = isComment(text, oldInBlockComment);
+      oldInBlockComment = result.nextInBlockComment;
+      if (marker === "-") {
+        changed += 1;
+        if (!result.comment) return false;
+      }
+    }
+  }
+  return changed > 0;
 }
 
 function hasEmptyCatch(lines) {

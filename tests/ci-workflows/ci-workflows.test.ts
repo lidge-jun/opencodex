@@ -3965,6 +3965,35 @@ describe("GitHub Actions hardening", () => {
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
     });
 
+    test("an open PR with an unavailable head repo is not a stacked parent", async () => {
+      const result = await run({
+        pr: {
+          number: 42,
+          base: {
+            ref: "main",
+            repo: { name: "opencodex", owner: { login: "lidge-jun" } },
+          },
+          title: "Wrong-base child",
+          draft: false,
+        },
+        openPulls: [
+          {
+            number: 41,
+            head: { ref: "main", repo: null },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      expect(result.logs.join(" ")).not.toContain("treating as stacked");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+    });
+
     test("a non-dev base with no open parent PR is still wrong-base", async () => {
       const result = await run({
         pr: { base: { ref: "feature/orphan" }, title: "Orphan stack", draft: false },

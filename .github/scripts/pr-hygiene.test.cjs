@@ -111,6 +111,23 @@ describe("assessHygiene", () => {
     }
   });
 
+  it("does not mistake private or generator members for comments", () => {
+    for (const patch of [
+      "@@\n+  #disableAuth() { return true; }",
+      "@@\n+  *[Symbol.iterator]() { yield secret; }",
+    ]) {
+      const failures = assessHygiene({ files: [{ filename: "src/router.ts", patch }] });
+      assert.equal(failures[0].code, "missing_regression_test", patch);
+    }
+  });
+
+  it("recognizes block-comment continuations only inside a block comment", () => {
+    assert.deepEqual(assessHygiene({ files: [{
+      filename: "src/router.ts",
+      patch: "@@\n /**\n- * old explanation\n+ * clearer explanation\n */",
+    }] }), []);
+  });
+
   it("classifies renamed behavior files on both sides", () => {
     const failures = assessHygiene({ files: [
       { filename: "docs/moved.md", previous_filename: "src/router.ts", patch: "" },
