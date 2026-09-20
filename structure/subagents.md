@@ -81,7 +81,8 @@ the flag and thread count decide what the native runtime allows.
 Because the global feature has precedence over catalog pins, Codex config injection reconciles it
 to disabled whenever the persisted OpenCodex mode explicitly selects v1. This includes a fresh
 install on a Codex home that had previously enabled v2; external-provider ownership and read-only
-injection preflight still prohibit that write.
+injection preflight still prohibit that write. The transition runs inside the same write lock and
+preimage as the rest of the injection, so a later refusal rolls the flag back with the files.
 
 `keepNativeChatGptOnV1` makes mode `v2` a catalog-driven hybrid: OpenCodex disables the global
 `multi_agent_v2` override because codex-rs resolves that override before a model row's explicit
