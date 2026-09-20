@@ -953,6 +953,20 @@ function ensureUsageLogDir(now: number): void {
   ensuredUsageLogDir = { path: dir, checkedAt: now };
 }
 
+/**
+ * One owner hook, run after an append lands.
+ *
+ * A slot rather than a direct call, because the only consumer -- ledger retention -- reads this
+ * module's revision helpers, and importing it back here would be a static cycle. The hook runs
+ * INSIDE the synchronous append call stack on purpose: that is what makes "no in-process append
+ * can interleave with a compaction" true rather than merely likely.
+ */
+let afterUsageLedgerAppend: (() => void) | null = null;
+
+export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
+  afterUsageLedgerAppend = hook;
+}
+
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
   const path = usageLogPath();
@@ -973,10 +987,12 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
       ensuredUsageLogDir = null;
       ensuredUsageLogFile = null;
       doAppend();
+      afterUsageLedgerAppend?.();
       return;
     }
     throw error;
   }
+  afterUsageLedgerAppend?.();
 }
 
 export type UsageLogRevision = {

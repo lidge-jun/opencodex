@@ -1232,6 +1232,7 @@
     "usage-failure-fingerprint.test.ts": "usage",
     "usage-failure-projection.test.ts": "usage",
     "usage-attempt-delivery.test.ts": "usage",
+    "usage-ledger-retention.test.ts": "usage",
     "request-pacing.test.ts": "usage",
     "reserve-auth-context.test.ts": "codex-integration",
     "reserve-availability.test.ts": "codex-integration",

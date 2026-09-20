@@ -2,6 +2,7 @@ import {
   chmodSync,
   closeSync,
   fchmodSync,
+  fsyncSync,
   fstatSync,
   lstatSync,
   openSync,
@@ -191,6 +192,40 @@ function writePrivateTempFile(
   carryHardenAcrossContentWrite(path);
 }
 
+/**
+ * The same private temp, filled by a writer that streams into the descriptor.
+ *
+ * For content that must not be held in memory as one string. The identity assertions, the
+ * ownership handshake and the hardening are the same; the difference is that the bytes arrive in
+ * bounded chunks and the descriptor is flushed before it closes.
+ *
+ * The `fsync` is not optional here and its failure is not swallowed. A replacement whose
+ * REPLACEMENT is not on disk can lose the rows it was supposed to retain, so the throw is what
+ * stops the rename from happening at all.
+ */
+function writePrivateTempFileWith(
+  path: string,
+  write: (descriptor: number) => void,
+  timeoutMemoKey: string,
+  onCreated: () => void,
+): void {
+  const descriptor = openSync(path, "wx", 0o600);
+  onCreated();
+  try {
+    if (windowsHardeningApplies()) {
+      hardenSecretPath(path, { required: true, timeoutMemoKey });
+    }
+    if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
+    assertPrivateTempDescriptor(path, descriptor);
+    write(descriptor);
+    assertPrivateTempDescriptor(path, descriptor);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  carryHardenAcrossContentWrite(path);
+}
+
 async function writePrivateTempFileAsync(
   path: string,
   content: string,
@@ -217,7 +252,7 @@ async function writePrivateTempFileAsync(
 
 function atomicWriteFileToTarget(
   path: string,
-  content: string,
+  content: string | ((descriptor: number) => void),
   target: string,
   io?: AtomicWriteIO,
   hooks: AtomicWriteHooks = {},
@@ -246,7 +281,11 @@ function atomicWriteFileToTarget(
   };
   try {
     if (io) ownsTemp = true;
-    effective.write(tmp, content);
+    // A streaming writer bypasses the string form of `write` and nothing else. Every later
+    // step -- harden, the pre-rename hooks, the rename and the whole residual-cleanup path,
+    // which still scrubs through `effective.write(tmp, "")` -- is shared with the string form.
+    if (typeof content === "function") writePrivateTempFileWith(tmp, content, path, () => { ownsTemp = true; });
+    else effective.write(tmp, content);
     hooks.afterTempWrite?.(tmp, target);
     effective.harden(tmp);
     hardened = true;
@@ -294,6 +333,23 @@ export function atomicWriteFile(
   hooks: AtomicWriteHooks = {},
 ): void {
   atomicWriteFileToTarget(path, content, resolveWriteTarget(path), io, hooks);
+}
+
+/**
+ * Atomically replace a file with bytes produced straight into the temporary descriptor.
+ *
+ * Same publication contract as {@link atomicWriteFile}: an exclusively created private temp, the
+ * identity assertions around the write, `hooks.validateBeforeRename` immediately before the
+ * rename, the platform-aware replace, and the residual cleanup on any failure. A custom
+ * {@link AtomicWriteIO} is not accepted, because the point of this form is that the default
+ * writer owns the descriptor.
+ */
+export function atomicWriteFileStreamed(
+  path: string,
+  write: (descriptor: number) => void,
+  hooks: AtomicWriteHooks = {},
+): void {
+  atomicWriteFileToTarget(path, write, resolveWriteTarget(path), undefined, hooks);
 }
 
 /**

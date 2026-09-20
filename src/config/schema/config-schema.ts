@@ -46,6 +46,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
+import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
 import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
@@ -82,6 +83,13 @@ export const configSchema = z.object({
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024).describe(
     "Deprecated compatibility limit for bounded legacy usage readers; GET /api/usage always aggregates the complete ledger",
   ),
+  // Opt-in ledger ceiling. A hand edit below the floor, or a non-safe integer, disables only
+  // this limit rather than failing the config: refusing to start because history retention was
+  // mistyped would be a worse outcome than not trimming history.
+  usageLedgerMaxBytes: z.number().int().safe()
+    .min(MIN_USAGE_LEDGER_MAX_BYTES)
+    .optional()
+    .catch(undefined),
   // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.
   upstreamHostCircuitThreshold: z.number().int()
     .min(0)

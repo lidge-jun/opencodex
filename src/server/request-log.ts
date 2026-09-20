@@ -529,6 +529,24 @@ export function hydrateRequestLogsFromDisk(
   }
 }
 
+/**
+ * Rebuild the Logs ring after retention deleted rows from the ledger.
+ *
+ * Without this a compaction is invisible where an operator actually looks: the ring holds up to
+ * 2,000 entries independently of the file, so rows deleted from disk keep serving through
+ * /api/logs until eviction or a restart -- the dashboard showing history the ledger no longer
+ * has. Observers are deliberately not replayed; they exist to watch NEW rows arrive, and
+ * replaying a rehydration through them would announce two thousand arrivals that did not happen.
+ */
+export function rehydrateRequestLogsAfterLedgerReplacement(
+  reader: () => PersistedUsageEntry[] = () => readRecentUsageEntries(MAX_LOG_SIZE),
+): number {
+  requestLog.length = 0;
+  requestLogBytes = 0;
+  requestLogsHydratedFromDisk = false;
+  return hydrateRequestLogsFromDisk(reader);
+}
+
 export function addRequestLog(entry: RequestLogEntry) {
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
