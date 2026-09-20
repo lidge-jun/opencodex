@@ -12,6 +12,8 @@ const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
 /** Hard cap for remote image downloads (also enforced inside pinnedHttpsGet). */
 export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
+/** Deadline for establishing TCP and TLS for provider-returned artifact URLs. */
+export const DOWNLOAD_CONNECT_TIMEOUT_MS = 10_000;
 /** Idle timeout for pinned HTTPS connect/headers/body when no AbortSignal is provided. */
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
@@ -270,6 +272,7 @@ export function pinnedHttpsGet(
   signal?: AbortSignal,
   options?: {
     maxBytes?: number;
+    connectTimeoutMs?: number;
     idleTimeoutMs?: number;
     rejectUnauthorized?: boolean;
   },
@@ -279,9 +282,11 @@ export function pinnedHttpsGet(
     throw new Error(`image URL must use HTTPS, got ${parsed.protocol}`);
   }
   const maxBytes = options?.maxBytes ?? MAX_DOWNLOAD_BYTES;
+  const connectTimeoutMs = options?.connectTimeoutMs ?? DOWNLOAD_CONNECT_TIMEOUT_MS;
   const idleTimeoutMs = options?.idleTimeoutMs ?? DOWNLOAD_IDLE_TIMEOUT_MS;
   return pinnedHttpGet(url, pinned, signal, {
     maxBytes,
+    connectTimeoutMs,
     idleTimeoutMs,
     rejectUnauthorized: options?.rejectUnauthorized,
     context: "image download",

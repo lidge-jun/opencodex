@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 type LookupCb =
   | ((err: Error | null, address: string, family: number) => void)
@@ -54,6 +54,39 @@ function installHttpsMock(bodyChunks: Buffer[], statusCode = 200) {
 }
 
 describe("pinnedHttpsGet transport", () => {
+  test("applies a connect deadline by default", async () => {
+    const requestMock = mock(() => {
+      const req = new EventEmitter() as EventEmitter & {
+        setTimeout: Function;
+        end: Function;
+        destroy: Function;
+      };
+      req.setTimeout = mock(() => {});
+      req.end = mock(() => {});
+      req.destroy = mock(() => {});
+      queueMicrotask(() => req.emit("socket", Object.assign(new EventEmitter(), { connecting: true })));
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+    const scheduled: number[] = [];
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms?: number) => {
+      scheduled.push(ms ?? 0);
+      if (ms === 10_000) queueMicrotask(callback);
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    try {
+      const { pinnedHttpsGet } = await import("../../src/images/artifacts");
+      await expect(pinnedHttpsGet(
+        "https://cdn.example/hang.png",
+        { address: "93.184.216.34", family: 4 },
+      )).rejects.toThrow(/connect timed out/);
+      expect(scheduled).toContain(10_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   test("lookup honors scalar and { all: true } callback shapes", async () => {
     let capturedLookup: ((hostname: string, opts: unknown, cb?: LookupCb) => void) | undefined;
     const requestMock = mock((options: { lookup?: typeof capturedLookup }, onResponse?: Function) => {
