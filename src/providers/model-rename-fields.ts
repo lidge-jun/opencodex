@@ -101,6 +101,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   noReasoningModels: "list",
   noTemperatureModels: "list",
   noTopPModels: "list",
+  noStopModels: "list",
   noPenaltyModels: "list",
   noStructuredOutputModels: "list",
   noJsonSchemaModels: "list",

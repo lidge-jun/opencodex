@@ -107,6 +107,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   noReasoningModels: NONE,
   noTemperatureModels: NONE,
   noTopPModels: NONE,
+  noStopModels: NONE,
   noPenaltyModels: NONE,
   noJsonSchemaModels: NONE,
   parallelToolCalls: NONE,

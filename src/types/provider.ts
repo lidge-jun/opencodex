@@ -810,6 +810,13 @@ export interface OcxProviderConfig {
   noTemperatureModels?: string[];
   /** Model ids that reject caller-specified top_p. */
   noTopPModels?: string[];
+  /**
+   * Model ids that reject caller-specified stop sequences. The openai-chat adapter
+   * drops `stop` for these (xAI grok-4.6 answers 400 invalid-argument
+   * "Model grok-4.6 does not support parameter stop.", which makes Claude Code's
+   * auto-mode safety classifier report the model as temporarily unavailable).
+   */
+  noStopModels?: string[];
   /** Model ids that reject caller-specified presence/frequency penalty values. */
   noPenaltyModels?: string[];
   /**

@@ -189,6 +189,7 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     ...(def.noReasoningModels ? { noReasoningModels: [...def.noReasoningModels] } : {}),
     ...(def.noTemperatureModels ? { noTemperatureModels: [...def.noTemperatureModels] } : {}),
     ...(def.noTopPModels ? { noTopPModels: [...def.noTopPModels] } : {}),
+    ...(def.noStopModels ? { noStopModels: [...def.noStopModels] } : {}),
     ...(def.noPenaltyModels ? { noPenaltyModels: [...def.noPenaltyModels] } : {}),
     ...(def.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...def.autoToolChoiceOnlyModels] } : {}),
     ...(def.preserveReasoningContentModels ? { preserveReasoningContentModels: [...def.preserveReasoningContentModels] } : {}),
