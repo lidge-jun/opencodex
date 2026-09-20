@@ -110,6 +110,10 @@ function isAllowedEmail(file: string, email: string): boolean {
   }
   // URL-userinfo fixtures (https://user:pw@host/...) read as "pw@host" — not emails.
   if (file.startsWith("tests/") && email === ["pw", "chatgpt.com"].join("@")) return true;
+  // Retina asset names read as addresses: "128x128@2x.png" is local part "128x128", domain "2x",
+  // and the loose TLD rule accepts "png". The @2x/@3x scale suffix is a platform convention, and
+  // an image extension is not a top-level domain, so a name of that exact shape is a filename.
+  if (/^[a-z0-9._-]+@[23]x\.(?:png|jpe?g|gif|webp|tiff?)$/i.test(email)) return true;
   return file.startsWith("tests/") && email === "a@b.com";
 }
 
