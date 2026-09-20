@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   extractSectionsForTests,
+  mapSectionsToLayersForTests,
   probePromptText,
   promptTextProbeSpawnAttemptsForTests,
   resetPromptTextProbeForTests,
@@ -181,6 +182,23 @@ describe("section extraction", () => {
   test("a section spanning multiple lines keeps its body", () => {
     const sections = extractSectionsForTests(message("<apps_instructions>line one\nline two</apps_instructions>"));
     expect(sections.get("apps_instructions")).toBe("line one\nline two");
+  });
+
+  test("context-dependent collaboration text maps to its prompt layer", () => {
+    const rendered = extractSectionsForTests(
+      message("<collaboration_mode>Pair-programming instructions.</collaboration_mode>"),
+    );
+    expect(mapSectionsToLayersForTests(rendered).collaboration).toEqual({
+      text: "Pair-programming instructions.",
+      reason: "ok",
+      bytes: 30,
+    });
+
+    expect(mapSectionsToLayersForTests(new Map()).collaboration).toEqual({
+      text: null,
+      reason: "not-rendered",
+      bytes: 0,
+    });
   });
 
   test("AGENTS.md is bounded by its own INSTRUCTIONS wrapper", () => {
