@@ -1,130 +1,136 @@
 {
-  "proofType": "fixture-rendered GUI proof from an exact-head hosted build; not a live backend",
+  "status": "FINAL/CORRECTED-HEAD",
+  "proofType": "fixture-rendered GUI proof from the exact-head hosted build; not a live backend",
   "sourceArtifact": {
-    "name": "PR #5197 exact-head hosted GUI build",
+    "name": "PR #5197 corrected-head hosted GUI build",
+    "artifactId": 10595174777,
+    "artifactName": "dashboard-preview-6c9576edb372200efec9d6ad4fea7b1e0dc35fb4",
+    "workflowRun": 35481230775,
+    "workflowAttempt": 1,
+    "workflowConclusion": "success",
     "entrypoint": "index.html",
-    "javascript": "assets/index-DGwN6Z5D.js",
+    "javascript": "assets/index-CKL6ayU1.js",
     "stylesheet": "assets/index-BTuCbqQd.css",
-    "commit": "bf1bf424f3ebabe977af0dd7b54e3c285baf1769",
-    "guiTree": "ce7f1018aa53203767a665de94d7e6005311f2a8"
+    "buildCommit": "6c9576edb372200efec9d6ad4fea7b1e0dc35fb4",
+    "prHead": "07bf0a4dbe369f204c2216f5e8c07c87f52d649c",
+    "guiTree": "06c1f0c620cbfca2a557813f7ec54b7c11cbb540"
+  },
+  "commands": {
+    "fixtureServer": "cd <extracted-artifact-root> && python3 fixture_server.py",
+    "asideReplTemplate": "/usr/bin/perl -e 'alarm shift; exec @ARGV' 120 aside repl \"<single-session inspect-act-verify script>\"",
+    "desktopWindow": "Aside window {1446,762} -> CSS viewport 1280x720",
+    "narrowWindow": "Aside window {646,842} -> CSS viewport 480x800",
+    "ko390Window": "Aside native page zoom 125 percent plus window {654,900} -> observed CSS viewport 390x686"
+  },
+  "reproduction": {
+    "baseUrl": "http://127.0.0.1:18799/",
+    "harnessScript": "fixture_server.py (scratch-only capture harness; not tracked)",
+    "driver": "Aside CLI repl opened the base URL in the real browser, selected fixture modes through POST /__fixture/mode, drove the dashboard controls, read back assertions, and captured each frame at the recorded CSS viewport and DPR."
   },
   "fixtureRoutes": [
-    {
-      "method": "GET",
-      "path": "/",
-      "purpose": "serve index.html"
-    },
-    {
-      "method": "GET",
-      "path": "/assets/*",
-      "purpose": "serve hosted GUI assets"
-    },
-    {
-      "method": "GET",
-      "path": "/provider-icons/*",
-      "purpose": "serve client icons"
-    },
-    {
-      "method": "GET",
-      "path": "/healthz",
-      "purpose": "minimal dashboard health bootstrap"
-    },
-    {
-      "method": "GET",
-      "path": "/api/startup-health",
-      "purpose": "minimal startup state"
-    },
-    {
-      "method": "GET",
-      "path": "/api/client-integrations",
-      "purpose": "integration list fixture"
-    },
-    {
-      "method": "GET",
-      "path": "/api/client-integrations/opencode",
-      "purpose": "OpenCode integration state fixture"
-    },
-    {
-      "method": "GET",
-      "path": "/api/client-integrations/journal?client=opencode",
-      "purpose": "OpenCode rollback journal fixture"
-    },
-    {
-      "method": "POST",
-      "path": "/api/client-integrations/preview",
-      "purpose": "apply or overwrite preview plan"
-    },
-    {
-      "method": "PUT",
-      "path": "/api/client-integrations/opencode",
-      "purpose": "confirmed mutation; stale mode returns one 409 with a fresh plan"
-    },
-    {
-      "method": "POST",
-      "path": "/api/client-integrations/restore/preview",
-      "purpose": "restore preview plan"
-    },
-    {
-      "method": "POST",
-      "path": "/api/client-integrations/restore",
-      "purpose": "confirmed restore mutation"
-    },
-    {
-      "method": "POST",
-      "path": "/__fixture/mode",
-      "purpose": "select apply, overwrite, restore, or stale fixture state"
-    },
-    {
-      "method": "GET",
-      "path": "/__fixture/state",
-      "purpose": "inspect current fixture state"
-    }
+    "GET / and static assets",
+    "GET /healthz",
+    "GET /api/startup-health",
+    "GET /api/client-integrations",
+    "GET /api/client-integrations/opencode",
+    "GET /api/client-integrations/journal?client=opencode",
+    "POST /api/client-integrations/preview",
+    "PUT /api/client-integrations/opencode",
+    "POST /api/client-integrations/restore/preview",
+    "POST /api/client-integrations/restore",
+    "GET /api/client-integrations/aside/profiles",
+    "GET /api/client-integrations/aside/profiles/7",
+    "GET /api/client-integrations/aside/profiles/7/journal",
+    "POST /api/client-integrations/aside/profiles/7/preview",
+    "PUT /api/client-integrations/aside/profiles/7",
+    "POST /__fixture/mode",
+    "GET /__fixture/state"
   ],
   "requestSequences": {
     "apply": [
-      "POST /__fixture/mode {mode: apply}",
+      "POST /__fixture/mode {mode:apply}",
       "GET /api/client-integrations/opencode",
       "GET /api/client-integrations/journal?client=opencode",
-      "POST /api/client-integrations/preview {clientId: opencode, operation: apply} -> apply plan"
+      "POST /api/client-integrations/preview {clientId:opencode,operation:apply}"
     ],
-    "foreign-overwrite": [
-      "POST /__fixture/mode {mode: overwrite}",
-      "GET /api/client-integrations/opencode -> conflict with reason foreign-edit",
+    "foreignOverwrite": [
+      "POST /__fixture/mode {mode:overwrite}",
+      "GET /api/client-integrations/opencode -> conflict, reason foreign-edit",
       "GET /api/client-integrations/journal?client=opencode",
-      "POST /api/client-integrations/preview {clientId: opencode, operation: overwrite} -> foreign-edit replace plan"
+      "POST /api/client-integrations/preview {clientId:opencode,operation:overwrite}"
     ],
-    "restore-drift": [
-      "POST /__fixture/mode {mode: restore}",
+    "restoreDrift": [
+      "POST /__fixture/mode {mode:restore}",
       "GET /api/client-integrations/opencode",
       "GET /api/client-integrations/journal?client=opencode -> op-restore-001",
-      "POST /api/client-integrations/restore/preview {opId: op-restore-001, confirmDrift: false} -> drift-aware restore plan"
+      "POST /api/client-integrations/restore/preview {opId:op-restore-001,confirmDrift:false}"
     ],
-    "stale-409-reconfirmation": [
-      "POST /__fixture/mode {mode: stale}",
-      "GET /api/client-integrations/opencode",
-      "GET /api/client-integrations/journal?client=opencode",
-      "POST /api/client-integrations/preview {clientId: opencode, operation: apply} -> initial plan",
-      "PUT /api/client-integrations/opencode with initial fingerprint -> 409 integration_preview_stale plus fresh plan",
-      "GET /api/client-integrations/opencode and GET /api/client-integrations/journal?client=opencode for reconciliation",
-      "capture before the second confirmation"
+    "stale409Reconfirmation": [
+      "POST /__fixture/mode {mode:stale}",
+      "GET state and journal",
+      "POST /api/client-integrations/preview -> initial p1:dddd... plan",
+      "PUT /api/client-integrations/opencode with initial binding -> 409 integration_preview_stale plus p1:eeee... fresh plan",
+      "GET state and journal reconciliation",
+      "capture before reconfirming"
     ],
-    "ko-restore-drift-390": [
-      "select Korean from the dashboard Language combobox",
-      "use the restore-drift request sequence",
-      "capture at CSS viewport width 390"
+    "koRestoreDrift390": ["select Korean in dashboard", "run restoreDrift", "capture at observed innerWidth 390"],
+    "koStaleReconfirm390": ["keep Korean selected", "run stale409Reconfirmation", "capture before reconfirming at innerWidth 390"],
+    "koProfileDisableNoop390": [
+      "POST /__fixture/mode {mode:profile-noop}",
+      "GET /api/client-integrations/aside/profiles -> profile 7 enabled=true,state=absent",
+      "POST /api/client-integrations/aside/profiles/7/preview {operation:disable} -> willChange=false,changes=[],profileId=7",
+      "assert document no-op copy and sync-preference disclosure",
+      "assert primary Disable button enabled",
+      "assert consequence body contains neither Korean backup nor rollback text",
+      "capture",
+      "PUT /api/client-integrations/aside/profiles/7 {enabled:false,operation:disable,planFingerprint:p1:ffffffffffffffffffffffffffffffff}",
+      "GET /__fixture/state verifies recorded binding"
     ],
-    "ko-stale-reconfirm-390": [
-      "keep Korean selected in the dashboard Language combobox",
-      "use the stale-409-reconfirmation request sequence",
-      "capture at CSS viewport width 390 before reconfirming"
-    ],
-    "keyboard-smoke": [
-      "POST /__fixture/mode {mode: apply}",
-      "open the apply confirmation dialog",
-      "press Tab twice from the dialog backdrop focus to focus the primary Apply button",
-      "capture the visible primary-button focus ring",
-      "press Escape and verify the dialog count changes from 1 to 0"
+    "keyboardFocus": [
+      "open apply dialog",
+      "press Tab twice to focus primary Apply",
+      "capture visible focus ring",
+      "assert dialog count 1 before Escape",
+      "press Escape and assert dialog count 0"
     ]
+  },
+  "captureBinding": {
+    "prHead": "07bf0a4dbe369f204c2216f5e8c07c87f52d649c",
+    "hostedBuildCommit": "6c9576edb372200efec9d6ad4fea7b1e0dc35fb4",
+    "sourceGuiTree": "06c1f0c620cbfca2a557813f7ec54b7c11cbb540",
+    "hostedBuildGuiTree": "06c1f0c620cbfca2a557813f7ec54b7c11cbb540",
+    "guiTreeEqual": true
+  },
+  "interactionObservations": {
+    "keyboardFocusVisible": true,
+    "dialogCountBeforeEscape": 1,
+    "dialogCountAfterEscape": 0
+  },
+  "profileNoopVerification": {
+    "previewDto": {
+      "version": 1,
+      "clientId": "aside",
+      "operation": "disable",
+      "state": "absent",
+      "foreignEdit": "none",
+      "changes": [],
+      "fingerprint": "p1:ffffffffffffffffffffffffffffffff",
+      "canApply": true,
+      "willChange": false,
+      "profileId": 7
+    },
+    "assertions": {
+      "documentScopedNoopCopyVisible": true,
+      "syncPreferenceDisclosureVisible": true,
+      "primaryButtonEnabled": true,
+      "backupPromiseAbsent": true,
+      "rollbackPromiseAbsent": true
+    },
+    "recordedBinding": {
+      "enabled": false,
+      "operation": "disable",
+      "planFingerprint": "p1:ffffffffffffffffffffffffffffffff"
+    }
   },
   "viewports": [
     {
@@ -132,25 +138,18 @@
       "cssWidth": 1280,
       "cssHeight": 720,
       "devicePixelRatio": 2,
-      "files": [
-        "apply-desktop.png",
-        "overwrite-foreign-desktop.png",
-        "restore-drift-desktop.png",
-        "stale-reconfirm-desktop.png",
-        "keyboard-focus.png"
-      ]
+      "pngWidth": 2560,
+      "pngHeight": 1440,
+      "files": ["apply-desktop.png","overwrite-foreign-desktop.png","restore-drift-desktop.png","stale-reconfirm-desktop.png","keyboard-focus.png"]
     },
     {
       "name": "narrow",
       "cssWidth": 480,
       "cssHeight": 800,
       "devicePixelRatio": 2,
-      "files": [
-        "apply-narrow.png",
-        "overwrite-foreign-narrow.png",
-        "restore-drift-narrow.png",
-        "stale-reconfirm-narrow.png"
-      ]
+      "pngWidth": 960,
+      "pngHeight": 1600,
+      "files": ["apply-narrow.png","overwrite-foreign-narrow.png","restore-drift-narrow.png","stale-reconfirm-narrow.png"]
     },
     {
       "name": "ko-390",
@@ -158,29 +157,24 @@
       "cssHeight": 686,
       "devicePixelRatio": 2.5,
       "browserZoomPercent": 125,
-      "note": "Native browser zoom plus window sizing was used to reach an observed innerWidth of exactly 390 without modifying page DOM or CSS.",
-      "files": [
-        "ko-restore-drift-390.png",
-        "ko-stale-reconfirm-390.png"
-      ]
+      "pngWidth": 976,
+      "pngHeight": 1716,
+      "dimensionNote": "Observed CSS viewport and DPR imply a nominal 975x1715 raster; the actual PNG is 976x1716 because the browser/native capture rounded each physical dimension by one pixel.",
+      "files": ["ko-restore-drift-390.png","ko-stale-reconfirm-390.png","ko-profile-disable-noop-390.png"]
     }
   ],
   "pngSha256": {
-    "apply-desktop.png": "cb462ebefad0494a20ab8e878a504068a74d001f13ac8d0d9fd009124a239c8f",
-    "apply-narrow.png": "5151bcee86f656f7dd37b0865ac57c5d461da1ac982cb0c2c8ceb08dbb537741",
-    "keyboard-focus.png": "5e9c2c738a149d696ab9efbe712f123b1bd2464b5dfe839e78a6d134c23453dd",
-    "ko-restore-drift-390.png": "205f72689b392f551b1efe4552e2087c26af7f5becec4e9c7c5dc9de1e4d1af0",
-    "ko-stale-reconfirm-390.png": "a39670070f68efca408cb46d44141563e0aee6147d0946a4429bbfa9e4ecd556",
-    "overwrite-foreign-desktop.png": "1141600b938e28881bbabb73d45e260fa90566026f4955905a9fa0518930a8b0",
-    "overwrite-foreign-narrow.png": "5cec48444e0a88bfcbbf4e2582735bbb91154bcaf6534478014c4f7d3a9ad273",
-    "restore-drift-desktop.png": "feade5901845715a575588cdc4cb0f6d09a8d6a3804e0e7d5732f8a064696f1d",
-    "restore-drift-narrow.png": "3c831fc361ce60210820b533eca91292142800389c45a2d52bfe61a1c454d60c",
-    "stale-reconfirm-desktop.png": "ccf802e2cc7ef81b461a90bdbf167266ae5ccaabea582d0a1d1988a3189ebf58",
-    "stale-reconfirm-narrow.png": "0088073e9cbaabb149137846e0a32ec39f212e29600897e3deac0e67aa0c6e40"
-  },
-  "reproduction": {
-    "command": "cd <scratch>/gui-capture && python3 fixture_server.py  # serves the verified artifact bundle + fixture API on http://127.0.0.1:18797 (GUI_CAPTURE_PORT overridable)",
-    "driver": "Aside CLI repl (aside repl) opened http://127.0.0.1:18797/ in the real browser; states driven via POST /__fixture/mode plus the dashboard UI; captures via page.screenshot at the recorded CSS viewports/DPR.",
-    "harnessScript": "fixture_server.py (scratch only, not tracked)"
+    "apply-desktop.png": "4427b60e8885c68e2478c319e4ef428d959b4cc13ee5141a64a92777550ab420",
+    "apply-narrow.png": "0e2dfd18e76c26755c7b347e149de29dab2b4a40d2074e2ad293d93ced2e34e3",
+    "keyboard-focus.png": "29714ff85f13b35cc72fffc1a36b6d07ee820be1f9824c9f56a317f15c38feb1",
+    "ko-profile-disable-noop-390.png": "09baf33f610dccff7d26b77717682f046da821cb2ff8276325be829882f20648",
+    "ko-restore-drift-390.png": "7c51f352c24defd7cc0c669e53fd254ae314f79faf6cc48a65b9dd2589fe46de",
+    "ko-stale-reconfirm-390.png": "9dc051b7e97a19fd3dff66958fde432d35f94473ddc403424af13fcdc5ec5254",
+    "overwrite-foreign-desktop.png": "0e6d14543dfe4ff5847aa3d66d26c499f32235c02a6d741f32a528b1af12f986",
+    "overwrite-foreign-narrow.png": "8c9af82bc4cfe79e6400c10fb553378524c3f49074145a0cf845db52c3691b63",
+    "restore-drift-desktop.png": "42127e71f1f13a4902b31e59861de518dc339028a3b3cdbe130f259f0a78f5fb",
+    "restore-drift-narrow.png": "e7482dfe56b92350641b8a3b13ab3da79e7c8130db74a5cb5208a79e0ee9b2f9",
+    "stale-reconfirm-desktop.png": "307444c11e8369593b1a023fbeb2ee1ad63bf8deaa7c8bc6dfb9aa7728e6c6c1",
+    "stale-reconfirm-narrow.png": "8938274b183b888eaf8159bd6083ced670ac2070ef1a5cbdd6424475f4cc1b77"
   }
 }
