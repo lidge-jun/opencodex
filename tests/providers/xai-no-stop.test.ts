@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { routedProviderConfig } from "../../src/router";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
 const XAI_NO_STOP_MODELS = [
@@ -47,6 +48,20 @@ describe("xAI noStopModels", () => {
       adapter.buildRequest(parsed("grok-composer-2.5-fast")).body as string,
     ) as { stop?: unknown };
     expect(forwarded.stop).toEqual(["END"]);
+  });
+
+  test("routedProviderConfig fills noStopModels on a bare xAI row", () => {
+    const routed = routedProviderConfig("xai", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      apiKey: "sk-test",
+      authMode: "key",
+    });
+    expect(routed.noStopModels).toEqual([...XAI_NO_STOP_MODELS]);
+    const dropped = JSON.parse(
+      createOpenAIChatAdapter(routed).buildRequest(parsed("grok-4.6")).body as string,
+    ) as { stop?: unknown };
+    expect(dropped.stop).toBeUndefined();
   });
 
   test("passthrough omits stop for grok-4.6 and forwards it for other ids", () => {
