@@ -3,7 +3,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Console Go accepts public tools but rejects the private additional_tools input wrapper. */
-export function normalizeOpenCodeGoAdditionalTools(body: unknown, responseUrl: string): unknown {
+export function normalizeOpenCodeGoAdditionalTools(
+  body: unknown,
+  responseUrl: string,
+  replayPrefixLength = 0,
+): unknown {
   let destination: URL;
   try {
     destination = new URL(responseUrl);
@@ -20,10 +24,16 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown, responseUrl: s
 
   const input: unknown[] = [];
   const promoted: unknown[] = [];
+  const currentTurnStart = Number.isFinite(replayPrefixLength)
+    ? Math.min(body.input.length, Math.max(0, Math.trunc(replayPrefixLength)))
+    : 0;
   let changed = false;
-  for (const item of body.input) {
+  for (const [index, item] of body.input.entries()) {
     if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
       changed = true;
+      // Replayed wrappers are conversation history, not authority for the current request.
+      // Go cannot accept the wrapper itself, so remove it without promoting its catalog.
+      if (index < currentTurnStart) continue;
       // Custom/search/namespace lowering already owns identity and deduplication. This pass
       // only moves declarations, including hosted tools that intentionally have no name.
       for (const tool of item.tools) promoted.push(tool);
