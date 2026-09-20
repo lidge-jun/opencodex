@@ -1075,8 +1075,8 @@ export async function prepareAdapterExchange(
         translatorBudget,
       });
       if (policyRefusal) {
-        // Codex-facing incomplete/content_filter, independent of openai-chat vs
-        // openai-responses. Same return shape as the 413 overflow helpers.
+        // Codex-facing incomplete/content_filter. openai-responses passthrough
+        // uses the same helper after its 413 block.
         return policyRefusal;
       }
       if (!isFixedCodexAccount(admissionState.authCtx)) {

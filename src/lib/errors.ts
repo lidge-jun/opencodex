@@ -227,7 +227,7 @@ export function extractPolicyRefusalText(raw: string): string {
   }
   const prefixed = trimmed.match(/^Provider error 403:\s*([\s\S]+)$/i);
   if (prefixed?.[1]?.trim()) return prefixed[1].trim();
-  return trimmed || "I can't help with that request.";
+  return trimmed;
 }
 
 function isLocalAclHardeningMessage(text: string): boolean {

@@ -29,7 +29,7 @@ control и safety ответа всё равно происходят на гр�
 
 Некоторые отказы xAI Chat Completions приходят как HTTP 403 с точной фразой отказа, например `I can't help with that request.`, а не как HTTP 200 с `finish_reason: content_filter`. Codex считает 403 транспортным сбоем, поэтому ход пользователя не записывается и тот же запрос повторяется.
 
-На non-combo запросе Responses OpenCodex переписывает такой allowlist-ованный 403 в HTTP 200 Responses со `status: "incomplete"` и `incomplete_details.reason: "content_filter"`. Поток использует ту же incomplete-границу. Переписанное тело не является ошибкой upstream, поэтому Codex не идёт по пути повтора 403. 403 подписки, кредитов, прав доступа и `not allowed to use this model` остаются ошибками. Combo failover по-прежнему видит исходный HTTP 403.
+На non-combo запросе Responses OpenCodex переписывает такой allowlist-ованный 403 в HTTP 200 Responses со `status: "incomplete"` и `incomplete_details.reason: "content_filter"`. Это работает и на пути адаптера openai-chat, и на openai-responses passthrough (OAuth grok-4.6 / grok-4.5). Поток использует ту же incomplete-границу. Пустой 403 остаётся ошибкой. 403 подписки, кредитов, прав доступа и `not allowed to use this model` остаются ошибками. Combo failover по-прежнему видит исходный HTTP 403.
 
 ## Обзор endpoint'ов
 

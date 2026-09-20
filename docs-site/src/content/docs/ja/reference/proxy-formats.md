@@ -22,7 +22,7 @@ provider events → internal adapter events → client dialect
 
 一部の xAI Chat Completions 拒否は、HTTP 200 と `finish_reason: content_filter` ではなく、HTTP 403 と `I can't help with that request.` のような拒否文だけを返します。Codex は 403 を転送失敗として扱うため、ユーザーのターンが記録されず、同じリクエストが再送されます。
 
-コンボではない Responses リクエストでは、OpenCodex はその allowlist 対象の 403 を HTTP 200 の Responses、`status: "incomplete"`、`incomplete_details.reason: "content_filter"` に書き換えます。ストリーミングも同じ incomplete 境界です。書き換えた本文は上流エラーではないため、Codex は 403 の再試行経路をたどりません。サブスクリプション、クレジット、権限、`not allowed to use this model` の 403 はエラーのままです。コンボのフェイルオーバーは元の HTTP 403 を見ます。
+コンボではない Responses リクエストでは、OpenCodex はその allowlist 対象の 403 を HTTP 200 の Responses、`status: "incomplete"`、`incomplete_details.reason: "content_filter"` に書き換えます。openai-chat アダプタ経路と openai-responses パススルー（grok-4.6 / grok-4.5 OAuth）の両方です。ストリーミングも同じ incomplete 境界です。空本文の 403 はエラーのままです。サブスクリプション、クレジット、権限、`not allowed to use this model` の 403 はエラーのままです。コンボのフェイルオーバーは元の HTTP 403 を見ます。
 
 ## エンドポイントの概要
 

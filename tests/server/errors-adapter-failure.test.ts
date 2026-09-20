@@ -144,6 +144,8 @@ describe("xAI policy-refusal 403", () => {
       403,
       "Please retry later; I can't help with that request in this context.",
     )).toBe(false);
+    expect(isUpstreamPolicyRefusal(403, "")).toBe(false);
+    expect(isUpstreamPolicyRefusal(403, "   ")).toBe(false);
   });
 
   test("extracts the refusal sentence from JSON and prefixed bodies", () => {
@@ -151,6 +153,8 @@ describe("xAI policy-refusal 403", () => {
       .toBe("I can't help with that request.");
     expect(extractPolicyRefusalText("Provider error 403: I can't help with that request."))
       .toBe("I can't help with that request.");
+    expect(extractPolicyRefusalText("")).toBe("");
+    expect(extractPolicyRefusalText("   ")).toBe("");
   });
 
   test("rewriteUpstreamPolicyRefusal returns Codex incomplete/content_filter for both wires", async () => {
@@ -202,5 +206,23 @@ describe("xAI policy-refusal 403", () => {
     } finally {
       budget.dispose();
     }
+  });
+
+  test("adapter-dispatch and passthrough-delivery both rewrite non-combo policy 403s", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const root = join(import.meta.dir, "../..");
+    const dispatch = await readFile(join(root, "src/server/responses/adapter-dispatch.ts"), "utf8");
+    const passthrough = await readFile(join(root, "src/server/responses/passthrough-delivery.ts"), "utf8");
+    for (const source of [dispatch, passthrough]) {
+      const overflow = source.indexOf("if (upstreamResponse.status === 413)");
+      const rewrite = source.indexOf("rewriteUpstreamPolicyRefusal({", overflow);
+      expect(overflow).toBeGreaterThan(-1);
+      expect(rewrite).toBeGreaterThan(overflow);
+    }
+    const combo = passthrough.indexOf("if (options.comboAttempt)");
+    const rewrite = passthrough.indexOf("rewriteUpstreamPolicyRefusal({");
+    expect(combo).toBeGreaterThan(-1);
+    expect(combo).toBeLessThan(rewrite);
   });
 });

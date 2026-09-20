@@ -27,7 +27,7 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 部分 xAI Chat Completions 拒绝会以 HTTP 403 加上 `I can't help with that request.` 这类拒绝句返回，而不是 HTTP 200 加 `finish_reason: content_filter`。Codex 把 403 当作传输失败，因此用户回合不会被记录，同一请求会被重试。
 
-在非 combo 的 Responses 请求上，OpenCodex 会把该 allowlist 中的 403 改写为 HTTP 200 Responses，`status: "incomplete"`，`incomplete_details.reason: "content_filter"`。流式响应使用同一 incomplete 边界。改写后的正文不是上游错误，因此 Codex 不会走 403 重试路径。订阅、额度、权限以及 `not allowed to use this model` 的 403 仍是错误。combo 故障切换仍会看到原始 HTTP 403。
+在非 combo 的 Responses 请求上，OpenCodex 会把该 allowlist 中的 403 改写为 HTTP 200 Responses，`status: "incomplete"`，`incomplete_details.reason: "content_filter"`。openai-chat 适配器路径和 openai-responses passthrough（grok-4.6 / grok-4.5 OAuth）都会改写。流式响应使用同一 incomplete 边界。空正文 403 仍是错误。订阅、额度、权限以及 `not allowed to use this model` 的 403 仍是错误。combo 故障切换仍会看到原始 HTTP 403。
 
 ## 端点总览
 

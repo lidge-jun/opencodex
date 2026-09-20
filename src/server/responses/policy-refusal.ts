@@ -11,8 +11,8 @@ async function* policyRefusalEvents(message: string): AsyncGenerator<AdapterEven
 /**
  * Turn an xAI-style HTTP 403 model refusal into a Codex-facing Responses
  * incomplete/content_filter payload. Returned from `prepareAdapterExchange`
- * like the 413 overflow helpers, so openai-chat and openai-responses wires
- * both skip adapter parseStream.
+ * and native openai-responses passthrough (the grok-4.6 OAuth wire), like
+ * the 413 overflow helpers. Combo hops still see the original 403.
  */
 export function rewriteUpstreamPolicyRefusal(args: {
   status: number;
