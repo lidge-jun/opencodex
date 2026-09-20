@@ -1,4 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt } from "../coding-agent/protocol";
@@ -13,7 +16,7 @@ export function buildQoderChildEnv(profile: QoderProfile, apiKey: string): Recor
 }
 
 /** Single-shot, tools-disabled Qoder CLI invocation; Codex remains the tool owner. */
-export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
+export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig, systemPromptFile?: string): string[] {
   const args = [
     "-p",
     "--output-format", "stream-json",
@@ -27,8 +30,7 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
   if (effort) args.push("--reasoning-effort", effort);
-  const system = buildSystemPrompt(parsed);
-  if (system) args.push("--append-system-prompt", system);
+  if (systemPromptFile) args.push("--append-system-prompt-file", systemPromptFile);
   return args;
 }
 
@@ -123,16 +125,41 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         });
         return;
       }
-      await runCodingAgentTurn({
-        profiles: QODER_PROFILES,
-        provider,
-        parsed,
-        incoming,
-        emit: guardQoderScaffolding(emit),
-        buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov),
-        buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey),
-        deps,
-      });
+      // argv is world-readable via process listing, so the folded system+developer prompt is
+      // staged in a private temp file and passed by path instead of embedded in the arguments.
+      const system = buildSystemPrompt(parsed);
+      let promptDir: string | undefined;
+      let promptFile: string | undefined;
+      try {
+        promptDir = system ? await mkdtemp(join(tmpdir(), "ocx-qoder-prompt-")) : undefined;
+        promptFile = promptDir ? join(promptDir, "system-prompt.txt") : undefined;
+        if (promptFile) await writeFile(promptFile, system!, { encoding: "utf8", mode: 0o600 });
+      } catch {
+        if (promptDir) await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+        emit({
+          type: "error",
+          message: "Qoder system prompt could not be prepared securely.",
+          status: 500,
+          errorType: "upstream_error",
+          code: "prompt_file_failed",
+          retryable: false,
+        });
+        return;
+      }
+      try {
+        await runCodingAgentTurn({
+          profiles: QODER_PROFILES,
+          provider,
+          parsed,
+          incoming,
+          emit: guardQoderScaffolding(emit),
+          buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov, promptFile),
+          buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey),
+          deps,
+        });
+      } finally {
+        if (promptDir) await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+      }
     },
   };
 }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
+import { readFile } from "node:fs/promises";
 import type { ChildProcess } from "node:child_process";
 import { buildQoderArgs, buildQoderChildEnv, createQoderAdapter } from "../../src/adapters/qoder/adapter";
 import { clearQoderBinaryCache, QODER_CN_PROFILE, QODER_GLOBAL_PROFILE, resolveQoderProfile } from "../../src/adapters/qoder/profiles";
@@ -42,6 +43,37 @@ describe("qoder adapter", () => {
     expect(args).toContain("--no-session-persistence");
     expect(args[args.indexOf("--reasoning-effort") + 1]).toBe("high");
     expect(args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  test("keeps system and developer prompts out of child-process arguments", async () => {
+    const secretSystem = "private system instructions";
+    const secretDeveloper = "private developer context";
+    let args: readonly string[] = [];
+    let promptFromFile: Promise<string> | undefined;
+    const adapter = createQoderAdapter(provider(), {
+      which: () => "/bin/qoder",
+      spawn: (_command, childArgs) => {
+        args = childArgs;
+        const flag = childArgs.indexOf("--append-system-prompt-file");
+        promptFromFile = readFile(childArgs[flag + 1]!, "utf8");
+        return fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+      },
+    });
+    await adapter.runTurn!(parsed({
+      context: {
+        systemPrompt: [secretSystem],
+        messages: [
+          { role: "developer", content: secretDeveloper, timestamp: 0 },
+          { role: "user", content: "hello", timestamp: 0 },
+        ],
+      },
+    }), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, () => {});
+
+    const promptPath = args[args.indexOf("--append-system-prompt-file") + 1]!;
+    expect(args.join(" ")).not.toContain(secretSystem);
+    expect(args.join(" ")).not.toContain(secretDeveloper);
+    expect(await readFile(promptPath, "utf8").catch(() => "removed")).toBe("removed");
+    expect(await promptFromFile).toBe(`${secretSystem}\n\n${secretDeveloper}`);
   });
 
   test("keeps Global and CN profiles, executables, destinations, and PAT variables isolated", async () => {

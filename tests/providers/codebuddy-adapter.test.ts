@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
@@ -115,14 +116,16 @@ describe("codebuddy headless arguments keep tool ownership with Codex", () => {
     expect(args[args.indexOf("--model") + 1]).toBe("glm-5.3");
   });
 
-  test("maps Codex reasoning effort onto --effort and folds the system prompt", () => {
+  test("maps Codex reasoning effort and references a private system-prompt file", () => {
     const args = buildArgs(
       CODEBUDDY_GLOBAL_PROFILE,
       parsed({ options: { reasoning: "high" }, context: { systemPrompt: ["Be terse."], messages: [] } }),
       provider(),
+      "/private/system-prompt.txt",
     );
     expect(args[args.indexOf("--effort") + 1]).toBe("high");
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe("Be terse.");
+    expect(args[args.indexOf("--system-prompt-file") + 1]).toBe("/private/system-prompt.txt");
+    expect(args).not.toContain("Be terse.");
   });
 });
 
@@ -186,6 +189,7 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
     let command = "";
     let args: readonly string[] = [];
     let options: import("node:child_process").SpawnOptions | undefined;
+    let promptFile = "";
     const adapter = createCodeBuddyAdapter(provider(), {
       platform: "win32",
       which: () => "C:\\npm\\codebuddy.cmd",
@@ -193,6 +197,10 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
         command = seenCommand;
         args = seenArgs;
         options = seenOptions;
+        const commandLine = seenArgs[3] ?? "";
+        const match = commandLine.match(/--system-prompt-file\s+"([^"]+)"/);
+        promptFile = match?.[1] ?? "";
+        expect(readFileSync(promptFile, "utf8")).toBe('Say "hello" & stop');
         return fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess;
       },
       killGraceMs: 20,
@@ -202,8 +210,30 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
     expect(command.toLowerCase()).toContain("cmd.exe");
     expect(args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
     expect(args[3]).toContain("codebuddy.cmd");
-    expect(args[3]).toContain("Say");
+    expect(args[3]).not.toContain("Say");
     expect(options?.windowsVerbatimArguments).toBe(true);
+    expect(existsSync(promptFile)).toBe(false);
+  });
+
+  test("keeps request-derived prompts out of argv and removes the private staging file", async () => {
+    let promptFile = "";
+    const secret = "private-system-instruction";
+    const adapter = createCodeBuddyAdapter(provider(), {
+      which: () => "/usr/bin/codebuddy",
+      spawn: (_command, args) => {
+        expect(args).not.toContain(secret);
+        const index = args.indexOf("--system-prompt-file");
+        expect(index).toBeGreaterThanOrEqual(0);
+        promptFile = args[index + 1] ?? "";
+        expect(readFileSync(promptFile, "utf8")).toBe(secret);
+        if (process.platform !== "win32") expect(statSync(promptFile).mode & 0o777).toBe(0o600);
+        return fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess;
+      },
+      killGraceMs: 20,
+    });
+
+    await run(adapter, parsed({ context: { systemPrompt: [secret], messages: [] } }));
+    expect(existsSync(promptFile)).toBe(false);
   });
 });
 
