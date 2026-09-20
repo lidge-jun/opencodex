@@ -292,6 +292,36 @@ jobs:
           echo "$description" | grep -q "flags=.*runtime"
           echo "$description" | grep -q "Timestamp="
 
+      - name: Verify every Mach-O in the bundle carries the release identity
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            echo "No team configured; skipping the bundle-wide assertion for this non-release build."
+            exit 0
+          fi
+          # Find executables by their magic bytes rather than by path or extension. A bundler
+          # signs what it placed; anything copied in afterwards is invisible to it, and the
+          # binaries that get missed are usually the ones with no extension to filter on.
+          bad=0
+          while IFS= read -r app; do
+            echo "checking $app"
+            while IFS= read -r -d '' file; do
+              magic="$(head -c 4 "$file" | xxd -p)"
+              case "$magic" in
+                cffaedfe|cefaedfe|cafebabe|bebafeca) ;;
+                *) continue ;;
+              esac
+              if ! codesign -dvvv "$file" 2>&1 | grep -q "TeamIdentifier=$APPLE_TEAM_ID"; then
+                echo "::error::$file is not signed with the release identity"
+                bad=1
+              fi
+            done < <(find "$app" -type f -print0)
+          done < <(find desktop/src-tauri/target -type d -name '*.app' -maxdepth 6)
+          exit "$bad"
+
       # Release signing is intentionally secret-gated. Developer ID, notarization,
       # and updater signatures require maintainer-owned credentials; builds without
       # those secrets remain useful for local validation but are not release assets.
