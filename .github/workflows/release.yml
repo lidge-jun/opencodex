@@ -236,9 +236,88 @@ jobs:
         if: runner.os != 'macOS'
         run: bun desktop/scripts/prepare-sidecar.ts --target ${{ matrix.sidecar-targets }}
 
+      # The signing certificate has to be in a keychain before the widget is signed, and the
+      # Tauri build step creates its own keychain only when it runs — which is after this. Until
+      # this step existed, build-widget.sh saw no MACOS_SIGN_IDENTITY and took its unsigned
+      # branch, and the bundler does not re-sign anything under PlugIns, so the extension would
+      # have gone out ad-hoc inside a Developer ID host. No release has published a macOS
+      # application yet, so this is a defect that had not reached anyone rather than one that had.
+      - name: Import the release signing certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          # Checked as a set, because a partial set is the dangerous case: the Tauri CLI skips
+          # notarization without failing when the notary credentials are missing, and the
+          # unnotarized artifact is uploaded and attached exactly as a good one would be.
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release needs the full signing and notarization credential set."
+              echo "::error::Missing:$missing"
+              exit 1
+            fi
+            echo "Signing credentials are incomplete, so this build stays ad-hoc signed:$missing"
+            echo "It is usable for local validation and is not a release asset."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/opencodex-signing.keychain-db"
+          # Recorded before anything is created, so the cleanup step can still find a keychain
+          # that a failure left half-built.
+          echo "OPENCODEX_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          keychain_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          certificate="$RUNNER_TEMP/opencodex-signing.p12"
+          # The decoded certificate must not outlive this step even when a later command fails.
+          trap 'shred -u "$certificate" 2>/dev/null || rm -Pf "$certificate" 2>/dev/null || true' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" > /dev/null
+          # shellcheck disable=SC2046 # the keychain list is intentionally word-split into arguments
+          security list-keychain -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
       - name: Build WidgetKit extension
         if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: bash desktop/scripts/build-widget.sh
+
+      - name: Verify the extension carries the release signature
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          appex=desktop/src-tauri/widget/OpenCodexWidget.appex
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release cannot assert its own signature without APPLE_TEAM_ID."
+              exit 1
+            fi
+            echo "No team configured; skipping the signature assertion for this non-release build."
+            exit 0
+          fi
+          codesign --verify --strict --deep "$appex"
+          description="$(codesign -dvvv "$appex" 2>&1)"
+          echo "$description"
+          echo "$description" | grep -q "TeamIdentifier=$APPLE_TEAM_ID"
+          echo "$description" | grep -q "flags=.*runtime"
+          echo "$description" | grep -q "Timestamp="
 
       # Release signing is intentionally secret-gated. Developer ID, notarization,
       # and updater signatures require maintainer-owned credentials; builds without
@@ -267,6 +346,55 @@ jobs:
             --target "$DESKTOP_TARGET" \
             --out dist/release
 
+      # After the bundle exists, not before: a sweep that runs first passes by finding nothing.
+      - name: Verify every Mach-O in the bundle carries the release identity
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release cannot verify its bundle without APPLE_TEAM_ID."
+              exit 1
+            fi
+            echo "No team configured; skipping the bundle-wide assertion for this local build."
+            exit 0
+          fi
+          # Executables are found by their magic bytes rather than by path or extension. A bundler
+          # signs what it placed; anything copied in afterwards is invisible to it, and the
+          # binaries that get missed are the ones with no extension to filter on.
+          apps=0
+          machos=0
+          bad=0
+          while IFS= read -r app; do
+            apps=$((apps + 1))
+            echo "checking $app"
+            while IFS= read -r -d '' file; do
+              # All eight Mach-O leading words: thin and fat, 32- and 64-bit, both byte orders.
+              # A list that covers only the common ones skips the rest in silence while the
+              # non-zero counter below still reports a healthy sweep.
+              case "$(head -c 4 "$file" | xxd -p)" in
+                cefaedfe|cffaedfe|feedface|feedfacf) ;;
+                cafebabe|bebafeca|cafebabf|bfbafeca) ;;
+                *) continue ;;
+              esac
+              machos=$((machos + 1))
+              if ! codesign -dvvv "$file" 2>&1 | grep -q "TeamIdentifier=$APPLE_TEAM_ID"; then
+                echo "::error::$file is not signed with the release identity"
+                bad=1
+              fi
+            done < <(find "$app" -type f -print0)
+          done < <(find desktop/src-tauri/target -maxdepth 6 -type d -name '*.app')
+          echo "inspected $machos Mach-O files across $apps app bundles"
+          # A sweep that inspected nothing is the failure mode this step exists to prevent.
+          if [ "$apps" -eq 0 ] || [ "$machos" -eq 0 ]; then
+            echo "::error::found $apps app bundles and $machos Mach-O files; the sweep inspected nothing"
+            exit 1
+          fi
+          exit "$bad"
+
       - name: Upload desktop release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -274,6 +402,15 @@ jobs:
           path: dist/release/
           if-no-files-found: error
           retention-days: 7
+
+      # always(), because a keychain holding the release identity must not survive a failed job
+      # on a runner image that could be reused.
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -n "${OPENCODEX_SIGNING_KEYCHAIN:-}" ] && [ -f "${OPENCODEX_SIGNING_KEYCHAIN}" ]; then
+            security delete-keychain "${OPENCODEX_SIGNING_KEYCHAIN}"
+          fi
 
   attach-release:
     runs-on: ubuntu-latest

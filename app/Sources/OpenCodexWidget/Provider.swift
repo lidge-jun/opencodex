@@ -2,7 +2,6 @@ import Foundation
 import WidgetKit
 import MenuBarCore
 
-@available(macOS 14, *)
 public struct SnapshotEntry: TimelineEntry {
     public let date: Date
     public let snapshot: WidgetSnapshot?
@@ -10,7 +9,6 @@ public struct SnapshotEntry: TimelineEntry {
     public let stale: Bool
 }
 
-@available(macOS 14, *)
 public struct SnapshotProvider: TimelineProvider {
     private let reader = SnapshotReader()
 
