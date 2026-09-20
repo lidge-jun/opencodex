@@ -78,7 +78,7 @@ Nothing in `desktop/src-tauri/src/tray.rs` changes: it already builds the tray w
 
 ## Acceptance
 
-1. `bun run icons:check` reports every generated artifact matching the source, tray included.
+1. `cd desktop && bun run icons:check` reports every generated artifact matching the source, tray included.
 2. `tests/ci-workflows/build-desktop-icon-set.test.ts` passes, and its drift guard fails when the
    tray source is perturbed.
 3. `icon.png` is fully opaque, and `tray/icon.png` is 44x44 with no non-black opaque pixel.
@@ -92,4 +92,4 @@ Nothing in `desktop/src-tauri/src/tray.rs` changes: it already builds the tray w
 - `tray/icon.png`: 44x44, 759 pixels with alpha above zero — 498 fully opaque and 261 antialiased
   — and no pixel with alpha whose colour is anything but black, which is what a template image has
   to be. Both prompt glyphs are transparent holes rather than white fill.
-- `bun run icons` regenerated 18 artifacts; `bun run icons:check` reported 18 matching.
+- `cd desktop && bun run icons` regenerated 18 artifacts; `bun run icons:check` reported 18 matching. Both are desktop package scripts and fail from the repository root.
