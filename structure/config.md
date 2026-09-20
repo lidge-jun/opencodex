@@ -340,7 +340,7 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 
 `src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
 contract. It preserves each field's existing rule rather than assigning one global priority:
-operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key,
+operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key with a case-varied operator key claiming the registry row,
 restriction lists form a stable union, and hard wire pins precede valid operator overrides and
 registry wire defaults. Only the canonical `openai-apikey` provider merges
 `modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value; other
