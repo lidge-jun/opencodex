@@ -332,8 +332,24 @@ describe("sidecar on429 wiring", () => {
     // inline. Inlining is what produced the original defect: three sites each swapped `apiKey`
     // and only two of them remembered the routing metadata paired with it.
     expect(body).toContain("failoverAccountSnapshot(");
-    expect(body).toContain("applyFailoverSnapshot(snapshot)");
+    // The helper must also receive the iteration-local request the loop retries with — a bare
+    // `snapshot` call rebinds only the outer parsed, and the rotated Kiro context dies there.
+    expect(body).toContain("applyFailoverSnapshot(snapshot, retryParsed)");
     expect(body).not.toContain("apiKey: snapshot.accessToken");
+  });
+
+  test("the shared hook rebinds the exact sidecar retry request", () => {
+    const start = coreSource.indexOf("const rotateSidecarProviderOn429 =");
+    expect(start).toBeGreaterThan(-1);
+    const body = coreSource.slice(start, coreSource.indexOf("\n  };", start));
+
+    // Both loops send the retry from an iteration-local shallow copy (iterParsed), so the hook
+    // must receive and rebind THAT request: the Kiro auth context through the shared snapshot
+    // helper, and the reasoning-replay/continuation scope through a second bind. Rebinding only
+    // the outer parsed leaves the rotated bearer paired with the failed account's metadata.
+    expect(body).toContain("retryParsed?: OcxParsedRequest");
+    expect(body).toContain("applyFailoverSnapshot(snapshot, retryParsed)");
+    expect(body).toContain("parsed: retryParsed");
   });
 
   test("every rotation site applies the credential through the one shared helper", () => {
@@ -341,7 +357,7 @@ describe("sidecar on429 wiring", () => {
     // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
-    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, nextParsed)?\)/g) ?? [];
+    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
     // Five includes native Responses passthrough, which returns before the Chat bridge loop.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
     expect(snapshotUses.length).toBe(5);
