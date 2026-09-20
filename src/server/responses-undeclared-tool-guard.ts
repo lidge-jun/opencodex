@@ -13,7 +13,10 @@ import {
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 /** Item types the client executes through a request-declared wire name. */
-const CLIENT_EXECUTED_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
+export const CLIENT_EXECUTED_CALL_TYPES: ReadonlySet<string> = new Set([
+  "function_call",
+  "custom_tool_call",
+]);
 /** Codex groups ordinary top-level tools here; unlike an MCP namespace, it has no wire prefix. */
 const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
 

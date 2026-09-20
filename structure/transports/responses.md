@@ -667,6 +667,47 @@ and continuation-state suppression as well as the refusal, and it stands down on
 `src/server/responses/run-turn-execution.ts` and `src/server/responses/adapter-delivery.ts` set the
 flag from `inboundWire` on the streaming, buffered, and JSON paths alike, so the three cannot drift.
 
+### Selection outlives the declaration check
+
+Declaration and selection are different questions, and the guard above answers only the first.
+`tool_choice: "none"`, a forced selector and an `allowed_tools` allow-list each narrow a catalog
+without removing a declaration, so a name can be declared and forbidden at the same time — and a
+guard that compares names against the catalog passes it.
+
+The gap is reachable because a repair can put such a call back.
+`createGrokResponsesSparseTerminalBlockRewrite` in `src/server/grok-responses-snapshot-repair.ts`
+rebuilds a terminal `output` the upstream never sent from the items it collected during the turn.
+`src/server/responses-request-tool-scope.ts` reads the boundary the request states, and the repair
+applies it to what it publishes: a client call outside the selection is left out of the
+reconstruction. The scope comes from the final outbound body, after every removal, rename and
+translation, so a catalog that ends up empty there authorizes no client call whatever the selector
+still says. An absent catalog states no boundary, exactly as it states none for the declaration
+guard.
+
+The refusal is narrow and it is visible. Only the offending item is dropped, so the assistant text
+that arrived in the same turn still reaches the client rather than being discarded with it. Because
+the turn no longer ended the way the upstream said it did, the reconstructed terminal is published
+as `response.incomplete` carrying `incomplete_details.reason: forbidden_tool_call`, not as a clean
+`response.completed` with a quietly shorter output. The repair edits nothing but the terminal it
+synthesizes; the raw stream remains the declaration guard's to police.
+
+The selection is kept honest on the way out as well. `src/adapters/xai-web-search.ts` omits an
+`auto`/`none` selector once normalization has left nothing for it to select, because xAI answers
+that request with a 400. A forced function selector is preserved: a selector this proxy cannot
+honor is a client input error, and `src/server/responses/passthrough-dispatch.ts` already answers
+it with one.
+
+Those two omissions are not the same edit, because the scope above is read from the body this
+normalization produces. `auto` selects from the catalog, so removing it from a request with an
+empty one states nothing new. `none` is a prohibition, and on a request whose catalog this
+normalizer emptied it is the only place the turn's client-call boundary is written down. Dropping
+the word alone would let the reconstruction hand back a call the caller ruled out, and nothing
+behind it would catch that: the repair runs on the grok client surface, while the declaration
+guard stands down whenever the provider's `authMode` is `forward` — which is what the xAI OAuth
+lane is. So the prohibition is restated as the explicit empty catalog, which carries the same
+deny-all, which the scope and the declaration guard both already read that way, and which this
+destination receives unchanged whenever a caller sends one itself.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in
@@ -866,6 +907,16 @@ request's execution budget, so a combo child that derives its own scope draws on
 counter rather than holding a second. A replacement never widens a send budget: it still has to
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through.
+
+The number of replacements is the request's as well. A leg reads it from `route.provider`, which
+credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
+request, so the grant is held to the smallest ceiling any leg has presented rather than to
+whatever the asking leg presents. Otherwise a request that had already spent the one replacement a
+strict row granted bought a second duplicate inference as soon as a more permissive row asked, and
+how many times one turn could be re-sent depended on the order the rows happened to ask in. A
+derived scope draws on the same grant even when its parent is a hand-built view rather than a
+factory budget: the claim is public on the parent, so unlike a pending external booking there is
+nothing private that forces a second counter.
 
 A committed or futile failure refuses without touching the grant, so a turn that already emitted
 output cannot drain the replacement a later ambiguous reset would have been entitled to. The
@@ -1337,6 +1388,33 @@ answers with an empty string for anything not display-safe and an empty body is 
 the default fires on; and `src/server/chat-native.ts` restores the code its own classifier overwrote —
 429 maps to `rate_limit_error`, which already carries a code, so the branch that copies an
 upstream code could never reach it — and suppresses the same synthetic wait.
+
+**The verdict is a property of the response, and every surface states it the same way.** The
+translated Chat wrapper in `src/server/chat-completions.ts` was the fourth writer and the one
+that had none of this: it preserved the cyber-policy code and `model_not_found`, took the
+upstream code only when `classifyError` had produced none, and then attached the retryable-429
+default. A refusal therefore left the Chat bridge as an ordinary rate limit carrying an
+instruction to send the turn again. It now reads the same two things the native surface reads —
+`isReplayRefusalResponse` on the response it still holds, and `isReplayRefusalCode` on a body
+that came through an intermediate formatter — and never the status, which a refusal and a real
+rate limit share. The failed-envelope path in the same function restates it too, so a refusal
+arriving as `status: "failed"` is not reported as the 502 a Codex client retries four times.
+Because a re-wrap is where the in-process marker is lost, `retainReplayRefusal` and
+`carryReplayRefusal` in `src/lib/upstream-retry.ts` are what each formatter calls:
+`src/bridge/errors.ts`, `src/server/responses/passthrough-error.ts`, both Chat wrappers, and the
+deferred-logging re-wrap in `src/server/relay.ts`.
+
+**Dropping `Retry-After` is necessary and not sufficient.** The status stays 429 because Codex
+stops there and a 5xx invites four more sends, but the Stainless-generated clients — `openai`
+and `anthropic`, Python and Node — decide from a status table that includes 429 and compute
+their own backoff when no wait is named, so a bare 429 is still resent by most callers of this
+proxy. Every surface therefore also emits `x-should-retry: false`, the one signal those clients
+read before that table. The refusal is the only code that gets it: the WebSocket post-send
+verdicts are genuine upstream observations and keep their existing 502/504 contract. The
+acceptance evidence is a count, not a shape — `tests/server/replay-refusal-parity.test.ts` runs
+the proxy over a socket, drives all three surfaces with a client that implements the published
+SDK rule, and asserts one physical upstream send per logical request, with a rate-limit control
+that shows the same client resending.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.

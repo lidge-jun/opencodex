@@ -12,6 +12,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { carryReplayRefusal } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
   addRequestLog,
@@ -833,11 +834,14 @@ export function responseWithDeferredRequestLog(
           }, addLog);
         },
       });
-      return new Response(body, {
+      // Logging re-wraps the response, and an in-process verdict does not survive a re-wrap on
+      // its own. A replay refusal that lost it here would read to a later quota recorder or
+      // Retry-After synthesizer as a 429 some upstream produced.
+      return carryReplayRefusal(response, new Response(body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
-      });
+      }));
     }
     if (isUsageDebugEnabled() && logCtx.usageDebugBodyKind === undefined) {
       logCtx.usageDebugBodyKind = response.body ? "other" : "none";

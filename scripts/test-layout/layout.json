@@ -1228,6 +1228,7 @@
     "remote-workspace-protocol.test.ts": "clients",
     "remote-workspace-rpc-framing.test.ts": "clients",
     "remove-tree-helper.test.ts": "lib",
+    "replay-refusal-parity.test.ts": "server",
     "repo-hygiene.test.ts": "ci-workflows",
     "request-decompress.test.ts": "usage",
     "request-evidence.test.ts": "usage",
@@ -1297,6 +1298,7 @@
     "responses-show-thinking-summary.test.ts": "responses",
     "responses-snapshot-repair-server.test.ts": "responses",
     "responses-snapshot-repair.test.ts": "responses",
+    "responses-sparse-terminal-tool-scope.test.ts": "responses",
     "responses-spill-shutdown-clock.test.ts": "responses",
     "responses-state-write-amplification.test.ts": "responses",
     "responses-state.test.ts": "responses",
@@ -1557,6 +1559,7 @@
     "ws-upstream.test.ts": "responses",
     "ws-upstream-socks5.test.ts": "responses",
     "xai-client.test.ts": "images",
+    "xai-empty-catalog-tool-choice.test.ts": "providers/xai",
     "xai-oauth-retry.test.ts": "providers/xai",
     "xai-refresh-lock.test.ts": "providers/xai",
     "xai-responses-adjacency.test.ts": "providers/xai",
@@ -1627,6 +1630,7 @@
     "responses-reset-replay.test.ts": "responses",
     "ambiguous-resend-gate.test.ts": "lib",
     "docs-developer-role-policy.test.ts": "ci-workflows",
+    "ambiguous-resend-composition.test.ts": "lib",
     "chat-inbound-developer-position.test.ts": "responses"
   },
   "migrated": [

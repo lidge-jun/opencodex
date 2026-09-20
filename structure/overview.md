@@ -158,7 +158,10 @@ still cover the rule, which is a judgement only review makes.
   that override is applied, it claims the grant at the moment it authorises rather than earlier,
   and a stage the caller observed something at refuses without spending it. The grant never
   widens a send budget: an authorised replacement still has to fit the allowance the leg already
-  had.
+  had. The ceiling is the request's, not the asking leg's: a leg reads its number from the
+  provider row it is currently running against, rotation, refresh, transport resolution and each
+  combo target reassign that row, so the request keeps the smallest ceiling any leg presented and
+  a more permissive row arriving later buys nothing.
   Enforced by `tests/lib/ambiguous-resend-gate.test.ts`.
 - **INV-CHAT-01** — One developer-role policy governs the translated Chat wire and every document
   that describes it. `foldDeveloperRoleToSystem` unset and `true` send `system`, `false` sends
