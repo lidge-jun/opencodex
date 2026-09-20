@@ -113,9 +113,14 @@ describe("Factory Droid client config", () => {
     expect("maxContextLimit" in composer).toBe(false);
     expect("enableThinking" in composer).toBe(false);
     const unknown = document.customModels.find(model => model.model === "mock/unknown")!;
+    expect(unknown.noImageSupport).toBe(true);
     expect(unknown.supportedReasoningEfforts).toEqual(["low", "high"]);
     expect("defaultReasoningEffort" in unknown).toBe(false);
     expect("reasoningEffort" in unknown).toBe(false);
+    const emptyModalities = buildClientConfig("droid", context([
+      { namespaced: "mock/empty-modalities", provider: "mock", id: "empty-modalities", inputModalities: [] },
+    ])) as DroidGeneratedConfig;
+    expect(emptyModalities.customModels[0]!.noImageSupport).toBe(true);
     for (const model of document.customModels) {
       expect("apiKey" in model).toBe(false);
       expect(model.maxOutputTokens).toBe(16_384);
