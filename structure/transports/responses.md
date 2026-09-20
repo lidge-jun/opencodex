@@ -623,6 +623,14 @@ declared bare tool and to rewrite code-mode helper names into the declared `exec
 input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
 is expressed by a separate flag rather than by withholding it.
 
+Muse may also wrap an already-flattened namespace identity, for example
+`default.mcp__server__tool`. That form resolves only when the complete suffix is an exact declared
+name containing the flattened `__` delimiter and neither explicit `default.` nor `default__`
+identity exists. It does not let `default.tool` borrow a namespaced tool's manufactured bare alias,
+and an unknown suffix still reaches the undeclared-tool failure.
+
+> Decision record: [ADR-0097](../decisions/ADR-0097-responses-http-sse.md)
+
 The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so
 whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
 `normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
