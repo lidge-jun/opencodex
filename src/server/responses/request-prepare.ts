@@ -110,6 +110,13 @@ import {
   CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE,
 } from "../../codex/loopback-target";
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  assertRouteAllowedByScope,
+  resolveAdmissionModelScope,
+  routeAllowedByScope,
+} from "../admission-model-scope";
 import { nativeContextLimits } from "../../codex/catalog";
 import { streamingContextOverflowResponse } from "./context-overflow";
 import {
@@ -411,7 +418,18 @@ export async function prepareResponsesRequest(
 
   let route: RouteResult;
   let credentialDomainWasRewritten = false;
+  // The selector the caller actually sent, captured before shadow interception
+  // or a subagent fallback rewrites it, so a refusal names the client's own
+  // request rather than a destination it never asked for.
+  const inboundSelector = parsed.modelId;
+  const admissionScope = resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult): RouteResult => {
+    // Every route this request path produces passes through here: the direct
+    // name, an alias, a policy or combo selection, a compaction override, a
+    // shadow-intercept target and both subagent-fallback re-routes. Checking
+    // the key's scope at this one point is what stops a rewrite from reaching
+    // a destination the front door would have refused.
+    assertRouteAllowedByScope(admissionScope, inboundSelector, candidate);
     candidate.staticPolicy = captureRouteStaticPolicy(
       candidate.providerName,
       candidate.modelId,
@@ -474,6 +492,7 @@ export async function prepareResponsesRequest(
     }
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoAvailableComboTargetsError) {
       return comboUnavailable(err.comboId);
     }
@@ -673,6 +692,7 @@ export async function prepareResponsesRequest(
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
+        if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
         if (err instanceof NoAvailableComboTargetsError) {
           return comboUnavailable(err.comboId);
         }
@@ -873,6 +893,7 @@ export async function prepareResponsesRequest(
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
+              if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
               if (err instanceof NoAvailableComboTargetsError) {
                 return comboUnavailable(err.comboId);
               }
@@ -1021,6 +1042,14 @@ export async function prepareResponsesRequest(
     inboundTransport: options.inboundTransport,
     claudeGoAffinity: options.claudeGoAffinity,
   });
+  // Normalization is the last thing that can move the destination: resolving an
+  // OpenAI virtual model rewrites route.modelId to the wire id that will
+  // actually be billed. A scope checked only before this would authorize the
+  // public selector and send the wire model, so the settled route is checked
+  // once more here.
+  if (!routeAllowedByScope(admissionScope, route)) {
+    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, route));
+  }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {

@@ -25,6 +25,12 @@ import { codexAccountNamespaceForModel } from "../codex/account-namespace-match"
 import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 import { isCodexReserveRequestEligible } from "../codex/loopback-target";
 import type { DataPlaneAdmission } from "./auth-cors";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  resolveAdmissionModelScope,
+  routeAllowedByScope,
+} from "./admission-model-scope";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
@@ -86,6 +92,12 @@ export async function handleSearch(
       const route = routeModel(config, model);
       if (!route.codexAccountId || route.codexAccountNamespace !== accountNamespace) {
         return formatErrorResponse(400, "invalid_request_error", "Invalid Codex account-qualified search model");
+      }
+      // This branch resolves a model through the router and bills the account it
+      // names, so a scoped key is held to the same destination rule it is held
+      // to on the inference path.
+      if (!routeAllowedByScope(resolveAdmissionModelScope(config, admission), route)) {
+        return admissionModelDeniedResponse(new AdmissionModelDeniedError(model, route));
       }
       exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
       logCtx.provider = `${route.providerName}-${accountNamespace}`;
