@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import {
   resolveResetCreditAutoRedeemSettings,
   type ResetCredit,
 } from "../../src/codex/reset-credit-auto-redeem";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 import { readConfigGeneration } from "../../src/config";
@@ -87,6 +88,15 @@ describe("reset-credit auto-redeem settings + plan (#822)", () => {
 });
 
 describe("reset-credit auto-redeemer runtime (#822)", () => {
+  // The two-process reservation test bounds its children with a 25s deadline, which includes
+  // their cold load of this module's graph through src/config. Pay that once here (#4956).
+  beforeAll(async () => {
+    await warmModuleGraph({
+      graph: "codex/reset-credit-auto-redeem",
+      entry: repoPath("src/codex/reset-credit-auto-redeem.ts"),
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("a disabled tick creates neither a journal nor a mutation coordinator", async () => {
     const journalFile = join(dir, "reset-credit-auto-redeem.json");
     expect(readdirSync(dir)).toEqual([]);
