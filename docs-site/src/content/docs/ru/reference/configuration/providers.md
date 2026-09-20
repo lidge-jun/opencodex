@@ -135,6 +135,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `noReasoningModels?` | `string[]` | Модели, отвергающие параметры reasoning/thinking. |
 | `noTemperatureModels?` | `string[]` | Модели, отвергающие переданный вызывающей стороной `temperature`. |
 | `noTopPModels?` | `string[]` | Модели, отвергающие переданный вызывающей стороной `top_p`. |
+| `noStopModels?` | `string[]` | Модели, отвергающие переданные вызывающей стороной `stop` / `stop_sequences`. Адаптер openai-chat и passthrough Chat Completions удаляют `stop` для этих моделей (xAI grok-4.6 отвечает 400 invalid-argument «Model grok-4.6 does not support parameter stop.», из-за чего ломается классификатор безопасности auto-mode в Claude Code). |
 | `noPenaltyModels?` | `string[]` | Модели, отвергающие penalty presence/frequency. |
 | `noStructuredOutputModels?` | `string[]` | Точные идентификаторы моделей, чей endpoint `openai-chat` отклоняет `response_format`. Поле опускается только при точном совпадении запрошенной модели; для остальных моделей `openai-chat` преобразование structured output остаётся включённым. |
 | `noJsonSchemaModels?` | `string[]` | Точные идентификаторы моделей, чей endpoint `openai-chat` отклоняет `response_format` типа `json_schema`, но принимает `json_object`. Такой запрос понижается до `json_object`, а не отбрасывается, поэтому вызывающая сторона всё равно получает JSON. Если модель есть в обоих списках, побеждает `noStructuredOutputModels`. Пресеты `opencode go`, `opencode zen` и `opencode free` включают это для своих маршрутов DeepSeek. |

@@ -110,6 +110,7 @@ const MODEL_ID_LISTS = [
   "noReasoningModels",
   "noTemperatureModels",
   "noTopPModels",
+  "noStopModels",
   "noPenaltyModels",
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",

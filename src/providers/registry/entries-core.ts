@@ -335,6 +335,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       "grok-build-0.1": 256_000,
     },
     noVisionModels: ["grok-build-0.1", "grok-composer-2.5-fast"],
+    // Chat Completions `stop` is rejected on this lineup (xAI 400 invalid-argument
+    // "does not support parameter stop."). Dropping it degrades softly; sending it
+    // fails hard. Seed the whole catalog — later-discovered Chat ids share the surface.
+    noStopModels: XAI_MODELS,
   },
   {
     id: "command-code",

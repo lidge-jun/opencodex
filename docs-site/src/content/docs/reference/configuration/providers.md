@@ -198,6 +198,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `noReasoningModels?` | `string[]` | Models that reject reasoning/thinking parameters. |
 | `noTemperatureModels?` | `string[]` | Models that reject caller-specified `temperature`. |
 | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
+| `noStopModels?` | `string[]` | Models that reject caller-specified `stop` / `stop_sequences`. The openai-chat adapter and Chat Completions passthrough drop `stop` for these (xAI grok-4.6 answers 400 invalid-argument "Model grok-4.6 does not support parameter stop.", which breaks Claude Code's auto-mode safety classifier). |
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |
 | `noStructuredOutputModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects `response_format`. Only an exact requested-model match omits the field; structured-output translation stays enabled for every other `openai-chat` model. |
 | `noJsonSchemaModels?` | `string[]` | Exact model IDs whose `openai-chat` endpoint rejects a `json_schema` `response_format` but still accepts `json_object`. Such a request is downgraded to `json_object` instead of being dropped, so a caller asking for JSON still gets JSON. `noStructuredOutputModels` wins when a model is on both lists. The `opencode go`, `opencode zen`, and `opencode free` presets ship this for their DeepSeek routes. |

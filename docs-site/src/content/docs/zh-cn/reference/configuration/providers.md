@@ -122,6 +122,7 @@ selector，而不是分配一个新名称。
 | `noReasoningModels?` | `string[]` | 会拒绝推理/思考参数的模型。 |
 | `noTemperatureModels?` | `string[]` | 会拒绝调用方指定 `temperature` 的模型。 |
 | `noTopPModels?` | `string[]` | 会拒绝调用方指定 `top_p` 的模型。 |
+| `noStopModels?` | `string[]` | 会拒绝调用方指定 `stop` / `stop_sequences` 的模型。openai-chat 适配器与 Chat Completions passthrough 会为这些模型去掉 `stop`（xAI grok-4.6 会返回 400 invalid-argument "Model grok-4.6 does not support parameter stop."，导致 Claude Code auto-mode 安全分类器失败）。 |
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 端点拒绝 `response_format` 的精确模型 ID。仅当请求模型与条目完全匹配时才省略该字段；其他 `openai-chat` 模型仍启用 structured-output 转换。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` 端点拒绝 `json_schema` 形式但仍接受 `json_object` 的精确模型 ID。这类请求会降级为 `json_object` 而不是被丢弃，因此请求 JSON 的调用方仍能拿到 JSON。同一模型同时出现在两个列表时，以 `noStructuredOutputModels` 为准。`opencode go`、`opencode zen`、`opencode free` 预设已为其 DeepSeek 路由内置该项。 |

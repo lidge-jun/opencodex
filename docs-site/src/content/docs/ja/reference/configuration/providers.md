@@ -122,6 +122,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noReasoningModels?` | `string[]` |推論/思考パラメーターを拒否するモデル。 |
 | `noTemperatureModels?` | `string[]` |発信者指定の`temperature`を拒否するモデル。 |
 | `noTopPModels?` | `string[]` |発信者指定の`top_p`を拒否するモデル。 |
+| `noStopModels?` | `string[]` |発信者指定の `stop` / `stop_sequences` を拒否するモデル。openai-chat アダプターと Chat Completions パススルーは、これらのモデルで `stop` を落とします（xAI grok-4.6 は 400 invalid-argument "Model grok-4.6 does not support parameter stop." を返し、Claude Code の auto-mode 安全分類器が失敗します）。 |
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` / `opencode free` プリセットが DeepSeek 経路に既定で載せます。 |

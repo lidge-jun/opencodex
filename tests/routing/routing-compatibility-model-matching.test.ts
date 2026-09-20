@@ -24,6 +24,7 @@ const effective: OcxProviderConfig = {
   authMode: "key",
   noTemperatureModels: ["gpt-oss"],
   noTopPModels: ["gpt-oss"],
+  noStopModels: ["gpt-oss"],
   noPenaltyModels: ["gpt-oss"],
   thinkingBudgetModels: ["gpt-oss"],
   autoToolChoiceOnlyModels: ["gpt-oss"],
@@ -39,7 +40,7 @@ function wire(): Record<string, unknown> {
     modelId: MODEL,
     context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
     stream: false,
-    options: { temperature: 0.5, topP: 0.9, presencePenalty: 0.2, frequencyPenalty: 0.2 },
+    options: { temperature: 0.5, topP: 0.9, presencePenalty: 0.2, frequencyPenalty: 0.2, stopSequences: ["END"] },
   };
   return JSON.parse(createOpenAIChatAdapter(effective).buildRequest(parsed).body as string);
 }
@@ -49,6 +50,7 @@ describe("behavior report must agree with the wire the adapter actually builds",
     const body = wire();
     expect(body.temperature).toBeUndefined();
     expect(body.top_p).toBeUndefined();
+    expect(body.stop).toBeUndefined();
     expect(body.presence_penalty).toBeUndefined();
     expect(body.frequency_penalty).toBeUndefined();
   });
@@ -58,6 +60,9 @@ describe("behavior report must agree with the wire the adapter actually builds",
   });
   test("report agrees: sampling.omitTopP", () => {
     expect(values()["sampling.omitTopP"]!.value).toBe(true);
+  });
+  test("report agrees: sampling.omitStop", () => {
+    expect(values()["sampling.omitStop"]!.value).toBe(true);
   });
   test("report agrees: sampling.omitPenalties", () => {
     expect(values()["sampling.omitPenalties"]!.value).toBe(true);
@@ -72,6 +77,7 @@ describe("behavior report must agree with the wire the adapter actually builds",
   test("an unlisted model reports false (control)", () => {
     const v = resolveProductionBehaviorValues(config, "ollama-cloud", "glm-5.3", effective, "salt")!;
     expect(v["sampling.omitTemperature"]!.value).toBe(false);
+    expect(v["sampling.omitStop"]!.value).toBe(false);
     expect(v["reasoning.budgetMode"]!.value).toBe(false);
   });
 });

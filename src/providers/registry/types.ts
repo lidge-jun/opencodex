@@ -308,6 +308,7 @@ export interface ProviderRegistryEntry {
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
   noTopPModels?: string[];
+  noStopModels?: string[];
   noPenaltyModels?: string[];
   /**
    * Registry-only seed for `OcxProviderConfig.noJsonSchemaModels`. Merged into the
@@ -357,7 +358,7 @@ export type ProviderConfigSeed = Pick<
   | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
-  | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
+  | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
   | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
   | "googleMode" | "project" | "location" | "headers"
 >;

@@ -96,6 +96,7 @@ ocx models provider openrouter on
 | `noReasoningModels?` | `string[]` | 拒絕 reasoning/thinking 參數的模型。 |
 | `noTemperatureModels?` | `string[]` | 拒絕呼叫者指定 `temperature` 的模型。 |
 | `noTopPModels?` | `string[]` | 拒絕呼叫者指定 `top_p` 的模型。 |
+| `noStopModels?` | `string[]` | 拒絕呼叫者指定 `stop` / `stop_sequences` 的模型。openai-chat 適配器與 Chat Completions passthrough 會為這些模型去掉 `stop`（xAI grok-4.6 會回 400 invalid-argument "Model grok-4.6 does not support parameter stop."，導致 Claude Code auto-mode 安全分類器失敗）。 |
 | `noPenaltyModels?` | `string[]` | 拒絕 presence/frequency penalty 的模型。 |
 | `noStructuredOutputModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `response_format` 的精確模型 ID。僅精確符合的請求模型會省略該欄位；structured-output 轉譯對其他每個 `openai-chat` 模型保持啟用。 |
 | `noJsonSchemaModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `json_schema` 形式但仍接受 `json_object` 的精確模型 ID。這類請求會降級為 `json_object` 而非被丟棄，因此要求 JSON 的呼叫端仍會拿到 JSON。同一模型同時列在兩份清單時，以 `noStructuredOutputModels` 為準。`opencode go`、`opencode zen`、`opencode free` 預設已為其 DeepSeek 路由內建。 |

@@ -750,6 +750,8 @@ export interface OcxProviderConfig {
   noTemperatureModels?: string[];
   /** Model ids that reject caller-specified top_p. */
   noTopPModels?: string[];
+  /** Model ids that reject caller-specified stop sequences. */
+  noStopModels?: string[];
   /** Model ids that reject caller-specified presence/frequency penalty values. */
   noPenaltyModels?: string[];
   /**

@@ -1249,6 +1249,10 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelDefaultReasoningEfforts).toEqual({ "grok-4.6": "high" });
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEffortMap).toBeUndefined();
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
+    expect(OAUTH_PROVIDERS.xai.providerConfig.noStopModels).toContain("grok-4.6");
+    expect(OAUTH_PROVIDERS.xai.providerConfig.noStopModels).toEqual(
+      OAUTH_PROVIDERS.xai.providerConfig.models,
+    );
     const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
     expect(antigravityRegistry?.liveModels).toBe(true);
     expect(providerConfigSeed(antigravityRegistry!).liveModels).toBe(true);

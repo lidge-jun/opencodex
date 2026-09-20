@@ -8,7 +8,7 @@ const CLOSED_KEYS = new Set([
   "responses.stateful", "responses.upstreamStreaming", "responses.serviceTier", "responses.fastWireKind", "responses.fastWireValue", "responses.snapshotRepair", "responses.itemIdRepair",
   "limits.contextWindow", "limits.maxInputTokens", "limits.maxOutputTokens",
   "modalities.input",
-  "sampling.omitTemperature", "sampling.omitTopP", "sampling.omitPenalties",
+  "sampling.omitTemperature", "sampling.omitTopP", "sampling.omitStop", "sampling.omitPenalties",
   "reasoning.supported", "reasoning.efforts", "reasoning.effortsAuthoritative", "reasoning.defaultEffort", "reasoning.effortMap", "reasoning.wireFormat",
   "reasoning.summaryMode", "reasoning.replayMode", "reasoning.splitMode", "reasoning.toggleMode", "reasoning.budgetMode",
   "tools.choiceRestrictions", "tools.parallel", "tools.hostedPreference", "tools.customFreeform", "tools.builtinNameEscaping",

@@ -192,6 +192,7 @@ export function resolveProductionBehaviorValues(
     ),
     "sampling.omitTemperature": behaviorRow("provider_config", includesModel(effective.noTemperatureModels, modelId)),
     "sampling.omitTopP": behaviorRow("provider_config", includesModel(effective.noTopPModels, modelId)),
+    "sampling.omitStop": behaviorRow("provider_config", includesModel(effective.noStopModels, modelId)),
     "sampling.omitPenalties": behaviorRow("provider_config", includesModel(effective.noPenaltyModels, modelId)),
     "reasoning.supported": behaviorRow(
       "provider_config",

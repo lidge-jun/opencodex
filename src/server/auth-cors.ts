@@ -1016,6 +1016,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noReasoningModels: "editor",
   noTemperatureModels: "editor",
   noTopPModels: "editor",
+  noStopModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
   noJsonSchemaModels: "editor",

@@ -136,6 +136,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `noReasoningModels?` | `string[]` | Akıl yürütme/düşünme parametrelerini reddeden modeller. |
 | `noTemperatureModels?` | `string[]` | Arayan tarafından belirtilen `temperature` değerini reddeden modeller. |
 | `noTopPModels?` | `string[]` | Arayan tarafından belirtilen `top_p` değerini reddeden modeller. |
+| `noStopModels?` | `string[]` | Arayan tarafından belirtilen `stop` / `stop_sequences` değerini reddeden modeller. openai-chat bağdaştırıcısı ve Chat Completions passthrough bu modeller için `stop` alanını düşürür (xAI grok-4.6, 400 invalid-argument "Model grok-4.6 does not support parameter stop." yanıtı verir ve Claude Code auto-mode güvenlik sınıflandırıcısını bozar). |
 | `noPenaltyModels?` | `string[]` | Varlık/frekans cezalarını reddeden modeller. |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` uç noktası `response_format`'ı reddeden tam model kimlikleri. Yalnızca tam bir istenen model eşleşmesi alanı atlar; yapılandırılmış çıktı çevirisi diğer her `openai-chat` modeli için etkin kalır. |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` uç noktası `json_schema` biçimini reddeden ama `json_object` kabul eden tam model kimlikleri. Böyle bir istek atılmak yerine `json_object` seviyesine düşürülür, böylece JSON isteyen çağıran yine JSON alır. Bir model her iki listede de varsa `noStructuredOutputModels` kazanır. `opencode go`, `opencode zen` ve `opencode free` hazır ayarları bunu DeepSeek rotaları için getirir. |

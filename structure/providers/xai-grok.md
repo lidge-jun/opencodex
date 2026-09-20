@@ -120,6 +120,8 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 Grok chat raw reasoning uses content-channel output with an empty summary; hidden replay envelopes retain continuation text. Native Responses content is not promoted to summaries. See [chat compatibility](chat-compat.md).
 
+Chat Completions `stop` is omitted for the whole xAI lineup via `noStopModels: XAI_MODELS`. The openai-chat adapter and Chat Completions passthrough drop `stop` the same way they drop `temperature`/`top_p` for `noTemperatureModels`/`noTopPModels`. xAI answers 400 invalid-argument "Model grok-4.6 does not support parameter stop." when the field is forwarded (Claude Code's auto-mode classifier sends `stop_sequences`). Dropping stop degrades softly; sending it fails hard.
+
 Claude replay carries [Go conversation affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 
