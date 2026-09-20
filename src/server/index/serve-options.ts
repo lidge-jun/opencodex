@@ -1558,7 +1558,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = audioClient
             ? await handleExternalLive(req, config, logCtx, { client: audioClient, lease: turnAdmissionLease, bindings: liveCallBindings })
-            : await handleLive(req, config, logCtx, turnAdmissionLease);
+            : await handleLive(req, config, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(
             requestId,
             start,
@@ -1633,7 +1633,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             : liveSidebandTarget && audioClient
               ? await resolveExternalLiveSocket(audioClient, config, logCtx, liveSidebandTarget, { lease: turnAdmissionLease, bindings: liveCallBindings, signal: acquisition?.signal })
               : liveSidebandTarget
-                ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease)
+                ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease, admission)
                 : formatErrorResponse(401, "authentication_error", "opencodex API key required");
         } catch (error) {
           try { releaseAcquisition(); }

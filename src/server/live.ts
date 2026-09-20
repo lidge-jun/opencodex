@@ -44,7 +44,9 @@ import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
+import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential, type DataPlaneAdmission } from "./auth-cors";
+import { admissionScopeDenial } from "./admission-model-scope";
+import { LIVE_AUDIO_MODEL } from "./audio-upstream";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
@@ -551,6 +553,57 @@ async function readRequestBodyCapped(req: Request, maxBytes: number): Promise<Ar
 }
 
 /**
+ * Who is asking and for which live model, as far as a per-key scope is concerned.
+ *
+ * This path has no router to resolve a destination, so the model is read where
+ * the client states it — the call-create session, or a standalone socket's own
+ * query — and the provider is whichever OpenAI upstream this relay settles on.
+ */
+export interface LiveScopeDestination {
+  admission?: DataPlaneAdmission;
+  model: string;
+}
+
+/**
+ * The live model a call-create body names, or the default this relay would get.
+ *
+ * Both inbound shapes carry it at `session.model` — JSON directly, multipart in
+ * the `session` field — and the body is relayed upstream unchanged, so the
+ * string is the destination rather than a selector the proxy rewrites. A body
+ * that states nothing readable resolves to the default, which is the model the
+ * upstream would then run.
+ */
+export async function liveCallCreateModel(body: ArrayBuffer, contentType: string): Promise<string> {
+  try {
+    let session: unknown;
+    if (contentType.toLowerCase().includes("multipart/form-data")) {
+      const form = await new Response(body, { headers: { "content-type": contentType } }).formData();
+      const raw = form.get("session");
+      session = typeof raw === "string" ? JSON.parse(raw) : undefined;
+    } else {
+      session = (JSON.parse(new TextDecoder().decode(body)) as { session?: unknown } | null)?.session;
+    }
+    const model = (session as { model?: unknown } | null | undefined)?.model;
+    return typeof model === "string" && model.trim() ? model.trim() : LIVE_AUDIO_MODEL;
+  } catch {
+    return LIVE_AUDIO_MODEL;
+  }
+}
+
+/**
+ * The model a sideband upgrade is for. A standalone session names it in its own
+ * query; a join onto an existing call names nothing, because the call it
+ * attaches to stated its model at create time.
+ */
+export function liveSidebandModel(target: LiveSidebandTarget): string {
+  if (target.style === "realtime-standalone" || target.style === "frameless-standalone") {
+    const model = new URLSearchParams(target.query).get("model")?.trim();
+    if (model) return model;
+  }
+  return LIVE_AUDIO_MODEL;
+}
+
+/**
  * Resolve OpenAI/ChatGPT auth + headers for live HTTP or sideband WebSocket relays.
  * Shared by call-create and sideband so pool token override stays consistent.
  */
@@ -559,6 +612,7 @@ export async function resolveLiveRelay(
   config: OcxConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
+  destination?: LiveScopeDestination,
 ): Promise<LiveRelayTarget | Response> {
   try {
     validateForwardAdmissionCredential(req.headers, config);
@@ -624,8 +678,20 @@ export async function resolveLiveRelay(
 
   // Client protocol headers first so provider/auth headers below always win on conflict.
   const headers: Record<string, string> = clientProtocolHeaders(req.headers);
+  const scopedModel = destination?.model ?? LIVE_AUDIO_MODEL;
   if (forward) {
     const { provider } = forward;
+    // The upstream is settled here, and voice bills it for the session model the
+    // caller stated. Refuse before any of it is sent, and give back the probe
+    // lease the resolution took.
+    const denial = admissionScopeDenial(config, destination?.admission, scopedModel, {
+      providerName: forward.providerName,
+      modelId: scopedModel,
+    });
+    if (denial) {
+      forward.releaseProbeLease?.();
+      return denial;
+    }
     if (provider.headers) Object.assign(headers, provider.headers);
     for (const [name, value] of forward.headers) headers[name] = value;
     logCtx.model = "gpt-live";
@@ -640,6 +706,11 @@ export async function resolveLiveRelay(
   if (forwardAuthError) return forwardAuthError;
   if (candidates.keyed) {
     const { provider, apiKey, providerName } = candidates.keyed;
+    const denial = admissionScopeDenial(config, destination?.admission, scopedModel, {
+      providerName,
+      modelId: scopedModel,
+    });
+    if (denial) return denial;
     if (provider.headers) Object.assign(headers, provider.headers);
     headers.authorization = `Bearer ${apiKey}`;
     logCtx.provider = providerName;
@@ -663,13 +734,17 @@ export async function handleLive(
   config: OcxConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
+  admission?: DataPlaneAdmission,
 ): Promise<Response> {
   const inboundContentType = req.headers.get("content-type") ?? "application/octet-stream";
   const inboundBodyOrError = await readRequestBodyCapped(req, LIVE_REQUEST_MAX_BYTES);
   if (inboundBodyOrError instanceof Response) return inboundBodyOrError;
   const inboundBody = inboundBodyOrError;
 
-  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease);
+  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease, {
+    admission,
+    model: await liveCallCreateModel(inboundBody, inboundContentType),
+  });
   if (relay instanceof Response) return relay;
 
   const headers: Record<string, string> = { ...relay.headers };
@@ -766,8 +841,12 @@ export async function resolveLiveSidebandUpgrade(
   logCtx: RequestLogContext,
   target: LiveSidebandTarget,
   turnAdmissionLease?: AdmissionLease,
+  admission?: DataPlaneAdmission,
 ): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
-  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease);
+  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease, {
+    admission,
+    model: liveSidebandModel(target),
+  });
   if (relay instanceof Response) return relay;
   return {
     headers: relay.headers,
