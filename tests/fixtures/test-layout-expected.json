@@ -1412,5 +1412,6 @@
   "openai-chat-developer-position.test.ts": "adapters/openai",
   "chat-inline-document-bytes.test.ts": "responses",
   "devin-output-budget.test.ts": "providers",
-  "api-key-model-scope.test.ts": "server"
+  "api-key-model-scope.test.ts": "server",
+  "docs-provider-discovery-limits.test.ts": "ci-workflows"
 }
