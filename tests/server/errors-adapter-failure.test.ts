@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   adapterFailureFromMessage,
   classifyError,
+  extractPolicyRefusalText,
+  isUpstreamPolicyRefusal,
   parseRetryAfterFromMessage,
 } from "../../src/lib/errors";
+import { syntheticOpenAIChatRefusalResponse } from "../../src/adapters/openai-chat/policy-refusal";
 import { bufferCompactResponse } from "../../src/server/responses";
 
 describe("adapterFailureFromMessage", () => {
@@ -118,5 +121,38 @@ describe("adapterFailureFromMessage", () => {
     expect(response.status).toBe(499);
     const body = await response.json() as { error?: { type?: string; code?: string } };
     expect(body.error).toMatchObject({ type: "client_cancelled", code: "client_cancelled" });
+  });
+});
+
+describe("xAI policy-refusal 403", () => {
+  test("detects the xAI refusal sentence and not plan/entitlement 403s", () => {
+    expect(isUpstreamPolicyRefusal(403, "I can't help with that request.")).toBe(true);
+    expect(isUpstreamPolicyRefusal(403, JSON.stringify({ error: "I can't help with that request." }))).toBe(true);
+    expect(isUpstreamPolicyRefusal(403, "Provider error 403: I can't help with that request.")).toBe(true);
+    expect(isUpstreamPolicyRefusal(200, "I can't help with that request.")).toBe(false);
+    expect(isUpstreamPolicyRefusal(403, "You have run out of credits or need a Grok subscription.")).toBe(false);
+    expect(isUpstreamPolicyRefusal(403, "The account is not allowed to use this model")).toBe(false);
+    expect(isUpstreamPolicyRefusal(403, "forbidden")).toBe(false);
+  });
+
+  test("extracts the refusal sentence from JSON and prefixed bodies", () => {
+    expect(extractPolicyRefusalText('{"error":"I can\'t help with that request."}'))
+      .toBe("I can't help with that request.");
+    expect(extractPolicyRefusalText("Provider error 403: I can't help with that request."))
+      .toBe("I can't help with that request.");
+  });
+
+  test("synthetic rewrite is HTTP 200 with content_filter so Codex records a turn", async () => {
+    const json = syntheticOpenAIChatRefusalResponse("I can't help with that request.", false);
+    expect(json.status).toBe(200);
+    const body = await json.json() as { choices: Array<{ finish_reason: string; message: { content: string } }> };
+    expect(body.choices[0]?.finish_reason).toBe("content_filter");
+    expect(body.choices[0]?.message.content).toBe("I can't help with that request.");
+
+    const stream = syntheticOpenAIChatRefusalResponse("I can't help with that request.", true);
+    expect(stream.status).toBe(200);
+    const text = await stream.text();
+    expect(text).toContain("content_filter");
+    expect(text).toContain("[DONE]");
   });
 });

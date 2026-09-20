@@ -152,8 +152,57 @@ function isSubscriptionGateMessage(text: string): boolean {
     text.includes("upgrade to pro") ||
     text.includes("pro subscription") ||
     text.includes("ollama.com/upgrade") ||
+    text.includes("need a grok subscription") ||
+    text.includes("run out of credits") ||
     (text.includes("upgrade") && text.includes("subscription"))
   );
+}
+
+/**
+ * xAI (and similar Chat Completions gateways) sometimes refuse a turn with HTTP 403
+ * and a model-refusal sentence instead of 200 + finish_reason=content_filter.
+ * Codex treats that 403 as a transport failure, so the user message is never
+ * recorded as a completed turn and retries loop. Keep this allowlist narrow:
+ * entitlement / plan / model-access 403s must stay errors.
+ */
+const POLICY_REFUSAL_PHRASES = [
+  "i can't help with that request",
+  "i cannot help with that request",
+  "i'm unable to help with that request",
+  "i am unable to help with that request",
+] as const;
+
+export function isUpstreamPolicyRefusalMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (isSubscriptionGateMessage(lower)) return false;
+  if (lower.includes("not allowed to use this model")) return false;
+  if (lower.includes("not allowed to use this operation")) return false;
+  return POLICY_REFUSAL_PHRASES.some(phrase => lower.includes(phrase));
+}
+
+export function isUpstreamPolicyRefusal(status: number, text: string): boolean {
+  return status === 403 && isUpstreamPolicyRefusalMessage(text);
+}
+
+/** Pull the human-readable refusal sentence out of a JSON or prefixed error body. */
+export function extractPolicyRefusalText(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: unknown; message?: unknown };
+    const nested = parsed.error;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+    if (nested && typeof nested === "object") {
+      const msg = (nested as { message?: unknown; error?: unknown }).message
+        ?? (nested as { error?: unknown }).error;
+      if (typeof msg === "string" && msg.trim()) return msg.trim();
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
+  } catch {
+    /* not JSON */
+  }
+  const prefixed = trimmed.match(/^Provider error 403:\s*([\s\S]+)$/i);
+  if (prefixed?.[1]?.trim()) return prefixed[1].trim();
+  return trimmed || "I can't help with that request.";
 }
 
 function isLocalAclHardeningMessage(text: string): boolean {
