@@ -245,6 +245,69 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
+  test("a result frame before message_stop defers to the synthesized tool_use done", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = (_cmd, _args) => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        toolUseStart(cliName),
+        inputJsonDelta("{}"),
+        BLOCK_STOP,
+        // The CLI settles with a successful result while every captured call is already
+        // complete, instead of parking on the never-answering capture server.
+        { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 42, output_tokens: 8 } },
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+
+    // The result-derived done(stop) must never surface: the leg ends as done(tool_use) with
+    // the vendor result frame's usage folded in.
+    expect(events.map(e => e.type)).toEqual([
+      "tool_call_start",
+      "tool_call_delta",
+      "tool_call_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      stopReason: "tool_use",
+      endTurn: false,
+      usage: { inputTokens: 42, outputTokens: 8, totalTokens: 50 },
+    });
+    expect(events.some(e => e.type === "done" && e.stopReason === "stop")).toBe(false);
+    expect(child?.killed).toBe(true);
+  });
+
+  test("a deferred result without message_stop fails closed with protocol_error", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    const spawn: SpawnFn = (_cmd, _args) => fakeChild(frameLines([
+      INIT_OK,
+      toolUseStart(cliName),
+      inputJsonDelta("{}"),
+      BLOCK_STOP,
+      // Result arrives but message_stop never does: the stream ends before the synthesized
+      // terminal event can be emitted.
+      { type: "result", subtype: "success", is_error: false },
+    ])) as unknown as ChildProcess;
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "protocol_error",
+      status: 502,
+      retryable: false,
+    });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
   test("tool_choice required without a captured call fails closed instead of a text done", async () => {
     const p = parsed([tool("exec")]);
     p.options = { toolChoice: "required" } as OcxParsedRequest["options"];

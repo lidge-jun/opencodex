@@ -352,6 +352,12 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
 
   let streamProtocolError: string | undefined;
   let turnError: string | undefined;
+  // A successful result frame that arrived after every captured tool call completed but
+  // before message_stop. The bridge contract still ends the leg with the synthesized
+  // done(tool_use) at message_stop, so the result-derived done(stop) is deferred and its
+  // usage (authoritative vendor accounting) is folded into the synthesis. Set inside the
+  // stream loop; read by the synthesis and the stream-end error selection below.
+  let deferredResultDone: Extract<AdapterEvent, { type: "done" }> | undefined;
   const state: StreamParseState = {
     sawPartialText: false,
     sawPartialThinking: false,
@@ -479,6 +485,22 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             kill();
             break;
           }
+          if (
+            toolBridge
+            && !terminalEmitted
+            && event.type === "done"
+            && toolCallStarts > 0
+            && (state.completedToolCalls ?? 0) === toolCallStarts
+          ) {
+            // Every captured call completed and the CLI settled with a successful result before
+            // message_stop (instead of parking on the never-answering capture server). Emitting
+            // this done(stop) now would end the turn as a text completion and skip the
+            // synthesized done(tool_use) the client contract expects. Defer it: message_stop
+            // synthesis emits the terminal event with this frame's usage, and a stream that
+            // ends without message_stop fails closed with protocol_error below.
+            deferredResultDone = event;
+            continue;
+          }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }
             : event);
@@ -520,11 +542,12 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           // and terminate the tree; the client executes, and the next request continues.
           // Pre-result usage snapshots keep this terminated leg accountable: no result frame
           // ever arrives for a turn parked on the never-answering capture server.
+          const terminalUsage = deferredResultDone?.usage ?? state.partialUsage;
           emitOnce({
             type: "done",
             stopReason: "tool_use",
             endTurn: false,
-            ...(state.partialUsage ? { usage: state.partialUsage } : {}),
+            ...(terminalUsage ? { usage: terminalUsage } : {}),
           });
           kill();
           break;
@@ -598,6 +621,15 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         status: 502,
         errorType: "upstream_error",
         code: "process_exit_error",
+        retryable: false,
+      });
+    } else if (toolBridge && deferredResultDone !== undefined && !state.sawMessageStop) {
+      emitOnce({
+        type: "error",
+        message: `${profile.label} CLI delivered a terminal result before message_stop on a tool-bridge turn.`,
+        status: 502,
+        errorType: "upstream_error",
+        code: "protocol_error",
         retryable: false,
       });
     } else if (!state.sawTerminalResult) {
