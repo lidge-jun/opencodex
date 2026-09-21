@@ -134,6 +134,42 @@ describe("policy candidate fallback", () => {
     expect(seenInputs).toEqual(["hello", "hello"]);
   });
 
+  test("the retry snapshot survives mutation inside the input array", async () => {
+    // The top-level field swap above also passes under a shallow `{...body}` copy. The
+    // real leaks mutate deeper: the sanitizer splices input entries in place and the
+    // assignment injector rewrites inside the same array. Pin a nested mutation so a
+    // shallow-copy regression cannot stay green.
+    const trace = policyTrace();
+    const logCtx = { routeDecision: trace } as RequestLogContext;
+    const seenInputs: unknown[] = [];
+    let calls = 0;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "policy/daily", input: [{ role: "user", content: "hello" }], stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, {} as OcxConfig, logCtx, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls += 1;
+        const body = await req.json() as { input: { role: string; content: string }[]; model: string };
+        options.onRequestBodyParsed?.(body);
+        seenInputs.push(JSON.parse(JSON.stringify(body.input)));
+        context.routeDecision = trace;
+        if (calls === 1) {
+          body.input.splice(0, 1, { role: "assistant", content: "recovered plaintext" });
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenInputs).toEqual([
+      [{ role: "user", content: "hello" }],
+      [{ role: "user", content: "hello" }],
+    ]);
+  });
+
   test("a local input-admission refusal hops instead of ending the chain (#1524)", async () => {
     // #1524: a candidate whose context window cannot fit the request used to TERMINATE the
     // fallback chain. It is a local preflight verdict about ONE candidate, not about the
