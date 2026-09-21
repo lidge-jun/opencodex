@@ -368,6 +368,21 @@ test("a malformed credentialGroups entry costs the list, not the rest of pool (#
   } finally { warn.mockRestore(); }
 });
 
+test("a malformed credentialGroups warning never includes operator-supplied identifiers", () => {
+  const pastedCredential = ["opaque", "provider", "credential", "value"].join("-");
+  const privateGroupId = ["private", "billing", "group"].join("-");
+  writePoolConfig([{ id: privateGroupId, credentials: [pastedCredential] }]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(loadConfig().pool?.credentialGroups).toBeUndefined();
+    const output = warn.mock.calls.flat().join("\n");
+    expect(output).toContain("provider-qualified");
+    expect(output).toContain("group index 0");
+    expect(output).not.toContain(pastedCredential);
+    expect(output).not.toContain(privateGroupId);
+  } finally { warn.mockRestore(); }
+});
+
 test("an ambiguous credentialGroups declaration is rejected on write, never ordered away (#4546)", () => {
   const base = candidate(undefined);
   const withGroups = (credentialGroups: unknown) => ({ ...base, pool: { kernel: true, credentialGroups } });
