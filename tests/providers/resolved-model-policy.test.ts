@@ -812,4 +812,22 @@ describe("resolved static model policy parity", () => {
     // The folded runtime lookup must resolve the operator row, not a registry-spelled shadow.
     expect(modelRecordValue(map, MODEL)).toEqual({ low: "registry-low", xhigh: "custom" });
   });
+
+  test("case-varied operator key reports operator provenance for the folded model id", () => {
+    const entry = registry({
+      modelContextWindows: { "claude-opus-5": 200_000 },
+    });
+    const configured = provider({
+      modelContextWindows: { "Claude-Opus-5": 150_000 },
+    });
+    const policy = resolveModelPolicy({
+      providerName: "anthropic",
+      modelId: "claude-opus-5",
+      provider: configured,
+      entry,
+      transportMatchedRegistry: true,
+    });
+    expect(policy.model.contextWindow).toBe(150_000);
+    expect(policy.provenance.model.contextWindow).toBe("operator");
+  });
 });

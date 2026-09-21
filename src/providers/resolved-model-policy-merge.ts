@@ -135,7 +135,16 @@ export function legacyModelSource<T>(
   registry: Readonly<Record<string, T>> | undefined,
   modelId: string,
 ): StaticPolicySource {
-  const merged = { ...(registry ?? {}), ...(operator ?? {}) };
+  // Fold case-equal registry keys into the operator row exactly like mapFill, so
+  // provenance answers from the same merged map the value lookup sees: a
+  // registry-spelled winning key whose only difference from an operator key is
+  // case still reports operator, not registry.
+  const claimed = new Set(Object.keys(operator ?? {}).map(key => key.toLowerCase()));
+  const merged: Record<string, T> = {};
+  for (const [key, value] of Object.entries(registry ?? {})) {
+    if (!claimed.has(key.toLowerCase())) merged[key] = value;
+  }
+  for (const [key, value] of Object.entries(operator ?? {})) merged[key] = value;
   let winningKey: string | undefined;
   if (Object.hasOwn(merged, modelId)) winningKey = modelId;
   const colon = modelId.indexOf(":");
