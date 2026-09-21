@@ -208,8 +208,7 @@ import/export는 로컬 설정만 다뤄요. 허브 프로필을 바꾸지 않�
 지정하거나 `/model`에 라우팅 id를 직접 입력하세요 (Claude Code는 문자열을 그대로 통과시킵니다).
 
 Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 모델을 찾아 기본 `/model`
-선택기의 "From gateway" 항목에 표시해요. Claude Code 2.1.278 선택기는 `claude` 또는 `anthropic`을 포함한 ID를 받습니다. `claude-`로 시작하는 모르는 ID는 compact를 끄지 않으면 200k로 계산되므로, 라우팅 모델은 `claude`를 포함하되 `claude-`로 시작하지 않는 안정적인 가역 별칭으로 노출합니다. 선택기는
-받으므로, opencodex는 라우팅 모델을 안정적이고 되돌릴 수 있는 별칭으로 노출해요.
+선택기의 "From gateway" 항목에 표시해요. Claude Code 2.1.278 선택기는 `claude` 또는 `anthropic`을 포함한 ID를 받습니다. `claude-`로 시작하는 모르는 ID는 compact를 끄지 않으면 200k로 계산되므로, 라우팅 모델은 `claude`를 포함하되 `claude-`로 시작하지 않는 안정적인 가역 별칭으로 노출합니다.
 
 | 화면 | 형식 | 예시 |
 | --- | --- | --- |
