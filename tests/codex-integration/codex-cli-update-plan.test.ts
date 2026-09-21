@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import type { CodexCliInstallReport } from "../../src/codex/cli-install-provenan
 import {
   acquireCodexCliUpdateLease,
   observeCodexCliUpdateLease,
+  releaseCodexCliUpdateLease,
   type CodexCliUpdateLeaseIo,
 } from "../../src/codex/cli-update-lease";
 import {
@@ -638,6 +639,9 @@ describe("Codex CLI update lease", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
     const lockPath = join(dir, "codex-cli-update.lock");
     writeFileSync(lockPath, "{not json");
+    // Backdate it past the publish grace: a fresh unparseable file is a contender's
+    // in-flight write, not debris, and must not be cleared under it.
+    utimesSync(lockPath, 0, 0);
     const installs: string[] = [];
     const plan = await applicablePlan();
     let inspections = 0;
@@ -650,6 +654,70 @@ describe("Codex CLI update lease", () => {
     }, installs));
     expect(result.status).toBe("applied");
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("a fresh unparseable record is a publish in flight, not debris", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    // The O_EXCL fallback leaves a create-before-record window: a contender that
+    // sees it must report contention/unavailable, never unlink the publisher's file.
+    writeFileSync(lockPath, "");
+    const attempt = acquireCodexCliUpdateLease({ lockPath, pid: 7_777 });
+    expect(attempt.acquired).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
+    // Once the file is old it is genuinely dead debris and reclaims.
+    utimesSync(lockPath, 0, 0);
+    const retry = acquireCodexCliUpdateLease({ lockPath, pid: 7_777 });
+    expect(retry.acquired).toBe(true);
+  });
+
+  test("a contender that observed a stale record cannot delete the successor's lease", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    // A holds a dead-pid lease; B observes it stale and takes over. The record A
+    // published must never let a slower contender (or A's own late release) delete B's.
+    const a = acquireCodexCliUpdateLease({ lockPath, pid: 1_111, planId: "a".repeat(32) });
+    expect(a.acquired).toBe(true);
+    if (!a.acquired) return;
+    const b = acquireCodexCliUpdateLease({ lockPath, pid: 2_222, isAlive: () => false });
+    expect(b.acquired).toBe(true);
+    if (!b.acquired) return;
+    // The late release names the superseded token: B's live lease survives.
+    releaseCodexCliUpdateLease({ lockPath, pid: 1_111, token: a.record.token });
+    const surviving = readFileSync(lockPath, "utf-8");
+    expect(JSON.parse(surviving).token).toBe(b.record.token);
+    // A release naming only the pid still cannot touch a successor's record either:
+    // the token the caller never had is required inside compare-and-delete.
+    releaseCodexCliUpdateLease({ lockPath, pid: 1_111 });
+    expect(JSON.parse(readFileSync(lockPath, "utf-8")).token).toBe(b.record.token);
+  });
+
+  test("a live owner is never reaped by age while its heartbeat is fresh", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-update-lease-"));
+    const lockPath = join(dir, "codex-cli-update.lock");
+    const held = acquireCodexCliUpdateLease({ lockPath, pid: 3_333 });
+    expect(held.acquired).toBe(true);
+    if (!held.acquired) return;
+    // Age the record far past the bound but keep the heartbeat fresh: a long install
+    // must stay held, not be deliberately broken.
+    writeFileSync(lockPath, JSON.stringify({
+      ...held.record,
+      createdAtMs: 0,
+      heartbeatAtMs: Date.now(),
+    }));
+    const contender = acquireCodexCliUpdateLease({ lockPath, pid: 4_444, isAlive: () => true });
+    expect(contender.acquired).toBe(false);
+    if (!contender.acquired) {
+      expect(contender.reason).toBe("held");
+    }
+    // The same live pid with a heartbeat that stopped is a wedged holder: reclaimable.
+    writeFileSync(lockPath, JSON.stringify({
+      ...held.record,
+      createdAtMs: 0,
+      heartbeatAtMs: 0,
+    }));
+    const reaper = acquireCodexCliUpdateLease({ lockPath, pid: 4_444, isAlive: () => true });
+    expect(reaper.acquired).toBe(true);
   });
 
   test("startup observation reads a held lease and ignores a stale one", () => {

@@ -20,6 +20,7 @@ import {
 import {
   acquireCodexCliUpdateLease,
   releaseCodexCliUpdateLease,
+  startCodexCliUpdateLeaseHeartbeat,
   type CodexCliUpdateLeaseIo,
 } from "./cli-update-lease";
 
@@ -575,6 +576,9 @@ export async function applyCodexCliUpdatePlan(
       null,
     );
   }
+  // A real install can outlast any fixed age bound; the heartbeat keeps the lease
+  // self-identifying as live so a contender cannot reap it on age alone.
+  const stopHeartbeat = startCodexCliUpdateLeaseHeartbeat(acquisition.record, leaseIo);
   try {
     const plan = await createCodexCliUpdatePlan(deps);
     if (!plan.applicable || !plan.planId || !plan.targetVersion || !plan.installedVersion) {
@@ -629,6 +633,7 @@ export async function applyCodexCliUpdatePlan(
     // applied update never owned a shim npm could have replaced.
     return result("applied");
   } finally {
-    releaseCodexCliUpdateLease(leaseIo);
+    stopHeartbeat();
+    releaseCodexCliUpdateLease({ ...leaseIo, token: acquisition.record.token });
   }
 }
