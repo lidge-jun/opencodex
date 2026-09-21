@@ -19,7 +19,7 @@ elif [ -x "$HOME/.local/bin/bun" ]; then
 elif [ -x "/opt/homebrew/bin/bun" ]; then
     BUN=/opt/homebrew/bin/bun
 else
-    echo "pre-commit: cannot find bun; install it or remove .git/hooks/pre-commit" >&2
+    echo "pre-commit: cannot find bun; install it, or remove the pre-commit hook from $(git rev-parse --git-path hooks)" >&2
     exit 1
 fi
 

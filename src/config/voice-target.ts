@@ -13,6 +13,7 @@
  */
 import { getProviderRegistryEntry } from "../providers/registry";
 import type { OcxProviderConfig } from "../types";
+import { voiceEndpointUrlConfigError } from "./provider-validation";
 import { resolveEnvValue } from "./proxy-env";
 
 export type VoiceRouteKind = "dictation" | "transcription" | "speech" | "live";
@@ -21,6 +22,14 @@ export type VoiceRouteKind = "dictation" | "transcription" | "speech" | "live";
 interface RouteFields {
   /** The reserved target meaning "keep the built-in OpenAI/ChatGPT path". */
   reserved: string;
+  /**
+   * Set when the route has no built-in backend, so the reserved name names nothing
+   * servable. Still the runtime default (an absent block resolves to it and the route
+   * answers 501 with a message saying what to set), but REFUSED at the write boundary:
+   * an explicit value there is a mistake worth naming when it is written, not on the
+   * first request.
+   */
+  reservedUnservable?: true;
   /** The route's config block key (`config.<key>`), used in schema error prefixes. */
   key: string;
   url: "dictationUrl" | "transcriptionUrl" | "speechUrl" | "liveUrl";
@@ -49,6 +58,7 @@ export const VOICE_ROUTES: Record<VoiceRouteKind, RouteFields> = {
   },
   speech: {
     reserved: "openai",
+    reservedUnservable: true,
     key: "speech",
     url: "speechUrl",
     headers: "speechHeaders",
@@ -121,6 +131,8 @@ export function voiceProviderEndpointError(
   if (typeof url !== "string" || url.trim() === "") {
     return `${label} has no ${route.label} endpoint (set providers.${providerName}.${route.url})`;
   }
+  const urlError = voiceEndpointUrlConfigError(route.url, url);
+  if (urlError) return `${label} ${urlError}`;
   const headers = provider[route.headers];
   if (headers !== undefined) {
     if (!isRecord(headers) || Object.values(headers).some(value => typeof value !== "string")) {
@@ -165,6 +177,16 @@ export function voiceConfigValueError(
     if (typeof target !== "string") return `schema_invalid: ${route.key}.${field}: must be a string`;
     const resolution = resolveVoiceTarget(providers, target, kind);
     if (resolution.kind === "invalid") return `schema_invalid: ${route.key}.${field}: ${resolution.error}`;
+    // The reserved name validates as correct for dictation and transcription
+    // because a real relay stands behind it. For speech nothing does: the value
+    // is accepted by both write boundaries, "Config is valid" is printed, and
+    // every request then answers 501 "No speech backend is configured". The
+    // three blocks look identical in a file, so this is the path someone takes
+    // by copying `provider: "openai"` across. Refuse it where it is written.
+    if (resolution.kind === "openai" && route.reservedUnservable) {
+      return `schema_invalid: ${route.key}.${field}: "${route.reserved}" names no ${route.label} backend; `
+        + `omit the ${route.key} block or name a custom provider with a ${route.url}`;
+    }
     if (resolution.kind === "custom") {
       const endpointError = voiceProviderEndpointError(resolution.providerName, resolution.provider, kind);
       if (endpointError) return `schema_invalid: ${route.key}.${field}: ${endpointError}`;

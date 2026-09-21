@@ -13,6 +13,7 @@ import { normalizeLogConversationId } from "../../src/server/request-log-convers
 import { REDACTED_PROVIDER_FIELDS, redactedFieldPresence, safeConfigDTO } from "../../src/server/auth-cors";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { RequestLogContext } from "../../src/server/request-log";
+import { providerManagementConfigError } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 // Port 9 is discard: nothing listens, so a request that escapes is refused at
@@ -89,6 +90,28 @@ describe("voice target resolution", () => {
     expect(voiceProviderEndpointError("pocket", PROVIDERS.pocket, "transcription")).toContain("transcriptionUrl");
   });
 
+  test("an endpoint carrying embedded credentials is refused, naming the field", () => {
+    // These four fields are `editor` in the config DTO and cloned into management
+    // responses verbatim: userinfo in the URL is a secret handed to whoever lists providers.
+    const leaky = { ...PROVIDERS.pocket, speechUrl: "http://user:secret@127.0.0.1:9/v1/audio/speech" };
+    const error = voiceProviderEndpointError("pocket", leaky as never, "speech");
+    expect(error).toContain("speechUrl");
+    expect(error).toContain("embedded credentials");
+    // ws:// is the normal shape for a local dictation engine and stays accepted...
+    expect(voiceProviderEndpointError("ears", { adapter: "openai", baseUrl: "http://127.0.0.1:9/v1",
+      dictationUrl: "ws://127.0.0.1:9/listen" } as never, "dictation")).toBeNull();
+    // ...but not with a password in it, and not on a scheme that is not a URL to a socket at all.
+    expect(voiceProviderEndpointError("ears", { adapter: "openai", baseUrl: "http://127.0.0.1:9/v1",
+      dictationUrl: "ws://u:p@127.0.0.1:9/listen" } as never, "dictation")).toContain("embedded credentials");
+    expect(voiceProviderEndpointError("ears", { adapter: "openai", baseUrl: "http://127.0.0.1:9/v1",
+      dictationUrl: "ftp://127.0.0.1:9/listen" } as never, "dictation")).toContain("http(s) or ws(s)");
+    // The provider write boundary (management POST/PATCH) refuses the same thing.
+    expect(providerManagementConfigError("pocket", { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1",
+      allowPrivateNetwork: true, liveUrl: "https://u:p@127.0.0.1:9" })).toContain("liveUrl must not include embedded credentials");
+    expect(providerManagementConfigError("pocket", { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1",
+      allowPrivateNetwork: true, liveUrl: "https://127.0.0.1:9" })).toBeNull();
+  });
+
   test("headers that are not strings are refused, naming the field", () => {
     const provider = { ...PROVIDERS.pocket, speechHeaders: { authorization: 7 } };
     const error = voiceProviderEndpointError("pocket", provider as never, "speech");
@@ -136,6 +159,18 @@ describe("voice target resolution", () => {
 
   test("a byModel override names the model it came from", () => {
     expect(voiceConfigValueError({ byModel: { m: "bare" } }, PROVIDERS, "speech")).toContain("speech.byModel.m");
+  });
+
+  test("the reserved name is refused for speech, which has no built-in backend", () => {
+    // Accepting it printed "Config is valid" and then answered every request 501.
+    const error = voiceConfigValueError({ provider: "openai" }, PROVIDERS, "speech");
+    expect(error).toContain("speech.provider");
+    expect(error).toContain("names no speech backend");
+    // byModel values take the same refusal, naming the model key.
+    expect(voiceConfigValueError({ byModel: { "zai/glm-5.3": "openai" } }, PROVIDERS, "speech")).toContain("speech.byModel.zai/glm-5.3");
+    // Dictation and transcription keep it: a real relay stands behind the name there.
+    expect(voiceConfigValueError({ provider: "openai" }, PROVIDERS, "dictation")).toBeNull();
+    expect(voiceConfigValueError({ provider: "openai" }, PROVIDERS, "transcription")).toBeNull();
   });
 
   // The three sites where a wrong message means the config blames the wrong
@@ -437,6 +472,23 @@ describe("speech request validation", () => {
       request: speechRequest({ input: "hi", response_format: {} }),
       expect: "`response_format` must be a string",
     },
+    // speed and instructions were allowlisted and never checked, so an object in
+    // either passed the unknown-key test and went upstream as-is.
+    {
+      why: "a speed that is not a number",
+      request: speechRequest({ input: "hi", speed: "fast" }),
+      expect: "`speed` must be a number from 0.25 through 4",
+    },
+    {
+      why: "a speed outside OpenAI's 0.25-4 range",
+      request: speechRequest({ input: "hi", speed: 9 }),
+      expect: "`speed` must be a number from 0.25 through 4",
+    },
+    {
+      why: "instructions that are not a string",
+      request: speechRequest({ input: "hi", instructions: ["be brief"] }),
+      expect: "`instructions` must be a string",
+    },
   ];
 
   for (const row of ROWS) {
@@ -563,6 +615,32 @@ describe("transcription request validation", () => {
       why: "no model at all",
       request: upload(f => { f.append("file", clip()); }),
       expect: "Unsupported transcription model",
+    },
+    // Two refusal sites the guard-coverage fix exposed as untested: they sat
+    // inside blocks that a NEIGHBOURING line-only guard's scan used to wander
+    // into and claim. Both are real caps; neither had a row.
+    {
+      why: "a content-length past 32 MiB",
+      // The header check at the top of the handler, not the read cap: a
+      // declared length over the limit is refused before a byte is read.
+      request: new Request("http://127.0.0.1/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=b", "content-length": "40000000" },
+        body: new ReadableStream({ start(c) { c.enqueue(new Uint8Array(8)); c.close(); } }),
+        // @ts-expect-error duplex is required for a streaming request body
+        duplex: "half",
+      }),
+      expect: "Audio request exceeds 32 MiB",
+      status: 413,
+    },
+    {
+      why: "a file past 25,000,000 bytes",
+      request: upload(f => {
+        f.append("file", new File([new Uint8Array(25_000_001)], "big.wav", { type: "audio/wav" }));
+        f.append("model", "gpt-4o-transcribe");
+      }),
+      expect: "Audio file exceeds 25,000,000 bytes",
+      status: 413,
     },
     {
       why: "a response_format that is neither json nor text",

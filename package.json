@@ -50,7 +50,7 @@
     "test:guards": "bun scripts/guard-coverage.ts",
     "test:known-failures": "bun scripts/check-known-failures.ts",
     "check": "bun run typecheck && bun run structure:check && bun run skill:surface:check && bun run test:red && bun run test:guards",
-    "hooks:install": "ln -sf ../../hooks/pre-commit .git/hooks/pre-commit && echo \"pre-commit installed \u2014 remove with: rm .git/hooks/pre-commit\"",
+    "hooks:install": "bun scripts/setup-hooks.ts",
     "typecheck": "bun x tsc --noEmit",
     "audit:high": "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
     "privacy:scan": "bun scripts/privacy-scan.ts",

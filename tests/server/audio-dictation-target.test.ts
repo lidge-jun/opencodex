@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { resolveDictationHeaders } from "../../src/config/dictation";
 import type { AdmissionLease } from "../../src/lib/admission";
 import type { AudioClient } from "../../src/server/audio-client";
@@ -9,7 +9,7 @@ import {
   resolveDictationSocket,
   selectDictationBackend,
 } from "../../src/server/audio-dictation";
-import type { RequestLogEntry } from "../../src/server/request-log";
+import { addRequestLog, clearRequestLogsForTests, type RequestLogEntry } from "../../src/server/request-log";
 import { normalizeLogConversationId } from "../../src/server/request-log-conversation";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -85,6 +85,13 @@ describe("dictation backend selection", () => {
 });
 
 describe("dictation conversation lookup", () => {
+  // The lookup reads the process-global request-log ring by reference. Without
+  // this bracket the negative assertion below holds only while no earlier test
+  // in the same Bun process left an entry whose digest happens to be "t1" --
+  // and tests/server/audio-voice-routes.test.ts pushes onto that same ring.
+  beforeEach(() => { clearRequestLogsForTests(); });
+  afterEach(() => { clearRequestLogsForTests(); });
+
   test("normalizes thread, parent, and session headers to the logged digest", () => {
     const ids = dictationConversationIds(new Headers({
       "thread-id": "t1",
@@ -111,8 +118,12 @@ describe("dictation conversation lookup", () => {
     expect(latestDictationModelFromEntries(entries, [normalizeLogConversationId("t1")])).toBe("zai/glm-5.3-flash");
   });
 
-  test("the request-backed lookup reads the same digests", () => {
+  test("the request-backed lookup reads the thread's newest logged model", () => {
+    // Both directions. The negative alone would pass against an implementation
+    // that returned undefined unconditionally.
     expect(resolveDictationActiveModelId(new Headers({ "thread-id": "t1" }))).toBeUndefined();
+    addRequestLog(logEntry(normalizeLogConversationId("t1"), "glm-5.3-flash", "zai/glm-5.3-flash"));
+    expect(resolveDictationActiveModelId(new Headers({ "thread-id": "t1" }))).toBe("zai/glm-5.3-flash");
   });
 });
 

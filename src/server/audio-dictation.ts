@@ -2,9 +2,9 @@ import { formatErrorResponse } from "../bridge";
 import {
   dictationProviderEndpointError,
   resolveDictationHeaders,
-  resolveDictationTarget,
   type DictationTargetResolution,
 } from "../config/dictation";
+import { selectVoiceBackend } from "../config/voice-target";
 import type { AdmissionLease } from "../lib/admission";
 import type { OcxConfig } from "../types";
 import type { AudioClient } from "./audio-client";
@@ -77,8 +77,9 @@ export function finishAudioUpstream(relay: AudioUpstream): AudioSocketTarget["fi
  * helper, so the runtime reports the same unknown/registry-managed rejection the write boundary does.
  */
 export function selectDictationBackend(config: OcxConfig, modelId: string | undefined): DictationTargetResolution {
-  const target = (modelId ? config.dictation?.byModel?.[modelId] : undefined) ?? config.dictation?.provider;
-  return resolveDictationTarget(config.providers, target);
+  // The byModel-then-provider rule lives once, in selectVoiceBackend. A second
+  // spelling here matched it today and would drift from it tomorrow.
+  return selectVoiceBackend(config.providers, config.dictation, modelId, "dictation");
 }
 
 /** Normalized conversation digests a dictation upgrade can be correlated with. */

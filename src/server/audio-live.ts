@@ -3,9 +3,9 @@ import { formatErrorResponse } from "../bridge";
 import {
   liveVoiceProviderEndpointError,
   resolveLiveVoiceHeaders,
-  resolveLiveVoiceTarget,
   type LiveVoiceTargetResolution,
 } from "../config/live-voice";
+import { selectVoiceBackend } from "../config/voice-target";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
 import { cancelBodyOnAbort, clearableDeadline } from "../lib/abort";
 import type { AdmissionLease } from "../lib/admission";
@@ -42,8 +42,7 @@ function protocolHeaders(client: AudioClient, relay: AudioUpstream, frameless: b
  * helper, so the runtime reports the same unknown/registry-managed rejection the write boundary does.
  */
 export function selectLiveVoiceBackend(config: OcxConfig, modelId: string | undefined): LiveVoiceTargetResolution {
-  const target = (modelId ? config.liveVoice?.byModel?.[modelId] : undefined) ?? config.liveVoice?.provider;
-  return resolveLiveVoiceTarget(config.providers, target);
+  return selectVoiceBackend(config.providers, config.liveVoice, modelId, "live");
 }
 
 /**

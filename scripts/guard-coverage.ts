@@ -59,6 +59,12 @@ import { GUARDS } from "../tests/red-guards";
  *  covers only its own lines — a fixed line window over-claimed in the Rust
  *  version, scoring a refusal as guarded when nothing guarded it. */
 function blockEnd(source: string, at: number, from: string): number {
+  // A guard that replaces a line-only statement covers that line and nothing
+  // after it. Scanning forward for the next `{` regardless found some LATER,
+  // unrelated block and marked all of it as covered -- which is exactly how a
+  // refusal site with no guard disappears from the uncovered worklist. Only a
+  // `from` that itself opens a block has a block to match.
+  if (!from.includes("{")) return at + from.length;
   let depth = 0;
   let opened = false;
   for (let i = at; i < source.length; i++) {

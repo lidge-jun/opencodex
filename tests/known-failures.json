@@ -1,9 +1,9 @@
 {
-  "_comment": "Failures that are not this branch's. Verified by running the same files on upstream/dev in a worktree and seeing the same four. Without this, a full-suite run reports a number instead of an answer, and the next real failure hides among the tolerated ones.",
+  "_comment": "Failures that are not this branch's. Verified by running the same files on upstream/dev in a worktree and seeing the same failures. Without this, a full-suite run reports a number instead of an answer, and the next real failure hides among the tolerated ones.",
   "verifiedAgainst": {
     "ref": "upstream/dev",
-    "commit": "e37ee40ad",
-    "date": "2026-09-20",
+    "commit": "8f94a6fee",
+    "date": "2026-09-21",
     "platform": "darwin-arm64"
   },
   "failures": [
@@ -23,19 +23,24 @@
       "reason": "fails identically on upstream/dev"
     },
     {
-      "test": "version-manager shim destruction (#2412) > a destroyed shim diagnostic does not open a non-file launcher",
-      "file": "tests/codex-integration/codex-shim-destroyed-probe.test.ts",
-      "reason": "fails identically on upstream/dev; times out at 5s, so likely environmental"
-    },
-    {
       "test": "remote workspace Linux command sandbox > builds a minimal bubblewrap argv with one writable workspace",
-      "file": "tests/remote-workspace",
+      "file": "tests/clients/remote-workspace-command-runner.test.ts",
       "reason": "bubblewrap is Linux-only; this host is macOS"
     },
     {
       "test": "remote workspace Linux command sandbox > revalidates approved toolchain roots and rejects a later symlink substitution",
-      "file": "tests/remote-workspace",
+      "file": "tests/clients/remote-workspace-command-runner.test.ts",
       "reason": "bubblewrap is Linux-only; this host is macOS"
+    },
+    {
+      "test": "release shell recovers only unverified reads after acknowledged publication",
+      "file": "tests/ci-workflows/ci-workflows.test.ts",
+      "reason": "fails identically on upstream/dev outside Actions: the release shell reads GITHUB_SHA (\"unbound variable\"), which only the workflow sets; passes with GITHUB_SHA exported"
+    },
+    {
+      "test": "resolveCodexRuntime > treats missing persisted and resolved versions as the same selection",
+      "file": "tests/codex-integration/codex-runtime.test.ts",
+      "reason": "fails identically on upstream/dev on a host with the Codex App installed: the resolver finds the real installation and reports \"installed\" where the test expects \"fallback\""
     }
   ]
 }

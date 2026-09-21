@@ -77,6 +77,19 @@ async function parseSpeech(req: Request, signal: AbortSignal): Promise<SpeechInp
   if (body.response_format !== undefined && typeof body.response_format !== "string") {
     return invalid("`response_format` must be a string");
   }
+  // `speed` and `instructions` were on the FIELDS allowlist and nowhere else, so
+  // an object or an array in either passed the unknown-key check and went
+  // upstream as-is. The allowlist says which names may appear; it says nothing
+  // about what they may contain, and the two are easy to mistake for each other.
+  // OpenAI's range for speed is 0.25 to 4.0; a value outside it is a client bug
+  // worth naming here rather than a 400 from someone else's server.
+  if (body.speed !== undefined
+    && (typeof body.speed !== "number" || !Number.isFinite(body.speed) || body.speed < 0.25 || body.speed > 4)) {
+    return invalid("`speed` must be a number from 0.25 through 4");
+  }
+  if (body.instructions !== undefined && typeof body.instructions !== "string") {
+    return invalid("`instructions` must be a string");
+  }
   return { body };
 }
 

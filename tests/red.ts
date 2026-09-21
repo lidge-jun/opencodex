@@ -15,6 +15,9 @@
  */
 
 
+import { closeSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { GUARDS, VOICE } from "./red-guards";
 
 
@@ -31,7 +34,7 @@ import { GUARDS, VOICE } from "./red-guards";
 const SUITE_TIMEOUT_MS = 60_000;
 
 async function runSuite(suite: string): Promise<{ ok: boolean; output: string }> {
-  const proc = Bun.spawn(["bun", "test", suite], { stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn([process.execPath, "test", suite], { stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => proc.kill(), SUITE_TIMEOUT_MS);
   try {
     const [out, err] = await Promise.all([
@@ -100,20 +103,50 @@ if (live.length) {
  */
 const LOCK = ".red-running";
 
+/**
+ * The guard currently removed from production source, if any. Set just before
+ * the mutated file is written and cleared just after the original is put back,
+ * so a signal that lands in between has what it needs to undo the damage.
+ * Synchronous on purpose: exit handlers cannot await.
+ */
+let active: { file: string; original: string } | null = null;
+
 function releaseLock(): void {
+  // ORDER MATTERS. The lock exists to warn that a guard is disabled; removing it
+  // while the guard is still disabled deletes the warning and keeps the damage.
+  // A SIGINT between the mutation write and the restore used to do exactly that,
+  // leaving a repository that `git add -A` would commit with `if (false)` in it.
+  if (active) {
+    try {
+      writeFileSync(active.file, active.original);
+      active = null;
+    } catch (error) {
+      console.error(`could not restore ${active.file}: ${String(error)} — the lock stays so nobody commits this state`);
+      return;
+    }
+  }
   try {
-    require("node:fs").unlinkSync(LOCK);
+    unlinkSync(LOCK);
   } catch {
     // already gone
   }
 }
 
-if (await Bun.file(LOCK).exists()) {
-  console.error(`${LOCK} exists — another red run is in flight, or one died mid-break.`);
-  console.error("Check `git status` before deleting it: a guard may still be disabled.");
-  process.exit(2);
+// Exclusive create: the existence check and the write are one operation, so two
+// runners started together cannot both observe "no lock" and both proceed to
+// mutate the same files in interleaved order.
+try {
+  const fd = openSync(LOCK, "wx");
+  writeFileSync(fd, `${process.pid}\n`);
+  closeSync(fd);
+} catch (error) {
+  if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+    console.error(`${LOCK} exists — another red run is in flight, or one died mid-break.`);
+    console.error("Check `git status` before deleting it: a guard may still be disabled.");
+    process.exit(2);
+  }
+  throw error;
 }
-await Bun.write(LOCK, `${process.pid}\n`);
 // Every exit, not just the ones remembered: the fixture check below used to
 // sit after the lock and its refusal leaked `.red-running`, which is the same
 // bug this lock exists to prevent, inside the tool that prevents it.
@@ -137,9 +170,9 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
  * are named by template literal and that name exists only at runtime.
  */
 async function ranTests(suite: string): Promise<Set<string>> {
-  const out = `/tmp/red-listing-${process.pid}.xml`;
+  const out = join(tmpdir(), `red-listing-${process.pid}.xml`);
   const proc = Bun.spawn(
-    ["bun", "test", suite, "--reporter=junit", `--reporter-outfile=${out}`],
+    [process.execPath, "test", suite, "--reporter=junit", `--reporter-outfile=${out}`],
     { stdout: "ignore", stderr: "ignore" },
   );
   await proc.exited;
@@ -180,6 +213,7 @@ for (const guard of GUARDS) {
     misses.push(`${guard.name}: no test named "${guard.expect}" in ${guard.suite}`);
     continue;
   }
+  active = { file: guard.file, original };
   await Bun.write(guard.file, original.replace(guard.from, guard.to));
   try {
     const { ok, output } = await runSuite(guard.suite);
@@ -189,6 +223,7 @@ for (const guard of GUARDS) {
     } else console.log(`  red   ${guard.name}`);
   } finally {
     await Bun.write(guard.file, original);
+    active = null;
   }
 }
 

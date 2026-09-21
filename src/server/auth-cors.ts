@@ -25,6 +25,7 @@ import {
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
+  voiceEndpointUrlConfigError,
   providerHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
@@ -757,6 +758,15 @@ export function providerManagementConfigError(
   const typed = provider as unknown as OcxProviderConfig;
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
+  // The four voice endpoints get the same embedded-credential refusal as baseUrl.
+  // They are `editor` fields, cloned into the management DTO verbatim, so a URL
+  // carrying userinfo would disclose it to anyone who can list providers.
+  for (const field of ["dictationUrl", "transcriptionUrl", "speechUrl", "liveUrl"] as const) {
+    const value = typed[field];
+    if (typeof value !== "string") continue;
+    const urlError = voiceEndpointUrlConfigError(field, value);
+    if (urlError) return `provider ${name} ${urlError}`;
+  }
   if (effectiveGoogleMode(name, typed) === "vertex" && typed.location !== undefined) {
     const locationError = googleVertexLocationConfigError(typed.location);
     if (locationError) return `provider ${name} ${locationError}`;

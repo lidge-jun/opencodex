@@ -1340,16 +1340,6 @@ export interface OcxImagesConfig {
  * `dictationProtocols`). Registry-managed provider ids are rejected as targets, mirroring
  * `images.provider`: those built-ins do not carry a dictation endpoint.
  */
-export interface OcxDictationConfig {
-  /** Backend used when `byModel` has no match. "openai" (default) keeps ChatGPT dictation. */
-  provider?: string;
-  /**
-   * Per `provider/model` override. Keys match the active model's namespaced id exactly (for
-   * example "zai/glm-5.3-flash"); values are "openai" or a custom provider id.
-   */
-  byModel?: Record<string, string>;
-}
-
 /**
  * Selects a voice route's backend. A target is either the reserved `"openai"` (the built-in
  * path) or the id of a CUSTOM provider in `config.providers`, where the endpoint lives on the
@@ -1365,6 +1355,9 @@ export interface OcxVoiceRouteConfig {
    */
   byModel?: Record<string, string>;
 }
+
+/** The dictation route reads the same shape; the name is kept for existing imports. */
+export type OcxDictationConfig = OcxVoiceRouteConfig;
 
 export interface OcxSearchConfig {
   /**
