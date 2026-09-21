@@ -259,9 +259,12 @@ function memberMatches(member: string, ref: CredentialDomainRef): boolean {
 }
 
 /**
- * Every way a declared grouping can be ambiguous, as operator-readable messages. The
- * config write path rejects on any of these and the load path drops the list, so an
- * ambiguous declaration is reported rather than resolved by whichever group came first.
+ * Every way a declared grouping can be ambiguous, reported by position only. Messages
+ * name group and member indexes, never the operator-supplied strings — a malformed
+ * credential pasted into this list would otherwise be printed verbatim into shared
+ * logs. The config write path rejects on any of these and the load path drops the
+ * list, so an ambiguous declaration is reported rather than resolved by whichever
+ * group came first.
  */
 export function credentialGroupIssues(groups: readonly DeclaredCredentialGroup[]): string[] {
   const issues: string[] = [];
