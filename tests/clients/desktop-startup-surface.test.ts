@@ -176,8 +176,9 @@ describe("desktop startup surface", () => {
   test("the run publishes before anything it does can return", () => {
     // The lookup below used to come first, so a run that returned there had said nothing at all
     // and the page could not tell that from a run still going.
-    const run = startup.slice(startup.indexOf("async fn run(app: &AppHandle, started: Instant)"));
-    const body = run.slice(0, run.indexOf("async fn register("));
+    const at = startup.indexOf("async fn run(app: &AppHandle");
+    expect(at).toBeGreaterThan(-1);
+    const body = startup.slice(at, startup.indexOf("async fn register(", at));
     const published = body.indexOf("report(app, started, Phase::Registering, None);");
     expect(published).toBeGreaterThan(-1);
     expect(body.indexOf("try_state::<AppState>()")).toBeGreaterThan(published);
