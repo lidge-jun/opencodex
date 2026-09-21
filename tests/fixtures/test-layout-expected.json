@@ -1197,6 +1197,7 @@
   "server-xai-header-parity.test.ts": "server",
   "server-xai-oauth-401-replay.test.ts": "server",
   "server-xai-responses-streaming.test.ts": "server",
+  "service-ownership-compatibility.test.ts": "service",
   "service-ownership-handover.test.ts": "service",
   "service-ownership-state.test.ts": "service",
   "service-probe-docker.test.ts": "service",
