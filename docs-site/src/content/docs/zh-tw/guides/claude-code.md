@@ -222,8 +222,7 @@ apply、輪換/復原或直接 disconnect 均可處理，無須新參數或事�
 ## /model 選擇器（“From gateway”）
 
 Claude Code 2.1.129+ 透過 `GET /v1/models?limit=1000` 發現閘道器模型，並在原生 `/model`
-選擇器中以“From gateway”標籤列出。由於選擇器只接受以 `claude` 或 `anthropic` 開頭的 ID，
-opencodex 會將已路由模型公開為穩定且可逆的別名：
+選擇器中以“From gateway”標籤列出。Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-` 開頭的未知 ID 在不關閉 compact 時按 200k 計算，因此 opencodex 會將已路由模型公開為包含 `claude`、但不以 `claude-` 開頭的穩定且可逆別名：
 
 | 介面 | 格式 | 示例 |
 | --- | --- | --- |
@@ -236,7 +235,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 每個條目帶有誠實的顯示名（如 `gemini-3-pro (gemini)`），並以官方 ModelInfo 形態附帶完整模型
 能力（推理強度階梯、thinking 型別），使 Claude Desktop 的第三方閘道器模式能夠提供其推理強度
 選擇器。真實 Anthropic 模型保留其規範 id。合成的 2026 日期是內部槽位，不是釋出日期。舊版雜湊
-別名與較舊設定中的 `ocx-claude-<provider>--<model>` id 仍可解析。
+別名與較舊設定中的 `claude-ocx-<provider>--<model>` id 仍可解析。
 擁有權威 1M 上下文視窗的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
 計算該模型（自動壓縮仍開啟）——代理在路由前會去掉該標記。
 選中後會儲存到 Claude Code 的 `settings.json` `model` 欄位；入站請求會將別名解析回路由

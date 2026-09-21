@@ -375,8 +375,7 @@ arbitrary external copies; revoke separately on the hub if desired.
 ## The /model picker ("From gateway")
 
 Claude Code 2.1.129+ discovers gateway models via `GET /v1/models?limit=1000` and lists them in
-the native `/model` picker labeled "From gateway". Because the picker only accepts ids beginning
-with `claude` or `anthropic`, opencodex exposes routed models as stable, reversible aliases:
+the native `/model` picker labeled "From gateway". Claude Code 2.1.278 accepts a picker id that contains `claude` or `anthropic`. An unrecognized id that starts with `claude-` is accounted at 200k unless compact is disabled, so opencodex exposes routed models as stable, reversible aliases that contain `claude` but do not start with `claude-`:
 
 | Surface | Format | Example |
 | --- | --- | --- |

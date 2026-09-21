@@ -313,8 +313,7 @@ gerekirse anahtarı hub'da ayrıca iptal edin.
 
 Claude Code 2.1.129+, `GET /v1/models?limit=1000` aracılığıyla ağ geçidi
 modellerini keşfeder ve bunları yerel `/model` seçicisinde "From gateway"
-etiketiyle listeler. Seçici yalnızca `claude` veya `anthropic` ile başlayan
-kimlikleri kabul ettiğinden, opencodex yönlendirilen modelleri kararlı, tersine
+etiketiyle listeler. Claude Code 2.1.278, `claude` veya `anthropic` içeren bir kimliği kabul eder. `claude-` ile başlayan tanınmayan bir kimlik, compact kapatılmadıkça 200k sayılır. opencodex yönlendirilen modelleri `claude` içeren ama `claude-` ile başlamayan kararlı, tersine
 çevrilebilir takma adlar olarak sunar:
 
 | Yüzey | Format | Örnek |
@@ -331,7 +330,7 @@ Desktop'ın üçüncü taraf ağ geçidi modunun çaba seçicisini sunabilmesi i
 ModelInfo biçiminde tam model yeteneklerini (akıl yürütme çabası merdiveni,
 düşünme türleri) taşır. Gerçek Anthropic modelleri kurallı kimliklerini korur.
 Sentetik 2026 tarihi bir çıkış tarihi değil, dahili bir yuvadır. Eski karma
-takma adlar ve eski yapılandırmalardan gelen `ocx-claude-<provider>--<model>`
+takma adlar ve eski yapılandırmalardan gelen `claude-ocx-<provider>--<model>`
 kimlikleri hala çözümlenir.
 
 Claude Desktop'ın altbilgi seçicisi zaten çalışan bir 3P görüşmesi için modeli

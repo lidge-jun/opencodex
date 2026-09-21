@@ -300,8 +300,7 @@ pas les copies externes ; révoquez-la séparément sur le hub si nécessaire.
 ## Le sélecteur /model (« Depuis la passerelle »)
 
 Claude Code 2.1.129+ découvre les modèles de passerelle via `GET /v1/models?limit=1000` et les répertorie dans
-le sélecteur natif `/model` intitulé « Depuis la passerelle ». Comme ce sélecteur n'accepte que les identifiants commençant
-par `claude` ou `anthropic`, opencodex expose les modèles routés sous forme d'alias stables et réversibles :
+le sélecteur natif `/model` intitulé « Depuis la passerelle ». Claude Code 2.1.278 accepte un identifiant qui contient `claude` ou `anthropic`. Un identifiant inconnu qui commence par `claude-` est compté à 200k sauf si le compactage est désactivé, donc opencodex expose les modèles routés sous forme d'alias stables et réversibles qui contiennent `claude` sans commencer par `claude-` :
 
 | Surface | Format | Exemple |
 | --- | --- | --- |
@@ -315,7 +314,7 @@ Chaque entrée porte un nom d'affichage explicite, comme `gemini-3-pro (gemini)`
 (échelle d'effort de raisonnement et types de réflexion) dans la structure officielle ModelInfo. Le mode passerelle tierce de Claude
 Desktop peut ainsi proposer son sélecteur d'effort. Les véritables modèles Anthropic conservent leurs
 identifiants canoniques. La date synthétique 2026 désigne un emplacement interne, et non une date de publication. Les
-anciens alias hachés et les identifiants `ocx-claude-<provider>--<model>` des configurations antérieures sont
+anciens alias hachés et les identifiants `claude-ocx-<provider>--<model>` des configurations antérieures sont
 toujours résolus.
 
 Si le sélecteur situé au bas de Claude Desktop ne modifie pas le modèle d'une conversation 3P déjà en cours,
