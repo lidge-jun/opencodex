@@ -178,6 +178,7 @@ import {
 import { EXTERNAL_CALL_PREFIX, LiveCallBindings } from "./live-call-bindings";
 import { contextEndpoint, contextRelayActivated } from "../codex/context-compat";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
+import { acceptSystemRestart } from "./management/system-restart";
 import {
   createManagementSessionControl,
   initializeManagementAuthState,
@@ -538,7 +539,19 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // no gate is supplied (tests, ad-hoc starts) a fresh pending gate is created.
   const readinessGate = deps.readinessGate ?? createReadinessGate();
   const packageTreeIntegrity = deps.packageTreeIntegrity
-    ?? createRuntimePackageTreeIntegrityGuard(detectInstall());
+    ?? createRuntimePackageTreeIntegrityGuard(detectInstall(), undefined, undefined, {
+      onReplaced: () => {
+        // An out-of-band install replaced the package under this live process. Serve
+        // the 503 for the triggering request, then let the standard drain-and-restart
+        // path bring the new tree up instead of refusing traffic until a manual
+        // restart. acceptSystemRestart is idempotent and supervisored-aware.
+        try {
+          acceptSystemRestart();
+        } catch (error) {
+          console.warn("Package tree changed; automatic drain-and-restart failed:", error instanceof Error ? error.message : error);
+        }
+      },
+    });
   // Actual bound port, filled in after Bun.serve binds so /readyz reports the
   // real ephemeral port for startServer(0). /healthz keeps its existing port
   // field (the requested listenPort) byte-for-byte.

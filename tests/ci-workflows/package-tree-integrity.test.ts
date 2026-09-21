@@ -153,6 +153,102 @@ describe("package tree integrity", () => {
     expect(guard.status()).toEqual({ ok: false, reason: "package_tree_unreadable" });
   });
 
+  describe("automatic restart on a replaced package tree", () => {
+    const base: PackageTreeObservation = {
+      device: 1n, inode: 10n, contentTimeNs: 100n, size: 500n,
+    };
+
+    test("fires once after the replacement persists past the delay", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 5_000 },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      expect(calls).toBe(0); // inside the debounce window
+
+      clock += 5_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      expect(calls).toBe(1);
+
+      // Idempotent: further refusals never re-arm the restart.
+      clock += 10_000;
+      guard.status();
+      expect(calls).toBe(1);
+    });
+
+    test("a zero delay fires on first detection", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 0 },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      expect(calls).toBe(1);
+    });
+
+    test("recovery or an unreadable manifest resets the debounce", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 5_000 },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+
+      // Mid-install the manifest briefly disappears: the timer must restart,
+      // not fire on a partially written tree.
+      observation = null;
+      clock += 4_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_unreadable" });
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      clock += 4_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      expect(calls).toBe(0);
+      clock += 5_000;
+      guard.status();
+      expect(calls).toBe(1);
+    });
+
+    test("source checkouts never auto-restart", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const guard = createRuntimePackageTreeIntegrityGuard(
+        "source",
+        () => observation,
+        () => clock,
+        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 0 },
+      );
+
+      observation = { ...base, inode: 11n };
+      clock += 60_000;
+      expect(guard.status()).toEqual({ ok: true });
+      expect(calls).toBe(0);
+    });
+  });
+
   // BUG-R1: a chmod fenced the whole data plane behind 503.
   //
   // These three drive the REAL filesystem rather than a hand-built observation,

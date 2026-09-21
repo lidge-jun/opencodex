@@ -16,6 +16,20 @@ export interface PackageTreeIntegrityGuard {
   status(): PackageTreeIntegrityStatus;
 }
 
+export interface PackageTreeIntegrityOptions {
+  /**
+   * Called once when a replaced package tree persists past `replacedRestartDelayMs`
+   * of sustained failure. The intended handler is the graceful drain-and-restart
+   * acceptor: an out-of-band install (npm/bun/pnpm global upgrade under a live
+   * proxy) then self-heals instead of serving 503s until someone restarts by hand.
+   * Only `package_tree_replaced` counts — an unreadable manifest resets the timer,
+   * so an install still mid-write does not trigger a restart on partial state.
+   */
+  onReplaced?: () => void;
+  /** Sustained-replacement delay before `onReplaced` fires. 0 fires on first detection. */
+  replacedRestartDelayMs?: number;
+}
+
 type ObservePackageTree = () => PackageTreeObservation | null;
 type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
 
@@ -70,17 +84,34 @@ const PACKAGE_TREE_RECHECK_MS = 1_000;
 export function createPackageTreeIntegrityGuard(
   observe: ObservePackageTree = observePackageManifest,
   now: () => number = Date.now,
+  options: PackageTreeIntegrityOptions = {},
 ): PackageTreeIntegrityGuard {
   const boot = observe();
   let lastOkAt: number | null = null;
+  let replacedSinceMs: number | null = null;
+  let notified = false;
+  const restartDelayMs = options.replacedRestartDelayMs ?? 5_000;
   return {
     status(): PackageTreeIntegrityStatus {
       const at = now();
       if (lastOkAt !== null && at - lastOkAt < PACKAGE_TREE_RECHECK_MS) return { ok: true };
       const current = observe();
-      if (boot === null || current === null) return { ok: false, reason: "package_tree_unreadable" };
-      if (!sameObservation(boot, current)) return { ok: false, reason: "package_tree_replaced" };
+      if (boot === null || current === null) {
+        replacedSinceMs = null;
+        return { ok: false, reason: "package_tree_unreadable" };
+      }
+      if (!sameObservation(boot, current)) {
+        if (options.onReplaced && !notified) {
+          if (replacedSinceMs === null) replacedSinceMs = at;
+          if (at - replacedSinceMs >= restartDelayMs) {
+            notified = true;
+            options.onReplaced();
+          }
+        }
+        return { ok: false, reason: "package_tree_replaced" };
+      }
       lastOkAt = at;
+      replacedSinceMs = null;
       return { ok: true };
     },
   };
@@ -96,7 +127,8 @@ export function createRuntimePackageTreeIntegrityGuard(
   installer: PackageTreeRuntimeInstall,
   observe: ObservePackageTree = observePackageManifest,
   now: () => number = Date.now,
-): PackageTreeIntegrityGuard {
-  if (installer === "source" || isStandaloneBinary()) return { status: () => ({ ok: true }) };
-  return createPackageTreeIntegrityGuard(observe, now);
-}
+  options: PackageTreeIntegrityOptions = {},
+  ): PackageTreeIntegrityGuard {
+    if (installer === "source" || isStandaloneBinary()) return { status: () => ({ ok: true }) };
+    return createPackageTreeIntegrityGuard(observe, now, options);
+  }
