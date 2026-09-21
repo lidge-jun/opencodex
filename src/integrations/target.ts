@@ -25,7 +25,7 @@
  */
 import { EXPORT_CLIENTS, ClientPathError, type BuildContribution, type ConfigFormat } from "../clients/config-export";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
-import { AmbiguousSelectorError, readPath } from "./merge";
+import { AmbiguousSelectorError, InvalidSelectorError, readPath } from "./merge";
 import type { OwnershipRecord } from "./ownership";
 import { INTEGRATION_CLIENTS, type IntegrationClientId } from "./registry";
 
@@ -97,7 +97,7 @@ function storeTarget(
  * Uncertainty answers yes. An unreadable or unparseable config file is a state
  * the classifier is about to refuse on, and it must refuse on the file our
  * record is about rather than silently move the operation to a different one.
- * An ambiguous selector is the same kind of answer.
+ * An ambiguous or invalid selector is the same kind of answer.
  */
 function recordedBlockStillPresent(
   io: IntegrationIO,
@@ -112,7 +112,7 @@ function recordedBlockStillPresent(
   try {
     return record.fragmentPaths.some(path => readPath(parsed, path) !== undefined);
   } catch (error) {
-    if (error instanceof AmbiguousSelectorError) return true;
+    if (error instanceof AmbiguousSelectorError || error instanceof InvalidSelectorError) return true;
     throw error;
   }
 }

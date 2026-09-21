@@ -9,7 +9,7 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/031_wp3_writer_impl.md.
  */
-import type { ManagedContribution } from "../clients/config-export";
+import type { ManagedContribution } from "../clients/config-export/contracts";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -22,7 +22,7 @@ function clone<T>(value: T): T {
 
 /**
  * `[field=value]` addresses the ONE element of a sequence whose `field` equals
- * `value`, and `[field=value,field=value]` the one whose every named field
+ * `value`, and `[v2:field=value,field=value]` the one whose every named field
  * matches. Raycast keeps its providers as a YAML list, so the element is the
  * smallest thing we can own there; an index would move under us the moment
  * the user reordered their own entries. Any other segment is a plain key.
@@ -35,13 +35,14 @@ function clone<T>(value: T): T {
  * defect as addressing it by index.
  *
  * The single-criterion spelling keeps its original grammar, where the value may
- * itself contain a comma. A conjunction is recognized only when EVERY
- * comma-separated part is `field=value` with a comma-free value, so no path
- * already written into an ownership record on disk changes meaning.
+ * itself contain commas and equals signs. A conjunction uses an explicit v2
+ * marker, so no path already written into an ownership record on disk changes
+ * meaning. Once the marker is present the whole segment must be valid; falling
+ * back to a key or v1 selector would recreate the silent reselection hazard.
  */
 const ARRAY_SELECTOR = /^\[([A-Za-z_][A-Za-z0-9_]*)=([^\]]+)\]$/u;
-const SELECTOR_CONJUNCTION =
-  /^\[([A-Za-z_][A-Za-z0-9_]*=[^,\]]+(?:,[A-Za-z_][A-Za-z0-9_]*=[^,\]]+)+)\]$/u;
+const SELECTOR_FIELD = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const SELECTOR_CONJUNCTION_PREFIX = "[v2:";
 
 /** One `field=value` equality a selector requires of the element it names. */
 export interface SelectorCriterion {
@@ -53,15 +54,45 @@ export type PathSegment =
   | { kind: "key"; key: string }
   | { kind: "select"; criteria: readonly SelectorCriterion[] };
 
+/** A reserved v2 selector marker was present, but its complete grammar was not. */
+export class InvalidSelectorError extends Error {
+  constructor() {
+    super("invalid versioned selector");
+    this.name = "InvalidSelectorError";
+  }
+}
+
+function validConjunctionCriteria(criteria: readonly SelectorCriterion[]): boolean {
+  return criteria.length >= 2 && criteria.every(criterion => (
+    SELECTOR_FIELD.test(criterion.field)
+    && criterion.value.length > 0
+    && !criterion.value.includes(",")
+    && !criterion.value.includes("]")
+  ));
+}
+
+/** Spell a multi-field selector without colliding with persisted v1 paths. */
+export function formatSelectorConjunction(criteria: readonly SelectorCriterion[]): string | null {
+  if (!validConjunctionCriteria(criteria)) return null;
+  return `${SELECTOR_CONJUNCTION_PREFIX}${criteria
+    .map(criterion => `${criterion.field}=${criterion.value}`)
+    .join(",")}]`;
+}
+
 export function parseSegment(raw: string): PathSegment {
-  const conjunction = SELECTOR_CONJUNCTION.exec(raw);
-  if (conjunction) {
+  if (raw.startsWith(SELECTOR_CONJUNCTION_PREFIX)) {
+    if (!raw.endsWith("]")) throw new InvalidSelectorError();
+    const parts = raw.slice(SELECTOR_CONJUNCTION_PREFIX.length, -1).split(",");
+    const criteria = parts.map(part => {
+      const equals = part.indexOf("=");
+      return equals < 0
+        ? { field: "", value: "" }
+        : { field: part.slice(0, equals), value: part.slice(equals + 1) };
+    });
+    if (!validConjunctionCriteria(criteria)) throw new InvalidSelectorError();
     return {
       kind: "select",
-      criteria: conjunction[1]!.split(",").map(part => {
-        const equals = part.indexOf("=");
-        return { field: part.slice(0, equals), value: part.slice(equals + 1) };
-      }),
+      criteria,
     };
   }
   const match = ARRAY_SELECTOR.exec(raw);
@@ -117,8 +148,12 @@ function selectElement(items: readonly unknown[], segment: PathSegment & { kind:
  */
 export function readPath(doc: unknown, path: readonly string[]): unknown {
   let cursor: unknown = doc;
-  for (const raw of path) {
-    const segment = parseSegment(raw);
+  // Validate the complete persisted grammar before document shape can short-circuit
+  // the walk. Otherwise an absent early key can hide a malformed later selector,
+  // making an unreadable ownership record look absent and move the operation to a
+  // different file.
+  const segments = path.map(parseSegment);
+  for (const segment of segments) {
     switch (segment.kind) {
       case "key":
         if (!isPlainRecord(cursor)) return undefined;
