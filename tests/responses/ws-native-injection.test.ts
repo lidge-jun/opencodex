@@ -209,7 +209,7 @@ test("accepted function results survive ordinary subsequent delta turns; no user
 function unitChannel(deadlines = { ackMs: 90_000, toolMs: 1_800_000 }) {
   const sent: Array<Record<string, unknown>> = [];
   const failures: Error[] = [];
-  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true }, model: "fixture" }, 1000, deadlines);
+  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true }, model: "fixture" }, 1000, undefined, deadlines);
   const detach = channel.attach(frame => sent.push(frame), error => failures.push(error));
   channel.observe({ type: "response.created", response: { id: "root" } });
   const advertise = (call: string, index = 0) => {
@@ -395,4 +395,30 @@ test("HTTP fallback never acquires injection ownership or replays a control fram
   expect(sent.at(-1)?.error.code).toBe("injection_not_supported");
   expect(fallbackCalls).toBe(requests); expect(InjectionSocket.all).toHaveLength(0);
   expect(ws.data.nativeControl).toBeUndefined();
+});
+
+test("injection channel refuses an oversized control body at the configured upstream limit", () => {
+  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true } }, 300_000, 256);
+  expect(() => channel.assertOutboundFrame(JSON.stringify({ type: "response.create", input: "x".repeat(1024) })))
+    .toThrow("configured upstream body limit");
+  expect(() => channel.assertOutboundFrame(JSON.stringify({ type: "response.create", input: "x" }))).not.toThrow();
+});
+
+test("a configured-size refusal keeps the channel alive and frees the call for a corrected result", () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const failures: Error[] = [];
+  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true }, model: "fixture" }, 1000, 256);
+  const detach = channel.attach(frame => { channel.assertOutboundFrame(JSON.stringify(frame)); sent.push(frame); },
+    error => failures.push(error));
+  try {
+    channel.observe({ type: "response.created", response: { id: "root" } });
+    const item = { id: "item-c", type: "function_call", call_id: "c", name: "fixture", arguments: "{}" };
+    channel.observe({ type: "response.output_item.added", output_index: 0, item });
+    channel.observe({ type: "response.output_item.done", output_index: 0, item });
+    expect(() => channel.inject({ type: "response.inject", response_id: "root", input: [savedResult("c", "x".repeat(1024))] }))
+      .toThrow("configured upstream body limit");
+    expect(sent).toHaveLength(0); expect(failures).toHaveLength(0); expect(channel.ended).toBe(false);
+    channel.inject({ type: "response.inject", response_id: "root", input: [savedResult("c", "small")] });
+    expect(sent).toHaveLength(1);
+  } finally { detach(); }
 });

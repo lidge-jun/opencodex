@@ -5,7 +5,7 @@ import { validSteeringSettings } from "../../src/server/responses/native-steerin
 import { nativeResponseControlEligible } from "../../src/server/responses/native-response-control";
 import { beginInjection, injectionConfig, installInjectionFixture, waitForInjection, InjectionSocket,
   advertiseInjection, savedResult, type Frame } from "../helpers/native-injection-fixture";
-import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest } from "../../src/types";
 
 installInjectionFixture();
 const config = (api = false) => ({ ...injectionConfig(api), codexNativeSteering: true });
@@ -21,25 +21,22 @@ function pending(socket: InjectionSocket, id: string, number = 1) {
     reason: "waiting_for_required_input", required_input: [{ type: "function_call_output", call_id: `call-${number}` }] });
 }
 
-test("public API steering uses only its explicit API-key route and preserves its beta tokens", async () => {
+test("public API steering is ineligible because retained successors bypass per-request admission", async () => {
   const c = await begin(true);
   c.send({ type: "response.steer", previous_response_id: c.id, input: "new constraint" });
-  expect(c.socket.frames.at(-1)?.type).toBe("response.steer");
+  expect(c.sent.at(-1)?.error.code).toBe("steering_not_supported");
   expect(c.socket.url).toBe("wss://api.openai.com/v1/responses");
   expect(c.socket.options.headers.authorization).toBe("Bearer fixture-public-key");
   expect(c.socket.options.headers["chatgpt-account-id"]).toBeUndefined();
   expect(c.socket.options.headers["openai-beta"]).toContain("fixture_beta=v1");
   expect(c.socket.options.headers["openai-beta"]).not.toContain("responses_multi_agent");
-  accept(c.socket, c.id);
-  c.socket.emit({ type: "response.incomplete", response: { id: c.id, output: [], incomplete_details: { reason: "steered" } } });
-  c.socket.emit({ type: "response.created", response: { id: "successor", previous_response_id: c.id } });
-  c.socket.emit({ type: "response.completed", response: { id: "successor", status: "completed", output: [] } });
-  await waitForInjection(() => !c.ws.data.nativeControl);
+  c.socket.emit({ type: "response.completed", response: { id: c.id, status: "completed", output: [] } });
   expect(InjectionSocket.all).toHaveLength(1);
-  expect(c.socket.frames).toHaveLength(2);
+  expect(c.socket.frames).toHaveLength(1);
 });
 
-for (const api of [false, true]) test(`explicit settings survive two same-socket continuations (${api ? "API" : "subscription"})`, async () => {
+test("explicit settings survive two same-socket subscription continuations", async () => {
+  const api = false;
   const c = await begin(api);
   c.send({ type: "response.steer", previous_response_id: c.id, input: "update" });
   accept(c.socket, c.id); pending(c.socket, c.id);
@@ -131,12 +128,9 @@ test("queued continuation owns a private copy of both result and settings", () =
   } finally { detach(); }
 });
 
-for (const override of [{ upstreamWebsocket: false }, { baseUrl: "https://gateway.example/v1" }, { authMode: "forward" }, { adapter: "openai-chat" }] as Partial<OcxProviderConfig>[]) {
-  test(`public API eligibility does not widen other routes: ${Object.keys(override)[0]}`, () => {
-    const provider = { ...config(true).providers.api, ...override };
-    expect(nativeResponseControlEligible(provider, new NativeSteeringChannel({}))).toBe(false);
-  });
-}
+test("public API eligibility excludes steering even when its WebSocket is explicitly enabled", () => {
+  expect(nativeResponseControlEligible(config(true).providers.api, new NativeSteeringChannel({}))).toBe(false);
+});
 
 for (const [fields, flags, reason] of [
   [{ conversation: "fixture-conversation" }, {}, "Conversation-bound"],

@@ -1,3 +1,4 @@
+import { NativeSteeringError } from "./native-steering";
 import { mergeSteeringContinuation } from "./native-steering-settings";
 import { markNativeControlResponse } from "./native-response-control";
 import type { NativeResponseControl } from "./native-response-control";
@@ -361,6 +362,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                   : { ...continuationBase, input: frame.input, previous_response_id: frame.previous_response_id };
               }
               const text = JSON.stringify(outgoing);
+              nativeControl.assertOutboundFrame?.(text);
               if (codexWsCreateFrameExceedsLimit(text)) {
                 throw new Error("Native steering frame exceeds the transport byte limit");
               }
@@ -374,7 +376,13 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             if (frame.type === "response.create" && beforeContinuation) {
               // Explicit tool-result continuations are physical request starts;
               // they keep provider pacing and revalidate auth AFTER the wait.
-              void beforeContinuation().then(sendControl).catch(() => failStream("Native steering continuation could not be dispatched; do not automatically replay queued input"));
+              // A typed pre-send refusal (e.g. the configured upstream body limit) is a
+              // known non-delivery and keeps its own message; every other failure keeps
+              // the unknown-delivery wording.
+              void beforeContinuation().then(sendControl).catch(error => failStream(
+                error instanceof NativeSteeringError ? error
+                  : new Error("Native steering continuation could not be dispatched; do not automatically replay queued input"),
+              ));
             } else sendControl();
           }, error => failStream(error));
         }
