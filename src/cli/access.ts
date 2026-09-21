@@ -38,7 +38,13 @@ const USAGE = `Usage:
  */
 function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<string, unknown>>): string[] {
   const cells: string[][] = [["ID", "NAME", "PREFIX", "REQ 7D", "TOTAL", "LAST USED"]];
-  const usageAvailable = typeof payload.attributionSince === "string";
+  // A string that does not parse is not attribution data: treat it like an absent
+  // field so malformed payloads still render "unavailable" instead of usage values.
+  const attributionSince = typeof payload.attributionSince === "string"
+    && !Number.isNaN(Date.parse(payload.attributionSince))
+    ? payload.attributionSince
+    : undefined;
+  const usageAvailable = attributionSince !== undefined;
   for (const entry of keys) {
     const usage = (entry.usage ?? {}) as Record<string, unknown>;
     const ambiguous = usage.ambiguous === true;
@@ -56,8 +62,8 @@ function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<stri
   const widths = cells[0]!.map((_, column) => Math.max(...cells.map(row => (row[column] ?? "").length)));
   const lines = cells.map(row => row.map((cell, i) => (cell ?? "").padEnd(widths[i]!)).join("  ").trimEnd());
   const footer: string[] = [];
-  if (typeof payload.attributionSince === "string") {
-    footer.push(`attribution since ${payload.attributionSince}`);
+  if (attributionSince !== undefined) {
+    footer.push(`attribution since ${attributionSince}`);
   }
   if (payload.historyTruncated === true) {
     footer.push("older history truncated");

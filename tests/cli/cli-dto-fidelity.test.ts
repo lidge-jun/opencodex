@@ -253,6 +253,16 @@ describe("#2705 access key usage columns", () => {
     expect(out).not.toContain("never");
   });
 
+  test("a malformed attributionSince string stays unavailable", async () => {
+    const out = await listOutput({
+      keys: [{ id: "k_bad", name: "bad", prefix: "ocx_data_mno...", usage: { requests7d: 0, totalRequests: 0 } }],
+      attributionSince: "not-a-timestamp",
+    });
+    expect(out).toContain("unavailable");
+    expect(out).not.toContain("attribution since");
+    expect(out).not.toMatch(/\b0\b/);
+  });
+
   test("dataset-level attribution and truncation print ONCE as a footer", async () => {
     // They describe the usage log, not a key. Without attributionSince an absent lastUsedAt is
     // unreadable: "never used" and "nothing attributable yet" look identical.
