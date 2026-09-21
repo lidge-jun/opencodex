@@ -3,6 +3,12 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
+import {
+  runBuildLocal,
+  summarizeAttempts,
+  type ArtifactEntry,
+  type BuildLocalDeps,
+} from "../../desktop/scripts/build-local";
 import { buildUpdaterManifest, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
 import { repoPath } from "../helpers/repo-root";
 
@@ -219,6 +225,127 @@ describe("desktop release scripts", () => {
  * an extension signed that way, so the app would have installed with no widget and nothing in
  * the build would have said so.
  */
+describe("local bundle builds", () => {
+  type Script = Record<string, number | null>;
+  const depsFor = (
+    scripted: Script,
+    opts: { platform?: string; initialArtifacts?: ArtifactEntry[]; argv?: string[] } = {},
+  ) => {
+    const calls: string[][] = [];
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const artifacts = (opts.initialArtifacts ?? []).map(entry => ({ ...entry }));
+    const deps: BuildLocalDeps = {
+      spawn: args => {
+        calls.push(args);
+        const format = args[args.indexOf("--bundles") + 1]!;
+        const verbose = args.includes("--verbose");
+        const key = verbose ? `${format}#v` : format;
+        const status = Object.hasOwn(scripted, key) ? scripted[key]! : 0;
+        // A successful non-verbose build refreshes the artifact, like the real bundler.
+        if (status === 0 && !verbose) {
+          const existing = artifacts.find(entry => entry.path.includes(format));
+          if (existing) existing.mtimeMs += 1;
+          else artifacts.push({ path: `/out/OpenCodex-test_${format}`, mtimeMs: 200 });
+        }
+        return { status };
+      },
+      log: line => { logs.push(line); },
+      error: line => { errors.push(line); },
+      listArtifacts: () => artifacts.map(entry => ({ ...entry })),
+      argv: opts.argv ?? [],
+      platform: opts.platform ?? "linux",
+    };
+    return { calls, logs, errors, deps };
+  };
+
+  test("a failing format does not destroy the formats that build", () => {
+    // Observed on a real GNOME desktop (120_install_verification.md): one shared
+    // invocation died on the AppImage and the deb was never attempted.
+    const { calls, logs, deps } = depsFor({ appimage: 1, deb: 0 });
+    expect(runBuildLocal(deps)).toBe(1);
+    const formats = calls.map(args => args[args.indexOf("--bundles") + 1]);
+    expect(formats).toContain("appimage");
+    expect(formats).toContain("deb");
+    expect(logs.some(line => line.includes("appimage: FAILED"))).toBe(true);
+    expect(logs.some(line => line.includes("deb: ok"))).toBe(true);
+    expect(logs.some(line => line.includes("/out/OpenCodex-test_deb"))).toBe(true);
+    expect(logs.some(line => line.includes("updater artifacts skipped"))).toBe(false);
+  });
+
+  test("a failing format is retried verbosely so the bundler's own stderr surfaces", () => {
+    const { calls, errors, deps } = depsFor({ appimage: 1, deb: 0 });
+    runBuildLocal(deps);
+    expect(errors.some(line => line.includes("rerunning with --verbose"))).toBe(true);
+    const verboseCalls = calls.filter(args => args.includes("--verbose"));
+    expect(verboseCalls).toHaveLength(1);
+    expect(verboseCalls[0]?.slice(0, 3)).toEqual(["tauri", "--verbose", "build"]);
+    expect(verboseCalls[0]).toContain("appimage");
+    expect(verboseCalls.some(args => args.includes("deb"))).toBe(false);
+  });
+
+  test("a verbose retry that succeeds does not change the recorded failure", () => {
+    const { logs, deps } = depsFor({ appimage: 1, "appimage#v": 0, deb: 0 });
+    expect(runBuildLocal(deps)).toBe(1);
+    expect(logs.some(line => line.includes("appimage: FAILED"))).toBe(true);
+  });
+
+  test("stale bundle output is not reported as this run's artifact", () => {
+    const { logs, deps } = depsFor(
+      { appimage: 1, deb: 0 },
+      { initialArtifacts: [{ path: "/out/OpenCodex-test_appimage", mtimeMs: 100 }] },
+    );
+    runBuildLocal(deps);
+    expect(logs.some(line => line.includes("/out/OpenCodex-test_appimage"))).toBe(false);
+    expect(logs.some(line => line.includes("/out/OpenCodex-test_deb"))).toBe(true);
+  });
+
+  test("a spawn that never started counts as a failure", () => {
+    const { logs, deps } = depsFor({ appimage: null, deb: 0 });
+    expect(runBuildLocal(deps)).toBe(1);
+    expect(logs.some(line => line.includes("appimage: FAILED"))).toBe(true);
+  });
+
+  test("a spawn error reports the launch failure", () => {
+    const errors: string[] = [];
+    const deps = depsFor({ deb: 0 }).deps;
+    const originalSpawn = deps.spawn;
+    deps.error = line => { errors.push(line); };
+    deps.spawn = args => (args.includes("appimage") ? { status: null, error: new Error("spawn bunx ENOENT") } : originalSpawn(args));
+    expect(runBuildLocal(deps)).toBe(1);
+    expect(errors.some(line => line.includes("could not start tauri"))).toBe(true);
+  });
+
+  test("the invocation shape is one tauri build per format, extra argv forwarded everywhere", () => {
+    const { calls, deps } = depsFor({ appimage: 1, deb: 0 }, { argv: ["--target", "x86_64-unknown-linux-gnu"] });
+    runBuildLocal(deps);
+    expect(calls[0]?.slice(0, 5)).toEqual(["tauri", "build", "--ci", "--bundles", "appimage"]);
+    expect(calls[1]?.slice(0, 5)).toEqual(["tauri", "--verbose", "build", "--ci", "--bundles"]);
+    for (const call of calls) {
+      expect(call.slice(-2)).toEqual(["--target", "x86_64-unknown-linux-gnu"]);
+    }
+  });
+
+  test("a fully successful build exits zero and keeps the updater note", () => {
+    const { logs, deps } = depsFor({});
+    expect(runBuildLocal(deps)).toBe(0);
+    expect(logs.some(line => line.includes("updater artifacts skipped"))).toBe(true);
+  });
+
+  test("macOS hosts build app and dmg", () => {
+    const { calls, deps } = depsFor({}, { platform: "darwin" });
+    expect(runBuildLocal(deps)).toBe(0);
+    const formats = calls.map(args => args[args.indexOf("--bundles") + 1]);
+    expect(formats).toEqual(["app", "dmg"]);
+  });
+
+  test("summarizeAttempts decides the exit code from the per-format outcomes", () => {
+    expect(summarizeAttempts([{ format: "appimage", status: 0 }, { format: "deb", status: 0 }]).exitCode).toBe(0);
+    expect(summarizeAttempts([{ format: "appimage", status: 1 }, { format: "deb", status: 0 }]).exitCode).toBe(1);
+    expect(summarizeAttempts([{ format: "appimage", status: 1 }, { format: "deb", status: 1 }]).lines[0]).toContain("FAILED");
+  });
+});
+
 describe("the desktop build toolchain carries the bundle-type marker", () => {
   // updater.rs selects the deb updater target from tauri_utils::platform::bundle_type(),
   // which reads a marker the tauri-bundler patches into the binary at packaging time.
