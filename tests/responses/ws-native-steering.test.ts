@@ -540,6 +540,34 @@ test("early continuation validates advertised call and approval identities and r
   detach();
 });
 
+test("an oversized paced continuation rolls back instead of failing the stream", async () => {
+  const settings = config();
+  settings.maxUpstreamBodyBytes = 4096;
+  const client = downstream({}, settings);
+  await waitFor(() => client.sent.some(frame => frame.type === "response.created"));
+  const { ws, send, sent } = client;
+  const socket = Socket.all.at(-1)!;
+  const id = socket.root;
+  send({ type: "response.steer", previous_response_id: id, input: "accepted constraint" });
+  accept(socket, id);
+  complete(socket, id, { output: [{ type: "function_call", call_id: "c", name: "lookup", arguments: "{}" }] });
+  // The paced path defers dispatch to a microtask; the reconstructed frame must be
+  // validated before that wait so the refusal reaches the channel's synchronous
+  // rollback and a corrected continuation can still use this channel.
+  send({ type: "response.create", previous_response_id: id, model: "gpt-5.5", input: [{ type: "function_call_output", call_id: "c", output: "x".repeat(8192) }] });
+  expect(sent.at(-1)?.error.code).toBe("outbound_body_too_large");
+  expect(socket.frames).toHaveLength(2);
+  expect(socket.readyState).toBe(1);
+  expect(ws.data.nativeControl).toBeDefined();
+  send({ type: "response.create", previous_response_id: id, model: "gpt-5.5", input: [{ type: "function_call_output", call_id: "c", output: "saved" }] });
+  await waitFor(() => socket.frames.length === 3);
+  expect(socket.frames[2].input).toEqual([{ type: "function_call_output", call_id: "c", output: "saved" }]);
+  socket.emit({ type: "response.created", response: { id: "retry-successor", previous_response_id: id } });
+  complete(socket, "retry-successor");
+  await waitFor(() => !ws.data.nativeControl);
+  expect(fallbackCalls).toBe(0);
+});
+
 
 test("warmup leaves no steering owner and the next ordinary turn gets a fresh channel", async () => {
   const { ws, sent, send } = downstream({ generate: false });

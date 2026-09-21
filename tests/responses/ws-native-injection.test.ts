@@ -231,6 +231,31 @@ test("injection queue counts include the in-flight frame and refuse the next fra
   } finally { detach(); }
 });
 
+test("an oversized paced continuation rolls back instead of failing the stream", async () => {
+  const settings = injectionConfig();
+  settings.maxUpstreamBodyBytes = 4096;
+  const { socket, send, sent, ws, id } = await beginInjection({}, settings);
+  const call = advertiseInjection(socket);
+  completeInjection(socket, { output: [call] });
+  await waitForInjection(() => sent.some(event => event.type === "response.completed"));
+  // The paced path defers dispatch to a microtask; the reconstructed frame must be
+  // validated before that wait so the refusal reaches the channel's synchronous
+  // rollback and a corrected continuation can still use this channel.
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult("call-1", "x".repeat(8192))] }));
+  expect(sent.at(-1)?.error.code).toBe("outbound_body_too_large");
+  expect(socket.frames).toHaveLength(1);
+  expect(socket.readyState).toBe(1);
+  expect(ws.data.nativeControl).toBeDefined();
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult("call-1", "recovered output")] }));
+  await waitForInjection(() => socket.frames.length === 2);
+  expect(socket.frames[1].input).toEqual([savedResult("call-1", "recovered output")]);
+  socket.emit({ type: "response.created", response: { id: "successor", previous_response_id: id } });
+  completeInjection(socket, {}, "successor");
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(InjectionSocket.all).toHaveLength(1);
+  expect(fallbackCalls).toBe(0);
+});
+
 test("serialized-byte cap rejects oversized output before a physical send", () => {
   const { channel, advertise, sent, detach } = unitChannel();
   try {

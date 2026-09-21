@@ -346,11 +346,11 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
           // the first create frame.
           let base: Record<string, unknown> | undefined;
           detachSteering = nativeControl.attach(frame => {
-            const sendControl = () => {
-              if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
-                throw new Error("Native steering connection is no longer available");
-              }
-              beforeDispatch?.(new Headers(headers));
+            // Build, serialize and bound-check the reconstructed frame synchronously in the
+            // channel callback: a typed refusal must reach the channel's synchronous rollback
+            // (continuation slot released, journal unwritten) rather than the asynchronous
+            // failStream path, so a corrected continuation can still retry on this channel.
+            const prepare = () => {
               let outgoing = frame;
               if (frame.type === "response.create") {
                 // Generation overrides have passed route policy; identity/tools remain pinned.
@@ -366,8 +366,16 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               if (codexWsCreateFrameExceedsLimit(text)) {
                 throw new Error("Native steering frame exceeds the transport byte limit");
               }
-              if (frame.type === "response.create") continuationBase = outgoing;
-              try { ws.send(text); } catch {
+              return { outgoing, text };
+            };
+            const prepared = prepare();
+            const sendControl = () => {
+              if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
+                throw new Error("Native steering connection is no longer available");
+              }
+              beforeDispatch?.(new Headers(headers));
+              if (frame.type === "response.create") continuationBase = prepared.outgoing;
+              try { ws.send(prepared.text); } catch {
                 // A send failure has unknown delivery. Never replay or fall back.
                 failStream("Native steering send failed; delivery is unknown");
                 throw new Error("Native steering send failed; delivery is unknown");

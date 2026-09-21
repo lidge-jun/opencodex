@@ -985,7 +985,8 @@ connection as a long-lived session resource rather than an ordinary bounded requ
 
 Steering frames also share the proxy's configured body and memory limits. A control frame above
 [`maxInboundBodyBytes`](/reference/inbound-body-admission/) is refused before
-it is parsed, and the reconstructed body sent upstream is refused when it exceeds
+it is parsed on an established control connection (an initial frame is still parsed before
+its type-based limit applies), and the reconstructed body sent upstream is refused when it exceeds
 [`maxUpstreamBodyBytes`](/reference/configuration/providers/). Each
 connection's replay journal is capped at 32 MiB and counted as pinned state against
 [`appOwnedMemoryBudgetMb`](/reference/configuration/server/); admitting a
