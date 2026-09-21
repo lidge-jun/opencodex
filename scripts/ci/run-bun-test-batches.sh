@@ -47,10 +47,14 @@ if [[ "$TEST_FILE_SCOPE" != "general" && "$TEST_FILE_SCOPE" != "all" ]]; then
   echo "BUN_TEST_FILE_SCOPE must be general or all, got: $TEST_FILE_SCOPE" >&2
   exit 64
 fi
-if ! command -v timeout >/dev/null 2>&1; then
-  echo "GNU timeout is required to bound Bun test batches." >&2
-  exit 69
+
+HAS_GNU_TIMEOUT=0
+if command -v timeout >/dev/null 2>&1 && timeout --signal=TERM --kill-after=1s 1s true >/dev/null 2>&1; then
+  HAS_GNU_TIMEOUT=1
+else
+  echo "::warning::GNU timeout is unavailable; Bun test batches will run without the outer ${BATCH_TIMEOUT_SECONDS}s process deadline."
 fi
+readonly HAS_GNU_TIMEOUT
 
 is_general_test_file() {
   local path="$1"
@@ -98,9 +102,13 @@ run_test_once() {
   printf '  %s\n' "${files[@]}"
 
   set +e
-  timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
-    "${BATCH_TIMEOUT_SECONDS}s" \
+  if (( HAS_GNU_TIMEOUT == 1 )); then
+    timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
+      "${BATCH_TIMEOUT_SECONDS}s" \
+      "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+  else
     "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+  fi
   status="${PIPESTATUS[0]}"
   set -e
 
@@ -171,7 +179,10 @@ attribute_batch_file_by_file() {
   fi
 }
 
-mapfile -d '' -t ALL_TEST_FILES < <(
+ALL_TEST_FILES=()
+while IFS= read -r -d '' path; do
+  ALL_TEST_FILES+=("$path")
+done < <(
   find tests -type f -print0 \
     | LC_ALL=C sort -z
 )

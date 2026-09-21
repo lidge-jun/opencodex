@@ -106,9 +106,9 @@ const DEDICATED_FILE = "api-usage.test.ts";
 const FIRST_BATCH = FIXTURE_FILES.slice(0, 3);
 const SECOND_BATCH = FIXTURE_FILES.slice(3);
 
-// GNU timeout, reduced to what the runner uses: flags, a duration, then the command. In
-// "timeout" mode it reports 124 for a multi-file batch without ever starting Bun, which is
-// exactly what a wedged batch looks like to the runner.
+// GNU timeout, reduced to what the runner uses: flags, a duration, then the command. The runner
+// also probes this shape before using it. In "timeout" mode it reports 124 for a multi-file batch
+// without ever starting Bun, which is exactly what a wedged batch looks like to the runner.
 const FAKE_TIMEOUT = [
   "#!/bin/sh",
   "while [ $# -gt 0 ]; do",
@@ -127,6 +127,13 @@ const FAKE_TIMEOUT = [
   "  exit 124",
   "fi",
   'exec "$@"',
+  "",
+].join("\n");
+
+const FAKE_NON_GNU_TIMEOUT = [
+  "#!/bin/sh",
+  'echo "timeout: illegal option -- -"',
+  "exit 125",
   "",
 ].join("\n");
 
@@ -162,6 +169,7 @@ type RunnerResult = { status: number | null; output: string; calls: string[] };
 function runBatches(
   mode: "green" | "crash" | "timeout" | "assert",
   fileScope: "general" | "all" = "general",
+  timeoutTool: "gnu" | "non-gnu" = "gnu",
 ): RunnerResult {
   const directory = mkdtempSync(join(tmpdir(), "ocx-batch-disposition-"));
   try {
@@ -171,7 +179,11 @@ function runBatches(
     mkdirSync(join(directory, "tests"));
     for (const file of FIXTURE_FILES) writeFileSync(join(directory, "tests", file), "");
     writeFileSync(join(directory, "tests", DEDICATED_FILE), "");
-    writeFileSync(join(binDirectory, "timeout"), FAKE_TIMEOUT, { mode: 0o755 });
+    writeFileSync(
+      join(binDirectory, "timeout"),
+      timeoutTool === "gnu" ? FAKE_TIMEOUT : FAKE_NON_GNU_TIMEOUT,
+      { mode: 0o755 },
+    );
     writeFileSync(join(binDirectory, "bun"), FAKE_BUN, { mode: 0o755 });
     const calls = join(directory, "calls.log");
     writeFileSync(calls, "");
@@ -219,6 +231,14 @@ describe.skipIf(process.platform !== "linux")("the Linux batch runner, executed"
     expect(singletonCalls(run)).toEqual([]);
     expect(noQueueFlags(run)).toEqual(["1", "1"]);
     expect(run.calls.some(call => call.includes(DEDICATED_FILE))).toBe(false);
+  }, SPAWN_BUDGET_MS);
+
+  test("a clean run does not require GNU timeout", () => {
+    const run = runBatches("green", "general", "non-gnu");
+    expect(`status:${run.status}`, run.output).toBe("status:0");
+    expect(batchCalls(run)).toHaveLength(2);
+    expect(singletonCalls(run)).toEqual([]);
+    expect(run.output).toContain("GNU timeout is unavailable");
   }, SPAWN_BUDGET_MS);
 
   test("all scope preserves the dedicated families in the Windows suite", () => {
