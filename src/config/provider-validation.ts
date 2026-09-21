@@ -111,6 +111,37 @@ export function providerBaseUrlConfigError(baseUrl: string): string | null {
   return null;
 }
 
+/**
+ * Validate one of the four voice endpoint URLs (`dictationUrl`, `transcriptionUrl`,
+ * `speechUrl`, `liveUrl`).
+ *
+ * Same userinfo rule as `providerBaseUrlConfigError`, for the same reason: these
+ * fields are `editor` in the config DTO and are cloned into management responses
+ * verbatim, so `wss://user:secret@host/stream` would hand the secret to anyone
+ * who can read the provider list. The scheme set is wider than baseUrl's because
+ * dictation and live are WebSocket endpoints; a bare `ws://` on loopback is the
+ * normal shape for a local engine, not a mistake.
+ */
+export function voiceEndpointUrlConfigError(field: string, url: unknown): string | null {
+  // Presence and type are the CALLER's refusal, not this one's. With the
+  // nonblank check in voiceProviderEndpointError disabled, `url` arrives here
+  // undefined; turning that into "must be a valid URL" refused the provider for
+  // the wrong reason and kept the test for the missing-endpoint case green --
+  // which is exactly how red.ts reported that guard as not noticed.
+  if (typeof url !== "string") return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return `${field} must be a valid URL`;
+  }
+  if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
+    return `${field} must be an http(s) or ws(s) URL`;
+  }
+  if (parsed.username || parsed.password) return `${field} must not include embedded credentials`;
+  return null;
+}
+
 /** Validate user-configured provider headers while keeping auth headers on owned fields. */
 export function providerHeadersConfigError(headers: unknown): string | null {
   if (headers === undefined) return null;

@@ -25,6 +25,7 @@ import {
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
+  voiceEndpointUrlConfigError,
   providerHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
@@ -490,6 +491,7 @@ export interface ApiAuthMatrixRow {
  */
 export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/audio/transcriptions", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  { endpoint: "/v1/audio/speech", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/live", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/realtime/calls", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // #1686: a bearer that is one of OUR admission secrets is now accepted here. It is safe
@@ -756,6 +758,15 @@ export function providerManagementConfigError(
   const typed = provider as unknown as OcxProviderConfig;
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
   if (baseUrlError) return `provider ${name} ${baseUrlError}`;
+  // The four voice endpoints get the same embedded-credential refusal as baseUrl.
+  // They are `editor` fields, cloned into the management DTO verbatim, so a URL
+  // carrying userinfo would disclose it to anyone who can list providers.
+  for (const field of ["dictationUrl", "transcriptionUrl", "speechUrl", "liveUrl"] as const) {
+    const value = typed[field];
+    if (typeof value !== "string") continue;
+    const urlError = voiceEndpointUrlConfigError(field, value);
+    if (urlError) return `provider ${name} ${urlError}`;
+  }
   if (effectiveGoogleMode(name, typed) === "vertex" && typed.location !== undefined) {
     const locationError = googleVertexLocationConfigError(typed.location);
     if (locationError) return `provider ${name} ${locationError}`;
@@ -1034,6 +1045,17 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   unsupportedHostedTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
+  dictationUrl: "editor",
+  // Header values may carry credentials (or ${ENV} references to them); treat like `headers`.
+  dictationHeaders: "redacted",
+  dictationProtocols: "editor",
+  transcriptionUrl: "editor",
+  transcriptionHeaders: "redacted",
+  transcriptionModel: "editor",
+  speechUrl: "editor",
+  speechHeaders: "redacted",
+  liveUrl: "editor",
+  liveHeaders: "redacted",
   reasoningEffortMap: "editor",
   modelReasoningEffortMap: "editor",
   reasoningWireFormat: "editor",
@@ -1093,8 +1115,8 @@ const PROVIDER_EDITOR_DERIVED_FIELDS = [
   ...RUNTIME_PROVIDER_FIELDS,
   ...FORBIDDEN_PROVIDER_RUNTIME_FIELDS,
   "fetch",
-  "hasApiKey",
-  "hasHeaders",
+  // One `has*` per redacted field — see `redactedFieldPresence`.
+  ...REDACTED_PROVIDER_FIELDS.map(field => `has${field[0]!.toUpperCase()}${field.slice(1)}`),
   "xaiResponsesOptInState",
 ] as const;
 
@@ -1195,14 +1217,42 @@ export function parseProviderEditorConfigDTO(value: unknown): ProviderEditorConf
 }
 
 /** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
+/** Whether a redacted field is carrying anything, for the `has*` flags. */
+function carriesValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value !== "";
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as object).length > 0;
+  return true;
+}
+
+/**
+ * A `has*` flag for every redacted field, derived from the policy rather than
+ * listed by hand.
+ *
+ * Listed by hand, it drifted: `hasApiKey` and `hasHeaders` were the only two,
+ * so a provider carrying `dictationHeaders` and `transcriptionHeaders`
+ * reported `hasHeaders: false` — a GUI reading that DTO tells you a provider
+ * holding two bearer tokens has no credentials. `apiKeyPool`, `mcpServers`
+ * and `desktopExecutor` were invisible for the same reason. Derived, a new
+ * redacted field cannot be added without its flag.
+ */
+export function redactedFieldPresence(provider: OcxProviderConfig): Record<string, boolean> {
+  const flags: Record<string, boolean> = {};
+  for (const field of REDACTED_PROVIDER_FIELDS) {
+    flags[`has${field[0]!.toUpperCase()}${field.slice(1)}`] =
+      carriesValue(provider[field]);
+  }
+  return flags;
+}
+
 export function safeConfigDTO(config: OcxConfig): unknown {
   const editor = providerEditorConfigDTO(config);
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
     const dto: Record<string, unknown> = {
       ...editor.providers[name],
-      hasApiKey: !!provider.apiKey,
-      hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
+      ...redactedFieldPresence(provider),
     };
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
@@ -1221,6 +1271,14 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // The GUI's browser-open toggle reads and writes this; absent means the
     // historical auto-open behavior.
     oauthOpenBrowser: config.oauthOpenBrowser !== false,
+    // Voice routing is provider names and model ids — no secrets, so it is
+    // returned as configured. Without it the management API cannot read back
+    // which backend serves speech, which makes "is the running process using
+    // the config on disk?" unanswerable from outside.
+    ...(config.dictation ? { dictation: config.dictation } : {}),
+    ...(config.transcription ? { transcription: config.transcription } : {}),
+    ...(config.speech ? { speech: config.speech } : {}),
+    ...(config.liveVoice ? { liveVoice: config.liveVoice } : {}),
     providers,
   };
 }

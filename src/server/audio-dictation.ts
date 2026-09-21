@@ -1,9 +1,16 @@
 import { formatErrorResponse } from "../bridge";
+import {
+  dictationProviderEndpointError,
+  resolveDictationHeaders,
+  type DictationTargetResolution,
+} from "../config/dictation";
+import { selectVoiceBackend } from "../config/voice-target";
 import type { AdmissionLease } from "../lib/admission";
 import type { OcxConfig } from "../types";
 import type { AudioClient } from "./audio-client";
 import { resolveAudioUpstream, TRANSCRIPTION_MODEL, type AudioUpstream } from "./audio-upstream";
-import type { RequestLogContext } from "./request-log";
+import { getRequestLogEntries, type RequestLogContext, type RequestLogEntry } from "./request-log";
+import { normalizeLogConversationId, sessionIdHeaderFromRequest } from "./request-log-conversation";
 
 export const DICTATION_SESSION_MAX_MS = 300_000;
 const DICTATION_FRAME_MAX_BYTES = 64 * 1024;
@@ -64,7 +71,85 @@ export function finishAudioUpstream(relay: AudioUpstream): AudioSocketTarget["fi
   };
 }
 
+/**
+ * Pick the dictation backend for one active model: exact `byModel` entry, then `dictation.provider`,
+ * then the reserved `"openai"` (the historical ChatGPT stream). Resolution is the shared config
+ * helper, so the runtime reports the same unknown/registry-managed rejection the write boundary does.
+ */
+export function selectDictationBackend(config: OcxConfig, modelId: string | undefined): DictationTargetResolution {
+  // The byModel-then-provider rule lives once, in selectVoiceBackend. A second
+  // spelling here matched it today and would drift from it tomorrow.
+  return selectVoiceBackend(config.providers, config.dictation, modelId, "dictation");
+}
+
+/** Normalized conversation digests a dictation upgrade can be correlated with. */
+export function dictationConversationIds(headers: Headers): string[] {
+  const ids = new Set<string>();
+  for (const raw of [
+    headers.get("thread-id"),
+    headers.get("x-codex-parent-thread-id"),
+    sessionIdHeaderFromRequest(headers),
+  ]) {
+    const normalized = normalizeLogConversationId(raw);
+    if (normalized) ids.add(normalized);
+  }
+  return [...ids];
+}
+
+/**
+ * Newest log entry whose conversation digest matches, or undefined. Pure; testable in isolation.
+ *
+ * Prefers `requestedModel` (the provider-namespaced selector the client asked for, e.g.
+ * "zai/glm-5.3-flash") over `model` (the physical destination routing settled on, which may be
+ * the bare upstream id). `byModel` is keyed by the selector, so the requested id is the one that
+ * matches it.
+ */
+export function latestDictationModelFromEntries(
+  entries: readonly RequestLogEntry[],
+  conversationIds: readonly string[],
+): string | undefined {
+  const wanted = new Set(conversationIds);
+  if (wanted.size === 0) return undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.conversationId && wanted.has(entry.conversationId)) return entry.requestedModel ?? entry.model;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the thread's active model from the request log: the most recent logged request whose
+ * `conversationId` digests to one of the upgrade's thread identities. The selection key is the
+ * requested selector when present, else the physical routed destination.
+ */
+export function resolveDictationActiveModelId(headers: Headers): string | undefined {
+  return latestDictationModelFromEntries(getRequestLogEntries(), dictationConversationIds(headers));
+}
+
 export async function resolveDictationSocket(
+  client: AudioClient, config: OcxConfig, log: RequestLogContext, lease: AdmissionLease, signal?: AbortSignal,
+): Promise<AudioSocketTarget | Response> {
+  const selection = selectDictationBackend(config, resolveDictationActiveModelId(client.headers));
+  if (selection.kind === "invalid") {
+    return formatErrorResponse(400, "invalid_request_error", selection.error);
+  }
+  if (selection.kind === "custom") {
+    // A custom endpoint relays frames verbatim, so it never resolves a ChatGPT account.
+    const endpointError = dictationProviderEndpointError(selection.providerName, selection.provider);
+    if (endpointError) return formatErrorResponse(400, "invalid_request_error", endpointError);
+    return {
+      upstreamWsUrl: selection.provider.dictationUrl!,
+      headers: resolveDictationHeaders(selection.provider.dictationHeaders),
+      protocols: selection.provider.dictationProtocols,
+      validateFrame: createDictationFrameValidator(),
+      maxSessionMs: DICTATION_SESSION_MAX_MS,
+      finish: () => {},
+    };
+  }
+  return resolveChatGptDictationSocket(client, config, log, lease, signal);
+}
+
+async function resolveChatGptDictationSocket(
   client: AudioClient, config: OcxConfig, log: RequestLogContext, lease: AdmissionLease, signal?: AbortSignal,
 ): Promise<AudioSocketTarget | Response> {
   const relay = await resolveAudioUpstream(client.headers, config, log, { admission: client.admission, model: TRANSCRIPTION_MODEL, lease, signal });

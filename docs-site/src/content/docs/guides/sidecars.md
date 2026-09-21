@@ -213,3 +213,37 @@ Claude Code OAuth fingerprint precedent, but should be soak-tested with the
 intended account and workload.
 
 See the [Configuration reference](/reference/configuration/#sidecars) for every field.
+
+## Dictation backend
+
+Codex dictation is not a sidecar, but it uses the same optional-relay shape: the proxy opens an
+upstream WebSocket and relays frames verbatim. By default that upstream is ChatGPT's dictation
+stream. To send dictation for an active `provider/model` to your own endpoint, first add a custom
+provider with a `dictationUrl`, then point `dictation.provider` (or a per-model `dictation.byModel`
+entry) at it:
+
+```jsonc
+{
+  "providers": {
+    "my-dictation": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://example.test/v1",
+      "dictationUrl": "ws://127.0.0.1:8912/listen",
+      "dictationHeaders": { "authorization": "Bearer ${MY_DICTATION_TOKEN}" }
+    }
+  },
+  "dictation": {
+    "provider": "my-dictation",
+    "byModel": { "my-model-provider/gpt-6-astra": "openai" }
+  }
+}
+```
+
+A custom endpoint must speak the same frame protocol Codex already uses with ChatGPT
+(`session.start`, `audio.append`, `session.close` inbound; `transcript.*` outbound); there is no
+adapter layer. The active model is looked up for the thread from the request log, so switching the
+session model switches the dictation backend with it. Custom targets do not require a ChatGPT
+login, and registry-managed provider ids are rejected as targets.
+
+Configure the block with `ocx agent dictation set` or `PUT /api/dictation-settings`; read it back
+with `ocx agent dictation status` or `ocx agent dictation --list` for the available model ids.

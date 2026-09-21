@@ -877,6 +877,46 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
     details: ["A bare invocation reads and never writes."],
   },
+  {
+    command: ["agent", "dictation"],
+    summary: "Show or set the dictation backend and its per-model overrides.",
+    routes: [
+      { method: "GET", path: "/api/dictation-settings" },
+      { method: "PUT", path: "/api/dictation-settings" },
+    ],
+    flags: [
+      { name: "--provider", value: "string", summary: "Default backend (\"openai\" or a custom provider id); \"-\" clears it." },
+      { name: "--by-model", value: "string", summary: "JSON object mapping provider/model ids to backends; \"-\" clears it." },
+      { name: "--list", value: "boolean", summary: "List currently-available model ids." },
+      { name: "--json", value: "boolean", summary: "Emit the settings as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Targets are \"openai\" (the existing ChatGPT dictation stream) or a custom provider id.",
+      "A custom provider carries providers.<id>.dictationUrl and speaks the same frame protocol; frames relay verbatim.",
+    ],
+  },
+  {
+    command: ["agent", "voice"],
+    summary: "Show or set the live voice backend and its per-model overrides.",
+    routes: [
+      { method: "GET", path: "/api/live-voice-settings" },
+      { method: "PUT", path: "/api/live-voice-settings" },
+    ],
+    flags: [
+      { name: "--provider", value: "string", summary: "Default backend (\"openai\" or a custom provider id); \"-\" clears it." },
+      { name: "--by-model", value: "string", summary: "JSON object mapping provider/model ids to backends; \"-\" clears it." },
+      { name: "--list", value: "boolean", summary: "List currently-available model ids." },
+      { name: "--json", value: "boolean", summary: "Emit the settings as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "Targets are \"openai\" (the existing realtime relay) or a custom provider id.",
+      "A custom provider carries providers.<id>.liveUrl and speaks the same frame protocol; frames relay verbatim.",
+    ],
+  },
 ];
 
 /** Capabilities that drive `route`, for `ocx capabilities --route`. */

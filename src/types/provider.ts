@@ -778,6 +778,52 @@ export interface OcxProviderConfig {
    */
   webSearchBridge?: ProviderWebSearchBridgeConfig;
   /**
+   * Dictation (mic → text) WebSocket endpoint for this provider. Setting it makes the provider a
+   * valid `dictation.provider` / `dictation.byModel` target. The endpoint must speak the same
+   * frame protocol Codex already uses with ChatGPT's dictation stream (client `session.start` /
+   * `audio.append` / `session.close`; server `transcript.*`); opencodex relays frames verbatim and
+   * never resolves a ChatGPT account, so no provider adapter is involved.
+   */
+  dictationUrl?: string;
+  /** Extra handshake headers for `dictationUrl`. Each value may be a whole `${ENV_VAR}` reference. */
+  dictationHeaders?: Record<string, string>;
+  /** WebSocket subprotocols offered on the `dictationUrl` handshake. */
+  dictationProtocols?: string[];
+  /**
+   * File transcription (audio file → text) endpoint for this provider. Setting it makes the
+   * provider a valid `transcription.provider` / `transcription.byModel` target. The endpoint must
+   * accept OpenAI's `POST /v1/audio/transcriptions` multipart shape and answer with `{ text }`;
+   * opencodex forwards the uploaded file unchanged and never resolves a ChatGPT account.
+   */
+  transcriptionUrl?: string;
+  /** Extra headers for `transcriptionUrl`. Each value may be a whole `${ENV_VAR}` reference. */
+  transcriptionHeaders?: Record<string, string>;
+  /**
+   * Model name sent to `transcriptionUrl`. The caller's model is NOT forwarded: opencodex only
+   * accepts OpenAI's transcription model names, which mean nothing to another engine, and passing
+   * one through makes a self-hosted backend reject every request. Unset sends no `model` field at
+   * all, which tells an OpenAI-compatible server to use whichever model it already has loaded.
+   */
+  transcriptionModel?: string;
+  /**
+   * Speech synthesis (text → audio) endpoint for this provider. Setting it makes the provider a
+   * valid `speech.provider` / `speech.byModel` target. The endpoint must accept OpenAI's
+   * `POST /v1/audio/speech` JSON shape and answer with audio bytes.
+   */
+  speechUrl?: string;
+  /** Extra headers for `speechUrl`. Each value may be a whole `${ENV_VAR}` reference. */
+  speechHeaders?: Record<string, string>;
+  /**
+   * Live voice (realtime speech conversation) WebSocket endpoint for this provider. Setting it
+   * makes the provider a valid `liveVoice.provider` / `liveVoice.byModel` target. The endpoint
+   * must speak the same realtime frame protocol the built-in live relay already uses;
+   * opencodex relays frames verbatim and never resolves a relay account, so no provider adapter
+   * is involved.
+   */
+  liveUrl?: string;
+  /** Extra handshake headers for `liveUrl`. Each value may be a whole `${ENV_VAR}` reference. */
+  liveHeaders?: Record<string, string>;
+  /**
    * Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values.
    * Map a label to the reserved value `"__omit__"` to send no reasoning field at all for that
    * effort, so the upstream model's own default applies. The sentinel is

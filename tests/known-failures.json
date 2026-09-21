@@ -1,0 +1,46 @@
+{
+  "_comment": "Failures that are not this branch's. Verified by running the same files on upstream/dev in a worktree and seeing the same failures. Without this, a full-suite run reports a number instead of an answer, and the next real failure hides among the tolerated ones.",
+  "verifiedAgainst": {
+    "ref": "upstream/dev",
+    "commit": "8f94a6fee",
+    "date": "2026-09-21",
+    "platform": "darwin-arm64"
+  },
+  "failures": [
+    {
+      "test": "Codex discovery exposes the observed native as a selector row plus one global bare row",
+      "file": "tests/claude-integration/claude-models-discovery.test.ts",
+      "reason": "fails identically on upstream/dev; model discovery, untouched by this branch"
+    },
+    {
+      "test": "the request's client_version reaches entitlement discovery (#2886)",
+      "file": "tests/claude-integration/claude-models-discovery.test.ts",
+      "reason": "fails identically on upstream/dev"
+    },
+    {
+      "test": "with no inbound or runtime version, /v1/models still exposes the gated rows (#3022)",
+      "file": "tests/claude-integration/claude-models-discovery.test.ts",
+      "reason": "fails identically on upstream/dev"
+    },
+    {
+      "test": "remote workspace Linux command sandbox > builds a minimal bubblewrap argv with one writable workspace",
+      "file": "tests/clients/remote-workspace-command-runner.test.ts",
+      "reason": "bubblewrap is Linux-only; this host is macOS"
+    },
+    {
+      "test": "remote workspace Linux command sandbox > revalidates approved toolchain roots and rejects a later symlink substitution",
+      "file": "tests/clients/remote-workspace-command-runner.test.ts",
+      "reason": "bubblewrap is Linux-only; this host is macOS"
+    },
+    {
+      "test": "release shell recovers only unverified reads after acknowledged publication",
+      "file": "tests/ci-workflows/ci-workflows.test.ts",
+      "reason": "fails identically on upstream/dev outside Actions: the release shell reads GITHUB_SHA (\"unbound variable\"), which only the workflow sets; passes with GITHUB_SHA exported"
+    },
+    {
+      "test": "resolveCodexRuntime > treats missing persisted and resolved versions as the same selection",
+      "file": "tests/codex-integration/codex-runtime.test.ts",
+      "reason": "fails identically on upstream/dev on a host with the Codex App installed: the resolver finds the real installation and reports \"installed\" where the test expects \"fallback\""
+    }
+  ]
+}

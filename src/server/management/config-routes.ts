@@ -73,6 +73,8 @@ import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
+import { dictationConfigValueError } from "../../config/dictation";
+import { liveVoiceConfigValueError } from "../../config/live-voice";
 import {
   findAnthropicVisionProvider,
   isValidVisionTimeoutMs,
@@ -129,6 +131,12 @@ function quotaAutoRefreshSettings(config: OcxConfig) {
     id,
     { fiveHour: setting.fiveHour === true, weekly: setting.weekly === true },
   ]));
+}
+
+/** Model ids the dictation and live-voice settings surfaces offer, reusing the vision describer list. */
+async function dictationAvailableModels(config: OcxConfig): Promise<string[]> {
+  const vision = await sidecarVisionResponseSettings(config);
+  return [...new Set(vision.models.map(option => option.value))];
 }
 
 async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
@@ -1017,6 +1025,62 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // its sidecar state from this body, and an omitted key reads as "old
       // server" and falls back to the full union (review F1).
       webSearchModels: webSearchModelOptionsFrom(config, savedWebSearchCandidates),
+    });
+  }
+
+  if (url.pathname === "/api/dictation-settings" && req.method === "GET") {
+    return jsonResponse({
+      dictation: config.dictation ?? {},
+      models: await dictationAvailableModels(config),
+    });
+  }
+
+  if (url.pathname === "/api/dictation-settings" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    if (raw.dictation !== undefined && !isPlainRecord(raw.dictation)) return jsonResponse({ error: "dictation must be an object" }, 400);
+    const dictation = (raw.dictation ?? {}) as Record<string, unknown>;
+    // Targets are validated against the live provider table: a custom provider id must exist and
+    // carry a dictationUrl, and registry-managed ids are refused.
+    const error = dictationConfigValueError(dictation, config.providers);
+    if (error) return jsonResponse({ error }, 400);
+    // Full replacement: an empty block clears the key so config files stay minimal.
+    if (Object.keys(dictation).length === 0) deleteConfigTopLevelKey(config, "dictation");
+    else config.dictation = dictation as unknown as OcxConfig["dictation"];
+    saveConfigPreservingClaudeCode(config);
+    return jsonResponse({
+      ok: true,
+      dictation: config.dictation ?? {},
+      models: await dictationAvailableModels(config),
+    });
+  }
+
+  if (url.pathname === "/api/live-voice-settings" && req.method === "GET") {
+    return jsonResponse({
+      liveVoice: config.liveVoice ?? {},
+      models: await dictationAvailableModels(config),
+    });
+  }
+
+  if (url.pathname === "/api/live-voice-settings" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    if (raw.liveVoice !== undefined && !isPlainRecord(raw.liveVoice)) return jsonResponse({ error: "liveVoice must be an object" }, 400);
+    const liveVoice = (raw.liveVoice ?? {}) as Record<string, unknown>;
+    // Targets are validated against the live provider table: a custom provider id must exist and
+    // carry a liveUrl, and registry-managed ids are refused.
+    const error = liveVoiceConfigValueError(liveVoice, config.providers);
+    if (error) return jsonResponse({ error }, 400);
+    // Full replacement: an empty block clears the key so config files stay minimal.
+    if (Object.keys(liveVoice).length === 0) deleteConfigTopLevelKey(config, "liveVoice");
+    else config.liveVoice = liveVoice as unknown as OcxConfig["liveVoice"];
+    saveConfigPreservingClaudeCode(config);
+    return jsonResponse({
+      ok: true,
+      liveVoice: config.liveVoice ?? {},
+      models: await dictationAvailableModels(config),
     });
   }
 

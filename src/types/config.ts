@@ -883,6 +883,26 @@ export interface OcxConfig {
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
   images?: OcxImagesConfig;
+  /**
+   * Dictation (mic → text) backend selection. Unset keeps Codex's historical ChatGPT dictation
+   * stream; a custom provider can be selected globally or per active model.
+   */
+  dictation?: OcxDictationConfig;
+  /**
+   * File transcription (audio file → text) backend selection. Unset keeps the built-in OpenAI
+   * relay; a custom provider can be selected globally or per active model.
+   */
+  transcription?: OcxVoiceRouteConfig;
+  /**
+   * Speech synthesis (text → audio) backend for read-aloud. Unset means no speech route is
+   * served at all — opencodex has no built-in text-to-speech to fall back to.
+   */
+  speech?: OcxVoiceRouteConfig;
+  /**
+   * Live voice (realtime speech conversation) backend selection. Unset keeps the built-in
+   * realtime relay; a custom provider can be selected globally or per active model.
+   */
+  liveVoice?: OcxVoiceRouteConfig;
   /** /v1/alpha/search relay for codex's built-in web search client. */
   search?: OcxSearchConfig;
   /** Codex multi-account pool. */
@@ -1312,6 +1332,32 @@ export interface OcxImagesConfig {
   /** Per-video generation timeout (ms) including polling. Default 300000 (5 min). */
   videoTimeoutMs?: number;
 }
+
+/**
+ * Selects the dictation backend. A target is either the reserved `"openai"` (the unchanged
+ * ChatGPT dictation stream) or the id of a CUSTOM provider in `config.providers`, where the
+ * WebSocket endpoint lives on the provider entry itself (`dictationUrl` / `dictationHeaders` /
+ * `dictationProtocols`). Registry-managed provider ids are rejected as targets, mirroring
+ * `images.provider`: those built-ins do not carry a dictation endpoint.
+ */
+/**
+ * Selects a voice route's backend. A target is either the reserved `"openai"` (the built-in
+ * path) or the id of a CUSTOM provider in `config.providers`, where the endpoint lives on the
+ * provider entry itself. Registry-managed provider ids are rejected as targets, mirroring
+ * `images.provider`: those built-ins carry no custom voice endpoint.
+ */
+export interface OcxVoiceRouteConfig {
+  /** Backend used when `byModel` has no match. */
+  provider?: string;
+  /**
+   * Per `provider/model` override. Keys match the active model's namespaced id exactly (for
+   * example "zai/glm-5.3-flash"); values are "openai" or a custom provider id.
+   */
+  byModel?: Record<string, string>;
+}
+
+/** The dictation route reads the same shape; the name is kept for existing imports. */
+export type OcxDictationConfig = OcxVoiceRouteConfig;
 
 export interface OcxSearchConfig {
   /**

@@ -67,6 +67,7 @@ frames in order. This handshake policy is separate from the Responses WebSocket 
 | Model discovery | `GET /v1/models` | Catalog or explicit Desktop snapshot | Not applicable |
 | File transcription | `POST /v1/audio/transcriptions` | `{ "text": string }` or plain text | Not supported on this file endpoint |
 | Streaming dictation | `WS /v1/audio/transcriptions/stream` | Not applicable | Desktop dictation JSON events |
+| Speech | `POST /v1/audio/speech` | Not applicable | OpenAI speech JSON in, audio bytes out |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
 
@@ -149,6 +150,74 @@ malformed event/config fields close the stream with code 1008.
 `text`. Replace prior text for the same utterance when its revision increases;
 do not concatenate revisions. Finish with `{"type":"session.close"}` and wait
 for final text and `session.updated` with `session.status="closed"`.
+
+## Self-hosted voice backends
+
+All three voice routes can be pointed at a custom provider instead of OpenAI, so
+the audio path never leaves the machine. Each route reads its own fields on the
+provider entry, and a provider may carry one, two or all three:
+
+| Route | Config block | Provider fields |
+| --- | --- | --- |
+| Streaming dictation | `dictation` | `dictationUrl`, `dictationHeaders`, `dictationProtocols` |
+| File transcription | `transcription` | `transcriptionUrl`, `transcriptionHeaders`, `transcriptionModel` |
+| Speech | `speech` | `speechUrl`, `speechHeaders` |
+
+Each block takes `provider` (the default) and `byModel` (per namespaced model
+id, exact match). The reserved target `"openai"` keeps the built-in path;
+registry-managed provider ids are refused, mirroring `images.provider`.
+
+Three behaviours are worth stating because they are easy to assume wrongly:
+
+- **`byModel` matches the thread's model, not the request's.** A voice request
+  carries no model of its own that would mean anything here, so opencodex reads
+  the `thread-id` (or `x-codex-parent-thread-id`, or the session header), finds
+  the most recent logged turn in that thread, and routes on the model that turn
+  asked for. Two consequences. A request with no thread header, or one naming a
+  thread the log has not seen, falls through to `provider`. And the conversation
+  id is recorded on `/v1/responses` and the Claude-messages path only —
+  `/v1/chat/completions` logs the model but leaves it unset, so a caller on that
+  route can never match a `byModel` entry whatever headers it sends. Codex uses
+  the responses path, so the usual case works and a `curl` test against chat
+  completions is the one that will not.
+
+- **The caller's transcription model is not forwarded.** opencodex accepts only
+  OpenAI's transcription model names, which mean nothing to another engine.
+  Set `transcriptionModel` to name one explicitly; unset sends no `model` field,
+  which tells an OpenAI-compatible server to use whatever it already has loaded.
+- **There is no built-in speech backend.** An unset `speech` block makes
+  `POST /v1/audio/speech` answer `501` naming the setting to configure, rather
+  than falling back to OpenAI.
+
+Dictation frames are relayed verbatim, so a `dictationUrl` endpoint must speak
+the streaming-dictation protocol above itself — there is no translating proxy in
+between.
+
+```json
+{
+  "providers": {
+    "handy": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8915/v1",
+      "allowPrivateNetwork": true,
+      "dictationUrl": "ws://127.0.0.1:8915/v1/audio/stream?dialect=codex",
+      "transcriptionUrl": "http://127.0.0.1:8915/v1/audio/transcriptions"
+    },
+    "pocket": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8911/v1",
+      "allowPrivateNetwork": true,
+      "speechUrl": "http://127.0.0.1:8911/v1/audio/speech"
+    }
+  },
+  "dictation": { "provider": "handy" },
+  "transcription": { "provider": "handy" },
+  "speech": { "provider": "pocket" }
+}
+```
+
+A loopback `baseUrl` needs `allowPrivateNetwork: true`; that is the provider's
+declaration that it is deliberately self-hosted.
 
 ## `POST /v1/responses`
 

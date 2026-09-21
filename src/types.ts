@@ -94,6 +94,8 @@ export type {
   OcxRoutingProfileConfig,
   OcxTokenGuardianConfig,
   OcxImagesConfig,
+  OcxDictationConfig,
+  OcxVoiceRouteConfig,
   OcxSearchConfig,
   OcxVisionSidecarConfig,
   OcxWebSearchSidecarConfig,

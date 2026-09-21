@@ -409,6 +409,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/messages" || path === "/v1/chat/completions") return req.method === "POST";
     if (path === "/v1/messages/count_tokens") return req.method === "POST";
     if (path === "/v1/audio/transcriptions") return req.method === "POST";
+    if (path === "/v1/audio/speech") return req.method === "POST";
     if (path === "/v1/audio/transcriptions/stream") return req.headers.get("upgrade")?.toLowerCase() === "websocket";
     if (path === "/v1/alpha/search") return req.method === "POST";
     if (contextEndpoint(path)) return req.method === "POST";

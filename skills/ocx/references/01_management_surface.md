@@ -928,8 +928,50 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 
+### `ocx agent dictation`
+
+Show or set the dictation backend and its per-model overrides.
+
+| Method | Route |
+|---|---|
+| GET | `/api/dictation-settings` |
+| PUT | `/api/dictation-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--provider` | string | Default backend ("openai" or a custom provider id); "-" clears it. |
+| `--by-model` | string | JSON object mapping provider/model ids to backends; "-" clears it. |
+| `--list` | boolean | List currently-available model ids. |
+| `--json` | boolean | Emit the settings as JSON. |
+
+JSON mode: `payload`.
+
+- Targets are "openai" (the existing ChatGPT dictation stream) or a custom provider id.
+- A custom provider carries providers.<id>.dictationUrl and speaks the same frame protocol; frames relay verbatim.
+
+### `ocx agent voice`
+
+Show or set the live voice backend and its per-model overrides.
+
+| Method | Route |
+|---|---|
+| GET | `/api/live-voice-settings` |
+| PUT | `/api/live-voice-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--provider` | string | Default backend ("openai" or a custom provider id); "-" clears it. |
+| `--by-model` | string | JSON object mapping provider/model ids to backends; "-" clears it. |
+| `--list` | boolean | List currently-available model ids. |
+| `--json` | boolean | Emit the settings as JSON. |
+
+JSON mode: `payload`.
+
+- Targets are "openai" (the existing realtime relay) or a custom provider id.
+- A custom provider carries providers.<id>.liveUrl and speaks the same frame protocol; frames relay verbatim.
+
 ## Counts
 
-- declared capabilities: 50
-- of those, state-changing: 25
+- declared capabilities: 52
+- of those, state-changing: 27
 - head-resolved invocations: 2
