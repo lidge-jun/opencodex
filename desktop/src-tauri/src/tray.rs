@@ -2,7 +2,7 @@ use crate::{
     exit::{self, ExitReason},
     formatting,
     proxy::ProxyClient,
-    sidecar, updater, widget, window,
+    updater, widget, window,
 };
 use serde_json::Value;
 use std::sync::{
@@ -135,30 +135,9 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "stop-proxy" => {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let pieces = app
-                        .try_state::<crate::AppState>()
-                        .map(|state| (state.proxy(), state.owns_runtime(), state.watch.clone()));
-                    let Some((Some(proxy), owned, watch)) = pieces else {
-                        return;
-                    };
-                    // The same drain the quit path takes: ask the runtime to stop, then confirm
-                    // that it actually has. The previous version accepted an unreachable endpoint
-                    // as proof and then killed the child anyway.
-                    let outcome = sidecar::drain(&proxy, owned, &watch).await;
-                    match outcome.failure() {
-                        None => {
-                            if let Some(state) = app.try_state::<crate::AppState>() {
-                                state.release();
-                            }
-                            set_owned(&app, false);
-                        }
-                        Some(error) => {
-                            crate::logging::log_once("graceful stop did not complete", &error)
-                        }
-                    }
-                });
+                // Through the coordinator, not beside it: Stop pressed twice, Stop then Quit, and
+                // Stop during an update all have to be one execution over one child.
+                exit::request_stop(app);
             }
             "check-updates" => {
                 let app = app.clone();
