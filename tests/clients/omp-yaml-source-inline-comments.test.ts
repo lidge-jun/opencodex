@@ -30,6 +30,34 @@ const VALUE_WITH_QUOTED_HASH = {
   }],
 };
 
+// Quote characters embedded in a plain scalar are content, not openers — the
+// ` #` behind them is a real comment the mutation would silently delete.
+const SOURCE_WITH_PLAIN_SCALAR_QUOTES = [
+  "providers:",
+  "  opencodex:",
+  "    name: user's model # user note",
+  "    api: openai-completions",
+  "",
+].join("\n");
+
+const SOURCE_WITH_EMBEDDED_DOUBLE_QUOTE = [
+  "providers:",
+  "  opencodex:",
+  "    name: model\"beta # user note",
+  "    api: openai-completions",
+  "",
+].join("\n");
+
+const PLAIN_QUOTED_VALUE = {
+  name: "user's model",
+  api: "openai-completions",
+};
+
+const EMBEDDED_QUOTED_VALUE = {
+  name: "model\"beta",
+  api: "openai-completions",
+};
+
 describe("OMP managed YAML inline comments", () => {
   test("refresh refuses to replace a managed block containing a nested inline comment", () => {
     const nextValue = {
@@ -66,5 +94,39 @@ describe("OMP managed YAML inline comments", () => {
       { kind: "remove", removeEmptyProviders: true },
       {},
     )).toBe("");
+  });
+
+  test("refresh refuses an inline comment hidden behind a plain-scalar apostrophe", () => {
+    const nextValue = { ...PLAIN_QUOTED_VALUE, api: "openai-responses" };
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_PLAIN_SCALAR_QUOTES,
+      { kind: "upsert", value: nextValue },
+      { providers: { opencodex: nextValue } },
+    )).toBeNull();
+  });
+
+  test("disable refuses an inline comment hidden behind a plain-scalar apostrophe", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_PLAIN_SCALAR_QUOTES,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBeNull();
+  });
+
+  test("refresh refuses an inline comment hidden behind an embedded double quote", () => {
+    const nextValue = { ...EMBEDDED_QUOTED_VALUE, api: "openai-responses" };
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_EMBEDDED_DOUBLE_QUOTE,
+      { kind: "upsert", value: nextValue },
+      { providers: { opencodex: nextValue } },
+    )).toBeNull();
+  });
+
+  test("disable refuses an inline comment hidden behind an embedded double quote", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_EMBEDDED_DOUBLE_QUOTE,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBeNull();
   });
 });

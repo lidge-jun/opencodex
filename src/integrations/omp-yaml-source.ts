@@ -80,8 +80,19 @@ function isComment(line: string): boolean {
   return line.trimStart().startsWith("#");
 }
 
+/**
+ * Quote tracking has to work in both directions: a `#` inside a quoted scalar
+ * is content (`"model#variant"`), but a quote inside a plain scalar is also
+ * content — `user's model` is one plain scalar, and treating its `'` as an
+ * opener would hide a real ` #` comment behind quote mode.
+ */
 function hasInlineComment(line: string): boolean {
   let quote: "'" | "\"" | null = null;
+  // A `'` or `"` opens a quoted scalar only where a scalar may begin — after
+  // `key:`, `- `, or a flow indicator — never inside a plain scalar already
+  // in progress.
+  let scalarStarted = false;
+  let flowDepth = 0;
   for (let index = 0; index < line.length; index += 1) {
     const character = line[index]!;
     if (quote === "\"") {
@@ -95,8 +106,41 @@ function hasInlineComment(line: string): boolean {
       else quote = null;
       continue;
     }
-    if (character === "'" || character === "\"") quote = character;
-    else if (character === "#" && /\s/u.test(line[index - 1] ?? "")) return true;
+    if (character === "#" && /\s/u.test(line[index - 1] ?? "")) return true;
+    const next = line[index + 1] ?? "";
+    if (scalarStarted) {
+      // `:` ends a plain scalar where a value boundary follows; inside flow
+      // collections `,`, `]`, and `}` do too.
+      if (character === ":" && (next === "" || /\s/u.test(next))) scalarStarted = false;
+      else if (flowDepth > 0 && (character === "," || character === "]" || character === "}")) {
+        scalarStarted = false;
+        if (character !== ",") flowDepth -= 1;
+      }
+      continue;
+    }
+    if (/\s/u.test(character)) continue;
+    if (character === "'" || character === "\"") {
+      quote = character;
+      continue;
+    }
+    if (character === "[" || character === "{") {
+      flowDepth += 1;
+      continue;
+    }
+    if (character === "]" || character === "}") {
+      flowDepth -= 1;
+      continue;
+    }
+    if (character === ",") continue;
+    // `key:`, `- `, `? `: indicators only where a value boundary follows.
+    if ((character === ":" || character === "-" || character === "?")
+      && (next === "" || /\s/u.test(next))) continue;
+    // Anchors, aliases, and tags decorate the scalar that follows them.
+    if (character === "&" || character === "*" || character === "!") {
+      while (index + 1 < line.length && !/\s/u.test(line[index + 1]!)) index += 1;
+      continue;
+    }
+    scalarStarted = true;
   }
   return false;
 }
