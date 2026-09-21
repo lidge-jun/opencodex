@@ -277,12 +277,25 @@ describe("remote catalog adversarial consumer", () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(new Uint8Array([0x20])); },
-      cancel() { cancelled = true; },
+      // A cancel that never settles must not hold the error path: the download
+      // still has to reject with the HTTP status error inside the bound below.
+      cancel() { cancelled = true; return new Promise<void>(() => {}); },
     });
 
-    await expect(downloadClientCatalog("https://hub.example.test", "ocx_data_test", {
-      fetchImpl: async () => new Response(body, { status: 500 }),
-    })).rejects.toMatchObject({ code: "catalog_http_500" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bounded = Promise.race([
+      downloadClientCatalog("https://hub.example.test", "ocx_data_test", {
+        fetchImpl: async () => new Response(body, { status: 500 }),
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("catalog download outlived a never-resolving body cancel")), 1_000);
+      }),
+    ]);
+    try {
+      await expect(bounded).rejects.toMatchObject({ code: "catalog_http_500" });
+    } finally {
+      clearTimeout(timer);
+    }
     expect(cancelled).toBe(true);
   });
 
