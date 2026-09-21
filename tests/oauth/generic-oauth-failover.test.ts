@@ -253,6 +253,15 @@ describe("#2568 generic OAuth account failover", () => {
     expect(retryAfter!).toBeLessThanOrEqual(30);
   });
 
+  test("an uncooled alternate reports an eligible target", async () => {
+    const ids = await seed(2);
+    // The negative case above proves cooled accounts are excluded; without this positive
+    // side an always-false implementation would also pass, silently deleting the
+    // rotation-send-budget attribution for the normal case it exists to describe.
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[0]!)).toBe(true);
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[1]!)).toBe(true);
+  });
+
   test("Retry-After drives the cooldown length", async () => {
     const ids = await seed(2);
     rotateGenericOAuthAccountOn429(config(), "xai", ids[0]!, "600");
@@ -291,6 +300,9 @@ describe("sidecar on429 wiring", () => {
     // Continuation, native passthrough and run-turn each have their own budget-denial branch.
     // A durable two-account quorum is insufficient because it intentionally ignores cooldowns.
     expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(3);
+    // The check must GATE the log, not merely run beside it: every call site wraps
+    // noteAttemptRecoveryWithheld in the eligibility condition.
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(3);
   });
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
