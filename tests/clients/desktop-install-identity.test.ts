@@ -22,6 +22,8 @@ const IDENTITY = repoPath(`${SHELL}/identity.rs`);
 const OWNERSHIP = repoPath(`${SHELL}/ownership.rs`);
 const STARTUP = repoPath(`${SHELL}/startup.rs`);
 const STATE = repoPath("src/service/state.ts");
+const COMPATIBILITY = repoPath("src/service/ownership-compatibility.ts");
+const DESKTOP_SHELL_DOC = repoPath("structure/desktop-shell.md");
 
 function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -31,6 +33,8 @@ describe("desktop install identity", () => {
   const identity = code(IDENTITY);
   const ownership = code(OWNERSHIP);
   const state = code(STATE);
+  const compatibility = code(COMPATIBILITY);
+  const desktopShellDoc = readFileSync(DESKTOP_SHELL_DOC, "utf8");
 
   test("the installation's id is minted once and never rewritten", () => {
     // Exclusive, because two launches racing to mint would answer to two ids, and the second one
@@ -124,5 +128,51 @@ describe("desktop install identity", () => {
     expect(startup).toContain("ownership::describe(ownership::resolve(app).as_ref()");
     expect(startup).toContain("identity::install_id(app)");
     expect(startup).toContain('format!("runtime ownership: {}", registration.identity)');
+  });
+
+  test("the desktop acceptance text names the consent reuse boundaries", () => {
+    expect(desktopShellDoc).toContain("Desktop runtime ownership acceptance");
+    expect(desktopShellDoc).toMatch(/same desktop installation reuses consent/i);
+    expect(desktopShellDoc).toMatch(/Package update and service repair also preserve that grant/i);
+    expect(desktopShellDoc).toMatch(/different `owner`, different `installId`, moved\s+`consentGeneration`/i);
+    expect(desktopShellDoc).toMatch(/unreadable ownership record is not reuse/i);
+    expect(desktopShellDoc).toMatch(/Uninstall or an explicit handback releases only the live claim/i);
+    expect(desktopShellDoc).toMatch(/old package-owned registration is only attachable as a guest/i);
+  });
+
+  test("service refresh preserves consent and handback releases only the live claim", () => {
+    const writer = state.slice(state.indexOf("export function writeServiceInstallState"));
+    const writerBody = writer.slice(0, writer.indexOf("\n}"));
+    expect(writerBody).toContain("...preservedConsent(current)");
+    const preserve = state.slice(state.indexOf("function preservedConsent"));
+    const preserveBody = preserve.slice(0, preserve.indexOf("\n}"));
+    expect(preserveBody).toContain("const ownership = current?.ownership");
+    expect(preserveBody).toContain("consentGenerationCeiling");
+    const release = state.slice(state.indexOf("export function releaseServiceOwner"));
+    const releaseBody = release.slice(0, release.indexOf("\n}"));
+    expect(releaseBody).toContain("const { ownership: _released, ...withoutOwnership } = current");
+    expect(releaseBody).toContain("consentGenerationCeiling");
+  });
+
+  test("recording consent revalidates the exact approved subject before reuse", () => {
+    expect(state).toContain("export class ServiceOwnershipSubjectMismatchError extends Error");
+    expect(state).toContain("export class ServiceOwnershipSubjectUnknownError extends Error");
+    const record = state.slice(state.indexOf("export function recordServiceOwner"));
+    expect(record).toContain("sameServiceOwnershipSubject(request.expectedSubject, actualSubject)");
+    expect(record).toContain("throw new ServiceOwnershipSubjectMismatchError");
+    expect(record).toContain("unknownStateError: reason => new ServiceOwnershipSubjectUnknownError");
+    // A moved generation is part of the subject, so a pending approval cannot be reused after
+    // another writer grants, releases or re-grants ownership.
+    const sameSubject = state.slice(state.indexOf("export function sameServiceOwnershipSubject"));
+    const sameSubjectBody = sameSubject.slice(0, sameSubject.indexOf("\n}"));
+    expect(sameSubjectBody).toContain("left.ownership.consentGeneration === right.ownership.consentGeneration");
+  });
+
+  test("old package-owned registrations cannot become durable desktop ownership", () => {
+    expect(compatibility).toContain("SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION");
+    const assess = compatibility.slice(compatibility.indexOf("export function assessServiceTakeoverCompatibility"));
+    expect(assess).toContain('reason: "managing-cli-unsupported"');
+    expect(assess).toContain('reason: "service-protocol-unsupported"');
+    expect(assess).toContain("input.state?.ownershipProtocolVersion !== SERVICE_OWNERSHIP_PROTOCOL_VERSION");
   });
 });
