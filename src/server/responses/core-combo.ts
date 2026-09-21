@@ -767,6 +767,7 @@ export async function executeComboResponses(
       code: failure.upstreamCode,
       message: failure.classificationText,
     });
+    const failedTargetCooled = isComboTargetInCooldown(comboId, pick.target, failureNow);
     // Same target selector as the exclusionary pick below, minus `exclude`: the only
     // difference is deliberate and is the whole point of the single-target retry.
     const retryAfterCooldown = () =>
@@ -797,6 +798,7 @@ export async function executeComboResponses(
         && combo.targets.length === 1
         && combo.waitForCooldownMs > 0
         && comboTargetsDispatched <= 1
+        && failedTargetCooled
         && !options.abortSignal?.aborted
       ) {
         pick = await retryAfterCooldown();

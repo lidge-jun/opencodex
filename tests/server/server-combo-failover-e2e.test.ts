@@ -2256,6 +2256,19 @@ describe("server combo failover 030 activation matrix", () => {
     expect(hits).toBe(1);
   });
 
+  test("single-target wait does not retry a request-local refusal", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { type: "invalid_request_error", message: "Unsupported parameter: user" } }, { status: 400 });
+    });
+    const response = await post(comboConfig({ a: provider("openai-responses", baseUrl(upstream), "key-a") }, [
+      { provider: "a", model: "m1" },
+    ], { cooldownMs: 50, waitForCooldownMs: 500 }), { user: "synthetic-client" });
+    expect(response.status).toBe(400);
+    expect(hits).toBe(1);
+  });
+
   test("a past Retry-After date remains immediate through response consumption", async () => {
     const now = Date.parse("2026-07-18T00:00:00.000Z");
     const failure = await consumeComboFailure(Response.json({ error: { message: "rate limited" } }, {
