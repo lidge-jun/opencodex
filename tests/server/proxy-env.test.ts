@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { applyProxyEnv } from "../../src/config";
-import { resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
+import { configuredOutboundFetch, resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
@@ -215,12 +215,31 @@ describe("applyProxyEnv with values the schema does not constrain", () => {
 });
 
 describe("applyProxyEnv", () => {
-  test("no-op when config.proxy is unset", () => {
+  test("writes no proxy state into an environment that has none", () => {
+    applyProxyEnv(configWithProxy());
+    for (const key of PROXY_ENV_KEYS) {
+      expect(process.env[key]).toBeUndefined();
+    }
+  });
+
+  test("keeps mandatory loopback exclusions when config.proxy is unset", () => {
     process.env.NO_PROXY = "operator-owned.example";
     applyProxyEnv(configWithProxy(undefined, "internal.example"));
     expect(process.env.HTTP_PROXY).toBeUndefined();
     expect(process.env.HTTPS_PROXY).toBeUndefined();
-    expect(process.env.NO_PROXY).toBe("operator-owned.example");
+    expect(process.env.NO_PROXY).toBe("operator-owned.example,localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test.each(["ALL_PROXY", "all_proxy"])("inherited SOCKS %s cannot intercept loopback fetches", async key => {
+    process.env[key] = "socks5://untrusted-proxy.invalid:1080";
+    applyProxyEnv(configWithProxy());
+    let directCalls = 0;
+    const response = await configuredOutboundFetch("http://127.0.0.1:11434/v1/chat/completions", undefined, async () => {
+      directCalls += 1;
+      return new Response("direct");
+    });
+    expect(await response.text()).toBe("direct");
+    expect(directCalls).toBe(1);
   });
 
   test("merges configured comma-separated noProxy entries", () => {

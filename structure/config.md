@@ -542,7 +542,9 @@ Stored Direct substitution follows the [credential identity contract](providers/
 configuration. An explicit SOCKS5 or SOCKS5h URL selects ALL_PROXY and removes
 stale scheme-proxy variables; HTTP(S) settings retain their existing environment
 precedence. Activation keeps the existing Windows auto-discovery path and loopback
-NO_PROXY entries. When the environment no longer selects SOCKS, activation
+NO_PROXY entries; the no-configured-proxy return merges them only when the environment
+already carries proxy state, leaving a proxy-free process untouched. When the
+environment no longer selects SOCKS, activation
 restores the native fetch; removing a saved field alone does not erase inherited
 process environment variables.
 SOCKS4 is rejected instead of being advertised as a working transport.
