@@ -201,11 +201,11 @@ stored as digests, and rate-capped at 8/min. They are secrets: do not persist on
 
 ## Inviting a machine (`ocx hub invite`)
 
-Run on the **hub**. It prints the command for the other machine:
-
-```bash
-ocx hub invite
-```
+Have the operator run `ocx hub invite` on the **hub** in a human-operated terminal outside
+the agent session, then transfer the generated command directly to the joining machine.
+Both text and JSON output contain a plaintext pairing grant or a command embedding it;
+do not run either mode through an agent tool or ask for its secret-bearing output in chat.
+The placeholder below illustrates the operator's command, not a request to relay a live grant:
 
 ```text
 # Run on the other machine:
@@ -224,7 +224,7 @@ other machine to dial itself and spends the code for nothing, so `invite` refuse
 the `hub.dataPublicOrigin` fix. An explicit override is never second-guessed: a loopback data
 origin is legitimate over an SSH tunnel.
 
-Every successful invite prints a `Bound browser origin:` line on stderr. A grant is bound to
+Every successful invite prints a non-secret `Bound browser origin:` line on stderr. The operator may report that line and the expiry for verification. A grant is bound to
 one origin and a remote `ocx connect` presents `Origin: http://localhost:<its own configured
 port>`, so when the bound origin is not the default the other machine must already be running
 on that port. Relay that line; it is the difference between a working exchange and a spent

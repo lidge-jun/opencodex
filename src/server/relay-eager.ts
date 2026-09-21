@@ -466,6 +466,8 @@ export function relaySseEagerBounded(
         else hooks.onSynthetic(syntheticKind, syntheticReason);
       }
       if (cancelled && !hooks.sawTerminal()) {
+        // Finalize transport telemetry before the cancellation hook persists its usage row.
+        upstream.abort();
         hooks.onClientCancel();
       }
       if (cancelled || upstream.signal.aborted || syntheticKind === "failed" || deliveryFallbackSent) {

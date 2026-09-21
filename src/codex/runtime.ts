@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
@@ -10,6 +10,7 @@ export type CodexRuntimeSource =
   | "environment"
   | "configured"
   | "shim"
+  | "installed"
   | "path"
   | "fallback";
 
@@ -42,6 +43,13 @@ export interface ResolveCodexRuntimeResult {
   readonly runtime: ResolvedCodexRuntime;
   readonly failures: readonly RuntimeProbeFailure[];
   readonly replacedConfigured?: Readonly<{ from: ResolvedCodexRuntime; reason: string }>;
+  /**
+   * Set when an unpinned, still-runnable persisted discovery is handed over to a
+   * strictly newer valid candidate. Distinct from replacedConfigured, which means
+   * the configured runtime became invalid; conflating "gone" with "superseded"
+   * would make the doctor output lie.
+   */
+  readonly supersededDiscovered?: Readonly<{ from: ResolvedCodexRuntime; to: ResolvedCodexRuntime; reason: string }>;
   readonly newerAvailable?: ResolvedCodexRuntime;
   /** Set when the selected runtime could not be written to codex-runtime.json. */
   readonly persistError?: string;
@@ -74,7 +82,39 @@ export interface ResolveCodexRuntimeDeps {
    * newerAvailable discovery). Use for hot UI/status paths.
    */
   discoverAlternatives?: boolean;
+  /**
+   * When false, select a spawnable candidate without running `codex --version`.
+   * The prompt probe needs a command it can spawn, not a version, and paying
+   * ~1s of blocking exec per candidate on a UI path is what made it report an
+   * absent candidate instead of the Windows Codex App install (issue 4458).
+   */
+  probeVersion?: boolean;
+  /**
+   * Directory listing used by Windows App-root discovery. Injected so tests can
+   * exercise the LOCALAPPDATA OpenAI/Codex/bin layout without a real Windows
+   * filesystem. Must be listed in resolveCacheKey's injection guard: an injected
+   * listing that leaked into the process memo would pin every later test in this
+   * file to a fake install.
+   */
+  readdirSync?: (path: string) => string[];
+  /**
+   * Stat used to order Windows App version directories by mtime. Same injection
+   * contract as readdirSync: a test-supplied impl must not populate the process
+   * memo.
+   */
+  statSync?: (path: string) => { mtimeMs: number; isDirectory(): boolean };
 }
+
+/**
+ * How a `codex-runtime.json` record got onto disk.
+ *
+ * "pinned" is an intentional operator selection (doctor --fix). "discovered" is
+ * automatic resolve-and-persist. Absent is the pre-field shape and is treated
+ * as discovered, not pinned: every such file was written by
+ * resolveAndPersistCodexRuntime, so reading it as a pin would leave issue 4204
+ * unfixed on exactly the installs that have it.
+ */
+export type CodexRuntimePinOrigin = "pinned" | "discovered";
 
 export interface PersistedCodexRuntimeState {
   readonly version: 1;
@@ -82,12 +122,23 @@ export interface PersistedCodexRuntimeState {
   readonly source: CodexRuntimeSource;
   readonly selectedVersion?: string | null;
   readonly updatedAt: string;
+  readonly origin?: CodexRuntimePinOrigin;
 }
 
 const PERSIST_FILE = "codex-runtime.json";
 const CLAMP_PERSIST_FILE = "codex-runtime-clamp.json";
 /** Probe rejection for an absolute candidate whose file is gone. Matched when retiring a dead pin (#4035). */
 const PATH_MISSING_REASON = "path does not exist";
+
+/**
+ * Probe rejection when the selected command cannot even be spawned. Distinct
+ * from PATH_MISSING_REASON (the absolute path was gone before spawn) and from
+ * the generic `failed --version (...)` string (the binary ran and failed).
+ * Exported because the prompt probe classifies this as program-not-found, so a
+ * PATH fallback that is simply not installed must not look like an execution
+ * failure (issue 4458).
+ */
+export const CODEX_PROGRAM_NOT_FOUND_REASON = "program not found (ENOENT)";
 
 function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
   const clone = (current: unknown): unknown => {
@@ -111,8 +162,13 @@ function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
   return value === "environment"
     || value === "configured"
     || value === "shim"
+    || value === "installed"
     || value === "path"
     || value === "fallback";
+}
+
+function isCodexRuntimePinOrigin(value: unknown): value is CodexRuntimePinOrigin {
+  return value === "pinned" || value === "discovered";
 }
 
 export function codexRuntimeStatePath(configDir: string = getConfigDir()): string {
@@ -249,6 +305,9 @@ export function parsePersistedCodexRuntime(
     if (raw.selectedVersion !== undefined
       && raw.selectedVersion !== null
       && typeof raw.selectedVersion !== "string") return null;
+    // Absent origin is legal (pre-field files). A present value that is neither
+    // literal makes the whole record invalid, same as every other field.
+    if (raw.origin !== undefined && !isCodexRuntimePinOrigin(raw.origin)) return null;
     return cloneAndDeepFreeze(raw as PersistedCodexRuntimeState);
   } catch {
     return null;
@@ -267,9 +326,35 @@ export function loadPersistedCodexRuntime(
   }
 }
 
+/**
+ * True only when the operator intentionally pinned this runtime.
+ *
+ * A record with no origin is NOT pinned: every such file predates this field
+ * and was written by resolveAndPersistCodexRuntime, which is auto-discovery.
+ * Reading a missing origin as an intentional pin would leave issue 4204
+ * unfixed on exactly the installs that have it — the still-runnable 0.135.0
+ * CLI that kept winning over a 0.153.4 Desktop runtime sitting right there.
+ */
+export function persistedCodexRuntimeIsPinned(
+  state: DeepReadonly<PersistedCodexRuntimeState> | null | undefined,
+): boolean {
+  return state?.origin === "pinned";
+}
+
+/**
+ * Persist the selected Codex runtime.
+ *
+ * `origin` defaults to "pinned" ON PURPOSE: a direct call is a deliberate
+ * selection. src/cli/doctor.ts calls this from `doctor --fix`. The automatic
+ * discovery path is resolveAndPersistCodexRuntime, which passes "discovered"
+ * explicitly. Flipping the default would make doctor --fix look like an
+ * accident, and a later resolve would silently replace the operator's choice
+ * (issue 4204).
+ */
 export function persistCodexRuntime(
   runtime: ResolvedCodexRuntime,
   deps: ResolveCodexRuntimeDeps = {},
+  origin: CodexRuntimePinOrigin = "pinned",
 ): void {
   const configDir = deps.configDir ?? getConfigDir();
   mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -279,6 +364,7 @@ export function persistCodexRuntime(
     source: runtime.source,
     selectedVersion: runtime.version,
     updatedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+    origin,
   };
   // Invalidate process authority before the persisted replacement is visible.
   clearCodexRuntimeResolveCache();
@@ -313,7 +399,7 @@ export function clearPersistedCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): 
 function probeVersion(
   command: string,
   deps: ResolveCodexRuntimeDeps,
-): { ok: true; version: string } | { ok: false; reason: string } {
+): { ok: true; version: string | null } | { ok: false; reason: string } {
   const platform = deps.platform ?? process.platform;
   if (command.includes("/") || command.includes("\\") || /^[A-Za-z]:/.test(command)) {
     const exists = deps.existsSync ?? existsSync;
@@ -322,6 +408,11 @@ function probeVersion(
       return { ok: false, reason: "not a spawnable Codex launcher on this platform" };
     }
   }
+  // The prompt probe needs a spawnable candidate, not a version. Running
+  // `codex --version` here is ~1s of blocking exec per candidate; on the
+  // dashboard probe that cost made Windows report Codex as missing even when
+  // the App install was sitting under LOCALAPPDATA/OpenAI/Codex/bin (issue 4458).
+  if (deps.probeVersion === false) return { ok: true, version: null };
   const execFile = deps.execFileSync ?? (execFileSync as unknown as RuntimeExecFile);
   // Sandbox the probe's CODEX_HOME: a real Codex CLI creates state (tmp/, logs) under
   // CODEX_HOME even for `--version`, and the probe inherits the caller's env — so a
@@ -350,6 +441,9 @@ function probeVersion(
     return { ok: true, version };
   } catch (error) {
     if (!probeHome) return { ok: false, reason: "probe sandbox unavailable" };
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { ok: false, reason: CODEX_PROGRAM_NOT_FOUND_REASON };
+    }
     const message = error instanceof Error ? error.message : String(error);
     const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
     return { ok: false, reason: `failed --version (${redacted})` };
@@ -399,6 +493,53 @@ function pathCandidates(deps: ResolveCodexRuntimeDeps): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+/**
+ * Codex installs that PATH does not necessarily expose.
+ *
+ * The Windows Codex App writes codex.exe under
+ * LOCALAPPDATA/OpenAI/Codex/bin/<changing-version>/, which never appears on
+ * the service process PATH. The prompt probe used to hardcode four POSIX
+ * paths and miss that layout, then report an absent candidate (issue 4458).
+ * POSIX keeps those four paths so an install that resolved before this source
+ * existed still resolves.
+ */
+function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
+  const platform = deps.platform ?? process.platform;
+  const env = deps.env ?? process.env;
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (!localAppData) return [];
+    const root = join(localAppData, "OpenAI", "Codex", "bin");
+    const readDir = deps.readdirSync ?? ((path: string) => readdirSync(path));
+    const stat = deps.statSync ?? ((path: string) => statSync(path));
+    try {
+      const names = readDir(root);
+      const dirs: Array<{ name: string; directory: string; mtimeMs: number }> = [];
+      for (const name of names) {
+        const directory = join(root, name);
+        try {
+          const st = stat(directory);
+          if (!st.isDirectory()) continue;
+          dirs.push({ name, directory, mtimeMs: st.mtimeMs });
+        } catch {
+          continue;
+        }
+      }
+      dirs.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+      return dirs.map(entry => join(entry.directory, "codex.exe"));
+    } catch {
+      return [];
+    }
+  }
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
+  return [
+    join(home, ".codex", "packages", "standalone", "current", "bin", "codex"),
+    join(home, ".local", "bin", "codex"),
+    "/usr/local/bin/codex",
+    "/opt/homebrew/bin/codex",
+  ];
 }
 
 interface RankedCandidate {
@@ -497,6 +638,20 @@ let resolveCacheEpoch = 0;
 let resolveCache: ResolveCacheMemo | null = null;
 
 /**
+ * Memo for probeVersion === false resolves. Kept separate from resolveCache
+ * because peekCodexRuntimeProcessCache is read by convergence and the bundled
+ * catalog as "what runtime are we on". Publishing a null version there would
+ * be read as "unknown version" and become process authority (issue 4458).
+ */
+interface DeferredResolveCacheMemo {
+  readonly key: string;
+  readonly at: number;
+  readonly value: DeepReadonly<ResolveCodexRuntimeResult>;
+}
+
+let deferredResolveCache: DeferredResolveCacheMemo | null = null;
+
+/**
  * Bumped whenever persisted runtime state is replaced or process authority is cleared.
  *
  * Consumers that memoize anything derived from `codex-runtime.json` — entitlement's client
@@ -522,6 +677,7 @@ function publishResolveCache(key: string, at: number, value: ResolveCodexRuntime
 function clearResolveCache(): void {
   resolveCacheEpoch += 1;
   resolveCache = null;
+  deferredResolveCache = null;
 }
 
 /** Clear process-local runtime authority without resolving a replacement. */
@@ -558,7 +714,15 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
 
 function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   // Only memoize uninjected process-env resolves (settings/status hot paths).
-  if (deps.execFileSync || deps.existsSync || deps.readFileSync || deps.configDir || deps.now) {
+  if (
+    deps.execFileSync
+    || deps.existsSync
+    || deps.readFileSync
+    || deps.readdirSync
+    || deps.statSync
+    || deps.configDir
+    || deps.now
+  ) {
     return null;
   }
   const env = deps.env ?? process.env;
@@ -567,6 +731,10 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
     path: env.PATH ?? "",
     platform: deps.platform ?? process.platform,
     discover: deps.discoverAlternatives !== false,
+    probeVersion: deps.probeVersion !== false,
+    localAppData: env.LOCALAPPDATA?.trim() ?? "",
+    homeDir: env.HOME?.trim() ?? "",
+    userProfile: env.USERPROFILE?.trim() ?? "",
     home: process.env.OPENCODEX_HOME ?? "",
     persisted: persistedRuntimeCacheStamp(deps),
   });
@@ -577,6 +745,27 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
  */
 export function resolveCodexRuntime(deps: ResolveCodexRuntimeDeps = {}): ResolveCodexRuntimeResult {
   const cacheKey = resolveCacheKey(deps);
+  // A deferred selection has no validated version and must not publish into
+  // runtime authority. peekCodexRuntimeProcessCache would otherwise report
+  // "available" with version null, which catalog/convergence read as unknown.
+  if (deps.probeVersion === false) {
+    if (cacheKey
+      && deferredResolveCache
+      && deferredResolveCache.key === cacheKey
+      && Date.now() - deferredResolveCache.at < RESOLVE_CACHE_MS) {
+      return cloneAndDeepFreeze(deferredResolveCache.value);
+    }
+
+    const deferred = resolveCodexRuntimeUncached(deps);
+    if (!cacheKey) return cloneAndDeepFreeze(deferred);
+    deferredResolveCache = {
+      key: cacheKey,
+      at: Date.now(),
+      value: cloneAndDeepFreeze(deferred),
+    };
+    return cloneAndDeepFreeze(deferredResolveCache.value);
+  }
+
   if (cacheKey && resolveCache && resolveCache.key === cacheKey && Date.now() - resolveCache.at < RESOLVE_CACHE_MS) {
     return cloneAndDeepFreeze(resolveCache.value);
   }
@@ -623,18 +812,44 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
   for (const command of pathCandidates(deps)) {
     ordered.push({ command, source: "path" });
   }
+  for (const command of installedCodexCandidates(deps)) {
+    ordered.push({ command, source: "installed" });
+  }
   ordered.push({ command: "codex", source: "fallback" });
 
   const seen = new Set<string>();
   const valid: ResolvedCodexRuntime[] = [];
+  // A caller that declined PATH-wide discovery normally gets the first valid
+  // candidate and nothing else, which is right for a hot path and wrong for
+  // exactly one arrangement: an unpinned persisted selection sitting in front of
+  // a Codex App runtime that PATH never exposes.
+  //
+  // That arrangement is issue 4204. The catalog's bundled loader passes
+  // discoverAlternatives: false, so it stopped at a still-runnable codex-cli
+  // 0.135.0 and derived the reasoning ladder from it while the Desktop app was
+  // running 0.153.4 out of LOCALAPPDATA. Nothing downstream could notice,
+  // because the newer runtime was never probed.
+  //
+  // So the early stop keeps skipping PATH — which is the expensive part, 100+
+  // launcher probes on a dev machine — but still probes the `installed` roots,
+  // a bounded set with one entry per Codex App version directory. A pinned
+  // record skips even that: the operator's choice is not up for revision, and
+  // there is then nothing to compare it against.
+  const persistedIsUnpinned = Boolean(persisted?.command) && !persistedCodexRuntimeIsPinned(persisted);
   for (const candidate of ordered) {
     const key = candidate.command.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
+    if (
+      deps.discoverAlternatives === false
+      && valid.length > 0
+      && !(persistedIsUnpinned && candidate.source === "installed")
+    ) {
+      continue;
+    }
     const resolved = tryCandidate(candidate, failures, deps);
     if (!resolved) continue;
     valid.push(resolved);
-    if (deps.discoverAlternatives === false) break;
   }
 
   if (valid.length === 0) {
@@ -644,9 +859,10 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     };
   }
 
-  // Prefer first valid in priority order (environment → configured → shim → path → fallback).
+  // Prefer first valid in priority order (environment → configured → shim → path → installed → fallback).
   let selected = valid[0]!;
   let replacedConfigured: ResolveCodexRuntimeResult["replacedConfigured"];
+  let supersededDiscovered: ResolveCodexRuntimeResult["supersededDiscovered"];
 
   const envValid = envPath
     ? valid.find(item => sameRuntimeCommand(item.command, envPath) && item.source === "environment")
@@ -672,6 +888,31 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     } else if (!envValid && configuredStillValid) {
       // Stick to configured even when a later PATH entry is also valid.
       selected = valid.find(item => sameRuntimeCommand(item.command, persisted.command)) ?? selected;
+      // An explicit pin is the user's decision and this change must never
+      // silently replace it — issue 4204 says so in as many words. Stick.
+      // An unpinned record (missing origin, or origin "discovered") may hand
+      // over to a strictly newer valid candidate. Unknown (null) versions on
+      // either side are not evidence of an upgrade: compareCodexVersions treats
+      // null as less-than, which would otherwise make any known alternative
+      // look newer than a deferred probe. probeVersion === false yields null
+      // everywhere, so the comparison cannot fire there; equal versions stick.
+      if (!persistedCodexRuntimeIsPinned(persisted)) {
+        const newerDiscovered = valid
+          .filter(item =>
+            !sameRuntimeCommand(item.command, selected.command)
+            && typeof item.version === "string"
+            && typeof selected.version === "string"
+            && compareCodexVersions(item.version, selected.version) > 0)
+          .sort((a, b) => compareCodexVersions(b.version, a.version))[0];
+        if (newerDiscovered) {
+          supersededDiscovered = {
+            from: selected,
+            to: newerDiscovered,
+            reason: `discovered runtime ${selected.version} superseded by newer runtime ${newerDiscovered.version}`,
+          };
+          selected = newerDiscovered;
+        }
+      }
     }
   }
 
@@ -687,6 +928,7 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
     runtime: selected,
     failures,
     replacedConfigured,
+    supersededDiscovered,
     newerAvailable: newer,
   };
 }
@@ -707,7 +949,7 @@ export function resolveAndPersistCodexRuntime(
     && (persistedRuntime.selectedVersion ?? null) === (result.runtime.version ?? null);
   if (result.runtime.command && result.runtime.source !== "fallback" && !selectionUnchanged) {
     try {
-      persistCodexRuntime(result.runtime, deps);
+      persistCodexRuntime(result.runtime, deps, "discovered");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const persistError = redactUserPath(redactSecretString(message)).slice(0, 200);

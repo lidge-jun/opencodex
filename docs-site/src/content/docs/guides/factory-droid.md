@@ -141,16 +141,17 @@ The model IDs are examples. Keep only models that `droid exec` can use for the s
 account. Do not add Factory-specific inference headers to this provider: its upstream is the local
 bridge, not a Factory HTTP endpoint.
 
-After saving a provider or changing its static catalog, synchronize and restart the Codex
-app-server so new sessions read the updated catalog:
+After saving a provider or changing its static catalog, synchronize and restart Codex so new
+sessions read the updated catalog:
 
 ```bash
 ocx sync --restart-codex
 ocx doctor
 ```
 
-Restarting Codex app-server processes interrupts active Codex work. Run the restart only after
-finishing or saving those sessions.
+`--restart-codex` restarts matching app-servers and fully quits and relaunches the Codex desktop
+app, which ends live conversations. Use `--restart-app-server-only` to leave the desktop app
+running. Run the restart only after finishing or saving those sessions.
 
 ## Verify the complete route
 

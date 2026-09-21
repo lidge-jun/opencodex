@@ -152,6 +152,8 @@ export function nativeChatSse(
   let sawFinish = false;
   let sawDone = false;
   let firstOutput = false;
+  let sawTextOutput = false;
+  let sawToolCalls = false;
   let settled = false;
   let cancelled = false;
   let cancelledBySignal = false;
@@ -264,7 +266,7 @@ export function nativeChatSse(
     const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
     const finished = choices.some(choice => isRec(choice) && typeof choice.finish_reason === "string" && choice.finish_reason.length > 0);
     if (finished) sawFinish = true;
-    const hasProgress = choices.some(choice => {
+    const hasText = choices.some(choice => {
       if (!isRec(choice) || !isRec(choice.delta)) return false;
       const delta = choice.delta;
       return (typeof delta.content === "string" && delta.content.length > 0)
@@ -272,15 +274,22 @@ export function nativeChatSse(
         || (typeof delta.reasoning === "string" && delta.reasoning.length > 0)
         || (Array.isArray(delta.reasoning_details) && delta.reasoning_details.some(detail =>
           isRec(detail) && typeof detail.text === "string" && detail.text.length > 0))
-        || (typeof delta.refusal === "string" && delta.refusal.length > 0)
-        || (Array.isArray(delta.tool_calls) && delta.tool_calls.some(tool => {
-          if (!isRec(tool)) return false;
-          const fn = isRec(tool.function) ? tool.function : {};
-          return (typeof tool.id === "string" && tool.id.length > 0)
-            || (typeof fn.name === "string" && fn.name.length > 0)
-            || (typeof fn.arguments === "string" && fn.arguments.length > 0);
-        }));
+        || (typeof delta.refusal === "string" && delta.refusal.length > 0);
     });
+    const hasTool = choices.some(choice => {
+      if (!isRec(choice) || !isRec(choice.delta)) return false;
+      const delta = choice.delta;
+      return Array.isArray(delta.tool_calls) && delta.tool_calls.some(tool => {
+        if (!isRec(tool)) return false;
+        const fn = isRec(tool.function) ? tool.function : {};
+        return (typeof tool.id === "string" && tool.id.length > 0)
+          || (typeof fn.name === "string" && fn.name.length > 0)
+          || (typeof fn.arguments === "string" && fn.arguments.length > 0);
+      });
+    });
+    if (hasText) sawTextOutput = true;
+    if (hasTool) sawToolCalls = true;
+    const hasProgress = hasText || hasTool;
     if (hasProgress || finished) pullDeadline = performance.now() + stallMs;
     else if (performance.now() >= pullDeadline) throw stalled;
     if (!firstOutput && hasProgress) {
@@ -356,6 +365,14 @@ export function nativeChatSse(
           releaseBuffer();
           if (sawDone || sawFinish) {
             if (!sawDone) enqueue(controller, "data: [DONE]\n\n");
+            settle(200);
+            controller.close();
+          } else if (sawToolCalls) {
+            // Mid tool-call truncation must fail closed to prevent downstream executing partial arguments.
+            fail(controller, "upstream SSE ended mid tool call without a terminal signal — possible truncation", "upstream_sse_truncated");
+          } else if (sawTextOutput) {
+            // Upstream produced text or reasoning output but missed the terminal frame; recover cleanly with [DONE].
+            enqueue(controller, "data: [DONE]\n\n");
             settle(200);
             controller.close();
           } else {

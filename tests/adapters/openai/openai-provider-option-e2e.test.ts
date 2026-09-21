@@ -17,6 +17,8 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { watchdogMs } from "../../helpers/ci-watchdog";
+import { ownedServiceHomeInspection } from "../../helpers/owned-service-home-inspection";
+import { phaseTimer } from "../../helpers/phase-timing";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 import { repoPath } from "../../helpers/repo-root";
 type Capture = {
@@ -121,6 +123,14 @@ function responsesLifecycle(body: Record<string, unknown>): string {
 
 describe("OpenAI provider-option integration spine", () => {
   test("keeps Pool, Direct, and API ownership stable across transports and management", async () => {
+    // Instrumented for #4997. This case missed its own 30s bound by 29ms in one control run and
+    // by 1.8s in another, and passes in the sharded lanes that run the same file, so the question
+    // is which part grew rather than whether the whole is too slow. The segments separate fixture
+    // setup, the server bind, the ownership assertions that are the actual contract, the migration
+    // child, and teardown including the reap. `captures` counts upstream requests this case has
+    // observed, which is the monotonic signal that tells a slow transport apart from a stalled one.
+    const timing = phaseTimer("openai provider-option ownership spine", () => captures.length);
+    timing.split("prepare");
     const root = mkdtempSync(join(tmpdir(), "ocx-provider-option-e2e-"));
     const opencodexHome = join(root, "opencodex");
     const codexHome = join(root, "codex");
@@ -141,6 +151,11 @@ describe("OpenAI provider-option integration spine", () => {
     let principalSeamCalls = 0;
     let loopbackOrigin: string | null = null;
     let server: { url: URL; stop(closeActiveConnections?: boolean): Promise<void> } | null = null;
+    // Hoisted so the outer finally can release them on the failure path too. Both used to be
+    // reachable only from the success path, so a case that threw mid-spine left a live socket and
+    // an unreaped child behind in a process that still had hundreds of files to run.
+    let openWebSocket: { close(): void } | null = null;
+    let migrationChild: { kill(): void; exited: Promise<number> } | null = null;
 
     const loopbackTuples = new Set([
       "GET /healthz",
@@ -350,8 +365,18 @@ describe("OpenAI provider-option integration spine", () => {
       expect(deriveModule.deriveProviderPresets().map(entry => entry.id)).not.toContain("openai-multi");
       expect(sidecar.listOpenAiForwardSidecarCandidates(config).map(row => row.providerName)).toEqual(["openai"]);
 
-      server = serverModule.startServer(0);
+      timing.split("server-start");
+      // Without this seam startup asks the host's real service manager who owns these homes, which
+      // on macOS means up to four synchronous `launchctl print` children across two domains, each
+      // carrying a two-second subprocess budget (src/service-manager-probe.ts). That is machine
+      // interrogation, not provider-option ownership, and it lands inside a 30s bound this case
+      // missed by 29ms. The verdict is unchanged: `owned` means no persistent service claim was
+      // observed, which is what a runner with no installed service reports anyway.
+      server = serverModule.startServer(0, {
+        inspectNativeCodexOwnership: ownedServiceHomeInspection("provider-option spine fixture"),
+      });
       loopbackOrigin = new URL(server.url).origin;
+      timing.split("execute");
       const local = (path: string, init?: RequestInit) => fetch(new URL(path, server!.url), init);
       const post = (path: string, body: unknown, headers: HeadersInit = {}) => local(path, {
         method: "POST",
@@ -405,13 +430,19 @@ describe("OpenAI provider-option integration spine", () => {
       const ws = new savedWebSocket(expectedWsUrl, {
         headers: { authorization: "Bearer fixture-caller-main" },
       } as unknown as string[]);
+      openWebSocket = ws;
       await new Promise<void>((resolve, reject) => {
         ws.addEventListener("open", () => resolve(), { once: true });
         ws.addEventListener("error", () => reject(new Error("fixture websocket failed to open")), { once: true });
       });
       const wsTurn = (model: string) => new Promise<Capture>((resolve, reject) => {
         const before = captures.length;
-        const timer = setTimeout(() => reject(new Error(`fixture websocket timeout: ${model}`)), watchdogMs(2_000));
+        // Detaching on the timeout matters as much as rejecting: a turn that gives up while still
+        // subscribed leaves a listener that can resolve a later turn's capture count.
+        const timer = setTimeout(() => {
+          ws.removeEventListener("message", onMessage);
+          reject(new Error(`fixture websocket timeout: ${model}`));
+        }, watchdogMs(2_000));
         const onMessage = (event: MessageEvent) => {
           if (!String(event.data).includes('"type":"response.completed"')) return;
           clearTimeout(timer);
@@ -533,6 +564,7 @@ describe("OpenAI provider-option integration spine", () => {
       const closed = new Promise<void>(resolve => ws.addEventListener("close", () => resolve(), { once: true }));
       ws.close();
       await closed;
+      openWebSocket = null;
 
       const selected = "openai-apikey/gpt-5.6-sol-pro";
       expect((await put("/api/disabled-models", { models: [selected] })).status).toBe(200);
@@ -574,6 +606,7 @@ describe("OpenAI provider-option integration spine", () => {
       ]) expect(usageLines.some(row => Object.entries(expected).every(([key, value]) => row[key] === value))).toBe(true);
 
       const migrationRoot = mkdtempSync(join(tmpdir(), "ocx-provider-option-migration-"));
+      timing.split("migration-child");
       try {
         const child = Bun.spawn([
           process.execPath,
@@ -581,6 +614,7 @@ describe("OpenAI provider-option integration spine", () => {
           join(migrationRoot, "opencodex"),
           join(migrationRoot, "codex"),
         ], { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+        migrationChild = child;
         const [stdout, stderr, exitCode] = await Promise.all([
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),
@@ -621,8 +655,16 @@ describe("OpenAI provider-option integration spine", () => {
           expect(receipt.principalSeamCalls).toBeGreaterThan(0);
         }
       } finally {
+        // Reap before the tree goes: a child still holding a descriptor under migrationRoot turns
+        // removal into a retry loop, and an orphan survives into whatever file runs next.
+        if (migrationChild !== null) {
+          migrationChild.kill();
+          await migrationChild.exited;
+          migrationChild = null;
+        }
         removeTreeWithRetry(migrationRoot);
       }
+      timing.split("execute-tail");
 
       expect(new Set(blockedUpstreamWebSocketUrls)).toEqual(new Set([
         "wss://chatgpt.com/backend-api/codex/responses",
@@ -651,7 +693,13 @@ describe("OpenAI provider-option integration spine", () => {
         }, null, 2) + "\n", { mode: 0o600 });
       }
     } finally {
+      timing.split("teardown");
       try {
+        try { openWebSocket?.close(); } catch { /* already closed or never opened */ }
+        if (migrationChild !== null) {
+          migrationChild.kill();
+          await migrationChild.exited;
+        }
         if (server) await server.stop(true);
       } finally {
         globalThis.fetch = savedFetch;
@@ -663,6 +711,7 @@ describe("OpenAI provider-option integration spine", () => {
         removeTreeWithRetry(root);
         expect(hashTree(realClaudeDir)).toBe(realClaudeHashBefore);
       }
+      timing.end();
     }
   }, 30_000);
 });

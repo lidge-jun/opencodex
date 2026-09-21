@@ -125,14 +125,14 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 <details>
 <summary>Docker Compose</summary>
 
-Depo, digest ile sabitlenmiş, root olmayan bir Compose derlemesi içerir. Ana makinede Git ve Bun kuruluysa,
-her imaj derlemesinden önce standart uyumluluk manifestosunu üretin, ardından veri düzlemi belirtecini
-stdin üzerinden bir kez ilklendirip hub'ı başlatın:
+Depo, digest ile sabitlenmiş, root olmayan bir Compose derlemesi içerir. Derleme, seçilen Git anlık
+görüntüsünden standart uyumluluk manifestosunu üretip doğrular. Yerel klon için Git ve Docker Compose,
+uzak Git bağlamı için Docker Compose gerekir. İki yöntemde de ana makinede Bun veya bir hazırlık adımı
+gerekmez. Veri düzlemi belirtecini stdin üzerinden bir kez ilklendirip hub'ı başlatın:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -143,11 +143,29 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 Varsayılan ana makine bağlaması `127.0.0.1:10100`. Uzaktan erişime açmak için
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d` gerekir; `0.0.0.0` tüm ana
 makine arayüzlerini açar. Erişimi bir güvenlik duvarı ve kimlik doğrulamalı bir TLS/tailnet ön yüzüyle
-kısıtlayın. Üretilen JSON izlenmez; imaja `.git` olmadan kopyalanır. Kaynak değiştiğinde yeniden
-üretin ve üretimle derleme arasında kaynağa dokunmayın. Derleme; eski manifestoları, eksik ya da uyuşmayan
+kısıtlayın. Üretilen JSON izlenmez. Derleme bağlamına yalnızca `git ls-files` envanterinin okuduğu
+`.git/index` ve `.git/HEAD` alınır; tam nesne deposu yerine yaklaşık 1 MB tutar. Bunlar salt okunur bir
+bağlama üzerinden yalnızca derlemeye özel manifesto aşamasında görünür, dolayısıyla hiçbir `COPY` `.git`
+içermez. Ana makinede önceden üretilmiş bir manifesto yalnızca doğrulandıktan sonra kabul edilir; aksi
+halde derleme manifestoyu kendisi üretir. Derleme; eski manifestoları, eksik ya da uyuşmayan
 dosyaları, fazladan kaynak dosyalarını ve sembolik bağlantıları reddeder. Kayıtlı her SHA-256 değerini
 derleme bağlamıyla ve kopyalanan çalışma zamanı dosyalarıyla karşılaştırır: `package.json`,
 `bun.lock` ve özellikle dahil edilen `scripts/model-metadata.source.json`.
+
+Uzak Git bağlamında BuildKit'in Git meta verilerini koruması gerekir. Bu Compose derleme parçası uzak
+anlık görüntüyü seçer ve gereken yerleşik argümanı iletir:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 Belirteç ve değişken durum `ocx-state` adlı volume içinde kalır; imaja, Compose dosyasına, ortama ya da
 kabuk argümanlarına hiçbir kimlik bilgisi konmaz. Sağlayıcı kurulumu, kimlik doğrulamalı kabul kontrolleri,
@@ -299,7 +317,7 @@ Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax, Qwen 
 
 ```bash
 ocx init                       # etkileşimli kurulum (config yazar, Codex'i bağlar, shim önerir)
-ocx start [--port 10100]       # proxy'yi ön planda başlat
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 varsayılanı socks5://127.0.0.1:10808
 ocx stop                       # durdur + yerel Codex'i geri yükle
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # arka plan servisi
 ocx codex-shim install         # `codex` her başladığında proxy'yi isteğe bağlı başlat
@@ -314,8 +332,9 @@ ocx v2 <...>                   # çoklu ajan v1/v2 yüzey denetimleri
 ocx update [--tag preview]     # opencodex'i güncelle
 ```
 
-Sabitlenmemiş başlatmalar, tercih edilen bağlantı noktası meşgulse başka bir boş bağlantı noktasına
-geçebilir; açıkça verilen bir `--port` asla değişmez. Tam başvuru:
+Tercih edilen bağlantı noktası meşgulse başlatma başka bir bağlantı noktasına geçmek yerine durur ve bağlantı
+noktasını hangi işlemin tuttuğunu bildirir; böylece ilkinin yanında ikinci bir proxy çalışır durumda kalamaz.
+Bağlantı noktasını boşaltın veya `--port` ile farklı bir tane belirtin. Tam başvuru:
 [CLI belgeleri](https://opencodex.me/tr/reference/cli/).
 
 ### Sağlık ve hazırlık

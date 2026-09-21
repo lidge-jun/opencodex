@@ -437,6 +437,28 @@ describe("generic OAuth pool-settings contract (#695)", () => {
     expect(result.autoSwitchThreshold).toBeNull();
   });
 
+  test("a live generic pool reports a zero threshold as off", async () => {
+    const out = capture();
+    try {
+      expect(await cmdAutoSwitch(
+        ["google-antigravity", "status", "--json"],
+        genericDeps(() => ({ json: { enabled: true, autoSwitchThreshold: 0, inert: false } }), []),
+      )).toBe(0);
+    } finally { out.restore(); }
+    expect(JSON.parse(out.lines.join("\n"))).toEqual({
+      provider: "google-antigravity", autoSwitchThreshold: 0, enabled: false, poolEnabled: true, inert: false,
+    });
+
+    const human = capture();
+    try {
+      expect(await cmdAutoSwitch(
+        ["google-antigravity", "status"],
+        genericDeps(() => ({ json: { enabled: true, autoSwitchThreshold: 0, inert: false } }), []),
+      )).toBe(0);
+    } finally { human.restore(); }
+    expect(human.lines.join("\n")).toContain("auto-switch: off (stored threshold 0%; usage-based switching disabled)");
+  });
+
   test("a successful generic write with a null body reports unknown settings", async () => {
     const calls: Captured[] = [];
     const out = capture();

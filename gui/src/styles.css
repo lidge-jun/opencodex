@@ -1980,17 +1980,9 @@ dialog.modal-overlay::backdrop {
 .codex-account-more-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; padding-top: 6px; }
 .codex-account-identity { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px 6px; min-width: 0; }
 .codex-account-identity-copy { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
-.codex-account-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; min-width: 0; }
 .codex-account-priority { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0; min-width: 0; flex: 0 0 auto; }
 .codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
-.codex-account-auto-switch { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 0 0 auto; }
-.codex-account-auto-switch-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
-.codex-account-auto-switch-input-wrap { display: inline-flex; align-items: stretch; position: relative; }
-.codex-account-auto-switch-input { width: 76px; height: 30px; padding: 4px 38px 4px 8px; font-size: var(--text-label); text-align: right; }
-.codex-account-auto-switch-unit { position: absolute; right: 25px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: var(--text-label); pointer-events: none; }
-.codex-account-auto-switch-input-wrap .ocx-stepper { width: 22px; }
-.codex-account-auto-switch-toggle { transform: scale(.8); transform-origin: center; margin-inline: -3px; }
 
 .startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .startup-runtime-notice-slot {
@@ -2600,7 +2592,7 @@ button.prov-account-row.active { cursor: default; }
 .heatmap-cell-4 { background: var(--green); }
 .heatmap-legend { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-label); align-self: flex-end; position: sticky; right: 0; }
 .heatmap-legend .heatmap-cell { width: 10px; height: 10px; }
-.heatmap-tip { position: fixed; z-index: 10; transform: translate(-50%, -100%) translateY(-8px); pointer-events: none;
+.heatmap-tip { position: fixed; z-index: var(--z-popover); pointer-events: none;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px;
   box-shadow: var(--shadow-sm); white-space: nowrap; font-size: var(--text-label); }
 .heatmap-tip-date { font-weight: var(--weight-semibold); color: var(--text); margin-bottom: 2px; }
@@ -2611,7 +2603,7 @@ button.prov-account-row.active { cursor: default; }
 
 /* 7d view: per-day request bar chart (replaces the year heatmap on the 7d toggle). */
 .daybars { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; align-items: end; height: 180px; padding-top: 8px; }
-.daybar { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+.daybar { appearance: none; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
 .daybar-track { width: 100%; max-width: 48px; flex: 1; display: flex; align-items: flex-end; background: var(--border); border-radius: var(--radius-xs); overflow: hidden; }
 /* Full-height stack scaled on Y — avoids layout thrash from animating height. */
 .daybar-stack {
@@ -2630,9 +2622,9 @@ button.prov-account-row.active { cursor: default; }
 .daybar-count { font-size: var(--text-label); font-weight: var(--weight-semibold); color: var(--text); }
 .daybar-label { font-size: var(--text-caption); white-space: nowrap; }
 .daybar:hover .daybar-track { outline: 1px solid var(--border); }
-.daybar-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 5;
+.daybar-tip { position: fixed; z-index: var(--z-popover);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;
-  min-width: 160px; box-shadow: var(--shadow-sm); pointer-events: none; }
+  min-width: min(160px, calc(100vw - 16px)); box-shadow: var(--shadow-sm); pointer-events: none; }
 .daybar-tip-date { font-size: var(--text-label); font-weight: var(--weight-semibold); color: var(--text); margin-bottom: 6px; white-space: nowrap; }
 .daybar-tip-row { display: flex; align-items: center; gap: 8px; font-size: var(--text-label); line-height: var(--leading-relaxed); }
 .daybar-tip-swatch { width: 10px; height: 10px; border-radius: var(--radius-2xs); flex-shrink: 0; }

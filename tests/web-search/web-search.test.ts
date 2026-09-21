@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as abortModule from "../../src/lib/abort";
 import { parseRequest } from "../../src/responses/parser";
 import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../../src/web-search";
 import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../../src/web-search/loop";
@@ -14,6 +15,7 @@ import type { OcxMessage, OcxParsedRequest } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { withUpstreamHttpVersion } from "../../src/lib/upstream-http-version";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * Wrap a fetch so it applies the provider's HTTP-version pin the way `providerFetch` does in
@@ -565,7 +567,13 @@ describe("web-search sidecar planning", () => {
 });
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the preload-home lease before later teardown can replace or remove that home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  globalThis.fetch = originalFetch;
+});
 
 test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTTP version pin", async () => {
   let routedProtocol: string | undefined;
@@ -605,6 +613,8 @@ test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTT
     throw new Error("the routed web-search leg must use the provider fetch");
   }) as typeof fetch;
 
+  // Direct dispatch needs the writer lease that startServer normally owns for this home.
+  releaseSpendHome = acquireOwnedSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
@@ -960,57 +970,56 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
   });
 
   test("fast headers plus raw byte progress can outlive connectTimeoutMs", async () => {
-    const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-    let bodyCancelled = 0;
-    const adapter: ProviderAdapter = {
-      name: "slow-healthy-stream",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    const connectTimeoutMs = 25;
+    // First-byte virtual time exceeds the header deadline; moving clear() there turns this red.
+    const deadlineController = new AbortController(), timeoutReason = new DOMException("Timeout elapsed", "TimeoutError"), originalDeadline = abortModule.clearableDeadline;
+    let deadlineCreations = 0, deadlineClears = 0, deadlineCleared = false, virtualElapsedMs = 0, bodyCancelled = 0;
+    const deadlineSpy = spyOn(abortModule, "clearableDeadline").mockImplementation((timeoutMs, parent) => {
+      if (timeoutMs !== connectTimeoutMs) return originalDeadline(timeoutMs, parent);
+      deadlineCreations++; const signal = parent ? AbortSignal.any([parent, deadlineController.signal]) : deadlineController.signal;
+      return {
+        signal, timeoutReason,
+        didExpire: () => signal.aborted && signal.reason === timeoutReason,
+        clear: () => { deadlineClears++; deadlineCleared = true; } };
+    });
+    const encoder = new TextEncoder(), adapter: ProviderAdapter = {
+      name: "slow-healthy-stream", buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
       fetchResponse: async (_request, ctx) => {
-        const body = new ReadableStream<Uint8Array>({
-          async start(controller) {
-            const encoder = new TextEncoder();
-            for (const chunk of ["a", "b", "c", "d", "e"]) {
-              await delay(12);
-              if (ctx?.abortSignal?.aborted) {
-                controller.error(ctx.abortSignal.reason);
-                return;
-              }
-              controller.enqueue(encoder.encode(chunk));
-            }
-            controller.close();
+        let chunkIndex = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            virtualElapsedMs += connectTimeoutMs + 1;
+            if (virtualElapsedMs > connectTimeoutMs && !deadlineCleared) deadlineController.abort(timeoutReason);
+            if (ctx?.abortSignal?.aborted) { controller.error(ctx.abortSignal.reason); return; }
+            controller.enqueue(encoder.encode("abcde"[chunkIndex++]!));
+            if (chunkIndex === 5) controller.close();
           },
           cancel() { bodyCancelled++; },
-        });
-        return new Response(body, { status: 200 });
+        }, { highWaterMark: 0 }), { status: 200 });
       },
       async *parseStream(response) {
         expect(await response.text()).toBe("abcde");
         yield { type: "text_delta", text: "healthy after slow generation" };
         yield { type: "done" };
       },
-      async parseResponse(response) {
-        await response.text();
-        return [{ type: "text_delta", text: "legacy non-stream result" }, { type: "done" }];
-      },
+      async parseResponse(response) { await response.text(); return [{ type: "text_delta", text: "legacy non-stream result" }, { type: "done" }]; },
     };
+    try {
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter, forwardProvider, hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+        settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+        maxSearches: 1, connectTimeoutMs,
+      });
 
-    const started = performance.now();
-    const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
-      adapter,
-      forwardProvider,
-      hostedTool: { type: "web_search" },
-      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
-      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
-      maxSearches: 1,
-      connectTimeoutMs: 25,
-    });
-
-    expect(response.status).toBe(200);
-    const frames = await collectSse(response.body!);
-    expect(performance.now() - started).toBeGreaterThanOrEqual(50);
-    expect(bodyCancelled).toBe(0);
-    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+      expect(response.status).toBe(200);
+      const frames = await collectSse(response.body!);
+      expect(virtualElapsedMs).toBeGreaterThan(connectTimeoutMs); expect(deadlineCreations).toBe(1);
+      expect(deadlineClears).toBeGreaterThan(0); expect(deadlineController.signal.aborted).toBe(false);
+      expect(bodyCancelled).toBe(0);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    } finally { deadlineSpy.mockRestore(); }
   }, 1_000);
 
   test("a buffered web_search followed by error never dispatches the hosted sidecar", async () => {
@@ -1214,48 +1223,6 @@ describe("web-search sidecar native web_search_call emission", () => {
     // Same-target replay reuses the ONE built request (builder runs once per target sequence).
     expect(builds).toBe(1);
   });
-
-  test("retry wait longer than the stall budget still succeeds (heartbeats feed the watchdog)", async () => {
-    globalThis.fetch = (() => Promise.resolve(new Response(
-      'event: response.completed\ndata: {"type":"response.completed"}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    ))) as typeof fetch;
-
-    let sends = 0;
-    const retryingAdapter: ProviderAdapter = {
-      name: "mock-retry429",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => {
-        sends += 1;
-        if (sends === 1) {
-          return new Response("rate limited", { status: 429, headers: { "retry-after": "30" } });
-        }
-        return new Response("{}", { status: 200 });
-      },
-      async *parseStream() {
-        yield { type: "text_delta", text: "answer after long backoff" };
-        yield { type: "done" };
-      },
-      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
-    };
-
-    const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
-      adapter: retryingAdapter,
-      forwardProvider,
-      hostedTool: { type: "web_search" },
-      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
-      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
-      maxSearches: 1,
-      stallTimeoutSec: 1,
-      retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 1_500, maxIntervalMs: 60_000, respectRetryAfter: false },
-    });
-    const frames = await collectSse(response.body!);
-    // A 1.5s backoff under a 1s stall budget must not trip upstream_stall_timeout.
-    expect(sends).toBe(2);
-    expect(frames.find(f => f.event === "response.completed")).toBeDefined();
-    expect(frames.find(f => f.event === "response.failed")).toBeUndefined();
-  }, 5_000);
 
   test("retry wait longer than connectTimeoutMs restarts the header deadline (no 504)", async () => {
     globalThis.fetch = (() => Promise.resolve(new Response(

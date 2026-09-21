@@ -1,21 +1,66 @@
 # Docs And Release
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
+
+Refresh-lock validation covers fresh unreadable locks, descriptor-matched release, path-probe failures preserving callback outcomes, and confirmed-owner unlink error handling in `tests/codex-integration/codex-account-store.test.ts`; the [catalog contract](../catalog.md#accounts-namespaces-and-pool-rotation) explicitly does not promise atomic compare-and-delete. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
+The CLI documents explicit Windows x64 installation observation separately from updates; observation never grants installation authority. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
+Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
+
+`tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
+`src/cli/config-command.ts` derives token ownership without importing the connect command or
+triggering catalog, lifecycle, or ACL-hardening work.
+
+The CLI default dashboard address follows the [management ingress bind](../runtime.md#hub-management-dashboard-address), covered by `tests/cli/cli-dispatch.test.ts`.
+
+Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
+
+The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
+
+The account reference documents the [Orca source-owned import](../codex-home.md#orca-source-owned-account-import).
+Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
+lists its required source/registry paths and preview/apply flags.
+
 ## Public docs
+
+The provider configuration reference and provider guide own the public Google tool-schema policy:
+the persisted values/default, initial refusal, non-direct repair withholding, direct no-repair
+behavior, and content-free diagnostics. English and all translated copies change together.
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
 served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, and Japanese under `/ja`. `docs-site/astro.config.mjs` is the locale source of truth.
 
+Server-configuration credential rows in English and every locale copy distinguish data-plane `apiKeys` from the independent management admin credential and link the matching locale management reference. Credential setup instructions themselves stay in the management reference; the rows only name the separation.
+
+Proxy-format, adapter, and provider documentation distinguishes server-level SOCKS5 configured outbound fetch from scheme-specific HTTP(S) routing, and every locale copy carrying that claim stays aligned. The public pages own the runtime detail rather than duplicating it here.
+
 Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a public page, update the
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
+
+Provider preset totals are recounted from the current registry when a preset lands. With Crusoe the
+documented split is 94 total: 78 key-based, 12 OAuth, three local, and one default ChatGPT-forward
+preset. The English provider guide and all seven translated copies carry the same counts and the
+same fixed-host discovery limits.
 
 Native retirement keeps active model/quota instructions aligned across locales with the
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers
 sharing a model-name fragment remain distinct from current Codex-native support.
+
+The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
+`tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
+
+The provider guide's OrcaRouter login section in English and all seven translated sources follows
+the [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
+64 KiB of valid UTF-8 JSON and one 30-second deadline covering headers and body. These are login
+limits, so the public guide does not apply them to inference payloads.
 
 ## GitHub Pages
 
@@ -27,6 +72,17 @@ https://opencodex.me/
 
 The workflow runs on `main` pushes touching `docs-site/**` or the workflow itself, builds
 `docs-site`, uploads the artifact, and deploys with GitHub Pages.
+
+That workflow is the deploy path, not a review gate: it first runs after promotion to `main`,
+so on its own it can only report a broken site once the change has already left review. The
+pull-request gate is the `docs-site-build` job in `.github/workflows/ci.yml`, selected by the
+`changes` job's `docs` filter (`docs-site/**` and the workflow itself). One Linux leg installs
+`docs-site` with `--frozen-lockfile` and runs the Astro build, so a manifest and lockfile that
+disagree fail before the build does. The `ci` aggregate treats it exactly like the other scoped
+jobs: requested when the filter is true, required `skipped` otherwise.
+
+The deliberate omission is that `docs-site/**` is not in the `ci` filter. A prose edit has no
+business starting the cross-platform suite; it only has to build.
 
 > Decision record: [ADR-0080](../decisions/ADR-0080-github-pages.md)
 
@@ -45,14 +101,15 @@ container bootstrap helper, but still publishes no registry image. The source bu
 base by multi-platform digest, runs non-root with a read-only root filesystem and dropped
 capabilities, publishes the data port on host loopback by default (remote binding is an explicit
 `OPENCODEX_BIND_ADDRESS` opt-in), persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
-owner-only canonical token file. Before every image build, operators run
-`bun scripts/generate-compatibility-version.ts` in the host Git checkout. The runtime copies
-that untracked JSON artifact without including `.git` in the Docker context or changing the
-generator's tracked-source authority. `docker/verify-compatibility.ts` rejects stale manifests
-by comparing all file hashes and the complete source inventory in the read-only build context
-and copied runtime tree. It rejects symlinks, missing/mismatched entries, and extra source files.
+owner-only canonical token file. A build-only manifest stage uses Git metadata from a read-only
+context mount to run `scripts/generate-compatibility-version.ts`; remote Git contexts retain that
+metadata through `BUILDKIT_CONTEXT_KEEP_GIT_DIR=1`. A verified host-generated artifact remains a
+compatible input. No `COPY` includes `.git`, and the Git executable does not reach the runtime stage.
+`docker/verify-compatibility.ts` compares all file hashes and the complete source inventory in the
+read-only build context before source copy and again in the copied runtime tree. It rejects symlinks,
+missing/mismatched entries, and extra source files.
 The required roots are `package.json`, `bun.lock`, and `scripts/model-metadata.source.json`;
-the context admits only that exact scripts artifact.
+the context also admits the canonical generator, while the runtime includes only the metadata source.
 Operators must still prove liveness, readiness, authenticated
 catalog access, and a real routed response before promotion.
 
@@ -70,10 +127,10 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs six shards only on manual dispatch with `lane=all` (or empty), not on push events. Aggregate `ci` accepts an intentional Windows skip, so release evidence must inspect all six actual job results on the exact publish SHA. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
-| `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
+| `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. This is the deploy path; the pull-request build gate is the `docs-site-build` job in `ci.yml`. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
 | `.github/workflows/enforce-issue-quality.yml` | `issues` (opened, edited, reopened), `issue_comment` (created, edited), or manual dispatch with an issue number | Issue-template compliance gate. |
@@ -113,6 +170,12 @@ invariants belong in `structure/`, not the README.
 `docs/` contains investigations and diagnostic notes. Do not treat it as the current public user
 manual. When an investigation graduates into a maintained invariant, summarize it here under
 `structure/` and link public workflows from `docs-site/`.
+
+Cross-cutting structure contracts are maintained by editing `structure/manifest.json`, the authority
+statement, and any dependent whose local explanation changes. Regenerate `structure/INDEX.md` with
+the owning command and require the structure check in hosted CI. The
+[structure rules](../AGENTS.md#the-source-to-doc-map) retain review of every document mapped to a
+changed source area even when no text edit is needed.
 
 ## Branch and devlog policy
 
@@ -269,12 +332,31 @@ preview has closed that stable patch line.
 
 ## Cross-platform CI
 
+The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
+
 `.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
 the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
-runs the full suite in six shards only on manual `workflow_dispatch` with `lane=all` (or an
-empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix. A
-release that requires Windows proof must dispatch it for the exact publish SHA and inspect
-all six successful jobs; an aggregate green `ci` check can include a deliberate Windows skip.
+runs the full suite in nine shards only on manual `workflow_dispatch` with `lane=all` (or an
+empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
+aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
+
+Nothing in the workflow retries. Linux and Windows use `scripts/ci/run-bun-test-batches.sh`, but
+each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
+Windows uses six files and 480 seconds. Windows selects all test families, while Linux leaves the
+storage-policy and api-usage families to its dedicated jobs. The Windows step disables the
+user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
+dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
+the process timeout without executing tests. The per-process home isolation and live-home/service
+manager guards remain active because the preload installs them before the lock boundary. A test
+failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
+batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
+failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
+jobs this run actually requested, then requires `success` from every one of them and `skipped`
+from every job the event did not request — so a job that was requested and never started can no
+longer report as a deliberate skip. On a `lane=all` dispatch the gate additionally reads the
+run's own job list through the Actions API and requires nine concrete successful `windows N/9`
+results, because a matrix rollup can report `success` when one matrix leg is skipped. A
+release that requires Windows proof still dispatches it for the exact publish SHA.
 Across the jobs, the workflow runs:
 
 ```bash
@@ -316,7 +398,7 @@ and its matching-cache or `unavailable` result.
 
 The Remote Hub guide and affected CLI, server-config, management-API, and dashboard references have eight sources: root English plus `fr`, `ko`, `zh-cn`, `zh-tw`, `ru`, `ja`, and `tr`. English is canonical; commands, defaults, endpoint auth, and warnings remain exact in translations. A release requires the remote-only focused/full gates, privacy scan, GUI/docs builds, protocol compatibility receipts, and the MAINTAINERS security review for the exact head.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](../providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 The account CLI and translated Codex integration guides follow the [automatic plan exclusion contract](../providers/openai-tiers.md#automatic-pool-plan-exclusions), including all-excluded pools and explicit routes.
@@ -327,7 +409,7 @@ The shared atomic replacement publisher also identifies explicit Remote Workspac
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
 The Combo guides describe the distinction between display quota and single-credential inference evidence used by routing. See [scoped provider quota](../runtime.md#scoped-provider-quota-for-combo-selection).
@@ -342,13 +424,11 @@ its defaults and exclusions are owned by [Responses transport](../transports/res
 
 Provider configuration documents distinguish actual summaries from raw reasoning content. The test layout registers the summary-default contract cases and removes the obsolete content-rewrite test with its implementation.
 
-## Paginated history writer boundary
-
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](../codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
+Paginated and migration-capable history follows the [authoritative writer contract](../codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
 Private pool credential metadata follows the [quota-history publication identity contract](../providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Hub/browser pairing instructions distinguish machine enrollment, session authentication, permission denial and network failure. The hosted dashboard preview is the render artifact used to review these states.
 The integrations guide documents Cline CLI as a two-file, loopback-only integration. Hosted CI validates its source-backed fixtures; the packaged dashboard exposes it through the existing client list.
@@ -375,3 +455,7 @@ Exact [model input declarations](../config.md#explicit-per-model-capability-decl
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.

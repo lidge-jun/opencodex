@@ -139,7 +139,7 @@ function handleList(args: string[]): void {
 // provider add
 // ---------------------------------------------------------------------------
 
-const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--model <id> --text-only] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
+const ADD_USAGE = "Usage: ocx provider add <name> [--adapter <adapter>] [--base-url <url>] [--api-key <key>] [--api-key-transport <x-api-key|bearer>] [--default-model <model>] [--model <id> --text-only] [--google-tool-schema-policy <compatible|reject-lossy>] [--allow-private-network] [--set-default] [--force] [--json] [--sync]";
 
 async function handleAdd(args: string[]): Promise<void> {
   const name = args[0];
@@ -164,6 +164,7 @@ async function handleAdd(args: string[]): Promise<void> {
   const adapter = consumeFlagValue(restArgs, "--adapter");
   const baseUrl = consumeFlagValue(restArgs, "--base-url");
   const defaultModel = consumeFlagValue(restArgs, "--default-model");
+  const googleToolSchemaPolicy = consumeFlagValue(restArgs, "--google-tool-schema-policy");
   const textOnly = consumeFlag(restArgs, "--text-only");
   const capabilityModel = consumeFlagValue(restArgs, "--model");
   rejectUnknownArgs(restArgs, ADD_USAGE);
@@ -227,6 +228,17 @@ async function handleAdd(args: string[]): Promise<void> {
       process.exit(1);
     }
     provConfig.apiKeyTransport = apiKeyTransport;
+  }
+  if (googleToolSchemaPolicy !== undefined) {
+    if (googleToolSchemaPolicy !== "compatible" && googleToolSchemaPolicy !== "reject-lossy") {
+      console.error('Error: --google-tool-schema-policy must be "compatible" or "reject-lossy".');
+      process.exit(1);
+    }
+    if (provConfig.adapter !== "google") {
+      console.error("Error: --google-tool-schema-policy requires the google adapter.");
+      process.exit(1);
+    }
+    provConfig.googleToolSchemaPolicy = googleToolSchemaPolicy;
   }
 
   const existingProvider = config.providers[name];

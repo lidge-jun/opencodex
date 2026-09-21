@@ -202,6 +202,37 @@ export function pendingTeardownOutstanding(): boolean {
   }
 }
 
+/**
+ * Are the outstanding obligations EXACTLY the ones this stop chose to keep?
+ *
+ * `ocx stop` can preserve its own obligations deliberately — the Codex history preflight
+ * refuses before anything is restored, so the receipt has to survive for a later stop
+ * (#4718). That is safe for an update to continue past, because the stop knows those
+ * receipts describe a proxy it just proved down.
+ *
+ * Nothing else is. A quarantined receipt is waiting on a human, and a receipt belonging
+ * to a live owner means another stop is in flight; letting either ride along would turn
+ * "we deliberately kept ours" into "we ignored everyone's". So membership is the test,
+ * not a count of ours: an unrecognized obligation of any kind answers false and the
+ * caller falls back to the ordinary failure code.
+ *
+ * Quarantined names are included in the scan on purpose. They do not correspond to any
+ * nonce this run preserved, so their presence always answers false.
+ */
+export function pendingTeardownsAreExactly(nonces: readonly string[]): boolean {
+  const expected = new Set(nonces.map(nonce => `${PREFIX}${nonce}${SUFFIX}`));
+  let names: string[];
+  try {
+    names = readdirSync(getConfigDir());
+  } catch (error) {
+    // A home that does not exist holds nothing, which matches only an empty expectation.
+    // Any other scan failure may be hiding an obligation and must not answer "exactly".
+    return (error as NodeJS.ErrnoException).code === "ENOENT" && expected.size === 0;
+  }
+  const found = names.filter(isAnyTeardownObligationFileName);
+  return found.length === expected.size && found.every(name => expected.has(name));
+}
+
 /** Paths of quarantined obligations awaiting a human. */
 export function listQuarantinedTeardowns(): string[] {
   try {
@@ -264,6 +295,14 @@ export function quarantinePendingTeardown(nonce: string): string | null {
  * alone. Only an abandoned obligation is a candidate, and a VALID one still has to prove
  * its endpoint is down before anything is restored — an invalid one never can, which is
  * what {@link quarantinePendingTeardown} exists for.
+ *
+ * `isAlive` must answer "is the OWNER still running", which is not "is this PID alive".
+ * PIDs are reused: after the owner exits its number can be handed to an unrelated process,
+ * and a bare liveness probe then reports the owner as running for as long as that process
+ * lives. The receipt is neither recovered nor quarantined nor reported while both updater
+ * gates keep refusing on it, which is a permanent fail-closed with no way forward (#4897).
+ * `handleStop` therefore passes an identity-aware predicate; do not substitute a bare
+ * `process.kill(pid, 0)` here for cheapness.
  */
 export function isPendingTeardownAbandoned(
   read: PendingTeardownRead | TeardownScanFailure,

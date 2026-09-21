@@ -1168,11 +1168,31 @@ describe("bot-owned control state", () => {
     assert.equal(decision.reason, "rate_limited_interval");
   });
 
-  it("defuses mention-shaped tokens without rewriting emails or mid-token at-signs", () => {
-    const out = sanitizeTranslationBody("see @octocat and user@example.com and npm:@scope");
+  it("defuses mention-shaped tokens at Markdown and punctuation boundaries", () => {
+    const out = sanitizeTranslationBody(
+      "see @octocat, comma,@team, [@user], >@org/team, Status:@maintainer, user@example.com, npm:@scope",
+    );
     assert.match(out, /@\u200boctocat/);
+    assert.match(out, /,@\u200bteam/);
+    assert.match(out, /\[@\u200buser\]/);
+    assert.match(out, />@\u200borg\/team/);
+    assert.match(out, /Status:@\u200bmaintainer/);
     assert.ok(out.includes("user@example.com"));
     assert.ok(out.includes("npm:@scope"));
+  });
+
+  it("preserves punctuation-bearing email local parts while defusing mentions", () => {
+    const out = sanitizeTranslationBody(
+      "mail x!@example.com, a=b@example.com, or a/b@example.com; end!@octocat key=@value path/@handle user.name@example.com user+tag@example.com",
+    );
+    assert.ok(out.includes("x!@example.com"));
+    assert.ok(out.includes("a=b@example.com"));
+    assert.ok(out.includes("a/b@example.com"));
+    assert.ok(out.includes("user.name@example.com"));
+    assert.ok(out.includes("user+tag@example.com"));
+    assert.match(out, /end!@\u200boctocat/);
+    assert.match(out, /key=@\u200bvalue/);
+    assert.match(out, /path\/@\u200bhandle/);
   });
 
   it("ignores forged body-embedded legacy state", () => {

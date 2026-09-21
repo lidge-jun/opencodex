@@ -146,6 +146,19 @@ test("offers a manual open fallback alongside the copy button", async () => {
   expect(host.textContent).toContain("Didn't open?");
 });
 
+test.each([
+  "javascript:alert(document.domain)",
+  "file:///etc/passwd",
+  "vscode://file/etc/passwd",
+  "not a URL",
+])("does not make an unsafe authorization URL clickable: %s", async (unsafeUrl) => {
+  await render(unsafeUrl);
+
+  expect(host.querySelector(".login-url-block-text")?.textContent).toBe(unsafeUrl);
+  expect(host.querySelector(".login-url-block-open")).toBeNull();
+  expect(host.textContent).not.toContain("Didn't open?");
+});
+
 // The block is shared by three surfaces, so its styles must not read as owned
 // by any one of them. Without this the "ownership" claim is unenforceable.
 test("carries component-scoped class names, not a host surface's prefix", async () => {

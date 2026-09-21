@@ -133,6 +133,12 @@ export function clearPendingConfigObjectChildDeletions(config: OcxConfig): void 
   pendingObjectChildDeletions.delete(config);
 }
 
+/** Consume both kinds of pending deletion only after a successful config publication. */
+export function clearPendingConfigDeletions(config: OcxConfig): void {
+  clearPendingConfigObjectChildDeletions(config);
+  clearPendingConfigTopLevelDeletions(config);
+}
+
 /**
  * Capture field replacements and deletion intent for a synchronous live-config save.
  * Restore before yielding on failure: an asynchronous rollback could overwrite a newer

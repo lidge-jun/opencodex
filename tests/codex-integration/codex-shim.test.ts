@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../../src/codex/shim";
+import { prependPath, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -40,10 +41,6 @@ const python3Path = process.platform === "win32"
 setCodexShimProbeObservationMsForTests(20);
 afterAll(() => setCodexShimProbeObservationMsForTests(null));
 const psPath = process.platform !== "win32" && existsSync("/bin/ps") ? "/bin/ps" : "";
-
-function prependPath(dir: string, current: string | undefined): string {
-  return [dir, current].filter(Boolean).join(delimiter);
-}
 
 function successfulLauncher(label: string): string {
   return process.platform === "win32" ? `${label}\r\n` : `#!/bin/sh\n# ${label}\nexit 0\n`;
@@ -83,48 +80,6 @@ function expectProcessGroupMissing(groupId: number): void {
     code = (error as NodeJS.ErrnoException).code;
   }
   expect(code).toBe("ESRCH");
-}
-
-function withInstalledShim(run: (paths: {
-  binDir: string;
-  home: string;
-  wrappers: string[];
-  backups: string[];
-  statePath: string;
-}) => void): void {
-  const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-bin-"));
-  const home = mkdtempSync(join(tmpdir(), "ocx-shim-home-"));
-  const oldPath = process.env.PATH;
-  const oldHome = process.env.OPENCODEX_HOME;
-  const wrappers = process.platform === "win32"
-    ? [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")]
-    : [join(binDir, "codex")];
-  try {
-    process.env.PATH = prependPath(binDir, oldPath);
-    process.env.OPENCODEX_HOME = home;
-    for (const wrapper of wrappers) {
-      writeFileSync(wrapper, process.platform === "win32" ? `real ${wrapper}\n` : "#!/bin/sh\necho real\n", "utf8");
-      if (process.platform !== "win32") chmodSync(wrapper, 0o755);
-    }
-    const installed = installCodexShim();
-    expect(installed.installed, installed.message).toBe(true);
-    const statePath = join(home, "codex-shim.json");
-    const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<{ wrapperPath: string; backupPath: string }> };
-    run({
-      binDir,
-      home,
-      wrappers: state.wrappers.map(file => file.wrapperPath),
-      backups: state.wrappers.map(file => file.backupPath),
-      statePath,
-    });
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = oldHome;
-    removeTreeWithRetry(binDir);
-    removeTreeWithRetry(home);
-  }
 }
 
 describe("Codex autostart shim", () => {

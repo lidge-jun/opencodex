@@ -133,6 +133,26 @@ function fixture(configName = "opencodex", includePool = true): Fixture {
   return { root, codexHome, configDir, key, manager };
 }
 
+/**
+ * The same fixture with its own state directory, for a successor launched while the owner still
+ * listens.
+ *
+ * These cases deliberately overlap two live proxies to prove the contended, admission-denied,
+ * hard-kill and takeover sequence. They cannot share one OPENCODEX_HOME: the spend journal
+ * allows one writer per state directory, so the successor would be refused before it ever bound
+ * and the case would report a startup failure instead of the transition it is about. CODEX_HOME
+ * is unchanged, and the native-main lock, recovery journal and vault all derive from that, so
+ * every assertion in these cases still observes the same shared native state.
+ */
+function successorConfig(f: Fixture, configName: string, includePool: boolean): Fixture {
+  const configDir = join(f.root, configName);
+  const parentConfigDir = process.env.OPENCODEX_HOME;
+  writeConfig(f.codexHome, configDir, MAIN_CODEX_ACCOUNT_ID, includePool);
+  if (parentConfigDir === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = parentConfigDir;
+  return { ...f, configDir };
+}
+
 // Each wait bounds a real child proxy doing real work: spawning Bun, opening the
 // owner SQLite database, and acquiring or releasing the lease. On the Windows
 // shards four Bun pools share one runner, so the fixed 10s bounds were reporting
@@ -211,8 +231,29 @@ class ChildHarness {
     for (;;) {
       const found = this.events.find(predicate);
       if (found) return found;
+      // A dead child and a slow one used to report identically. On run 35210400258
+      // (windows 7/9) the first wait of a case failed with `events=[] stderr=` -- and because
+      // that stderr promise only resolves at EOF, its emptiness proves the child had already
+      // exited, silently, rather than that it was still booting. The message never said so.
+      // Report the exit the moment it happens, with the code, instead of spending the deadline.
+      if (this.child.exitCode !== null || this.child.signalCode !== null) {
+        // The event and the exit can land in the same wake, so re-check before blaming death.
+        const settled = this.events.find(predicate);
+        if (settled) return settled;
+        throw new Error(
+          `child exited (code=${this.child.exitCode}, signal=${this.child.signalCode}) before the `
+          + `awaited event; events=${JSON.stringify(this.events)} stderr=${await this.stderr}`,
+        );
+      }
       if (Date.now() >= deadline) {
-        throw new Error(`child event timeout; events=${JSON.stringify(this.events)} stderr=${await this.stderr}`);
+        // Do NOT await `this.stderr` unguarded here. It resolves at EOF, so for the case this
+        // branch now describes -- a child still running -- it would never settle, and the
+        // timeout would hang until the enclosing budget killed the test with a worse message.
+        const stderr = await Promise.race([this.stderr, Bun.sleep(1_000).then(() => "<still open>")]);
+        throw new Error(
+          `child event timeout after ${timeoutMs}ms; the child is still running; `
+          + `events=${JSON.stringify(this.events)} stderr=${stderr}`,
+        );
       }
       await Promise.race([
         new Promise<void>(resolve => this.waiters.add(resolve)),
@@ -444,7 +485,7 @@ describe("native-main process owner lease", () => {
     const target = await f.manager.finishStage(stage.stageId, stage.writerToken, "target");
     expect(source.profile.state).toBe("active");
 
-    const successorFixture = { ...f };
+    const successorFixture = successorConfig(f, "crash-a-successor", false);
     const owner = new ChildHarness(f, { NATIVE_OWNER_HOLD_SWITCH_BOUNDARY: "auth-replaced" });
     let successor: ChildHarness | undefined;
     try {
@@ -511,7 +552,7 @@ describe("native-main process owner lease", () => {
       expect(readFileSync(tempPath, "utf8")).toContain("access-target");
       expect(probeNativeProfileRecoveryState(f.manager.context)).toBe("journal");
 
-      successor = new ChildHarness(f, { NATIVE_OWNER_HOLD_RECOVERY: "1" });
+      successor = new ChildHarness(successorConfig(f, "temp-crash-successor", false), { NATIVE_OWNER_HOLD_RECOVERY: "1" });
       await successor.waitFor(event => event.event === "listening");
       await successor.snapshot(isContended);
       await owner.hardKill();

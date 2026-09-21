@@ -19,7 +19,7 @@ export { decodeSchtasksOutput, setQuerySchtasksForTests, formatWindowsSchedulerS
 export type { WindowsSchedulerXmlState } from "./service/windows-taskxml";
 export { buildWindowsServiceScript, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsLauncherVbs, buildWindowsTaskXml, buildWindowsTaskXmlDocument, windowsTaskRegistrationOwnedByAttempt, windowsTaskRegistrationHealthy, readWindowsSchedulerXmlState } from "./service/windows-taskxml";
 export type { WindowsSchedulerRegistrationStageDeps, FreshWindowsSchedulerRegistrationDeps, RemoveNativeWindowsServiceDeps } from "./service/windows-ops";
-export { windowsListenPort, winswListenPort, writeServiceDefinitionFile, definitionCarriesCredential, stageWindowsSchedulerRegistrationXml, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, assertWindowsNativeServiceAccountSupported, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, classifyWindowsServiceStop } from "./service/windows-ops";
+export { windowsListenPort, winswListenPort, writeServiceDefinitionFile, definitionCarriesCredential, stageWindowsSchedulerRegistrationXml, stageElevatedSchedulerRegistration, describeElevatedRegistrationFailure, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, assertWindowsNativeServiceAccountSupported, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, classifyWindowsServiceStop } from "./service/windows-ops";
 export type { ServiceRepairVerb, RepairServiceDeps } from "./service/repair";
 export { repairService } from "./service/repair";
 export type { ServiceInstallPreparationDeps, FreshWindowsSchedulerInstallDeps, ServiceStopOutcome, ServiceUninstallOutcome } from "./service/orchestration";

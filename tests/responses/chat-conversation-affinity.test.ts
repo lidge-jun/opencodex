@@ -6,6 +6,7 @@ import { handleChatCompletions } from "../../src/server/chat-completions";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // #3433 transport contract only: these client-assigned fixture IDs are not a capture of Hermes.
@@ -14,14 +15,20 @@ const identityHeaders = ["session_id", "session-id", "thread-id", "x-codex-paren
 let isolated: IsolatedCodexHome;
 let home: string;
 let previousHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   isolated = installIsolatedCodexHome("ocx-chat-identity-");
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-chat-identity-config-"));
   process.env.OPENCODEX_HOME = home;
+  // Taken after this case installs its home so direct Chat dispatch owns that journal.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 afterEach(() => {
+  // Released before this case restores and removes its home so no live database is unlinked.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   isolated.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;

@@ -158,3 +158,144 @@ export function cursorOverflowRemintCountForTests(): number {
   pruneOverflowRemints(now());
   return overflowRemintByScope.size;
 }
+
+/** Max next-turn conversation-id rotations after incomplete client-tool streams per retained scope. */
+export const CURSOR_INCOMPLETE_TOOL_REMINT_MAX = 3;
+export const CURSOR_INCOMPLETE_TOOL_REMINT_TTL_MS = CURSOR_OVERFLOW_REMINT_TTL_MS;
+export const CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES = CURSOR_OVERFLOW_REMINT_MAX_ENTRIES;
+
+type IncompleteToolRemintState = {
+  remintCount: number;
+  updatedAt: number;
+};
+
+/**
+ * One bounded next-turn remint allowance, keyed by retained thread scope.
+ *
+ * Each recovery reason owns its own instance. Sharing one budget would let a cheap, frequent
+ * failure spend the allowance that a rarer, more expensive recovery depends on.
+ */
+function createCursorRemintBudget(max: number, ttlMs: number, maxEntries: number) {
+  const byScope = new Map<string, IncompleteToolRemintState>();
+
+  const prune = (at: number): void => {
+    for (const [scopeKey, entry] of byScope) {
+      if (at - entry.updatedAt > ttlMs) byScope.delete(scopeKey);
+    }
+    while (byScope.size > maxEntries) {
+      const oldest = byScope.keys().next().value;
+      if (oldest === undefined) break;
+      byScope.delete(oldest);
+    }
+  };
+
+  return {
+    /** Record one remint; returns false when this budget is exhausted. */
+    record(scopeKey: string): boolean {
+      const at = now();
+      prune(at);
+      const existing = byScope.get(scopeKey);
+      if (existing && existing.remintCount >= max) {
+        existing.updatedAt = at;
+        byScope.delete(scopeKey);
+        byScope.set(scopeKey, existing);
+        return false;
+      }
+      const entry = existing ?? { remintCount: 0, updatedAt: at };
+      entry.remintCount += 1;
+      entry.updatedAt = at;
+      byScope.delete(scopeKey);
+      byScope.set(scopeKey, entry);
+      prune(at);
+      return true;
+    },
+    clear(scopeKey: string): void {
+      byScope.delete(scopeKey);
+    },
+    clearForTests(): void {
+      byScope.clear();
+    },
+    countForTests(): number {
+      prune(now());
+      return byScope.size;
+    },
+  };
+}
+
+const incompleteToolRemintBudget = createCursorRemintBudget(
+  CURSOR_INCOMPLETE_TOOL_REMINT_MAX,
+  CURSOR_INCOMPLETE_TOOL_REMINT_TTL_MS,
+  CURSOR_INCOMPLETE_TOOL_REMINT_MAX_ENTRIES,
+);
+
+/** Incomplete-tool and overflow recovery share ownership scope, but keep independent budgets. */
+export function cursorIncompleteToolRemintScopeKey(
+  threadOwner: string | undefined,
+  identityScope?: string,
+): string | null {
+  return cursorOverflowRemintScopeKey(threadOwner, identityScope);
+}
+
+/** Record one incomplete-tool remint; returns false when the independent cap is exhausted. */
+export function recordCursorIncompleteToolRemint(scopeKey: string): boolean {
+  return incompleteToolRemintBudget.record(scopeKey);
+}
+
+/** A clean turn replenishes this recovery without changing the overflow retry budget. */
+export function clearCursorIncompleteToolRemint(scopeKey: string): void {
+  incompleteToolRemintBudget.clear(scopeKey);
+}
+
+export function clearCursorIncompleteToolRemintForTests(): void {
+  incompleteToolRemintBudget.clearForTests();
+}
+
+export function cursorIncompleteToolRemintCountForTests(): number {
+  return incompleteToolRemintBudget.countForTests();
+}
+
+/**
+ * Max next-turn rotations after a MID-STREAM envelope echo, per retained scope.
+ *
+ * Deliberately a separate budget from the incomplete-tool allowance. A mid-stream echo is a
+ * cheap, repeatable formatting failure, while an incomplete client-tool stream is a rarer
+ * structural one; on a shared counter a model that echoes every turn would spend the budget
+ * that incomplete-tool recovery depends on. Bounding it at all is the point: the echo has
+ * already reached the client and cannot be quarantined, so without a cap a persistently
+ * echoing model would remint the conversation on every single turn, forever.
+ */
+export const CURSOR_ENVELOPE_ECHO_REMINT_MAX = 3;
+export const CURSOR_ENVELOPE_ECHO_REMINT_TTL_MS = CURSOR_OVERFLOW_REMINT_TTL_MS;
+export const CURSOR_ENVELOPE_ECHO_REMINT_MAX_ENTRIES = CURSOR_OVERFLOW_REMINT_MAX_ENTRIES;
+
+const envelopeEchoRemintBudget = createCursorRemintBudget(
+  CURSOR_ENVELOPE_ECHO_REMINT_MAX,
+  CURSOR_ENVELOPE_ECHO_REMINT_TTL_MS,
+  CURSOR_ENVELOPE_ECHO_REMINT_MAX_ENTRIES,
+);
+
+/** Echo recovery shares ownership scope with overflow and incomplete-tool, budget apart. */
+export function cursorEnvelopeEchoRemintScopeKey(
+  threadOwner: string | undefined,
+  identityScope?: string,
+): string | null {
+  return cursorOverflowRemintScopeKey(threadOwner, identityScope);
+}
+
+/** Record one envelope-echo remint; returns false when the independent cap is exhausted. */
+export function recordCursorEnvelopeEchoRemint(scopeKey: string): boolean {
+  return envelopeEchoRemintBudget.record(scopeKey);
+}
+
+/** A turn that completed without an echo replenishes only this budget. */
+export function clearCursorEnvelopeEchoRemint(scopeKey: string): void {
+  envelopeEchoRemintBudget.clear(scopeKey);
+}
+
+export function clearCursorEnvelopeEchoRemintForTests(): void {
+  envelopeEchoRemintBudget.clearForTests();
+}
+
+export function cursorEnvelopeEchoRemintCountForTests(): number {
+  return envelopeEchoRemintBudget.countForTests();
+}

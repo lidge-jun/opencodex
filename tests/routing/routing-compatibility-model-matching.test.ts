@@ -143,7 +143,7 @@ describe("a prototype-shaped model id resolves to no override", () => {
 
 // Not every override map is family-aware, and the two that are not must stay that way.
 // The adapter reads `modelPreferHostedTools` through `hasOwnProperty`
-// (`src/adapters/openai-responses.ts:1001`) and `resolveOpenRouterRouting` reads
+// (`src/adapters/openai-responses/image-gen.ts:80`) and `resolveOpenRouterRouting` reads
 // `modelOpenRouterRouting` through `Object.hasOwn` (`src/providers/openrouter-routing.ts:89`);
 // the type calls the first "Exact-model hosted tools" (`src/types.ts:1584`). Sending
 // these through modelRecordValue would be the divergence above with the sign flipped:

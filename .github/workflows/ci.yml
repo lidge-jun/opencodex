@@ -60,8 +60,27 @@ permissions:
 
 # Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
 concurrency:
-  group: cross-platform-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # `push` and `pull_request` want supersession: a newer head on the same ref
+  # makes the older one irrelevant, and cancelling it saves an hour of runners
+  # for an answer nobody will read.
+  #
+  # `workflow_dispatch` is the opposite. An operator dispatching a lane has
+  # asked for evidence about one specific commit, and the next merge into
+  # `dev` is not a newer answer to that question — it is an unrelated commit
+  # that happens to share `github.ref`. Keyed on the ref alone, the merge
+  # cancelled the dispatch, so the `macos control` lane — the longest job in
+  # this workflow at roughly fifty minutes — could not complete on any branch
+  # under active development. Run 35318264610 was cancelled in the same second
+  # its job started, three minutes after it was queued. Cancellations of that
+  # shape were read as runner capacity for months, and a maintainer dispatching
+  # the lane for release evidence usually got nothing back without noticing,
+  # because a cancelled job reports neither pass nor fail (#5037).
+  #
+  # `github.run_id` is unique per run, so each dispatch is a group of one: it
+  # cancels nothing and nothing cancels it, including a second dispatch of the
+  # same ref.
+  group: cross-platform-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   # Which Windows runner this run is allowed to use.
@@ -156,6 +175,8 @@ jobs:
       ci: ${{ steps.scope.outputs.ci }}
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
+      docs: ${{ steps.filter.outputs.docs }}
+      structure: ${{ steps.filter.outputs.structure }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -207,6 +228,44 @@ jobs:
               - '.github/workflows/stale-needs-info.yml'
             gui:
               - 'gui/**'
+            # The docs site is built by nothing else on a pull request. `ci` above
+            # deliberately omits `docs-site/**` -- a prose edit has no business
+            # starting the cross-platform suite -- and `deploy-docs.yml` triggers
+            # only on `push` to `main`. That left the Astro toolchain with no
+            # pull-request build gate at all, so a dependency bump under
+            # `docs-site/` could only be proven by an author's local run and would
+            # otherwise surface at promotion.
+            #
+            # `.github/workflows/ci.yml` is here so an edit to the job below
+            # verifies itself. Without it this filter's own pull request would
+            # skip the thing it adds.
+            docs:
+              - 'docs-site/**'
+              - '.github/workflows/ci.yml'
+            # `structure/` is the one directory whose entire purpose is a gate,
+            # and it was the one directory the gate never saw. `ci` above omits
+            # it for the same reason it omits `docs-site/**`, so a pull request
+            # touching only `structure/` skipped every expensive leg — including
+            # the suite that contains `tests/ci-workflows/structure-ssot.test.ts`,
+            # the only place CI runs `bun run structure:check`. The aggregate
+            # then reported success over nothing. #4999, a pure doc split, is the
+            # live example; it stayed invisible for so long because
+            # `structure/AGENTS.md` makes a `structure/` edit almost always
+            # arrive beside a `src/` one, which the `ci` filter does match.
+            #
+            # The job this feeds runs the gate alone rather than widening `ci`,
+            # so a prose edit still does not start the cross-platform matrix.
+            # `.github/workflows/ci.yml` is listed for the same reason `docs`
+            # lists it: without it this filter's own pull request would skip the
+            # job it adds.
+            # This list stays PULL-REQUEST scope only, like `docs` above: the
+            # push trigger's `paths:` is pinned to mirror `ci` exactly, and
+            # `dev`, `main` and `preview` are all protected to require a pull
+            # request, so every `structure/` change is read at the pull request
+            # before it can reach an integration line.
+            structure:
+              - 'structure/**'
+              - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -250,7 +309,9 @@ jobs:
   # `scripts/ci/run-bun-test-batches.sh` mirrors Bun's sorted round-robin shard
   # assignment, then runs each shard in small batches so every batch gets a fresh
   # Bun process. The helper prints the exact files before each batch and retries
-  # only a Bun runtime crash once; ordinary test failures are never retried.
+  # nothing: a test failure, a process timeout and a Bun runtime crash each fail
+  # the shard where they happen. A timeout or a crash is additionally swept one
+  # file per process, after the shard has already failed, to attribute it.
   # Storage-policy API tests and api-usage are deliberately excluded here and run
   # in dedicated jobs below. Bun 1.3.14 can corrupt the Linux isolate/epoll state
   # around those Worker-heavy harnesses; keeping them out of the general shards
@@ -522,51 +583,45 @@ jobs:
           cd gui
           bun run build
 
-      # Bun 1.3.14 segfaults while reclaiming a Worker at an `--isolate` file
-      # boundary: the header shows BALANCED `workers_spawned(N)
-      # workers_terminated(N)` and the process dies with exit 133 after the last
-      # assertion in the file already passed. It landed on
-      # `storage-worker-lifecycle` and `server-background-lifecycle` — the two
-      # files that tear down a still-busy policy Worker — and accounted for most
-      # of this leg's red runs on `dev` while every failing SHA passed on rerun.
+      # No attempt is ever repeated here. A Bun panic is the interpreter dying mid-suite,
+      # which is process death a user would have seen; a second execution that happens not
+      # to die does not un-kill the first, and a leg that reports green on it is reporting
+      # something that did not happen. This leg retried a crash exactly once until
+      # 2026-09-17, the Linux batch runner swept crashed batches into green, and the result
+      # was that Bun 1.4.2's preload segfault stayed invisible on every lane except Windows.
       #
-      # This is a runtime crash, not a test result, and the Linux shards already
-      # retry exactly this class through `scripts/ci/run-bun-test-batches.sh`
-      # (`is_bun_runtime_crash`). The unsharded macOS control had no equivalent,
-      # so the same crash that Linux absorbs failed the whole promotion here.
-      #
-    # Keep the signature list in sync with `is_bun_runtime_crash` in
-    # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
-    # the first attempt — only the crash signature is retried, exactly once.
+      # `is_bun_runtime_crash` from scripts/ci/bun-crash-signatures.sh survives, and this leg,
+      # the Windows leg, the macOS control and the Linux batch runner all still source that one
+      # definition. Its job is now diagnosis only: it decides which failure message is printed,
+      # never whether the leg fails.
       - name: Test
         env:
           MACOS_TEST_SHARD: ${{ matrix.shard }}
         run: |
           # GitHub Actions starts bash `run:` blocks with `-e`. Disable
-          # errexit so a Bun crash reaches PIPESTATUS and the bounded retry.
+          # errexit so a Bun crash reaches PIPESTATUS and the classifier below,
+          # instead of aborting the step before either can be read.
           set +e
           set -uo pipefail
+          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
+          source scripts/ci/bun-crash-signatures.sh
 
           run_macos_suite() {
-            local suite_log suite_status attempt
+            local suite_log suite_status
             suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)" || return $?
-            for attempt in 1 2; do
-              # Preserve the existing per-test ceiling and crash-only retry for
-              # every invocation, including each isolated serial file.
-              bun test --isolate --timeout 60000 "$@" 2>&1 | tee "$suite_log"
-              suite_status="${PIPESTATUS[0]}"
-              if [ "$suite_status" -eq 0 ]; then
-                rm -f "$suite_log"
-                return 0
-              fi
-              if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
-                echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
-                rm -f "$suite_log"
-                return "$suite_status"
-              fi
-              echo "::warning::Bun runtime crash in the macOS suite (exit ${suite_status}, attempt ${attempt})."
-            done
-            echo "::error::Bun runtime crash repeated on the macOS suite; failing after one retry."
+            # The per-test ceiling applies to every invocation, including each isolated
+            # serial file. One attempt, whatever the outcome.
+            bun test --isolate --timeout 60000 "$@" 2>&1 | tee "$suite_log"
+            suite_status="${PIPESTATUS[0]}"
+            if [ "$suite_status" -eq 0 ]; then
+              rm -f "$suite_log"
+              return 0
+            fi
+            if is_bun_runtime_crash "$suite_status" "$suite_log"; then
+              echo "::error::Bun runtime crash in the macOS suite (exit ${suite_status}); a crash is process death, not a test result, and it fails this leg on the first occurrence."
+            else
+              echo "::error::macOS suite failed (exit ${suite_status})."
+            fi
             rm -f "$suite_log"
             return "$suite_status"
           }
@@ -636,7 +691,20 @@ jobs:
     # suite runs in one pool, so it is the place that catches what sharding
     # hides. The flakes it keeps surfacing are timing, not logic, and the fix
     # is the tests, not a fourth lane.
-    timeout-minutes: 30
+    #
+    # Sized to measured work, not to a guess. At 30 this lane never once finished:
+    # every run was cancelled slightly past halfway and the cancellations were read
+    # as runner capacity for months (#4905). An authorized one-off measurement let it
+    # complete for the first time and it took 50m39s wall, Bun reporting 3034.18s over
+    # 26526 tests in 1343 files. 75 leaves roughly 24 minutes of headroom on that
+    # number, which is the growth room the suite needs without letting a genuine hang
+    # sit for an hour before anyone sees it.
+    #
+    # This bound is not a fix for anything the run reports. That first complete run
+    # surfaced four tests that exceed their own timeouts under shared-process pressure,
+    # tracked separately in #4997; raising this budget is what made them observable and
+    # must not be mistaken for resolving them.
+    timeout-minutes: 75
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -672,50 +740,37 @@ jobs:
           cd gui
           bun run build
 
-      # Bun 1.3.14 segfaults while reclaiming a Worker at an `--isolate` file
-      # boundary: the header shows BALANCED `workers_spawned(N)
-      # workers_terminated(N)` and the process dies with exit 133 after the last
-      # assertion in the file already passed. It landed on
-      # `storage-worker-lifecycle` and `server-background-lifecycle` — the two
-      # files that tear down a still-busy policy Worker — and accounted for most
-      # of this leg's red runs on `dev` while every failing SHA passed on rerun.
-      #
-      # This is a runtime crash, not a test result, and the Linux shards already
-      # retry exactly this class through `scripts/ci/run-bun-test-batches.sh`
-      # (`is_bun_runtime_crash`). The unsharded macOS control had no equivalent,
-      # so the same crash that Linux absorbs failed the whole promotion here.
-      #
-    # Keep the signature list in sync with `is_bun_runtime_crash` in
-    # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
-    # the first attempt — only the crash signature is retried, exactly once.
+      # This is the lane that exists to see what sharding hides, so it is the last place a
+      # repeated attempt belongs. One execution, whatever the outcome; the shared classifier
+      # decides which message is printed, never whether the leg fails.
       - name: Test
         run: |
           # GitHub Actions starts bash `run:` blocks with `-e`. Disable
-          # errexit so a Bun crash reaches PIPESTATUS and the bounded retry.
+          # errexit so a Bun crash reaches PIPESTATUS and the classifier below,
+          # instead of aborting the step before either can be read.
           set +e
           set -uo pipefail
+          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
+          source scripts/ci/bun-crash-signatures.sh
           suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
-          for attempt in 1 2; do
-            # --timeout: Bun's default 5s per-test ceiling is the recurring flake
-            # class on this loaded shared runner (real retry windows + server
-            # round-trips exceed 5s under contention; a 10s-floor in-test
-            # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
-            # job timeout is the outer backstop) while removing the timing
-            # flakes — assertions are untouched. Pairs with the 30s CI floor in
-            # tests/helpers/ci-watchdog.ts.
-            bun test --isolate --timeout 60000 tests 2>&1 | tee "$suite_log"
-            suite_status="${PIPESTATUS[0]}"
-            if [ "$suite_status" -eq 0 ]; then
-              exit 0
-            fi
-            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
-              echo "::error::macOS suite failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
-              exit "$suite_status"
-            fi
-            echo "::warning::Bun runtime crash in the macOS suite (exit ${suite_status}, attempt ${attempt})."
-          done
-          echo "::error::Bun runtime crash repeated on the macOS suite; failing after one retry."
-          exit 1
+          # --timeout: Bun's default 5s per-test ceiling is the recurring flake
+          # class on this loaded shared runner (real retry windows + server
+          # round-trips exceed 5s under contention; a 10s-floor in-test
+          # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
+          # job timeout is the outer backstop) while removing the timing
+          # flakes — assertions are untouched. Pairs with the 30s CI floor in
+          # tests/helpers/ci-watchdog.ts.
+          bun test --isolate --timeout 60000 tests 2>&1 | tee "$suite_log"
+          suite_status="${PIPESTATUS[0]}"
+          if [ "$suite_status" -eq 0 ]; then
+            exit 0
+          fi
+          if is_bun_runtime_crash "$suite_status" "$suite_log"; then
+            echo "::error::Bun runtime crash in the macOS control suite (exit ${suite_status}); a crash is process death, not a test result, and it fails this leg on the first occurrence."
+          else
+            echo "::error::macOS control suite failed (exit ${suite_status})."
+          fi
+          exit "$suite_status"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
@@ -737,7 +792,7 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   platform-windows:
-    name: windows ${{ matrix.shard }}/6
+    name: windows ${{ matrix.shard }}/9
     needs: select-windows-runner
     if: >-
       github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
@@ -752,8 +807,10 @@ jobs:
     # and the composed-acceptance cases it carries could not be read at all. The
     # other shards finished in 14-15 minutes, which is the wrong side of the
     # margin. 25 leaves the outer bound in place — a wedged shard still dies —
-    # while making a completed shard the normal outcome. The crash-retry below can
-    # double a shard's work, and this ceiling has to cover that second attempt too.
+    # while making a completed shard the normal outcome. The crash retry that used to
+    # double a shard's work is gone; the ceiling is kept at the value chosen for it
+    # rather than re-tightened, because narrowing it would trade a removed mask for a
+    # new truncation, and a cancelled shard is neither a pass nor a fail.
     #
     # Four shards then grew into the ceiling: across five runs of one branch, completed
     # shards took 17-25 minutes and run 33934756997 cancelled a green 3/4 at 25m12s —
@@ -762,13 +819,25 @@ jobs:
     # inside the margin 25 was chosen to provide.
     # Shard 1 of run 34036848646 then reached that wall with 2736 passing tests
     # and no test failures. The matched tests were 25% slower than the prior
-    # complete run; about one minute of tests remained. Keep every test deadline
-    # and all six shards, but leave the whole batch and cleanup a 30-minute bound.
+    # complete run; about one minute of tests remained. That change kept every
+    # test deadline and all six shards, but left the whole batch and cleanup a
+    # 30-minute bound.
+    #
+    # Six shards then grew into the 30-minute ceiling too. Across seven lane=all
+    # dispatches the six shard totals were 114.3-133.2 minutes. The worst observed
+    # shard imbalance was 1.43x its dispatch's per-shard average. Eight shards leave
+    # no margin: 133.2 / 8 * 1.43 * 1.25 = 29.8 minutes after the already-observed
+    # 25% run-to-run slowdown. Nine gives 133.2 / 9 * 1.43 * 1.25 = 26.5 minutes.
+    # Keep the 30-minute bound and pay for three more concurrent runners plus their
+    # repeated checkout/install/build setup so test work, rather than the ceiling,
+    # shrinks. The per-batch timeout below is independent: it aborts a stuck Bun
+    # process but adds no delay to a healthy one, so calibrating it does not change
+    # this total-work projection.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
     steps:
       - name: Show selected runner
         shell: bash
@@ -819,36 +888,38 @@ jobs:
           cd gui
           bun run build
 
-      - name: Test
+      - name: Test in fresh-process batches
         # --timeout: the Linux batches and the macOS control both pass 60000; this leg was
         # the only one left on Bun's 5s default, and it is the slowest hardware on the board.
         # Three of its failures were the default firing on tests that had not hung — the
         # composed-acceptance cases spawn a real `ocx start` and were still working at 41s.
         #
-        # The retry is the same one the macOS leg already carries, for the same reason: a Bun
-        # runtime panic is a crash in the interpreter, not a test result, and failing the shard
-        # on it reports a defect this repository does not have (#2152). An ordinary assertion
-        # failure returns its status immediately — only the crash signatures below are retried,
-        # and only once, so a genuinely broken build cannot be retried into green.
+        # Nothing is retried. Run 35171877721 proved Linux's 12-file/120-second defaults are
+        # not Windows defaults: 58 completed primary batches took 4.6-105.8s and seven more
+        # hit 120s. Six of those passed every file alone; splitting their attribution times
+        # into six-file halves gives a 148.0s maximum. The seventh carried
+        # codex-inject-integration.test.ts, which passed in 312.0s and 317.6s in green runs
+        # 35164979005 and 35161399172. Replacing its censored 120s attribution with 317.6s projects
+        # that six-file half at 337.4s; 25% run variance makes 421.8s, so 480s leaves 58.2s.
+        # Six-file batches add twelve Bun processes per shard, but the two green shards measured
+        # only 0.106-0.168s of wrapper overhead per process: at most ~2.1s against the margin.
+        # A timeout or crash still fixes the shard red before singleton attribution. scope=all
+        # preserves the full Windows suite; Linux keeps its correctly sized 12-file/120s defaults.
+        #
+        # The preload's Windows-only user lock serializes separate test runners on one machine.
+        # These batches are already one dedicated job's sequential pieces, so treating each Bun
+        # process as a competing runner can queue batch N+1 behind a straggler from batch N until
+        # this step's 480s process bound fires without running a test. Disable that outer queue for
+        # this step only. Every process still creates its own isolated home and arms the live-home
+        # and service-manager guard before the lock boundary.
         shell: bash
-        run: |
-          set +e
-          set -uo pipefail
-          suite_log="$(mktemp -t ocx-windows-suite.XXXXXX)"
-          for attempt in 1 2; do
-            bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/6 2>&1 | tee "$suite_log"
-            suite_status="${PIPESTATUS[0]}"
-            if [ "$suite_status" -eq 0 ]; then
-              exit 0
-            fi
-            if ! grep -Eqi 'oh no: Bun has crashed|Internal assertion failure|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' "$suite_log"; then
-              echo "::error::Windows shard ${{ matrix.shard }}/6 failed on attempt ${attempt} (exit ${suite_status}); assertion failures are not retried."
-              exit "$suite_status"
-            fi
-            echo "::warning::Bun runtime crash in Windows shard ${{ matrix.shard }}/6 (exit ${suite_status}, attempt ${attempt})."
-          done
-          echo "::error::Bun runtime crash repeated on Windows shard ${{ matrix.shard }}/6; failing after one retry."
-          exit 1
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/9
+          BUN_TEST_FILE_SCOPE: all
+          BUN_TEST_BATCH_SIZE: "6"
+          BUN_TEST_BATCH_TIMEOUT_SECONDS: "480"
+          OCX_TEST_NO_QUEUE: "1"
+        run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
@@ -937,6 +1008,74 @@ jobs:
       - name: Build, start, and recreate the container
         run: bun scripts/ci/docker-smoke.ts
 
+  # Proves the Astro toolchain still builds the site, on the only event that can
+  # prove it before promotion.
+  #
+  # Linux only, and one leg. The site is static output from a Node/Bun toolchain
+  # with no OS-specific behaviour to promise, so a Windows or macOS leg would buy
+  # queue time rather than coverage. `docs-site` keeps its own manifest and
+  # lockfile, so this installs there and nowhere else.
+  #
+  # `--frozen-lockfile` is the point of the job as much as the build is: it fails
+  # on a manifest and lockfile that disagree, which is exactly the shape a
+  # hand-edited override introduces.
+  docs-site-build:
+    name: docs site build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install docs-site dependencies
+        working-directory: docs-site
+        run: bun install --frozen-lockfile
+
+      - name: Build the docs site
+        working-directory: docs-site
+        run: bun run build
+
+  # The gate for the directory that is itself a gate.
+  #
+  # `structure:check` normally reaches CI only through
+  # `tests/ci-workflows/structure-ssot.test.ts`, inside the suite the `ci` filter
+  # decides whether to run. A pull request touching only `structure/` does not
+  # match that filter, so on #4999 every expensive leg reported `skipped` and the
+  # aggregate reported success while nothing had read the change (#5001).
+  #
+  # Running the gate directly here, rather than adding `structure/**` to `ci`,
+  # keeps a prose edit from starting nine Windows shards and two macOS shards for
+  # a check that takes seconds. It runs whenever `structure/` changes, including
+  # alongside a `src/` change where the suite covers it too; a duplicate of a
+  # seconds-long check is not worth a condition that could be wrong.
+  structure-gate:
+    name: structure gate
+    needs: changes
+    if: needs.changes.outputs.structure == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Structure doc-map, ownership, and invariant bindings
+        run: bun run structure:check
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
     needs: changes
@@ -1014,35 +1153,147 @@ jobs:
     # Every producer, including the ones that only feed other jobs. `needs` holds
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
-    # `skipped` — which the gate is required to read as a deliberate skip.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, npm-global-smoke]
+    # `skipped`, which is the shape the step below is written to catch.
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # Read-only, and only for this job: the Windows assertion below reads the run's own
+      # job list through the Actions API. The workflow default stays `contents: read`.
+      actions: read
     steps:
-      - name: Assert every needed job succeeded or was skipped
+      - name: Assert every job this event requested succeeded
         shell: bash
         env:
           RESULTS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+          LANE: ${{ github.event.inputs.lane }}
+          CHANGES_CI: ${{ needs.changes.outputs.ci }}
+          CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
+          CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
+          CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "$RESULTS" | jq .
-          # Allowlist, not denylist. Anything that is not a known-good result
-          # fails the gate, so a result GitHub adds later cannot pass silently.
+
+          # This gate used to accept `skipped` from any job, unconditionally, because that is
+          # how a trigger-scoped job reports when the workflow declines to run it. The cost of
+          # that shortcut is that it cannot tell "this event did not ask for the job" apart
+          # from "this event asked and the job never started" — and the second one is real:
+          # on run 35112645195 a Windows job reported `skipped` with zero steps while the
+          # aggregate concluded success.
           #
-          # `skipped` is a pass on purpose: that is how a trigger-scoped job
-          # (platform-windows on a pull request) reports when it is deliberately
-          # not run.
-          bad=$(echo "$RESULTS" | jq -r '
-            to_entries
-            | map(select(.value.result != "success" and .value.result != "skipped"))
-            | .[] | "\(.key)=\(.value.result)"')
-          if [ -n "$bad" ]; then
-            echo "::error::needed job(s) did not pass: $bad"
-            exit 1
+          # So derive what THIS event asked for, from the same conditions the jobs carry, and
+          # require `success` from every requested job and `skipped` from every other one.
+          # Both directions are checked: a job that runs when the gate did not expect it means
+          # this list and that job's `if:` have drifted, which is worth a human reading.
+          scoped=requested
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
+            scoped=not-requested
+          fi
+          packaging=not-requested
+          if [ "$CHANGES_PACKAGING" = "true" ]; then
+            packaging=requested
+          fi
+          docs=not-requested
+          if [ "$CHANGES_DOCS" = "true" ]; then
+            docs=requested
+          fi
+          structure=not-requested
+          if [ "$CHANGES_STRUCTURE" = "true" ]; then
+            structure=requested
+          fi
+          dispatch=not-requested
+          windows=not-requested
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            dispatch=requested
+            # `lane=macos-control` is the one dispatch that deliberately omits Windows.
+            if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
+              windows=requested
+            fi
           fi
 
-      # Windows is dispatch-only, so there is no event where a skipped Windows
-      # leg is a gate violation: on push events it is always skipped, and on
-      # dispatch a failed Windows leg already fails the allowlist above. The
-      # old "windows must have run on main/preview" assertion left with the
-      # condition it policed.
+          # One line per job, mirroring that job's own `if:`. Adding a job to this workflow
+          # without adding it here fails the gate by name rather than passing unnoticed.
+          GATED_JOBS="changes select-windows-runner test storage-policy api-usage gates"
+          GATED_JOBS="$GATED_JOBS platform-macos keyring-smoke docker-smoke npm-global-smoke"
+          GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
+          GATED_JOBS="$GATED_JOBS structure-gate"
+
+          expected_for() {
+            case "$1" in
+              changes|select-windows-runner) echo requested ;;
+              test|storage-policy|api-usage|gates|platform-macos|keyring-smoke|docker-smoke)
+                echo "$scoped" ;;
+              npm-global-smoke) echo "$packaging" ;;
+              docs-site-build) echo "$docs" ;;
+              structure-gate) echo "$structure" ;;
+              macos-control) echo "$dispatch" ;;
+              platform-windows) echo "$windows" ;;
+              *) echo undeclared ;;
+            esac
+          }
+
+          bad=""
+          fail() {
+            bad="${bad}$1
+          "
+          }
+
+          while IFS='=' read -r job result; do
+            [ -n "$job" ] || continue
+            case "$(expected_for "$job")" in
+              undeclared)
+                fail "$job has no expectation in this gate; add it here when you add the job" ;;
+              requested)
+                [ "$result" = "success" ] \
+                  || fail "$job was requested by $EVENT_NAME but reported '$result'" ;;
+              *)
+                [ "$result" = "skipped" ] \
+                  || fail "$job was not requested by $EVENT_NAME but reported '$result'" ;;
+            esac
+          done <<RESULTS_EOF
+          $(echo "$RESULTS" | jq -r 'to_entries | .[] | "\(.key)=\(.value.result)"')
+          RESULTS_EOF
+
+          # The inverse: a job named here that has left `needs` would otherwise go unchecked.
+          for job in $GATED_JOBS; do
+            echo "$RESULTS" | jq -e --arg job "$job" 'has($job)' >/dev/null \
+              || fail "$job is expected by this gate but is missing from its needs list"
+          done
+
+          # A matrix reports one rolled-up result, and that rollup cannot see a leg that never
+          # started: five successes and one skipped leg roll up to `success`. No matrix here
+          # carries a per-leg `if:`, so a leg can only be skipped when its whole job is, which
+          # the expectation table above already catches. What that table cannot catch is a
+          # matrix that produced FEWER legs than the nine a dispatch is run to read, so count
+          # them by name. The nine Windows legs are the entire output of that dispatch.
+          if [ "$windows" = requested ]; then
+            shards=9
+            # `filter=latest` (the default) is the latest execution of each job in the run,
+            # which is what a human reading the run sees. Asking for one ATTEMPT instead would
+            # fail every partial re-run: "Re-run failed jobs" puts only the repaired shard in
+            # the new attempt, so the five that already passed would read as missing.
+            legs="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name | test("^windows [0-9]+/[0-9]+$")) | "\(.name)=\(.conclusion)"' \
+              | LC_ALL=C sort -u)"
+            printf 'windows legs:\n%s\n' "$legs"
+            shard=1
+            while [ "$shard" -le "$shards" ]; do
+              printf '%s\n' "$legs" | grep -Fqx "windows ${shard}/${shards}=success" \
+                || fail "windows ${shard}/${shards} did not report success"
+              shard=$(( shard + 1 ))
+            done
+            found="$(printf '%s\n' "$legs" | grep -c . || true)"
+            [ "$found" -eq "$shards" ] \
+              || fail "expected ${shards} windows shard results, found ${found}"
+          fi
+
+          if [ -n "$bad" ]; then
+            printf '%s' "$bad" | sed -e 's/^ *//' -e '/^$/d' -e 's/^/::error::/'
+            exit 1
+          fi
+          echo "Every job requested by ${EVENT_NAME} succeeded; every job it did not request was skipped."

@@ -615,7 +615,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                   signal: headerDeadline.signal,
                 }, retryRecovery));
               },
-              { abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
+              { replaySafe: true, abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
             );
           }
         } finally {

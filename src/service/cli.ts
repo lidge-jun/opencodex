@@ -1,6 +1,7 @@
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { restoreNativeCodexAsync } from "../codex/inject";
+import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
@@ -196,23 +197,28 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     assertServiceAuthEnvironment();
     // A throw used to escape straight to the top level, so the one command that can
     // leave a macOS hub evicted never reached its own serving check (#4236, defect 1f).
-    // Report the failure, then still ask whether anything is listening: on darwin the
-    // rollback inside installLaunchd may have brought the previous job back, and on
-    // Windows the preserve/restart protocol may have done the same. The operator needs
-    // both halves of that answer, and the exit code stays non-zero either way.
+    // Still ask whether anything is listening: on darwin the rollback inside installLaunchd
+    // may have brought the previous job back, and on Windows the preserve/restart protocol
+    // may have done the same. The operator needs both halves of that answer, and the exit
+    // code stays non-zero either way.
+    //
+    // The failure text travels INTO that report rather than being printed here. Printing it
+    // here and then letting the report reach its success line stated both outcomes for one
+    // run — "❌ Service repair failed: ... exit code 199" beside "✅ opencodex service
+    // repaired and serving on port 10100" — and the checkmark was the false half: the
+    // existing registration had been restarted, not repaired (#4914).
     let repairError: unknown;
     try {
       await repairService({ verb });
     } catch (error) {
       repairError = error;
-      console.error(`❌ Service ${verb} failed: ${error instanceof Error ? error.message : String(error)}`);
       process.exitCode = 1;
     }
     // All three platforms: a repair that reports success while nothing serves is the
     // defect class this unit exists to close. Windows bakes its port into the
     // scheduler wrapper or the WinSW XML, both of which installedServiceListenPort()
     // now reads.
-    await reportServiceServing(verb === "restart" ? "restarted" : "repaired");
+    await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);
     if (repairError !== undefined) process.exitCode = 1;
     return;
   }
@@ -264,6 +270,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       await maybeShowStarPrompt();
       break;
     case "start":
+      // The installed launcher preserves the recorded CODEX_SQLITE_HOME: a
+      // changed sqlite_home/CODEX_SQLITE_HOME/CODEX_HOME would start the service
+      // on the recorded database while this shell resolves another, splitting
+      // native Codex history between databases. Same guard `stop` already runs.
+      assertServiceEnvironmentMatchesInstall();
       ops.start();
       await reportServiceServing("started");
       break;
@@ -291,7 +302,15 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
           break;
         }
         const restore = await restoreNativeCodexAsync();
-        if (restore.success) console.log("✅ service stopped + native Codex restored.");
+        if (restore.success) {
+          console.log("✅ service stopped + native Codex restored.");
+          // Success is not the whole answer when routing came down but the provider table
+          // stayed. Saying only "restored" here is how a user finds an unexplained
+          // opencodex table in their config weeks later (#4812).
+          if (restore.retainedCodexProviderTable) {
+            console.log(`   ${describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`);
+          }
+        }
         else console.error(`⚠️ service stopped, but native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` (or check $CODEX_HOME/config.toml) before using native Codex.`);
         if (!restore.success) process.exitCode = 1;
         // The Grok fence is the other managed config this command owns. Leaving it behind
@@ -338,6 +357,9 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         if (!restore.success) {
           console.error(`⚠️ native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` before using native Codex.`);
           process.exitCode = 1;
+        }
+        else if (restore.retainedCodexProviderTable) {
+          console.log(`↩️  ${describeRetainedCodexProviderTable(restore.retainedCodexProviderTable)}`);
         }
         const grok = stripGrokConfig();
         if (grok.changed) console.log(`↩️  ${grok.message}`);

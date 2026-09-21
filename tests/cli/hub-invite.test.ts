@@ -179,9 +179,16 @@ describe("hub invite argument and origin helpers", () => {
 
   test("the printed command carries --clients only when the operator asked for it", () => {
     expect(hubInviteCommand(GRANT, "https://d.test:8443", "https://m.test", []))
-      .toBe(`echo '${GRANT}' | ocx connect https://d.test:8443 --management-url https://m.test --pairing-code-stdin`);
+      .toBe(`echo '${GRANT}' | ocx connect 'https://d.test:8443' --management-url 'https://m.test' --pairing-code-stdin`);
     expect(hubInviteCommand(GRANT, "https://d.test:8443", "https://m.test", ["codex"]))
-      .toContain("--clients codex --pairing-code-stdin");
+      .toContain("--clients 'codex' --pairing-code-stdin");
+  });
+
+  test("shell-quotes every dynamic value in the printed command", () => {
+    expect(hubInviteCommand("code'word", "https://x$({touch,pwn})", "https://m.test/$HOME", ["codex"]))
+      .toBe(
+        `echo 'code'"'"'word' | ocx connect 'https://x$({touch,pwn})' --management-url 'https://m.test/$HOME' --clients 'codex' --pairing-code-stdin`,
+      );
   });
 });
 
@@ -192,7 +199,7 @@ describe("hub invite output", () => {
     expect(boundOrigin).toBe("http://localhost:10100");
     expect(out.join("\n")).toContain("# Run on the other machine:");
     expect(out.join("\n")).toContain(
-      `echo '${GRANT}' | ocx connect http://100.64.0.10:10100 --management-url https://hub.tailnet.ts.net --pairing-code-stdin`,
+      `echo '${GRANT}' | ocx connect 'http://100.64.0.10:10100' --management-url 'https://hub.tailnet.ts.net' --pairing-code-stdin`,
     );
     // The warning is advice, not output a script should capture.
     expect(err.join("\n")).toContain("single-use");
@@ -222,10 +229,10 @@ describe("hub invite output", () => {
       hub: { managementPublicOrigin: "https://hub.tailnet.ts.net", dataPublicOrigin: "https://hub.tailnet.ts.net:8443" },
     });
     const fromConfig = await invite(["invite"], configured);
-    expect(fromConfig.out.join("\n")).toContain("ocx connect https://hub.tailnet.ts.net:8443 ");
+    expect(fromConfig.out.join("\n")).toContain("ocx connect 'https://hub.tailnet.ts.net:8443' ");
 
     const overridden = await invite(["invite", "--data-url", "https://front.test"], configured);
-    expect(overridden.out.join("\n")).toContain("ocx connect https://front.test ");
+    expect(overridden.out.join("\n")).toContain("ocx connect 'https://front.test' ");
   });
 
   test("--json emits exactly the documented envelope", async () => {
@@ -236,7 +243,7 @@ describe("hub invite output", () => {
       expiresAt: new Date(EXPIRES_AT).toISOString(),
       dataUrl: "http://100.64.0.10:10100",
       managementUrl: "https://hub.tailnet.ts.net",
-      command: `echo '${GRANT}' | ocx connect http://100.64.0.10:10100 --management-url https://hub.tailnet.ts.net --clients codex,claude --pairing-code-stdin`,
+      command: `echo '${GRANT}' | ocx connect 'http://100.64.0.10:10100' --management-url 'https://hub.tailnet.ts.net' --clients 'codex,claude' --pairing-code-stdin`,
     });
   });
 });
@@ -321,7 +328,7 @@ describe("hub invite refuses before burning a code", () => {
       hub: { managementPublicOrigin: "https://hub.tailnet.ts.net", dataPublicOrigin: "https://hub.tailnet.ts.net:8443" },
     }), { live: { pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime" } });
     expect(viaConfig.code).toBe(0);
-    expect(viaConfig.out.join("\n")).toContain("ocx connect https://hub.tailnet.ts.net:8443 ");
+    expect(viaConfig.out.join("\n")).toContain("ocx connect 'https://hub.tailnet.ts.net:8443' ");
   });
 
   test("no running hub, a malformed origin, and a refused mint each exit 1 with a reason", async () => {

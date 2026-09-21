@@ -1,3 +1,5 @@
+import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
+import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
 import * as usageHistoryModule from "../../src/usage/log";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -171,7 +173,7 @@ async function completeMockCodexOAuth(options: {
     loggedIn: true,
   } as ReturnType<typeof oauth.getLoginStatus>);
   const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
-  // Mirrors the login-status poll delay in auth-api.ts; other timers are intentionally dropped.
+  // Mirrors the login-status poll delay in login-flow.ts; other timers are intentionally dropped.
   const CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
   const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
     callback: (...args: unknown[]) => void,
@@ -2874,16 +2876,7 @@ describe("codex-auth API", () => {
     });
   });
 
-  test("reset-credit consume rejects invalid account ids before credential lookup", async () => {
-    const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ accountId: "../bad" }),
-    });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
-    expect(resp!.status).toBe(400);
-    expect(await resp!.json()).toMatchObject({ error: "Invalid account id format" });
-  });
+  registerResetCreditConsumeValidationTests(makeConfig, seedPoolAccount);
 
   test("reset-credit consume returns remaining from refreshed quota, not the consume payload", async () => {
     const config = makeConfig();
@@ -4019,218 +4012,6 @@ describe("codex-auth API", () => {
     expect(accounts.find(a => a.isMain)?.priority).toBe(0);
   });
 
-  async function putAccountAutoSwitch(config: OcxConfig, body: unknown): Promise<Response> {
-    const req = new Request("http://localhost/api/codex-auth/auto-switch", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: typeof body === "string" ? body : JSON.stringify(body),
-    });
-    return (await handleCodexAuthAPI(req, new URL(req.url), config))!;
-  }
-
-  test("PUT /api/codex-auth/auto-switch persists a pool account override", async () => {
-    const config = makeConfig({ autoSwitchThreshold: 95 });
-    seedPoolAccount(config, { id: "work", email: "work@example.test" });
-
-    const resp = await putAccountAutoSwitch(config, { id: "work", threshold: 60 });
-
-    expect(resp.status).toBe(200);
-    expect(await resp.json()).toMatchObject({
-      ok: true,
-      id: "work",
-      autoSwitchThresholdOverride: 60,
-      autoSwitchThreshold: 60,
-    });
-    expect(config.codexAccountAutoSwitchThresholds).toEqual({ work: 60 });
-  });
-
-  test("PUT /api/codex-auth/auto-switch persists a main-account override", async () => {
-    const config = makeConfig({ autoSwitchThreshold: 95 });
-
-    const resp = await putAccountAutoSwitch(config, {
-      id: MAIN_CODEX_ACCOUNT_ID,
-      threshold: 0,
-    });
-
-    expect(resp.status).toBe(200);
-    expect(await resp.json()).toMatchObject({
-      id: MAIN_CODEX_ACCOUNT_ID,
-      autoSwitchThresholdOverride: 0,
-      autoSwitchThreshold: 0,
-    });
-    expect(config.codexAccountAutoSwitchThresholds).toEqual({
-      [MAIN_CODEX_ACCOUNT_ID]: 0,
-    });
-  });
-
-  test.each([
-    ["new override", undefined, 0],
-    ["replacement override", { __main__: 60, side: 35 }, 0],
-    ["last override reset", { __main__: 60 }, null],
-    ["sibling-preserving reset", { __main__: 60, side: 35 }, null],
-  ] as const)("account threshold rollback preserves live and disk state after lock contention: %s", async (_label, thresholds, threshold) => {
-    saveConfig(makeConfig({ providers: { openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } },
-      autoSwitchThreshold: 95, ...(thresholds ? { codexAccountAutoSwitchThresholds: { ...thresholds } } : {}) }));
-    const config = loadConfig();
-    armClaudeCodeBaseline(config);
-    // Established deletion provenance allows rebasing newly added disk-only fields.
-    configModule.deleteConfigTopLevelKey(config, "injectionPrompt");
-    const previousMap = config.codexAccountAutoSwitchThresholds;
-    const previousDescriptor = Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds");
-    const diskBefore = readFileSync(getConfigPath(), "utf8");
-    const lockDatabase = new Database(join(TEST_DIR, "config-mutation.sqlite"), { create: true });
-    lockDatabase.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-    try {
-      await expect(putAccountAutoSwitch(config, { id: MAIN_CODEX_ACCOUNT_ID, threshold }))
-        .rejects.toBeInstanceOf(ConfigMutationLockError);
-      expect(readFileSync(getConfigPath(), "utf8")).toBe(diskBefore);
-      expect(config.codexAccountAutoSwitchThresholds).toBe(previousMap);
-      expect(config.codexAccountAutoSwitchThresholds).toEqual(thresholds);
-      expect(Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds")).toEqual(previousDescriptor);
-    } finally {
-      lockDatabase.exec("ROLLBACK");
-      lockDatabase.close();
-    }
-    // A later unrelated save must not publish the rejected override/reset or erase a disk sibling.
-    writeFileSync(getConfigPath(), JSON.stringify({ ...JSON.parse(diskBefore),
-      codexAccountAutoSwitchThresholds: { ...thresholds, concurrent: 25 }, autoSwitchThreshold: 90 }));
-    config.upstreamFailoverThreshold = 4;
-    configModule.saveConfigPreservingClaudeCode(config);
-    expect(loadConfig()).toMatchObject({ autoSwitchThreshold: 90, upstreamFailoverThreshold: 4,
-      codexAccountAutoSwitchThresholds: { ...thresholds, concurrent: 25 } });
-    expect(config.codexAccountAutoSwitchThresholds).toEqual({ ...thresholds, concurrent: 25 });
-    expect(loadConfig().configRebaseProvenance).toEqual({ version: 1, deletedTopLevelKeys: ["injectionPrompt"] });
-  });
-
-  test.each(["lock contention", "save boundary failure"] as const)(
-    "account threshold rollback restores pending child deletions after %s", async failure => {
-      saveConfig(makeConfig({ providers: { openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } },
-        autoSwitchThreshold: 95, codexAccountAutoSwitchThresholds: { work: 60 } }));
-      const config = loadConfig();
-      armClaudeCodeBaseline(config);
-      // This pending, previously accepted reset must survive rollback of the next request.
-      setCodexAccountAutoSwitchThresholdOverride(config, "work", null);
-      const previousDescriptor = Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds");
-      const diskBefore = readFileSync(getConfigPath(), "utf8");
-      const lockDatabase = failure === "lock contention"
-        ? new Database(join(TEST_DIR, "config-mutation.sqlite"), { create: true }) : undefined;
-      lockDatabase?.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-      const saveSpy = failure === "save boundary failure"
-        ? spyOn(configModule, "saveConfigPreservingClaudeCode").mockImplementation(candidate => {
-          // Real pre-save preparation can recreate the absent parent before a later failure.
-          prepareConfigObjectChildDeletionRebase(candidate);
-          throw new ConfigMutationLockError("synthetic config commit failure");
-        }) : undefined;
-      try {
-        await expect(putAccountAutoSwitch(config, { id: MAIN_CODEX_ACCOUNT_ID, threshold: null }))
-          .rejects.toBeInstanceOf(ConfigMutationLockError);
-        expect(readFileSync(getConfigPath(), "utf8")).toBe(diskBefore);
-        expect(Object.getOwnPropertyDescriptor(config, "codexAccountAutoSwitchThresholds")).toEqual(previousDescriptor);
-      } finally {
-        saveSpy?.mockRestore();
-        lockDatabase?.exec("ROLLBACK");
-        lockDatabase?.close();
-      }
-      writeFileSync(getConfigPath(), JSON.stringify({ ...JSON.parse(diskBefore),
-        codexAccountAutoSwitchThresholds: { work: 85, __main__: 70, concurrent: 25 }, autoSwitchThreshold: 90 }));
-      config.upstreamFailoverThreshold = 4;
-      configModule.saveConfigPreservingClaudeCode(config);
-      // Keep old work deletion, discard rejected main deletion, adopt concurrent additions.
-      expect(config.codexAccountAutoSwitchThresholds).toEqual({ __main__: 70, concurrent: 25 });
-      expect(loadConfig()).toMatchObject({ autoSwitchThreshold: 90, upstreamFailoverThreshold: 4,
-        codexAccountAutoSwitchThresholds: { __main__: 70, concurrent: 25 } });
-      expect(loadConfig().codexAccountAutoSwitchThresholds).not.toHaveProperty("work");
-    },
-  );
-
-  test("PUT /api/codex-auth/auto-switch rejects an unknown pool account", async () => {
-    const config = makeConfig({ autoSwitchThreshold: 95 });
-
-    const resp = await putAccountAutoSwitch(config, { id: "missing", threshold: 60 });
-
-    expect(resp.status).toBe(404);
-    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
-  });
-
-  test("a null account threshold restores global inheritance and drops an empty map", async () => {
-    const config = makeConfig({
-      autoSwitchThreshold: 95,
-      codexAccountAutoSwitchThresholds: { work: 60 },
-    });
-    seedPoolAccount(config, { id: "work", email: "work@example.test" });
-
-    const resp = await putAccountAutoSwitch(config, { id: "work", threshold: null });
-
-    expect(resp.status).toBe(200);
-    expect(await resp.json()).toMatchObject({
-      id: "work",
-      autoSwitchThresholdOverride: null,
-      autoSwitchThreshold: 95,
-    });
-    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
-  });
-
-  test("account threshold overrides include main and are reported by the account list", async () => {
-    const config = makeConfig({
-      autoSwitchThreshold: 95,
-      codexAccountAutoSwitchThresholds: { work: 60, [MAIN_CODEX_ACCOUNT_ID]: 0 },
-    });
-    seedPoolAccount(config, { id: "work", email: "work@example.test" });
-    seedPoolAccount(config, { id: "side", email: "side@example.test" });
-
-    const accounts = await listCodexAuthAccounts(config);
-
-    expect(accounts.find(a => a.id === "work")?.autoSwitchThresholdOverride).toBe(60);
-    expect(accounts.find(a => a.id === "side")?.autoSwitchThresholdOverride).toBeNull();
-    expect(accounts.find(a => a.isMain)?.autoSwitchThresholdOverride).toBe(0);
-  });
-
-  test.each([
-    [true, "p***n@example.test"],
-    [false, "person@example.test"],
-  ] as const)("account threshold DTOs preserve email masking=%s", async (maskEmails, expectedEmail) => {
-    const config = makeConfig({
-      autoSwitchThreshold: 95,
-      codexAccountAutoSwitchThresholds: { work: 0, missing: 60 },
-      privacy: { maskEmails },
-    });
-    seedPoolAccount(config, { id: "work", email: "person@example.test" });
-    seedPoolAccount(config, { id: "missing", email: "person@example.test" });
-    updateAccountQuota("work", 99);
-    removeCodexAccountCredential("missing");
-
-    const accounts = await listCodexAuthAccounts(config);
-
-    expect(accounts.find(account => account.id === "work")).toMatchObject({
-      email: expectedEmail,
-      autoSwitchThresholdOverride: 0,
-      hasCredential: true,
-    });
-    expect(accounts.find(account => account.id === "missing")).toMatchObject({
-      email: expectedEmail,
-      autoSwitchThresholdOverride: 60,
-      hasCredential: false,
-      needsReauth: true,
-    });
-    expect(JSON.stringify(accounts)).not.toContain("access-work");
-    expect(JSON.stringify(accounts)).not.toContain("refresh-work");
-  });
-
-  test.each([
-    ["a negative threshold", -1],
-    ["a threshold above 100", 101],
-    ["a fractional threshold", 1.5],
-    ["a numeric string", "80"],
-    ["a missing threshold", undefined],
-  ] as const)("rejects %s as an account threshold override", async (_label, threshold) => {
-    const config = makeConfig();
-    seedPoolAccount(config, { id: "work", email: "work@example.test" });
-
-    const resp = await putAccountAutoSwitch(config, { id: "work", threshold });
-
-    expect(resp.status).toBe(400);
-    expect(config.codexAccountAutoSwitchThresholds).toBeUndefined();
-  });
 
   test("GET /api/codex-auth/active reports an operator pin but not an automatic pick", async () => {
     const config = makeConfig({ activeCodexAccountId: "work" });
@@ -4838,7 +4619,7 @@ describe("codex-auth API", () => {
   test("the device poll budget covers the 15-minute grant", async () => {
     // The budget is a loop bound with no observable output, so a regression to
     // the 5-minute browser budget would pass every behavioral test above.
-    const source = await Bun.file(new URL("../../src/codex/auth-api.ts", import.meta.url)).text();
+    const source = await Bun.file(new URL("../../src/codex/auth-api/login-flow.ts", import.meta.url)).text();
     const budget = /const pollAttempts = useDeviceFlow \? (\d+) : (\d+);/.exec(source);
     expect(budget).toBeTruthy();
     // 900s is the grant; the extra margin covers post-grant settlement, so an
@@ -5746,27 +5527,7 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential("quota-unknown")).toBeNull();
   });
 
-  test("OAuth creation rejects a namespace claimed during warmup without persisting", async () => {
-    const config = makeConfig();
-    const result = await completeMockCodexOAuth({
-      config,
-      requestBody: { id: "oauth-race" },
-      oauthAccountId: "acct-oauth-race",
-      email: "oauth-race@example.test",
-      onWarmup: () => {
-        config.codexAccountNamespaces = { "oauth-race": "pool-a" };
-      },
-    });
-
-    expect(result.startStatus).toBe(200);
-    expect(result.state).toMatchObject({
-      status: "error",
-      error: "account id must not collide with a configured Codex account namespace",
-    });
-    expect(config.codexAccounts).toEqual([]);
-    expect(config.codexAccountNamespaces).toEqual({ "oauth-race": "pool-a" });
-    expect(getCodexAccountCredential("oauth-race")).toBeNull();
-  });
+  registerWarmupRateLimitCases(makeConfig, completeMockCodexOAuth);
 
   test("OAuth creation reports a durable add when catalog convergence is pending", async () => {
     const accountId = "oauth-picker-pending";
@@ -6083,12 +5844,12 @@ describe("codex-auth API", () => {
   });
 
   test("OAuth pool login excludes self from collision check when reauth", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined)");
   });
 
   test("OAuth pool reauth binds ChatGPT identity to the existing pool slot", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("expectedChatgptId");
     expect(source).toContain("expectedEmail");
     expect(source).toContain("Signed-in ChatGPT account does not match this pool account");
@@ -6096,18 +5857,18 @@ describe("codex-auth API", () => {
   });
 
   test("OAuth pool login waits for the current flow to finish, not stale credentials", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("st.done && st.loggedIn");
     expect(source).toContain("Login timed out before OAuth completed.");
   });
 
   test("OAuth pool login stores a privacy log label at the account creation call site", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     expect(source).toContain("withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts)");
   });
 
   test("GET /api/codex-auth/login-status projects transient flow-state emails at response boundaries", async () => {
-    const source = await Bun.file("src/codex/auth-api.ts").text();
+    const source = await Bun.file("src/codex/auth-api/login-flow.ts").text();
     // #3859 turned the unconditional mask into a policy projection. The guarantee is unchanged:
     // BOTH boundaries redact through the shared helper, and the route resolves the policy from
     // config rather than defaulting to reveal.

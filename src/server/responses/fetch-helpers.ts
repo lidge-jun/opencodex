@@ -1,3 +1,4 @@
+import type { NativeResponseControl } from "./native-response-control";
 import type { Server } from "bun";
 import {
   codexWsUpstreamFetch,
@@ -10,6 +11,7 @@ import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
+import { configuredOutboundFetch } from "../../lib/proxy-env";
 
 export { withUpstreamHttpVersion };
 
@@ -43,6 +45,31 @@ export function safeOriginLabel(url: string): string {
   }
 }
 
+/**
+ * Check whether a target host should bypass Bun's keep-alive pool reuse.
+ * Configured via the `OCX_FRESH_CONNECTION_HOSTS` environment variable (comma-separated).
+ */
+export function wantsFreshConnection(
+  input: Parameters<typeof globalThis.fetch>[0],
+  hostsEnv = process.env.OCX_FRESH_CONNECTION_HOSTS,
+): boolean {
+  if (!hostsEnv) return false;
+  try {
+    const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    const targets = hostsEnv
+      .split(",")
+      .map(h => h.trim().toLowerCase().replace(/^\.+/, ""))
+      .filter(Boolean);
+    for (const target of targets) {
+      if (host === target || host.endsWith(`.${target}`)) return true;
+    }
+  } catch {
+    /* unparseable target URL keeps default connection behavior */
+  }
+  return false;
+}
+
 
 
 export interface PaceAwareFetch {
@@ -52,7 +79,40 @@ export interface PaceAwareFetch {
 
 export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
 
+/**
+ * Apply the physical-send connection policy to whichever fetch actually performs the send.
+ *
+ * The executor `providerFetch` builds is not the only physical boundary. A `dispatchOverride`
+ * that revalidates credentials re-reads `route.provider.fetch` at send time -- reselection can
+ * install a different provider transport after this wrapper was constructed -- and then calls
+ * that fetch directly instead of the supplied executor. Keeping the policy inside the executor
+ * alone therefore left every provider-scoped transport reusing a pooled socket for a host the
+ * operator had named in `OCX_FRESH_CONNECTION_HOSTS` (#4992). The policy belongs around the
+ * selected fetch so it follows the selection rather than the construction.
+ *
+ * Idempotent on purpose: an override that hands the send back to the supplied executor passes
+ * through here twice, and both passes derive the same headers from the same wire URL.
+ */
+export function sendWithConnectionPolicy(
+  physicalFetch: typeof globalThis.fetch,
+  input: Parameters<typeof globalThis.fetch>[0],
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  const fresh = wantsFreshConnection(input);
+  if (fresh) {
+    headers.set("Connection", "close");
+  }
+  return physicalFetch(input, {
+    ...init,
+    headers,
+    redirect: "manual",
+    ...(fresh ? { keepalive: false } : {}),
+  });
+}
+
 export interface ProviderFetchOptions {
+  nativeControl?: NativeResponseControl;
   providerName?: string;
   modelId?: string;
   /** One pacing slot was acquired immediately before this fetch wrapper was created. */
@@ -70,7 +130,11 @@ export function providerFetch(
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
   options: ProviderFetchOptions = {},
 ): ProviderFetch {
-  const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const configuredFetch = Object.assign(
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => configuredOutboundFetch(input, init),
+    { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
+  ) as typeof globalThis.fetch;
+  const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? configuredFetch;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };
@@ -78,11 +142,15 @@ export function providerFetch(
   // Return the original 3xx so the response owner retains its retry/health/relay contract.
   const dispatch = Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
-      base(input, { ...init, redirect: "manual" }),
+      sendWithConnectionPolicy(base, input, init),
     { preconnect },
   ) as typeof globalThis.fetch;
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      // The hook inspects the outgoing headers and refuses the send by throwing; it is not a
+      // mutator, and the copy it receives is deliberately not threaded onward. `Connection`
+      // is decided inside `dispatch`, which runs after this, so the fresh-connection policy
+      // wins regardless of what any caller or hook put in the header.
       options.beforeDispatch?.(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 };
       return options.dispatchOverride
@@ -101,7 +169,8 @@ export function providerFetch(
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
       // there would silently negotiate a transport the operator ruled out.
-      return codexWsUpstreamFetch(input, init, httpFetch, runtime, options.onCodexWsQuota, options.beforeDispatch);
+      return codexWsUpstreamFetch(input, init, httpFetch, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
+        () => waitForPacing(init.signal ?? undefined));
     }
     return httpFetch(input, init);
   };

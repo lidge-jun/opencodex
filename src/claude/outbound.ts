@@ -189,7 +189,27 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
   return { id, input, resultContent, completed };
 }
 
-function messageSnapshot(model: string): Rec {
+/**
+ * `inputTokenFloor` is this proxy's own count of the prompt it forwarded, used only when the
+ * upstream sent no confirmed usage before the first frame.
+ *
+ * Real Anthropic fills `message_start.message.usage.input_tokens` with the turn's prompt size,
+ * and third-party clients read it there — Paseo's context meter takes input from this frame and
+ * output from `message_delta`, so a hardcoded zero showed a nearly-empty ring for a turn whose
+ * `/context` reported ~97k (#4857). #4891 fixed the destinations that report usage up front;
+ * the internal bridge attaches `usage: null` to its lifecycle frames, so those paths had
+ * nothing to report and kept sending zero.
+ *
+ * A floor is a measurement, which is what makes it publishable here: it counts the prompt this
+ * proxy actually sent, the same estimate `claude-messages.ts` already trusts as a log floor. It
+ * is not a claim about upstream's tokenizer, and it is not final — `message_delta` carries the
+ * authoritative count for every reader that waits for it, exactly as before.
+ */
+function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: number): Rec {
+  const usage = confirmedUsage
+    ?? (typeof inputTokenFloor === "number" && Number.isFinite(inputTokenFloor) && inputTokenFloor > 0
+      ? { input_tokens: Math.trunc(inputTokenFloor), output_tokens: 0 }
+      : { input_tokens: 0, output_tokens: 0 });
   return {
     id: `msg_${uuid()}`,
     type: "message",
@@ -198,7 +218,7 @@ function messageSnapshot(model: string): Rec {
     model,
     stop_reason: null,
     stop_sequence: null,
-    usage: { input_tokens: 0, output_tokens: 0 },
+    usage,
   };
 }
 
@@ -212,6 +232,8 @@ interface OpenBlock {
   argsBuf?: string;
   argsBufBytes?: number;
   webSearchArgsEmitted?: boolean;
+  /** True once ordinary function-call arguments were emitted to Anthropic SSE. */
+  toolArgsEmitted?: boolean;
   callId?: string;
   /** Last fixed-size reasoning identity (item + summary/content index) seen by this block. */
   reasoningPartKey?: string;
@@ -226,7 +248,15 @@ interface OpenBlock {
 export function responsesSseToAnthropicSse(
   upstream: ReadableStream<Uint8Array>,
   model: string,
-  opts: { pingIntervalMs?: number; translatorBudget: TranslatorBudget },
+  opts: {
+    pingIntervalMs?: number;
+    translatorBudget: TranslatorBudget;
+    /**
+     * This proxy's count of the prompt it forwarded, published on `message_start` only when the
+     * upstream sent no confirmed usage before the first frame. See `messageSnapshot` (#4857).
+     */
+    inputTokenFloor?: number;
+  },
 ): ReadableStream<Uint8Array> {
   const translatorBudget = opts.translatorBudget;
   const pingIntervalMs = opts?.pingIntervalMs ?? 20_000;
@@ -244,6 +274,7 @@ export function responsesSseToAnthropicSse(
   let open: OpenBlock | null = null;
   let sawToolUse = false;
   let webSearchRequests = 0;
+  let earlyAnthropicUsage: Rec | undefined;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const utf8SliceBytes = (value: string, start: number, end: number): number => {
@@ -280,7 +311,10 @@ export function responsesSseToAnthropicSse(
       const ensureStarted = () => {
         if (started) return;
         started = true;
-        emit("message_start", { type: "message_start", message: messageSnapshot(model) });
+        emit("message_start", {
+          type: "message_start",
+          message: messageSnapshot(model, earlyAnthropicUsage, opts.inputTokenFloor),
+        });
         emit("ping", { type: "ping" });
       };
       // Keepalive pings protect remote deployments behind LB/NAT idle timeouts even
@@ -403,8 +437,17 @@ export function responsesSseToAnthropicSse(
       const handleFrame = (eventName: string, data: Rec) => {
         switch (eventName) {
           case "response.created":
-            // Transport prelude only. Start Anthropic framing on semantic output or completion.
+          case "response.in_progress": {
+            // Lifecycle preludes do not start Anthropic framing, but some upstreams attach
+            // confirmed input usage before semantic output. Retain only its bounded Anthropic
+            // projection so message_start can report measurements that already arrived.
+            const response = isRec(data.response) ? data.response : {};
+            const usage = isRec(response.usage) ? response.usage : undefined;
+            if (!started && usage && typeof usage.input_tokens === "number") {
+              earlyAnthropicUsage = anthropicUsage(usage);
+            }
             break;
+          }
           case "response.heartbeat":
             if ((controller.desiredSize ?? 0) > 0) emit("ping", { type: "ping" });
             break;
@@ -488,6 +531,7 @@ export function responsesSseToAnthropicSse(
               argsBuf: "",
               argsBufBytes: 0,
               webSearchArgsEmitted: false,
+              toolArgsEmitted: false,
             };
             break;
           }
@@ -518,6 +562,14 @@ export function responsesSseToAnthropicSse(
               type: "content_block_delta", index: open.index,
               delta: { type: "input_json_delta", partial_json: data.delta },
             });
+            open.toolArgsEmitted = true;
+            break;
+          }
+          case "response.function_call_arguments.done": {
+            if (!open || open.kind !== "tool_use" || open.bufferWebSearchArgs || open.toolArgsEmitted) break;
+            if (typeof data.arguments !== "string" || data.arguments.length === 0) break;
+            emit("content_block_delta", { type: "content_block_delta", index: open.index, delta: { type: "input_json_delta", partial_json: data.arguments } });
+            open.toolArgsEmitted = true;
             break;
           }
           case "response.output_item.done": {
@@ -565,6 +617,13 @@ export function responsesSseToAnthropicSse(
                   delta: { type: "input_json_delta", partial_json: JSON.stringify(sanitizeWebSearchInput(parsed)) },
                 });
                 open.webSearchArgsEmitted = true;
+              } else if (!open.bufferWebSearchArgs && !open.toolArgsEmitted
+                && typeof item.arguments === "string" && item.arguments.length > 0) {
+                emit("content_block_delta", {
+                  type: "content_block_delta", index: open.index,
+                  delta: { type: "input_json_delta", partial_json: item.arguments },
+                });
+                open.toolArgsEmitted = true;
               }
               closeOpenBlock();
             }

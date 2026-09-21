@@ -11,7 +11,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 프록시 수신 포트입니다. |
 | `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 데이터 admission 토큰이 필요하며, `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 owner-only `service-api-token` 순서로 결정됩니다. 손으로 내보낼 값은 없습니다. [Remote access](#remote-access)를 보세요. |
-| `proxy?` | `string` | — | 송신용 HTTP(S) 프록시 URL 또는 `${ENV_VAR}`입니다. 해당 변수가 비어 있을 때만 `HTTP_PROXY` / `HTTPS_PROXY`에 적용되며, 루프백은 `NO_PROXY`에 그대로 남습니다. |
+| `proxy?` | `string` | — | 송신용 HTTP(S) 또는 SOCKS5 프록시 URL(`socks5://host:port`) 또는 `${ENV_VAR}`입니다. HTTP URL은 해당 변수가 비어 있을 때 `HTTP_PROXY` / `HTTPS_PROXY`에 적용됩니다. SOCKS5 URL은 내장 SOCKS5 터널을 사용하고 `ALL_PROXY`에도 적용되며(`ocx start --socks5`), 이 프로세스에서 상속된 `HTTP(S)_PROXY`를 지웁니다. 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Canonical Codex Responses 응답의 선택적 safety-buffering 헤더 두 개와 SSE 힌트를 제거합니다. 공급자의 안전 정책이나 거절 응답은 바뀌지 않습니다. Native WS 메타데이터와 compact는 제외됩니다. |
 | `stallTimeoutSec?` | `number` | `300` | Responses 및 네이티브 Chat에서 유효한 업스트림 진행이 없는 시간(초). 최소 1초. |
@@ -19,7 +19,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `shutdownTimeoutMs?` | `number` | `5000` | 진행 중인 turn을 중단하기 전에 허용하는 정상 종료 드레인 기한입니다. |
 | `websockets?` | `boolean` | `false` | 클라이언트용 Responses WebSocket 경로를 광고하고 허용합니다. `false`이면 클라이언트는 HTTP/SSE를 사용하며, 적격 canonical ChatGPT 업스트림 WS 최적화는 비활성화하지 않습니다. |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS에서 추가로 허용할 정확한 origin입니다. 루프백 origin은 항상 허용됩니다. `chrome-extension://<extension-id>` 같은 authority 기반 브라우저 확장 origin을 지원하며, `*`는 와일드카드가 아닙니다. Firefox와 Safari는 확장 UUID를 (설치/브라우저 실행 때마다) 새로 만드므로 origin이 바뀌면 항목을 갱신하세요. |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | 비루프백 바인드에서 관리 API와 데이터 플레인 인증이 허용하는 생성된 `ocx_…` 자격 증명입니다. 대시보드에서 관리합니다. |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | 비루프백 바인드에서 데이터 플레인 요청만 허용하는 생성된 `ocx_…` 자격 증명입니다. 관리 API는 허가하지 않으며, 관리 접근에는 [관리 API 레퍼런스](/ko/reference/management-api/)에 설명된 별도의 자격 증명을 사용합니다. 대시보드에서 관리합니다. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 선택적으로 활성화하는 보관 세션 정리 정책입니다. 절대 암묵적으로 활성화되지 않습니다. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 제거 가능한 앱 소유 로그, 캐시, blob, continuation payload에 대한 MiB 단위 상한입니다. 범위는 64–4096이며 RSS 상한은 아닙니다. |
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |

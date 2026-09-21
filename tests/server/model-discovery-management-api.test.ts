@@ -4,7 +4,18 @@ import type { OcxConfig } from "../../src/types";
 import { ManagementRequest as Request } from "../helpers/management-auth";
 
 function config(): OcxConfig {
-  return { port: 10100, defaultProvider: "vendor", providers: { vendor: { liveModels: false, models: ["known"] } }, disabledModels: ["vendor/new"] };
+  // `adapter` and `baseUrl` are both required by the persisted-config schema, so a row without
+  // them cannot reach this handler in production. The fixture used to omit them and still crossed
+  // into the real catalog gather path, which builds a discovery request before the static-provider
+  // branch returns; that is how it reached a URL join at all.
+  return {
+    port: 10100,
+    defaultProvider: "vendor",
+    providers: {
+      vendor: { adapter: "openai-chat", baseUrl: "https://vendor.example/v1", liveModels: false, models: ["known"] },
+    },
+    disabledModels: ["vendor/new"],
+  };
 }
 
 async function call(live: OcxConfig, path: string, method = "GET", body?: unknown) {

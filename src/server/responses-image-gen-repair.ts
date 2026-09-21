@@ -2,7 +2,7 @@ import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { relaySseWithPayloadRewrite, type SsePayloadRewrite } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
-interface NamespacedTool {
+export interface NamespacedTool {
   namespace: string;
   name: string;
 }

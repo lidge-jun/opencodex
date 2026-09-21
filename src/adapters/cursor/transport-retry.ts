@@ -1,6 +1,8 @@
 import type { CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactory, CursorTransportFactoryInput } from "./transport";
-import { abortError, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstream-retry";
+import type { RequestExecutionBudget } from "../../lib/request-execution-budget";
+import type { AttemptRecoveryKind } from "../../usage/log";
+import { SendBudgetExhaustedError, abortError, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstream-retry";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { isCursorRootEnvelopeError, safeCursorErrorMessage } from "./cursor-errors";
 
@@ -10,6 +12,27 @@ export { sleepWithAbort as abortAwareSleep } from "../../lib/upstream-retry";
 export const CURSOR_RETRY_ATTEMPTS = 3;
 export const CURSOR_RETRY_BASE_MS = 250;
 export const CURSOR_RETRY_MAX_MS = 2_000;
+
+/**
+ * Fixed identity for the Cursor upstream in the request budget's target ledger. A literal, not
+ * anything derived from the turn: the ledger is read back in diagnostics, so it must not become
+ * a place where a session or credential identity leaks.
+ */
+export const CURSOR_BUDGET_TARGET_KEY = "cursor";
+
+/**
+ * How one Cursor turn participates in the enclosing logical request (#4546).
+ *
+ * Both fields are optional and the whole object defaults to empty, which is what keeps a
+ * context-free unit call unlimited: this transport is exercised directly by tests that build no
+ * request at all, and a mandatory budget would have made every one of them a budget test.
+ */
+export interface CursorTurnExecutionOptions {
+  /** Absent means unlimited; present means every retry is a physical send the request pays for. */
+  sendBudget?: RequestExecutionBudget;
+  /** Observes each physical run request; `ordinal` counts from 1 within this turn. */
+  onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
+}
 
 /**
  * True only for clearly transient failures that occur BEFORE the run request is committed to the
@@ -66,6 +89,11 @@ function requestUncommitted(transport: CursorTransport): boolean {
  *  - the failing transport reports the run request was not committed to the wire,
  *  - the error is a transient pre-commit failure.
  * Otherwise the error propagates (the adapter maps it to a user-facing message).
+ *
+ * `execution` carries the enclosing request's send budget. Each attempt here is a real re-send
+ * of the whole turn, so an outer cap that counted one adapter entry counted at most a third of
+ * what went upstream; when a budget is present every attempt is admitted against it and an
+ * exhausted request stops before opening another transport (#4546).
  */
 export async function runCursorTurnWithRetry(
   makeTransport: (input: CursorTransportFactoryInput) => CursorTransport,
@@ -73,9 +101,26 @@ export async function runCursorTurnWithRetry(
   request: CursorRunRequest,
   signal: AbortSignal | undefined,
   onEvent: (message: CursorServerMessage, transport: CursorTransport) => void,
+  execution: CursorTurnExecutionOptions = {},
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     if (signal?.aborted) throw abortError(signal);
+    // Admitted before the transport is built: a refused send must not open a connection, and
+    // the refusal must reach the adapter as the typed exhaustion rather than as a run failure
+    // that the retry predicate below could read as transient.
+    const decision = execution.sendBudget?.reserveDispatch({
+      sendClass: "transient",
+      targetKey: CURSOR_BUDGET_TARGET_KEY,
+    });
+    if (decision && (!decision.allowed || !decision.permit.use())) {
+      throw new SendBudgetExhaustedError(CURSOR_BUDGET_TARGET_KEY);
+    }
+    execution.onPhysicalSend?.({
+      ordinal: attempt + 1,
+      // Cursor retries only pre-commit transport failures, so every retry send is the
+      // connection-reset class; there is no re-send of a turn the server may have accepted.
+      ...(attempt > 0 ? { recovery: "connection-reset" as const } : {}),
+    });
     const transport = makeTransport(input);
     let emittedAny = false;
     let closed = false;

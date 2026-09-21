@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import type { ProviderAdapter } from "../../src/adapters/base";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * Dispatch-priority regression test for the image bridge (PR #424).
@@ -39,9 +41,16 @@ let runTurnCalled = false;
 let mockWsPlan: unknown = undefined;
 
 let handleResponses: typeof import("../../src/server/responses")["handleResponses"];
+let releaseSpendHome: (() => void) | undefined;
+// Retained so teardown can remove it. Nothing created this directory before the lease did:
+// taking ownership mkdirs the state directory, so the suite now owns its removal too.
+let ownedHome = "";
 
 beforeAll(async () => {
-  process.env.OPENCODEX_HOME = join(tmpdir(), "ocx-test-" + randomUUID());
+  ownedHome = join(tmpdir(), "ocx-test-" + randomUUID());
+  process.env.OPENCODEX_HOME = ownedHome;
+  // Take the writer lease after this suite installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
 
   const actualResolver = await import("../../src/server/adapter-resolve");
   mock.module("../../src/server/adapter-resolve", () => ({
@@ -112,6 +121,12 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  // Release, then remove, then restore. An open lease inside a directory being deleted fails
+  // the removal on Windows and leaves an unlinked live database on POSIX, and the removal has
+  // to happen while OPENCODEX_HOME still names the directory being removed.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  if (ownedHome) removeTreeWithRetry(ownedHome);
   if (PREV_HOME === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = PREV_HOME;
   mock.restore();
@@ -155,6 +170,9 @@ describe("image bridge dispatch priority (handler activation)", () => {
     const res = await post(true, [{ type: "image_generation" }]);
     expect(imageBridgeRun).toBe(true);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    // The bridge answers with a live SSE stream. Releasing it here means no reader is
+    // still attached when this suite drops its lease in afterAll.
+    await res.body?.cancel();
   });
 
   test("alias-only image tool_choice keeps canonical bridge interception armed", async () => {
@@ -176,6 +194,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(imageBridgeToolNames).toContain("generate_image");
     expect(imageBridgeToolNames).toContain("image_gen");
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body?.cancel();
   });
 
   test("stream=false + image_generation tool → 400 (bridge requires stream=true)", async () => {
@@ -193,6 +212,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(webSearchRun).toBe(true);
     expect(imageBridgeRun).toBe(false);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body?.cancel();
   });
 
   test("routed compaction with image_generation tool → image bridge does NOT hijack compaction (#424)", async () => {
@@ -214,6 +234,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     );
     expect(imageBridgeRun).toBe(false);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body?.cancel();
   });
 
   test("dual-tool on a runTurn adapter → image bridge wins (web-search loop has no runTurn support)", async () => {
@@ -226,6 +247,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
       expect(imageBridgeRun).toBe(true);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
+      await res.body?.cancel();
     } finally {
       useRunTurnAdapter = false;
     }
@@ -241,6 +263,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
       expect(webSearchRun).toBe(false);
       expect(runTurnCalled).toBe(false);
       expect(res.headers.get("content-type")).toBe("text/event-stream");
+      await res.body?.cancel();
     } finally {
       useRunTurnAdapter = false;
     }

@@ -38,8 +38,34 @@ describe("sanitizeReasoningInputContent scoping", () => {
       type: "reasoning",
       id: "rs_1",
       content: [],
+      // `reasoningItem` omits `summary`, and the sanitizer now supplies the empty array the
+      // Responses API requires on every reasoning input item.
+      summary: [],
       encrypted_content: "native-blob",
     });
+  });
+
+  // Regression: a reasoning item translated from `/v1/chat/completions` or `/v1/messages` carried
+  // no `summary`, which responsesRequestSchema allows and the upstream does not — the request was
+  // refused with `Missing required parameter: 'input[N].summary'` before inference.
+  test("a summary-less reasoning item gains the required empty summary", () => {
+    const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [reasoningItem()] }));
+    expect(out[0]!.summary).toEqual([]);
+  });
+
+  test("an existing summary is left exactly as it arrived", () => {
+    const summary = [{ type: "summary_text", text: "chain" }];
+    const out = inputOf(sanitizeReasoningInputContent({ model: "m", input: [reasoningItem({ summary })] }));
+    expect(out[0]!.summary).toEqual(summary);
+  });
+
+  test("a summary-less item is repaired even where content is preserved", () => {
+    const out = inputOf(sanitizeReasoningInputContent(
+      { model: "m", input: [reasoningItem()] },
+      { preserveRawReasoningContent: true },
+    ));
+    expect(out[0]!.summary).toEqual([]);
+    expect(out[0]!.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
   });
 
   test("default behavior still blanks reasoning content (ChatGPT backend rule)", () => {
@@ -113,6 +139,27 @@ describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
     expect(body.input[0]!.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
     expect(body.input[1]).toMatchObject({ type: "function_call", call_id: "call_1", name: "get_weather" });
     expect(body.input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1", output: "rain" });
+  });
+
+  test("a route switch never forwards foreign opaque reasoning or invents plaintext", () => {
+    const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
+    enrichProviderFromRegistry("deepseek", provider);
+    const built = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "deepseek-v4-flash",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _stripReasoningEncryptedContent: true,
+      _rawBody: {
+        model: "deepseek-v4-flash",
+        tools: [{ type: "function", name: "get_weather", parameters: { type: "object" } }],
+        input: [reasoningItem({ content: [], encrypted_content: "foreign-provider-blob" })],
+      },
+    } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], { headers: new Headers() });
+    const body = JSON.parse(String(built.body)) as { input: Record<string, unknown>[] };
+    expect(body.input[0]).not.toHaveProperty("encrypted_content");
+    expect(JSON.stringify(body.input[0])).not.toContain("reasoning_text");
+    expect(JSON.stringify(body.input[0])).not.toContain("foreign-provider-blob");
   });
 
   test("a canonical OpenAI provider still blanks reasoning content", () => {

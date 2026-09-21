@@ -69,7 +69,9 @@ async function put(body: unknown): Promise<Response> {
 describe("atomic model visibility management", () => {
   test("catalog busy maps management and v1 models to 503 startup to warn-skip and system-env to skip", async () => {
     const management = await Bun.file(new URL("../../src/server/management-api.ts", import.meta.url)).text();
-    const server = await Bun.file(new URL("../../src/server/index.ts", import.meta.url)).text();
+    // The catalog-busy mapping moved into the serve-options leaf when src/server/index.ts
+    // became a facade.
+    const server = await Bun.file(new URL("../../src/server/index/serve-options.ts", import.meta.url)).text();
     const prewarm = await Bun.file(new URL("../../src/cli/catalog-prewarm.ts", import.meta.url)).text();
     const systemEnv = await Bun.file(new URL("../../src/server/system-env.ts", import.meta.url)).text();
     for (const source of [management, server]) {

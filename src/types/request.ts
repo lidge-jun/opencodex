@@ -68,6 +68,12 @@ export interface OcxParsedRequest {
   _cursorConversationId?: string;
   /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
   _clientThreadId?: string;
+  /**
+   * This request's OWN Codex thread id (`thread-id`), as opposed to `_clientThreadId`, which
+   * carries `x-codex-parent-thread-id` and is therefore shared by every parallel child of one
+   * parent. Only a surface that must distinguish siblings should read it.
+   */
+  _codexOwnThreadId?: string;
   /** True when promptCacheKey identifies a shared cache cohort rather than one conversation. */
   _promptCacheKeyIsSharedCohort?: boolean;
   /** Cursor-only thread owner; may be an opaque process-local Desktop session/thread identity. */
@@ -154,9 +160,11 @@ export interface OcxAssistantMessage {
   model?: string;
   timestamp: number;
   /**
-   * Kiro `reasoningContent.redactedContent` for THIS assistant turn — an opaque encrypted blob
-   * Kiro replays to preserve model reasoning across turns. Provider-specific and unrenderable, so
-   * it rides the message rather than a content part: any other adapter simply ignores it.
+   * Kiro's encrypted reasoning blob for THIS assistant turn — the opaque value from the turn's
+   * `reasoningContentEvent` (`signature` for the GPT-5.6 family, `redactedContent` for the base64
+   * shape), tagged with the wire field it must be replayed on (see kiro/reasoning.ts). Kiro
+   * replays it to preserve model reasoning across turns. Provider-specific and unrenderable, so it
+   * rides the message rather than a content part: any other adapter simply ignores it.
    */
   kiroRedactedReasoning?: string;
 }
@@ -310,15 +318,16 @@ export interface OcxProviderContinuationState {
 }
 
 export type AdapterEvent =
-  | { type: "heartbeat" }
+  | { type: "heartbeat"; replayUnsafe?: true }
   | { type: "text_delta"; text: string; phase?: OcxMessagePhase }
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
   | { type: "thinking_signature"; signature: string }
   | { type: "redacted_thinking"; data: string }
-  // Kiro reasoning round-trip: the encrypted `redactedContent` blob for the CURRENT assistant turn.
-  // Never rendered — it only rides the reasoning item's envelope so the next request can replay it.
+  // Kiro reasoning round-trip: the encrypted reasoning blob for the CURRENT assistant turn, tagged
+  // with the wire field it arrived on. Never rendered — it only rides the reasoning item's envelope
+  // so the next request can replay it verbatim.
   | { type: "kiro_redacted_reasoning"; data: string }
   | { type: "reasoning_raw_delta"; text: string }
   | { type: "tool_call_start"; id: string; name: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata }

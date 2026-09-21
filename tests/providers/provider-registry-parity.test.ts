@@ -16,6 +16,12 @@ import {
   providerConfigSeed,
 } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "../../src/providers/registry";
+import {
+  REGISTRY_FIELD_MODEL_ID_ROLES,
+  registryModelIdKeys,
+} from "../../src/providers/registry/model-ids";
+import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
+import { META_MUSE_MODELS } from "../../src/providers/registry/model-seeds";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { routeModel } from "../../src/router";
@@ -35,10 +41,10 @@ function nativeTemplate(): Record<string, unknown> {
 
 const EXPECTED_KEY_PROVIDER_IDS = [
   "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "packycode", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
-  "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
+  "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "crusoe", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
-  "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
+  "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
   "qoder", "qoder-cn", "codebuddy", "codebuddy-cn",
 ];
@@ -56,6 +62,120 @@ describe("provider registry parity", () => {
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("every field carried by the shipped registry has a model-id role classification", () => {
+    // This is the runtime half. The module's satisfies clause is the compile-time half, so
+    // together they catch both a new interface field and a shipped entry carrying an unclassified field.
+    const classifiedFields = new Set(Object.keys(REGISTRY_FIELD_MODEL_ID_ROLES));
+    for (const entry of PROVIDER_REGISTRY) {
+      for (const field of Object.keys(entry)) {
+        expect(classifiedFields.has(field), `${entry.id}.${field}`).toBe(true);
+      }
+    }
+  });
+
+  test("every direct model-id map is collected independently", () => {
+    const cases = [
+      ["modelWireDefaults", "openai-chat"],
+      ["modelResponsesUpstreamStreaming", false],
+      ["modelResponsesTerminalRepair", { graceMs: 25 }],
+      ["modelSupportsServiceTier", true],
+      ["modelSupportsReasoningSummaries", false],
+      ["modelSupportsVerbosity", true],
+      ["modelContextWindows", 100_000],
+      ["modelDisplayNames", "Synthetic display name"],
+      ["modelInputModalities", ["text"]],
+      ["modelMaxOutputTokens", 8_000],
+      ["modelReasoningEfforts", ["low"]],
+      ["modelDefaultReasoningEfforts", "low"],
+      ["modelReasoningEffortMap", { low: "low" }],
+      ["virtualModels", { wireModelId: "wire-target", reasoningMode: "pro" }],
+      ["modelMaxInputTokens", 90_000],
+    ] as const;
+
+    for (const [field, value] of cases) {
+      const modelId = `vendor/${field}`;
+      const entry = {
+        id: `fixture-${field}`,
+        label: `Fixture ${field}`,
+        adapter: "openai-chat",
+        baseUrl: "https://registry-model-id.fixture.example/v1",
+        authKind: "key",
+        [field]: { [modelId]: value },
+      } as ProviderRegistryEntry;
+      expect(registryModelIdKeys(entry), field).toEqual([modelId]);
+    }
+  });
+
+  test("non-model records contribute no selector identities", () => {
+    const entry = {
+      id: "fixture-non-model-records",
+      label: "Fixture non-model records",
+      adapter: "openai-chat",
+      baseUrl: "https://registry-model-id.fixture.example/v1",
+      authKind: "key",
+      staticHeaders: { "x-model/header": "value" },
+      reasoningEffortMap: { "effort/label": "high" },
+      responsesItemIdRepair: {
+        message: ["message/value"],
+        reasoning: ["reasoning/value"],
+        repairMissingTerminalIds: true,
+      },
+    } as ProviderRegistryEntry;
+    expect(registryModelIdKeys(entry)).toEqual([]);
+  });
+
+  test("virtual models contribute selectable keys but never wire target values", () => {
+    const entry = {
+      id: "fixture-virtual-model",
+      label: "Fixture virtual model",
+      adapter: "openai-chat",
+      baseUrl: "https://registry-model-id.fixture.example/v1",
+      authKind: "key",
+      virtualModels: {
+        "client/selectable": { wireModelId: "wire/target", reasoningMode: "pro" },
+      },
+    } as ProviderRegistryEntry;
+    expect(registryModelIdKeys(entry)).toEqual(["client/selectable"]);
+    expect(registryModelIdKeys(entry)).not.toContain("wire/target");
+  });
+
+  test("deduplication keeps registry-field order and the first occurrence", () => {
+    const entry = {
+      id: "fixture-stable-deduplication",
+      label: "Fixture stable deduplication",
+      adapter: "openai-chat",
+      baseUrl: "https://registry-model-id.fixture.example/v1",
+      authKind: "key",
+      modelWireDefaults: {
+        "first/model": "openai-chat",
+        "shared/model": "openai-chat",
+      },
+      modelResponsesUpstreamStreaming: {
+        "shared/model": false,
+        "second/model": false,
+      },
+      modelContextWindows: {
+        "third/model": 100_000,
+        "shared/model": 100_000,
+      },
+    } as ProviderRegistryEntry;
+    expect(registryModelIdKeys(entry)).toEqual([
+      "first/model",
+      "shared/model",
+      "second/model",
+      "third/model",
+    ]);
+  });
+
+  test("a shipped entry's ids are recovered from its classified maps, not its models list", () => {
+    const metaMuse = PROVIDER_REGISTRY.find(entry => entry.id === "meta-muse")!;
+    // meta-muse declares these ids in BOTH its models list and its context-window, modality and
+    // effort maps. The helper never reads models, so recovering them here is evidence the maps
+    // were read. Compared against the seed the entry is built from rather than a copied literal,
+    // so adding a Muse model does not fail this case for the wrong reason.
+    expect(registryModelIdKeys(metaMuse)).toEqual([...META_MUSE_MODELS]);
   });
 
   test("key-login export is derived from the registry", () => {
@@ -401,28 +521,39 @@ describe("provider registry parity", () => {
       defaultModel: "qwen3.8-max",
       liveModels: false,
       models: [
-        "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "glm-5.3", "glm-5.3-flash", "glm-5.2",
+        "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+        "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
-        "qwen3.7-max": ["text", "image"],
+        "qwen3.7-max": ["text"],
       },
       modelReasoningEfforts: {
         "qwen3.8-max": ["low", "medium", "xhigh"],
+        "qwen3.8-flash": ["low", "medium", "xhigh"],
       },
-      modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
+      modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh", "qwen3.8-flash": "xhigh" },
       modelContextWindows: {
-        "qwen3.8-max": 983_616,
+        "qwen3.8-max": 1_000_000,
         "qwen3.7-max": 1_000_000,
       },
-      noVisionModels: ["glm-5.3", "glm-5.2"],
+      modelMaxOutputTokens: {
+        "qwen3.8-max": 131_072,
+        "deepseek-v4-pro": 393_216,
+      },
+      noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
+      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
+      // still-phantom glm-5.3-flash must stay out of this preset's models list.
+      // glm-5.3 itself joined the plan on 260917 and is Personal-entitled (probed 260918).
+
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
-      .toEqual(["qwen3.8-max"]);
+      .toEqual(["qwen3.8-max", "qwen3.8-flash"]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .not.toContain("qwen3.8-max");
+    expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
+      .not.toContain("qwen3.8-flash");
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
       .toContain("qwen3.7-max");
   });
@@ -750,6 +881,27 @@ describe("provider registry parity", () => {
     });
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"].models).toEqual(anthropicOauth?.models);
     expect(KEY_LOGIN_PROVIDERS["anthropic-apikey"].modelContextWindows).toEqual(anthropicOauth?.modelContextWindows);
+  });
+
+  test("Anthropic providers seed image input while preserving explicit model overrides", () => {
+    for (const id of ["anthropic", "anthropic-apikey"]) {
+      const entry = PROVIDER_REGISTRY.find(entry => entry.id === id)!;
+      const seed = providerConfigSeed(entry);
+      expect(entry.models!.length).toBeGreaterThan(0);
+      for (const model of entry.models!) {
+        expect(seed.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      }
+
+      const provider: OcxProviderConfig = {
+        adapter: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        modelInputModalities: { "claude-sonnet-5": ["text"] },
+      };
+      enrichProviderFromRegistry(id, provider);
+      expect(provider.modelInputModalities?.["claude-sonnet-5"]).toEqual(["text"]);
+      expect(provider.modelInputModalities?.["claude-fable-5-1"]).toEqual(["text", "image"]);
+      expect(provider.modelInputModalities?.["unknown-model"]).toBeUndefined();
+    }
   });
 
   test("Anthropic providers advertise an effort ladder for every model on both auth flows", () => {

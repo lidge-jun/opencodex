@@ -22,10 +22,12 @@ import {
 } from "./request-log";
 import {
   BoundedSseFrameBuffer,
+  EMPTY_BYTES,
   joinSseFrameBytes,
   MAX_CLIENT_SSE_FRAME_BYTES,
 } from "./sse-frame-buffer";
-import { replaceSseDataPayload } from "./sse-payload-rewrite";
+import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
+import { createBoundedResponseLogBody } from "./response-log-body";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -199,7 +201,7 @@ export function createSseTerminalOutputBoundary(
   const processFrames = (
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
   ): Uint8Array => {
-    if (disposed || terminal || frames.length === 0) return new Uint8Array(0);
+    if (disposed || terminal || frames.length === 0) return EMPTY_BYTES;
     const output: Uint8Array[] = [];
     let responsesTerminal = false;
     for (const frame of frames) {
@@ -258,13 +260,13 @@ export function createSseTerminalOutputBoundary(
 
   return {
     feed(chunk) {
-      if (disposed || terminal) return new Uint8Array(0);
+      if (disposed || terminal) return EMPTY_BYTES;
       return processFrames(framer.feed(chunk));
     },
     finish() {
-      if (disposed || terminal) return new Uint8Array(0);
+      if (disposed || terminal) return EMPTY_BYTES;
       const tail = framer.finish();
-      if (tail.byteLength === 0) return new Uint8Array(0);
+      if (tail.byteLength === 0) return EMPTY_BYTES;
       // EOF may cut off the final SSE block before its blank-line delimiter.
       // Feed it through the exact same parser/rewrite/terminal path as a
       // complete frame, using a synthetic delimiter so the client receives a
@@ -358,7 +360,7 @@ export function relaySseWithFailedTail(
           if (result !== "buffered") return;
         }
       } catch (err) {
-        let partial: Uint8Array = new Uint8Array(0);
+        let partial: Uint8Array = EMPTY_BYTES;
         let tailTerminal = false;
         try {
           partial = terminalBoundary.finish();
@@ -402,15 +404,7 @@ export function nextSseBlock(buffer: string): { block: string; delimiter: string
   };
 }
 
-export function sseDataPayload(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const value = line.slice(5);
-    data.push(value.startsWith(" ") ? value.slice(1) : value);
-  }
-  return data.length > 0 ? data.join("\n") : null;
-}
+export { sseDataPayload } from "./sse-payload-rewrite";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -718,25 +712,16 @@ export function responseWithDeferredRequestLog(
   }
   if (!response.body || !contentType.includes("text/event-stream")) {
     if (response.body && (contentType.includes("application/json") || response.status >= 400)) {
-      const finalizeJsonLog = async () => {
-        const text = await response.text();
-        // Non-JSON error bodies: inspect/log only a bounded prefix (the stored
-        // upstreamError is 500 chars anyway); the FULL text is still forwarded to the
-        // client below, unchanged. JSON bodies keep full inspection (usage parsing).
-        const isJson = contentType.includes("application/json");
-        inspectResponseLogJson(logCtx, isJson ? text : text.slice(0, 8192));
-        addFinalRequestLog(requestId, start, logCtx, response.status, { closeReason: "non_stream" }, addLog);
-        return text;
-      };
-      const body = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          try {
-            controller.enqueue(new TextEncoder().encode(await finalizeJsonLog()));
-            controller.close();
-          } catch (err) {
-            addFinalRequestLog(requestId, start, logCtx, 502, { closeReason: "non_stream" }, addLog);
-            try { controller.error(err); } catch { /* already torn down */ }
-          }
+      const body = createBoundedResponseLogBody(response.body, {
+        json: contentType.includes("application/json"),
+        inspect: text => inspectResponseLogJson(logCtx, text),
+        finalize: reason => {
+          // Preserve wire status; request history follows the adjacent SSE
+          // convention for a client cancellation or upstream read failure.
+          const status = reason === "cancel" ? 499 : reason === "read_error" ? 502 : response.status;
+          addFinalRequestLog(requestId, start, logCtx, status, {
+            closeReason: reason === "cancel" ? "client_cancel" : "non_stream",
+          }, addLog);
         },
       });
       return new Response(body, {
@@ -951,8 +936,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let reported = false;
   let sawTerminal = false;
   let disposed = false;
-  let delimiterTail: Uint8Array = new Uint8Array(0);
-  let candidate: Uint8Array = new Uint8Array(0);
+  let delimiterTail: Uint8Array = EMPTY_BYTES;
+  let candidate: Uint8Array = EMPTY_BYTES;
   let candidateBytes = 0;
   let discardingOversizedFrame = false;
   const reportFirstOutput = createFirstOutputReporter(handlers.onFirstOutput);
@@ -965,8 +950,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let firstResponseId: string | undefined;
 
   const clearFrameState = (): void => {
-    delimiterTail = new Uint8Array(0);
-    candidate = new Uint8Array(0);
+    delimiterTail = EMPTY_BYTES;
+    candidate = EMPTY_BYTES;
     candidateBytes = 0;
     discardingOversizedFrame = false;
   };
@@ -1003,9 +988,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   };
 
   const takeCandidate = (): Uint8Array => {
-    if (candidateBytes === 0) return new Uint8Array(0);
+    if (candidateBytes === 0) return EMPTY_BYTES;
     const frame = candidate.slice(0, candidateBytes);
-    candidate = new Uint8Array(0);
+    candidate = EMPTY_BYTES;
     candidateBytes = 0;
     return frame;
   };
@@ -1018,7 +1003,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       Math.min(nextBytes, MAX_INSPECTION_SSE_FRAME_BYTES),
     );
     if (nextBytes > MAX_INSPECTION_SSE_FRAME_BYTES) {
-      candidate = new Uint8Array(0);
+      candidate = EMPTY_BYTES;
       candidateBytes = 0;
       discardingOversizedFrame = true;
       inspectionCounters.frameCapOverflows += 1;
@@ -1181,7 +1166,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 
   const scanChunk = (chunk: Uint8Array): void => {
     const previousTail = delimiterTail;
-    delimiterTail = new Uint8Array(0);
+    delimiterTail = EMPTY_BYTES;
     const tailLength = previousTail.byteLength;
     const totalLength = tailLength + chunk.byteLength;
     const byteAt = (index: number): number => index < tailLength
@@ -1227,7 +1212,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       if (disposed) return;
       try {
         retainCandidateSlice(delimiterTail);
-        delimiterTail = new Uint8Array(0);
+        delimiterTail = EMPTY_BYTES;
         if (!discardingOversizedFrame && candidateBytes > 0 && !reported) {
           const sourceBytes = candidateBytes;
           const decoded = decoder!.decode(takeCandidate());
@@ -1338,6 +1323,9 @@ function startBoundedInspectionPump(options: InspectionPumpOptions): void {
     try {
       for (;;) {
         const { done, value } = await reader.read();
+        // Hard cancellation settles a pending read as EOF. Do not flush a
+        // partial terminal after the owner already finalized cancellation.
+        if (cancelled) break;
         if (clientGoneSignal?.aborted) markClientGone();
         if (drainStopped) {
           // stopDrain() cancelled the reader; the settled read is the wake-up.

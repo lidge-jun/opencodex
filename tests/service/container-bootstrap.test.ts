@@ -78,24 +78,51 @@ describe("container deployment contract", () => {
     ]);
   });
 
-  test("requires the host-generated manifest in the runtime image", () => {
+  test("builds the manifest in a build-only stage and keeps Git out of every image layer", () => {
     const ignored = readFileSync(repoPath(".dockerignore"), "utf8").split(/\r?\n/);
     expect(ignored[0]).toBe("**");
+    // The host-prepared manifest stays a supported input, so this exception must not go away.
     expect(ignored).toContain("!src/generated/compatibility-version.json");
     expect(ignored).not.toContain("src/generated/compatibility-version.json");
-    expect(ignored.some(line => /^!\/?\.git(?:\/|$)/.test(line))).toBe(false);
+    // Exactly the two files `git ls-files` reads. A broader exception would put 1.3 GB of
+    // objects in every local build context, which is why this asserts the block verbatim.
+    expect(ignored.slice(ignored.indexOf("!.git/"), ignored.indexOf("!.git/") + 4)).toEqual([
+      "!.git/", ".git/**", "!.git/index", "!.git/HEAD",
+    ]);
+    for (const wider of ["!.git", "!.git/**", "!.git/objects/**", "!.git/refs/**"]) {
+      expect(ignored).not.toContain(wider);
+    }
     expect(ignored.slice(ignored.indexOf("!scripts/"), ignored.indexOf("!scripts/") + 3)).toEqual([
       "!scripts/", "scripts/**", "!scripts/model-metadata.source.json",
     ]);
     expect(ignored).not.toContain("!scripts/**");
 
     const dockerfile = readFileSync(repoPath("Dockerfile"), "utf8");
-    const runtime = dockerfile.split(" AS runtime")[1];
-    expect(dockerfile).toContain("RUN --mount=type=bind,target=/build-context bun /tmp/verify-compatibility.ts /build-context");
+    const manifestStage = dockerfile.split(" AS build")[0]!;
+    const runtime = dockerfile.split(" AS runtime")[1]!;
+    // The context is still inspected through a read-only bind mount before any COPY can
+    // dereference a source symlink, and still before the build stage copies src.
+    expect(dockerfile).toContain("RUN --mount=type=bind,target=/build-context");
     expect(dockerfile.indexOf("RUN --mount=type=bind")).toBeLessThan(dockerfile.indexOf("COPY --chown=bun:bun src ./src"));
+    // Both inputs, and no third one: a missing manifest must fail the build rather than
+    // fall through to a placeholder.
+    expect(manifestStage).toContain("bun /tmp/generate-compatibility-version.ts /build-context");
+    expect(manifestStage).toContain("bun /tmp/verify-compatibility.ts /build-context");
+    expect(manifestStage).toContain("exit 1");
+    // Git is installed for the inventory read and confined to the build-only stage.
+    expect(manifestStage).toContain("apt-get install -qq --no-install-recommends git");
+    expect(dockerfile.split(" AS build")[1]).not.toContain("apt-get install");
+    expect(runtime).not.toContain("apt-get install");
+    // Nothing copies Git into an image layer.
+    for (const line of dockerfile.split(/\r?\n/).filter(row => row.trimStart().startsWith("COPY "))) {
+      expect(line).not.toContain(".git");
+    }
+    expect(dockerfile).toContain("COPY --from=manifest --chown=bun:bun /manifest/src/generated/compatibility-version.json ./src/generated/compatibility-version.json");
     expect(dockerfile).toContain("COPY --chown=bun:bun scripts/model-metadata.source.json ./scripts/model-metadata.source.json");
     expect(runtime).toContain("COPY --from=build --chown=bun:bun /home/bun/app/scripts/model-metadata.source.json ./scripts/model-metadata.source.json");
-    expect(runtime).toContain("COPY --chown=bun:bun src/generated/compatibility-version.json ./src/generated/compatibility-version.json");
+    // The manifest now rides in on the build stage's src tree; the copied-runtime checks
+    // that prove the snapshot matches it are unchanged.
+    expect(runtime).toContain("COPY --from=build --chown=bun:bun /home/bun/app/src ./src");
     expect(runtime).toContain('RUN ["bun", "docker/verify-compatibility.ts"]');
     expect(runtime).toContain("readOpenCodexCompatibilityVersion() ?? ''");
     expect(runtime).toContain("throw new Error('Missing or invalid generated compatibility manifest')");

@@ -36,16 +36,18 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexAccountPickerEnabled?` | `boolean` | map が空なら off | 有効な `codexAccountNamespaces` mapping から account-qualified Codex picker row を生成するかを制御します。`true` は mapping された行の表示を許可します。空でない map で省略した場合は後方互換性のため有効として扱われ、map が空なら off です。`false` は mapping を削除せず、明示的な `<selector>/<native-openai-model>` routing も無効にせずに、生成行を非表示にして picker の bare native 行を復元します。 |
 | `activeCodexAccountId?` | `string` | — |次のリクエスト用に手動で選択されたプール アカウント。選択するとスレッドのアフィニティがクリアされます。実行中のリクエストでは、取得された資格情報が保持されます。 |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool のアカウント別選択順。アカウント ID → `-100` から `100` の整数で、**大きいほど先に使われ**、未設定は `0` です。これは eligibility ではなく順序の境界です。選択は適格なアカウントを、まだ quota に余裕がある最上位 tier に絞り込み、その tier の中を `accountPoolStrategy` が選びます。tier が飛ばされるのは、そのメンバー全員が自身の 0 以外の実効しきい値（アカウント別上書き、未設定ならグローバル値）以上、cooldown 中、soft-avoid、一時停止、または再認証待ちのときだけで、usage 不明が tier を drain させることはありません。順序付けが不適格なアカウントを選択可能にすることはなく、すでにアカウントが結び付いた thread を再 bind することもありません。メインの `__main__` も同じ条件で参加するため、Codex Desktop ログインを最後に使わせられます。エントリが 1 つもなければ挙動は従来どおりです。map が不正な場合は警告を出して順序付けを無効にします（config の修復処理は走りません）。`ocx account priority` と Codex Auth ページで管理します。 |
-| `autoSwitchThreshold?` | `number` | `80` | プロアクティブ切り替えのグローバル既定しきい値。`codexAccountAutoSwitchThresholds` でアカウント別に上書きできます。既定では `quota` は現在の切り替え元アカウントの実効しきい値で紐付け済み/未紐付けタスクを再評価し、`fill-first` は未紐付け割り当ての余裕を各アカウント自身の実効しきい値で判定します。`pool.cacheAffinity` がオンなら、紐付け済みタスクはアカウントが使い切られるか処理できなくなるまでしきい値超過後も同じアカウントを維持します。`round-robin` の rotation 自体はカウンターに基づきしきい値を使いませんが、共通の優先度 tier フィルターは各アカウントの実効しきい値を使います。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。実効値 `0` はそのアカウントからの使用量ベース切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
+| `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は未紐付けタスクの次のリクエストを再評価できます。紐付け済みタスクは既定（`pool.cacheAffinity`）ではしきい値を超えても同じアカウントを維持し、アカウントが使い切られるか処理できなくなったときだけ離れ、その場合も実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`pool.cacheAffinity: false` にするとしきい値で紐付け済みタスクも再評価します。`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
 | `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | `autoSwitchThreshold` のアカウント別上書き（アカウント ID → `0`〜`100` の整数）。未設定はグローバル値を継承し、`0` はそのアカウントからの使用量ベース切り替えだけを無効にします。メインの `__main__` も指定できます。Codex Auth の各アカウントカードで管理します。 上書きを有効にすると、現在のグローバルしきい値が固定のアカウント別値としてコピーされます。`0` を含む上書き値は、その後グローバル値が変更されても優先されます。無効にすると `threshold: null` を送信してエントリを削除し、現在のグローバルしきい値と今後の変更を継承する状態に戻ります。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが自身の実効しきい値（アカウント別上書き、未設定ならグローバル値）未満なら維持します。しきい値到達後は未紐付けリクエストを移せます。`pool.cacheAffinity` がオフなら紐付け済みタスクの次のリクエストも usage の低い適格アカウントへ移せます。オンなら紐付け済みタスクはアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持されます。`round-robin` は共通の優先度 tier フィルター内で未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、またはそのアカウントの実効 drain threshold（アカウント別上書き、未設定ならグローバル値）までアクティブアカウントへ割り当てます。 `reset-first`: 各アカウント自身の実効しきい値に基づいて余裕があるアカウントから、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。 月次リセットはこの順序に使用しません。 |
-| `pool.cacheAffinity?` | `boolean` | `false` | 紐付け済み Codex スレッド向けのオプトイン cache-affinity 順序。`pool.kernel` とは独立で、既定はオフです。不正な値はオフとして読みます。オンにすると live な紐付けが quota 余裕より優先されます。`quota` は使用量が そのアカウントの実効しきい値に達したという理由だけではスレッドを移しません。一時停止、使用不可、または実際に使い切られたアカウント（既知 usage 100%）では離れるので、affinity は固定ではなく並べ替えです。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は未紐付けリクエストを移せます。紐付け済みタスクは既定ではアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持され、離れるときは実際に quota 余裕があり usage がより低いアカウントへだけ移ります。フラグをオフにすると、しきい値で紐付け済みタスクの次のリクエストも実際に quota 余裕があり usage がより低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。  `reset-first`: 使用率のしきい値未満から、次の5時間枠または週次枠のリセットが最も近いアカウントを選びます。紐付け済みタスクは設定されたアフィニティ方針に従います。独立したモデル枠は使用率順です。 月次リセットはこの順序に使用しません。 |
+| `pool.cacheAffinity?` | `boolean` | `true` | 紐付け済み Codex スレッド向けの cache-affinity 順序。`pool.kernel` とは独立で、既定はオンです。不正な値はオンとして読みます。live な紐付けが quota 余裕より優先され、`quota` は使用量が `autoSwitchThreshold` を超えたという理由だけではスレッドを移しません。一時停止、使用不可、または実際に使い切られたアカウント（既知 usage 100%）では離れますが、実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`false` にするとしきい値での再紐付けに戻ります。affinity は固定ではなく並べ替えです。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。通常のResponses送信とネイティブcompact送信では、実証済みの接続前DNS/TCP到達不能障害はprovider-host単位で記録され、アカウントの健全性、アカウントのクールダウン、スレッド/セッションの親和性、アクティブアカウントの選択、Poolルーティングには影響せず、この閾値にもカウントされません。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
+
+各戦略で使う実効しきい値は、アカウントの `codexAccountAutoSwitchThresholds` があればその値、なければグローバルの `autoSwitchThreshold` です。0 は使用量による先行切り替えだけを無効にし、起動時のバインド、ハードロック、クールダウン、モデル利用資格の確認、障害復旧は引き続き適用されます。
 
 selector 名はユーザーが選ぶ公開 label であり、opencodex はアカウント role の意味を付与しません。
 `codexAccountNamespaces` のキーは長さ 1〜64 文字、先頭と末尾は ASCII
@@ -80,6 +82,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `baseUrl` | `string` |アップストリーム API のベース URL。ほとんどの組み込み固定エンドポイントは不一致を無視します。衝突安全キー プリセットは、古い同じ名前のカスタム宛先を保持します。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 上流の使用量、請求、レート制限表示とは別の、クライアント側の送信開始間隔調整です。プロバイダー制限は全モデルに適用され、`models` は上流の正確なモデル ID に一致し、遅延を増やす場合のみ有効です。キュー待機は応答ヘッダーのタイムアウトを消費しません。HTTP、Responses WebSocket、明示的なアダプターの `fetchResponse`/`runTurn` 送信を対象にします。 |
 | `responsesPath?` | `string` |キー認証 `openai-responses` リクエストの相対リソース パス。 `/` で始まり、スキーム、クエリ、またはフラグメントが含まれていない必要があります。 |
+| `chatCompletionsPath?` | `string` | `openai-chat` リクエストの相対リソース パス。 `responsesPath` の対となる設定で、同じ形式ルールが適用されます。1つのアップストリームが Chat Completions と Responses を異なるプレフィックスで提供する場合に必要です。モデルごとの wire override はアダプターのみを変更し `baseUrl` は変更しないため、この設定がないと有効化された Chat リクエストが Responses ベースへ送信されます。同梱例は Z.AI です。 |
 | `upstreamWebsocket?` | `boolean` | `openai-responses` リクエストで使用するアップストリーム Responses WebSocket トランスポート（既定値は無効）。アップストリームがこのプロトコルに対応している場合、ストリーミング POST は設定済みの Responses パス（既定値 `/v1/responses`）へ HTTPS の WSS で接続し、通常の処理向けに SSE へ再エンコードされます。forward プロバイダーは `{baseUrl}/responses`、キー認証プロバイダーは `responsesPath`（未設定時は従来の `/v1/responses`）を使用します。HTTP のベース URL は SSE のままとなり、Responses 以外のパスと `openai-chat` リクエストは HTTP を使用します。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` ケイパビリティの 3 状態です。`true`: fast モードが注入でき、呼び出し元の値も保持されます。`false`: フィールドは削除され、注入もされません (非対応と文書化されたアップストリームには送りません)。未設定: 未分類 — 呼び出し元の値はそのまま保持され、fast モードは注入しません。レジストリは正規 OpenAI (`true`)、DeepSeek、Volcengine Ark (`false`) を分類します。実際にティアをサポートするカスタム ゲートウェイにのみ明示的に設定してください。 |
 | `preserveResponsesReasoningContent?` | `boolean` | リプレイされる Responses reasoning アイテムの平文 reasoning コンテンツを消去せずに保持します (消去は ChatGPT バックエンドのルールです)。DeepSeek のように reasoning リプレイを受け入れるアップストリームで有効にしてください。プロキシ生成の `ocxr1` エンベロープは常に削除されます。 |
@@ -129,7 +132,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
 | `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key プロバイダーのみ(`authMode: "key"`)。オプトインの同一ターゲット 429 リトライ: `retryOn429` が無ければ無効で、オブジェクトがあれば `enabled: false` でない限り有効になります。429 時に待機(上流の `Retry-After` または固定間隔)してから、キー フェイルオーバーの前に同一キーで同一リクエストを再送します — メインのテキストターン回復ループ、Responses passthrough、画像/動画ブリッジ、web-search サイドカー、ターミナル継続要求をすべてカバーします。再送の対象はプリストリームの HTTP 429 応答のみで、カスタム `runTurn` トランスポートは HTTP リトライループの対象外です。`attempts` は最初の 429 以降の同一キー再送回数(合計送信数 = `attempts` + 1)で、メインの回復ループ・ターミナルガード継続・ブリッジ再試行で共有されるリクエスト単位の予算です。`attempts` を使い切っても同一キーでの再送が止まるだけで、通常のキー フェイルオーバーまたは最終エラー処理が利用可能なターゲットに応じて続きます — キー認証の passthrough ワイヤにはフェイルオーバーがないため、使い切った 429 はそのまま返ります。Codex 自体は 429 をリトライしないため、単一キーのプロバイダーでは唯一の防御です。デフォルト: `enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`(1回の待機は `maxIntervalMs` で上限、その上限は 600000)、`respectRetryAfter: true`。 |
-| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | キー認証の `openai-chat` プロバイダーのみ。ストリーム開始前に上流から返される一時的なステータス（500、502、503、504、520、521、522）に対するオプトインの再試行です。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。最初の Responses リクエスト、ターミナルガード継続、ネイティブの `/v1/chat/completions`、および 429／アカウント回復時の再取得が対象です。`attempts` は最初の送信を含め、1 回のリクエストで許可される上流への送信総数です（1～10、デフォルトは 3）。接続リセット回復と共有するリクエスト単位の単一予算であるため、`3` を指定した場合、プロバイダーに到達する実リクエストは最大 3 回です。待機には 400 ms を基準とする固定式の指数バックオフを使用し、上限は 5 秒で、`Retry-After` に従います。レート制限を扱う `retryOn429` とは別の機能であり、ストリーム開始後の失敗は再送されません。 |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | キー認証の `openai-chat` および `openai-responses` プロバイダーのみ。`authMode: "forward"` のプロバイダー（ChatGPT アカウントプール）はこのオプションを読まず、既定の再試行段数を維持します。ストリーム開始前に上流から返される一時的なステータス（500、502、503、504、520、521、522）に対するオプトインの再試行です。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。最初の Responses リクエスト、ターミナルガード継続、ネイティブの `/v1/chat/completions`、および 429／アカウント回復時の再取得が対象です。`attempts` は最初の送信を含め、1 回のリクエストで許可される上流への送信総数です（1～10、デフォルトは 3）。接続リセット回復と共有するリクエスト単位の単一予算であるため、`3` を指定した場合、プロバイダーに到達する実リクエストは最大 3 回です。待機には 400 ms を基準とする固定式の指数バックオフを使用し、上限は 5 秒で、`Retry-After` に従います。レート制限を扱う `retryOn429` とは別の機能であり、ストリーム開始後の失敗は再送されません。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
 | `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |
 | `reasoningDetailsModels?` | `string[]` | thinking を構造化された `reasoning_details` 配列で返すモデル（`reasoning_split` 使用の MiniMax M シリーズ）。ストリーム差分は累積スナップショットとして prefix-diff され、保持された reasoning は `reasoning_content` 文字列ではなく `reasoning_details` 配列としてリプレイされます。 |
@@ -140,6 +143,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `escapeBuiltinToolNames?` | `boolean` | Anthropic 互換ゲートウェイの組み込みツール名をエスケープし、返された呼び出しで復元します。 |
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 前にストリームが終了しても、可視テキストまたは完全な JSON オブジェクトのツール入力が受信済みの場合に限り完了を許可します（Anthropic 互換ゲートウェイ向け）。デフォルトはオフ。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google トランスポート/認証モード。デフォルトは`ai-studio`です。 |
+| `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 専用です。省略時または `compatible` は互換スキーマと既存の非直接 400 修復を維持します。`reject-lossy` は初期損失または判定不能な上限付き比較を送信前に拒否し、制約を開く Vertex／Cloud Code Assist 修復を保留します。直接 AI Studio はこの修復を行いません。 |
 | `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。 |
 | `location?` | `string` |頂点の位置。環境フォールバックは `GOOGLE_CLOUD_LOCATION` です。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` |カーソルのみ: 標準入出力またはストリーミング可能な HTTP MCP サーバー。 |
@@ -147,25 +151,29 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
 
+プロバイダーの登録・置換（`POST /api/providers`）では、メモリやファイルの設定を変更する前に `responsesPath` と `chatCompletionsPath` を検証します。`PATCH /api/providers?name=<provider>` はリクエスト本文を保存済みのプロバイダーにマージします。`disabled` 以外のフィールドを変更する更新（`requestPacing` のみの更新を除く）では、保存前にマージ後のプロバイダーのパスを同じ方法で検証し、保持されているパスが無効な場合は `400` を返して設定を変更しません。設定ファイルの読み込みにも同じ経路の規則が適用されます。
+
 API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/reference/configuration/server/#claude-code) で構成されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 
 ダッシュボード接続テストとライブ モデル検出では、制限された GET 専用トランスポートが使用されます。送信プロキシを使用しない場合、opencodex はホスト名を一度解決し、その検証されたアドレスにのみ接続します。 HTTPS は元のホスト、SNI、および証明書の検証を保持します。プロバイダー設定では証明書チェックを無効にすることはできません。
 
-`HTTP_PROXY`、`HTTPS_PROXY`、または `ALL_PROXY` が適用される場合、これらの操作は Bun のネイティブ フェッチを維持します。 URL とリテラル アドレスのチェックは引き続き実行されますが、プロキシが最終ルート、DNS 応答、ピアを選択するため、opencodex はそのピアを固定したり検証したりできません。これは明示的なセキュリティ制限です。
+これらの操作は[サーバーで設定された送信 fetch](/ja/reference/configuration/server/)を使用します。`config.proxy` で設定された、または SOCKS5 `ALL_PROXY` から継承したサーバーの SOCKS5 プロキシは、宛先が `NO_PROXY` に一致しない場合に OpenCodex の組み込みトンネルを使用します。`HTTP_PROXY` と `HTTPS_PROXY` は Bun のネイティブ HTTP(S) 処理を維持しますが、SOCKS 以外の `ALL_PROXY` はネイティブ HTTP fetch の経路にはなりません。URL とリテラル アドレスのチェックは引き続き実行されますが、選択されたプロキシが最終ルート、DNS 応答、ピアを決めるため、opencodex はそのピアを固定したり検証したりできません。これは明示的なセキュリティ制限です。
 
 プライベート/ローカル宛先には `allowPrivateNetwork: true` が必要で、送信プロキシがアクティブな場合は、一致する `NO_PROXY` エントリが必要です。ループバックは自動的に追加されます。 CIDR エントリは解釈されないため、各 LAN ホストを明示的にリストします。マッチャーは、正確なホスト、ドメイン サフィックス、オプションのポート、括弧で囲まれた IPv6、および `*` をサポートします。たとえば、`192.168.1.50` を明示的にリストします。メタデータとリンクローカル宛先はブロックされたままになります。診断リクエストはリダイレクトを拒否し、資格情報が剥奪されたターゲットを報告します。通常のプロバイダー要求のリダイレクト レビューは、この診断ガードとは独立したままになります。
 
-Clash / Surge / Mihomo 利用者向けの fake-IP DNS 例外は 2 種類あり、いずれも DNS の*応答*にのみ適用されます。URL に書かれたリテラルアドレスは引き続き拒否されます。IANA ベンチマーク範囲 `198.18.0.0/15`（IPv4-mapped IPv6 表記を含む）は、そのホストにアウトバウンドプロキシが適用される場合に許可されます。Mihomo の既定 IPv6 fake-IP 範囲 `fdfe:dcba:9876::/48` はより厳しい条件でのみ許可されます。URL スキームに一致するプロキシ変数（`https:` は `HTTPS_PROXY`、`http:` は `HTTP_PROXY`、`ALL_PROXY` は対象外）が設定されていること、ホストが `NO_PROXY` に一致しないことが必要で、その場合リクエストはそのプロキシに明示的に固定されます。それ以外の ULA、隣接プレフィックス、実際のプライベート応答と混在した fake-IP 応答には引き続き `allowPrivateNetwork: true` が必要です。プロバイダー保存時の検証には IPv6 例外は適用されません。
+Clash / Surge / Mihomo 利用者向けの fake-IP DNS 例外は 2 種類あり、いずれも DNS の*応答*にのみ適用されます。URL に書かれたリテラルアドレスは引き続き拒否されます。IANA ベンチマーク範囲 `198.18.0.0/15`（IPv4-mapped IPv6 表記を含む）は、そのホストにアウトバウンドプロキシが適用される場合に許可されます。Mihomo の既定 IPv6 fake-IP 範囲 `fdfe:dcba:9876::/48` はより厳しい条件でのみ許可されます。URL スキームに一致するプロキシ変数（`https:` は `HTTPS_PROXY`、`http:` は `HTTP_PROXY`）または SOCKS5 の `ALL_PROXY` が設定されていること（SOCKS 以外の `ALL_PROXY` は対象外）、ホストが `NO_PROXY` に一致しないことが必要で、その場合リクエストはそのプロキシに明示的に固定されます。それ以外の ULA、隣接プレフィックス、実際のプライベート応答と混在した fake-IP 応答には引き続き `allowPrivateNetwork: true` が必要です。プロバイダー保存時の検証には IPv6 例外は適用されません。
 
 ## Codexアカウントプール
 
 pool アカウントの追加と quota 更新はダッシュボードの **Codex Auth** ページで処理してください。設定には secret で
 ないアカウント metadata だけを保存し、access/refresh token は強化された Codex アカウント credential store に別途
 保管します。Pool routing は新規/未紐付け割り当て、使用量ベースのプロアクティブ切り替え、障害回復に分かれます。
-紐付け済みタスクは通常 affinity を維持します。既定では `quota` はしきい値超過後の次のリクエストで再紐付けでき、
-`pool.cacheAffinity` がオンなら、紐付け先アカウントが使い切られるか処理できなくなるまでその再紐付けを延期します。
+紐付け済みタスクは通常 affinity を維持します。既定（`pool.cacheAffinity`）では、紐付け先アカウントが
+使い切られるか処理できなくなるまで再紐付けを延期し、離れるときは実際に quota 余裕があり usage が
+より低いアカウントへだけ移ります。フラグをオフにすると、`quota` はしきい値超過後の次のリクエストで
+再紐付けできます。
 pause、cooldown、再認証、障害処理も独立して routing を消去または変更できます。未紐付けリクエストには
 プロキシ再起動や affinity リセット後の既存タスクも含まれます。出力前の **429/402** は使用量ベースの
 切り替えがオフでも同じリクエストで適格な代替アカウントへ 1 回再試行できます。アカウント変更後も会話
@@ -179,8 +187,8 @@ pause、cooldown、再認証、障害処理も独立して routing を消去ま�
 別の適格な Pool アカウントへリクエストを切り替えることがあります。これらの障害回復は
 `autoSwitchThreshold: 0` でも有効であり、`0` が無効にするのは使用量に基づく予防的な切り替えだけです。
 
-**割り当てとプロアクティブ切り替え戦略：** `quota`（既定）はアクティブアカウントがない場合に最小 usage の適格アカウントを選び、適格なアクティブアカウントが自身の実効しきい値（アカウント別上書き、未設定ならグローバル値）未満なら維持します。その実効しきい値に達した後は未紐付けリクエストを移せます。`pool.cacheAffinity` がオフなら紐付け済みタスクの次のリクエストも再紐付けできます。オンなら cache affinity が quota 余裕より優先され、紐付け済みタスクはアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持されます。`round-robin` は
-未紐付けリクエストを均等分散し、rotation 自体はカウンターに基づきしきい値を使いません。ただし、共通の優先度 tier フィルターは各アカウント自身の実効しきい値で余裕を判定します。`accountPoolStickyLimit`
+**割り当てとプロアクティブ切り替え戦略：** `quota`（既定）はアクティブアカウントがない場合に最小 usage の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。`autoSwitchThreshold` 超過後は未紐付けリクエストを移せます。既定では cache affinity が quota 余裕より優先され、紐付け済みタスクはアカウントが使い切られるか（既知 usage 100%）処理できなくなるまで維持され、離れるときは実際に quota 余裕があり usage がより低いアカウントへだけ移ります。usage が不明なアカウントは紐付け済みタスクの移動先にはならず、すべてのアカウントがしきい値を超えていればそのまま残ります。フラグをオフにすると紐付け済みタスクの次のリクエストもしきい値で再紐付けできますが、その場合も実際に quota 余裕があり usage がより低いアカウントへだけ移ります。`round-robin` は
+未紐付けリクエストを均等分散し、しきい値は通常の rotation を変えません。`accountPoolStickyLimit`
 （既定 `1`、1–100）は成功応答ではなく割り当て/紐付け数を数えます。`fill-first` は未紐付けリクエストを
 cooldown、再認証、またはそのアカウントの実効 drain threshold（アカウント別上書き、未設定ならグローバル値）までアクティブアカウントへ割り当て、正常な紐付け済みタスクは
 affinity を維持します。これらの戦略は provider enforcement を回避しません。

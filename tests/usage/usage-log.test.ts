@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { STORE_BUDGET_MS } from "../helpers/test-budget";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -79,6 +79,39 @@ describe("usage log", () => {
     expect(readUsageEntries()).toHaveLength(invalid.length);
     expect(readUsageEntries().every(row => row.claudeCompatibility === undefined)).toBe(true);
   });
+
+  test("round trips only recognized recovery-withheld reasons (#5044)", () => {
+    // The attribution is a wire value a maintainer reads, so it is a bounded vocabulary: an
+    // unknown reason is dropped rather than failing the row, which is how a log written by a
+    // newer build stays readable by an older one — the same rule `recoveryKinds` follows.
+    const attempt = {
+      ordinal: 1, provider: "google", model: "gemini-test", adapter: "google", status: 429,
+      durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const,
+    };
+    const normalized = normalizeUsageEntryForTest({
+      requestId: "withheld", timestamp: Date.now(), provider: "google", model: "gemini-test",
+      status: 429, durationMs: 1, usageStatus: "reported",
+      attempts: [
+        { ...attempt, recoveryWithheld: ["retry-send-budget"] },
+        { ...attempt, ordinal: 2, recoveryWithheld: ["rotation-send-budget", "rotation-send-budget"] },
+        { ...attempt, ordinal: 3, recoveryWithheld: ["secret-canary"] },
+        { ...attempt, ordinal: 4 },
+      ],
+    });
+    expect(normalized?.attempts?.map(row => row.recoveryWithheld)).toEqual([
+      ["retry-send-budget"],
+      // Deduplicated: one rotation refused twice is one fact about the attempt.
+      ["rotation-send-budget"],
+      // Unknown value dropped, and the key omitted entirely rather than left as an empty array,
+      // so an attempt that withheld nothing keeps the exact shape it had before this field.
+      undefined,
+      undefined,
+    ]);
+
+    // The count that means "requests this proxy actually made" does not move for a refusal.
+    expect(normalized?.attempts?.every(row => row.sendCount === 1)).toBe(true);
+  });
+
 
   test("round trips only recognized per-attempt xAI credential sources", () => {
     const attempt = {
@@ -1012,4 +1045,104 @@ describe("usage log", () => {
 
     expect(readRecentUsageEntries(1)).toEqual([]);
   }, STORE_BUDGET_MS);
+
+  test("appendUsageEntry avoids redundant mkdirSync and chmodSync on consecutive calls", async () => {
+    const nodeFs = await import("node:fs");
+    const mkdirSpy = spyOn(nodeFs, "mkdirSync");
+    const chmodSpy = spyOn(nodeFs, "chmodSync");
+    // Pinned so the count measures the cache and not the runner's scheduling: five
+    // appends that happen to straddle the one-second boundary would legitimately
+    // harden twice, and a saturated CI runner can take that long.
+    const clock = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+
+    try {
+      for (let i = 0; i < 5; i++) {
+        appendUsageEntry({
+          requestId: `ocx-perf-${i}`,
+          timestamp: Date.now(),
+          provider: "openai",
+          model: "gpt-4o",
+          status: 200,
+          durationMs: 10,
+          usageStatus: "unreported",
+        });
+      }
+
+      expect(mkdirSpy.mock.calls.length).toBe(1);
+      // One for the directory, one for the file. Not five.
+      expect(chmodSpy.mock.calls.length).toBe(2);
+    } finally {
+      clock.mockRestore();
+      mkdirSpy.mockRestore();
+      chmodSpy.mockRestore();
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "appendUsageEntry re-narrows externally widened permissions after the bounded cache window",
+    () => {
+      const now = Date.now();
+      const clock = spyOn(Date, "now").mockReturnValue(now);
+      try {
+        appendUsageEntry({
+          requestId: "ocx-permission-initial",
+          timestamp: now,
+          provider: "openai",
+          model: "gpt-4o",
+          status: 200,
+          durationMs: 10,
+          usageStatus: "unreported",
+        });
+        chmodSync(testDir, 0o755);
+        chmodSync(usageLogPath(), 0o644);
+
+        clock.mockReturnValue(now + 1_000);
+        appendUsageEntry({
+          requestId: "ocx-permission-recheck",
+          timestamp: now + 1_000,
+          provider: "openai",
+          model: "gpt-4o",
+          status: 200,
+          durationMs: 11,
+          usageStatus: "unreported",
+        });
+
+        expect(statSync(testDir).mode & 0o777).toBe(0o700);
+        expect(statSync(usageLogPath()).mode & 0o777).toBe(0o600);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  test("appendUsageEntry recovers cleanly on ENOENT if usage directory is deleted between calls", () => {
+    const entry1: PersistedUsageEntry = {
+      requestId: "ocx-enoent-1",
+      timestamp: Date.now(),
+      provider: "openai",
+      model: "gpt-4o",
+      status: 200,
+      durationMs: 10,
+      usageStatus: "unreported",
+    };
+    appendUsageEntry(entry1);
+
+    // Simulate directory deletion by log rotation / cleanup while process is running
+    rmSync(testDir, { recursive: true, force: true });
+    expect(existsSync(testDir)).toBe(false);
+
+    const entry2: PersistedUsageEntry = {
+      requestId: "ocx-enoent-2",
+      timestamp: Date.now(),
+      provider: "openai",
+      model: "gpt-4o",
+      status: 200,
+      durationMs: 12,
+      usageStatus: "unreported",
+    };
+    expect(() => appendUsageEntry(entry2)).not.toThrow();
+    const readBack = readRecentUsageEntries(10);
+    expect(readBack.length).toBe(1);
+    expect(readBack[0].requestId).toBe("ocx-enoent-2");
+  });
 });

@@ -258,7 +258,13 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(repoRoot, "bin", "ocx.mjs"), "utf8");
-const serverSource = readFileSync(join(repoRoot, "src", "server", "index.ts"), "utf8");
+// The three /healthz identity assertions below read the route handler, which moved into the
+// serve-options leaf when src/server/index.ts became a facade. Reading the facade alone would
+// find none of them. This is the only place in this file that reads server source.
+const serverSource = [
+  readFileSync(join(repoRoot, "src", "server", "index.ts"), "utf8"),
+  readFileSync(join(repoRoot, "src", "server", "index", "serve-options.ts"), "utf8"),
+].join("\n");
 const dispatchSource = readFileSync(join(repoRoot, "src", "cli", "dispatch.ts"), "utf8");
 
 describe("bounded recovery diagnostics", () => {

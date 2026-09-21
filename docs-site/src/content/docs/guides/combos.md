@@ -83,7 +83,10 @@ The request then follows normal combo selection and failover.
 
 Explicit provider/combo selectors and configured combo aliases take precedence over this recall.
 Failed, incomplete, or cancelled responses do not replace the last successful selection. Recall is
-process-local and bounded to 256 lanes for 30 minutes; it does not store account credentials.
+process-local and bounded to 256 conversations for 30 minutes, and to 1 KiB per remembered model
+name and 64 KiB in total; expired entries are also cleaned up in the background. A response whose
+model name is too large to retain leaves the previous selection untouched rather than clearing it.
+Recall does not store account credentials.
 Without usable conversation identity or valid remembered state, normal compaction routing applies.
 A restart clears the remembered state.
 
@@ -213,7 +216,8 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | HTTP 401, 403, 404, 408, 429, or any 5xx | Cool the target and hop to the next eligible target. |
 | HTTP 410 with an explicit model end-of-life, retired, deprecated, sunset, decommissioned, or no-longer-available signal | Cool that target and hop. Unrelated 410 responses remain terminal. |
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
-| Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or invalid request | Stop and return the error; another target would not make the request valid. |
+| Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or other invalid request | Stop and return the error; another target would not make the request valid. |
+| Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, or model-scoped image input | Hop before output commitment without cooling; see request-local target compatibility below. |
 | Any other unclassified error | Stop and return the error. |
 
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
@@ -227,8 +231,8 @@ fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. 
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
 
-The current request never retries the same attempted target. Later requests skip it until its
-cooldown expires. A `Retry-After` HTTP-date that is already in the past is also preserved as an
+The current request never retries the same attempted target. Later requests skip a cooled target until its
+cooldown expires; request-local compatibility rejections do not cool the target. A `Retry-After` HTTP-date that is already in the past is also preserved as an
 immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later
 request to wait for the earliest eligible target cooldown, up to that cap on each selection attempt,
 and then make one fresh selection. A request may therefore wait up to `hops × waitForCooldownMs`
@@ -254,12 +258,19 @@ another provider, which prevents duplicate text and tool execution. If the pre-o
 its safety cap without a terminal or output boundary, OpenCodex also commits the current target
 instead of growing memory without a bound.
 
+## Request-local target compatibility
+
+When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex removes the unsupported top-level `user` metadata field without changing the session/cache key, input messages, tool schemas, or safety identifiers. Public Responses API and noncanonical forward gateways keep that field.
+
+A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
+
 ## Default reasoning effort
 
-`defaultEffort` fills an absent `reasoning.effort` when the combo has a non-null default and the selected target has a known, nonempty supported ladder. If the target supports the configured value, it is retained; otherwise the highest supported rung at or below it is used, or the lowest supported rung when none is lower. Unknown or empty ladders omit the default.
+`defaultEffort` supplies a configured effort when the selected target has a known, nonempty supported ladder. With the default `defaultEffortMode: "fallback"`, an explicit caller effort keeps precedence. `defaultEffortMode: "force"` overrides a valid caller effort with the configured default; it requires a valid, non-null `defaultEffort` and can increase cost and latency. Force mode is an explicit operator choice through combo configuration or management.
 
-The default-injection step preserves existing effort and other reasoning fields. Capability normalization can separately remove unsupported effort/thinking controls as described below. Supported defaults are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; omit the field or use `null` to disable default injection.
+The target's advertised ladder remains authoritative. An exact supported value is retained; otherwise the highest supported rung at or below it is selected, or the lowest supported rung when none is lower. Unknown or empty ladders never cause default injection. Force mode does not repair malformed caller effort into a valid expensive request. Other reasoning fields, including `reasoning.summary`, are preserved.
 
+`reasoningEffortMode` remains independent of `defaultEffortMode`: explicit empty ladders remove unsupported effort/thinking controls, and adaptive unknown ladders do so as well, as described below. Strict unknown ladders preserve the caller's request without forcing a default. Supported defaults are `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`; omit `defaultEffort` or set it to `null` to disable default injection in fallback mode.
 
 ### Mixed-capability groups (`reasoningEffortMode`)
 
@@ -406,7 +417,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
 | `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |
-| `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
+| `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
+| `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |

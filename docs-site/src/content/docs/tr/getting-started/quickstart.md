@@ -14,7 +14,7 @@ ocx init
 
 `ocx init` adım adım size rehberlik eder:
 
-1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 79 önayardan birini
+1. **Bir sağlayıcı seçin** — yerleşik kayıt defterindeki 94 önayardan birini
    veya bir temel URL ile adaptör yazmak için `custom` seçeneğini belirleyin.
 2. **API anahtarı** — bir anahtar yapıştırın veya `${ANTHROPIC_API_KEY}` gibi
    bir ortam değişkenine başvurun.
@@ -55,8 +55,10 @@ Başlatıldığında opencodex:
   yönlendirilen girdileri Codex'in model kataloğuna senkronize eder**,
 - `http://localhost:<port>/v1` üzerinde dinler.
 
-İstenen port meşgulse `ocx start` boş bir port seçer, bunu `runtime-port.json`
-dosyasına kaydeder ve canlı dinleyiciyi kullanmak için Codex'i günceller.
+İstenen port meşgulse `ocx start` durur ve portu neyin tuttuğunu bildirir: orada bir
+opencodex yanıt veriyorsa önce `ocx stop` çalıştırın veya `ocx start --port <port>` ile
+boş bir portta başlatın. Kendiliğinden başka bir porta geçmez; önceki davranış, iki
+proxy'nin yan yana çalışmasına ve Codex'in daha yeni olana yönlendirilmesine neden oluyordu.
 
 Kontrol edin:
 
@@ -117,5 +119,4 @@ ocx restore back  # Codex'i hala çalışan proxy üzerinden tekrar yönlendirin
 - [Nasıl Çalışır](/tr/getting-started/how-it-works/) — her isteğe ne olur?
 - [Sağlayıcılar](/tr/guides/providers/) — kimlik doğrulamanın her yolu.
 - [Yapılandırma](/tr/reference/configuration/) — tam `config.json` referansı.
-
 

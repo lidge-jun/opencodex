@@ -2,9 +2,9 @@
  * #1700: the native Responses passthrough relayed a routed provider's call to a tool the request
  * never declared. Codex has no top-level handler for it, so the turn surfaced as a bare `aborted`
  * with the target file untouched. The bridged paths already fail closed on the same condition
- * (`declaredToolNames`, src/bridge.ts); these pin the passthrough's equivalent.
+ * (`declaredToolNames`, src/bridge/sse.ts); these pin the passthrough's equivalent.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   collectDeclaredNamelessClientCallTypes,
   collectDeclaredBareWireToolNames,
@@ -25,6 +25,15 @@ import { handleResponses } from "../../src/server/responses";
 import { expandPreviousResponseInput } from "../../src/responses/state";
 import type { OcxConfig } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { readAll, streamFromText } from "../helpers/sse-stream";
+
+// A case that calls handleResponses directly never runs startServer, so it never takes the
+// spend-journal writer lease and its dispatch is refused before it reaches its own contract.
+// Dropped in teardown so a case that throws mid-assertion cannot leave the lease behind.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+afterEach(() => { releaseSpendHome?.(); releaseSpendHome = undefined; });
 
 /** One SSE event block without its blank-line delimiter. */
 function frame(type: string, payload: Record<string, unknown>): string {
@@ -34,33 +43,6 @@ function frame(type: string, payload: Record<string, unknown>): string {
 /** One SSE event block including its delimiter, ready to concatenate. */
 function sse(type: string, payload: Record<string, unknown>): string {
   return `${frame(type, payload)}\n\n`;
-}
-
-function streamFromText(text: string): ReadableStream<Uint8Array> {
-  const chunk = new TextEncoder().encode(text);
-  let sent = false;
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent) {
-        controller.close();
-        return;
-      }
-      sent = true;
-      controller.enqueue(chunk);
-    },
-  });
-}
-
-async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let text = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-  }
-  return text;
 }
 
 async function relay(
@@ -810,6 +792,7 @@ describe("the reported turn, end to end through handleResponses", () => {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
     try {
+      takeSpendHome();
       return await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -949,6 +932,7 @@ describe("a refused turn does not become continuation state", () => {
       { headers: { "content-type": "application/json" } },
     )) as typeof fetch;
     try {
+      takeSpendHome();
       return await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1056,6 +1040,7 @@ describe("a refused turn does not become continuation state", () => {
     })) as typeof fetch;
     let response: Response;
     try {
+      takeSpendHome();
       response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1119,6 +1104,7 @@ describe("a refused turn does not become continuation state", () => {
     })) as typeof fetch;
     let response: Response;
     try {
+      takeSpendHome();
       response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1208,6 +1194,7 @@ describe("real relay and continuation caller normalization (#4176 / #4181)", () 
         }),
       });
 
+      takeSpendHome();
       const turn1Res = await handleResponses(turn1Req, config, { model: "", provider: "" });
       expect(turn1Res.status).toBe(200);
       const clientStreamText = await turn1Res.text();
@@ -1240,6 +1227,7 @@ describe("real relay and continuation caller normalization (#4176 / #4181)", () 
         }),
       });
 
+      takeSpendHome();
       const turn2Res = await handleResponses(turn2Req, config, { model: "", provider: "" });
       expect(turn2Res.status).toBe(200);
       await turn2Res.json();
@@ -1278,6 +1266,7 @@ describe("real relay and continuation caller normalization (#4176 / #4181)", () 
     })) as typeof fetch;
 
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1315,6 +1304,7 @@ describe("real relay and continuation caller normalization (#4176 / #4181)", () 
     })) as typeof fetch;
 
     try {
+      takeSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1389,6 +1379,7 @@ describe("empty and absent tool catalogs", () => {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
     try {
+      takeSpendHome();
       return await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2324,6 +2315,7 @@ describe("xAI hosted-call authorization through handleResponses", () => {
       });
     }) as typeof fetch;
     try {
+      takeSpendHome();
       return await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

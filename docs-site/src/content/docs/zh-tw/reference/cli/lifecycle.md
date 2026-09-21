@@ -13,13 +13,17 @@ description: 安裝、啟動、停止、服務、診斷、同步與更新指令�
 
 ## 代理生命週期
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-啟動代理伺服器（偏好連接埠 `10100`）。若該連接埠被佔用，opencodex 會選擇並記錄另一個可用連接埠。它寫入 PID/runtime-port 狀態，並拒絕啟動第二個即時實例。啟動時它將每個供應商的模型同步到 Codex 目錄。關閉時它還原原生 Codex——除非它是作為受管服務啟動的（`OCX_SERVICE=1`）。
+啟動代理伺服器（偏好連接埠 `10100`）。它寫入 PID/runtime-port 狀態，並拒絕啟動第二個即時實例。偏好連接埠被佔用時，`start` 會探測佔用者，且無論結果如何都會停止：若回應的是 opencodex，它會直接拒絕啟動；否則會回報無法識別的佔用者。它絕不會自行將監聽位置移到其他連接埠，因為這會讓第一個代理繼續執行，並將 Codex 重新指向第二個代理。即使明確指定不同的 `--port`，共用同一個 `OPENCODEX_HOME` 時仍會拒絕啟動，因為僅觀察模式和啟用上限的模式都會寫入同一份支出日誌。獨立的同層實例必須使用不同的 `OPENCODEX_HOME`；`port: 0` 只讓作業系統指派連接埠，不會隔離狀態。啟動時它將每個供應商的模型同步到 Codex 目錄。關閉時它還原原生 Codex——除非它是作為受管服務啟動的（`OCX_SERVICE=1`）。
+
+`--socks5`（預設 `127.0.0.1:10808`）會將 SOCKS5 URL 儲存到 `config.proxy`，並透過真正的 SOCKS5 通道轉送對外 HTTP(S) 請求。`--socks5-off` 只會清除已儲存的 SOCKS5 代理，不會刪除 HTTP 代理。此值儲存在設定中，因此會在 `ocx update` 後保留。URL 可以包含使用者名稱和密碼，但啟動記錄會隱藏它們。
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -138,21 +142,29 @@ ocx status --json
 
 ## 目錄同步
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 從每個已設定的供應商擷取即時模型清單，並將合併後的目錄重新注入 Codex。在新增供應商後或要重新整理可用模型時執行它。
 
-若長壽的 Codex `app-server` 仍在執行，`ocx sync` 會警告它們可能繼續提供先前的記憶體內模型清單，即使 `opencodex-catalog.json` / `models_cache.json` 已更新。傳入 `--restart-codex` 以僅對目前使用者擁有的相符 `codex … app-server` 與 `codex-code-mode-host` 進程發送 `SIGTERM`（執行中的回合可能被中斷）。刻意避免廣泛的 `pkill -f codex` 比對。
+若長壽的 Codex `app-server` 仍在執行，`ocx sync` 會警告它們可能繼續提供先前的記憶體內模型清單，即使 `opencodex-catalog.json` / `models_cache.json` 已更新。傳入 `--restart-codex` 會重啟相符的 `codex … app-server` 與 `codex-code-mode-host` 進程，並在 macOS、Linux 與 Windows 上完全結束再重新啟動 Codex 桌面應用程式，讓模型選擇器重新讀取目錄。進行中的對話會結束。刻意避免廣泛的 `pkill -f codex` 比對。
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app` 是 `--restart-codex` 的已棄用別名。它仍然可用、會印出棄用提示，且不再僅限 Windows。
 
-使 Codex 的本機模型選擇器快取失效，使其從現用的 opencodex 目錄重建。與 `ocx sync` 相同的過時 `app-server` 警告與可選的 `--restart-codex` 行為適用。
+`--restart-app-server-only` 恢復先前的窄範圍行為：僅對目前使用者擁有的相符 app-server / code-mode-host 進程發送 `SIGTERM`，桌面應用程式保持執行（執行中的回合仍可能被中斷）。若與 `--restart-codex` 或 `--restart-desktop-app` 一起使用，窄範圍優先，因為失去進行中的對話無法復原，過期的選擇器可以。
 
-### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+當命令在 Codex 應用程式內部執行時，重啟會交給分離的 helper，此工作階段會隨應用程式一起結束。
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
+
+使 Codex 的本機模型選擇器快取失效，使其從現用的 opencodex 目錄重建。與 `ocx sync` 相同的過時 `app-server` 警告與可選重啟旗標適用。
+
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 安裝由另一個 OpenCodex 執行個體的 `/v1/catalog` 端點提供的完整目錄，接著同步 `models_cache.json`。URL 必須是 HTTPS；僅回送位址允許 HTTP。URL 內嵌憑證、查詢、片段、重新導向、超出大小的回應以及無效目錄，都會在任何本機寫入之前遭拒。驗證為選用，且只透過環境變數名稱（`--auth-env`）讀取，不接受 argv 傳入。
 
-目錄與快取在共用的 Codex 目錄鎖之下寫入；失敗時保留 last-known-good 檔案。位元組完全相同時是保留 mtime 的無操作。`--restart-codex` 僅在實際寫入之後生效。`ETag` 條件式請求與 Desktop 應用程式重新啟動不屬於此命令。完整的 `--json` 信封與結束碼請參見[英文參考](/reference/cli/lifecycle/)。
+如果 `HTTP_PROXY` 或 `http_proxy` 生效，且 `NO_PROXY` 或 `no_proxy` 中沒有相符的略過規則，回送 HTTP 要求會在加入驗證標頭或送出要求之前遭拒。`ALL_PROXY`/`all_proxy` 以及僅設定 `HTTPS_PROXY`/`https_proxy` 的情況不會觸發此 HTTP 限制；仍允許透過 HTTPS 取得目錄。拒絕訊息不會包含代理位址或驗證權杖。 非空的 `http_proxy` 和 `no_proxy` 分別優先於 `HTTP_PROXY` 和 `NO_PROXY`。若要設定與 Bun 相容的代理略過規則，請使用主機名稱、相符的 `host:port`、`[::1]` 等含方括號的 IPv6 位址或 `*`，不要使用 URL、路徑或 `*.` 前綴。
+
+目錄與快取在共用的 Codex 目錄鎖之下寫入；失敗時保留 last-known-good 檔案。位元組完全相同時是保留 mtime 的無操作。`--restart-codex`、`--restart-app-server-only` 以及已棄用別名 `--restart-desktop-app` 僅在實際寫入之後生效，含義與 `ocx sync` / `ocx sync-cache` 相同。`ETag` 條件式請求不屬於此命令。完整的 `--json` 信封與結束碼請參見[英文參考](/reference/cli/lifecycle/)。
 
 ## 背景服務
 
@@ -166,10 +178,10 @@ Windows 工作排程器安裝使用一般處理程序優先順序（`Priority=4`
 
 | 子指令 | 動作 |
 | --- | --- |
-| 無 | 服務不存在時安裝並啟動；已存在時重新整理並重啟。正常的 Windows 工作排程器定義會沿用；過時的定義可能會重新註冊並需要提高權限。 |
+| 無 | 服務不存在時安裝並啟動；已存在時執行 `repair`。正常的 Windows 工作排程器定義會沿用；過時的定義可能會重新註冊並需要提高權限。 |
 | `install` | 建立並啟動服務。註冊它，在 Windows 上需要提高權限。 |
-| `repair` | 就地重新整理已安裝的服務並重啟它。正常的 Windows 工作排程器定義會沿用；過時的定義可能會重新註冊並需要提高權限。 |
-| `restart` | `repair` 的別名。 |
+| `repair` | 就地重新整理已安裝的服務。在 macOS 上，僅在有變更時才重新載入 launchd，因此正常且未變更的工作會繼續執行，repair 不會造成中斷。在 Linux 和 Windows 上會重啟服務；正常的 Windows 工作排程器定義會沿用，過時的定義可能會重新註冊並需要提高權限。 |
+| `restart` | 執行相同的重新整理，並在所有平台上保證重啟。在 macOS 上，未變更且已載入的工作會就地 kickstart。不是 `repair` 的別名。 |
 | `start` | 啟動已安裝的服務。 |
 | `stop` | 停止服務並還原原生 Codex。 |
 | `status` | 回報服務與代理診斷及日誌路徑。 |
@@ -237,7 +249,7 @@ ocx codex-shim uninstall
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。
+在 `http://localhost:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。在啟用管理 ingress 的 hub 上，開啟的是 `http://127.0.0.1:<管理埠>`。
 
 ## 更新
 

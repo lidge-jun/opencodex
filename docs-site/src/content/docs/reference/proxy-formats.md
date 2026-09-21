@@ -255,11 +255,16 @@ uses an unsupported protocol, opencodex skips the WebSocket attempt and uses HTT
 dialing the upstream directly.
 
 These rules belong to the upstream WebSocket transport, independently of the selected provider
-adapter. HTTP fetch-based Responses requests, including SSE fallback, use Bun's HTTP proxy rules
-and do not use `ALL_PROXY`. `config.proxy` fills missing `HTTP_PROXY`/`HTTPS_PROXY` values; the
-resulting scheme-specific value also takes precedence over an existing `ALL_PROXY` for WebSocket.
-For an HTTPS upstream that requires a proxy, set `HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY`
-alone leaves both WSS and its HTTPS fallback without a scheme-matched proxy.
+adapter. HTTP fetch-based Responses requests, including SSE fallback, use the
+[configured outbound fetch](/reference/configuration/server/#server-fields). A server SOCKS5 proxy — set
+with `config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when
+`NO_PROXY`/`no_proxy` does not exempt the target. Scheme-specific
+`HTTP_PROXY`/`HTTPS_PROXY` values retain Bun's native HTTP(S) handling, while a non-SOCKS
+`ALL_PROXY` is not a native HTTP fetch route. `config.proxy` fills missing
+`HTTP_PROXY`/`HTTPS_PROXY` values; the resulting scheme-specific value also takes precedence over
+an existing `ALL_PROXY` for WebSocket. For an HTTPS upstream that requires a proxy, set
+`HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY` alone leaves both WSS and its HTTPS fallback without
+a scheme-matched proxy.
 
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
@@ -563,7 +568,9 @@ upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers; 
 account choice is bound to that pair (process-local), so a join that reaches the proxy reuses the
 account that created the call, while Direct mode forwards the caller's current bearer on both legs.
 The relayed client headers are exactly `openai-alpha`, `x-session-id`, `session-id`, `thread-id`,
-`originator`, and `x-oai-attestation` (`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`);
+`originator`, `x-oai-attestation`, and `x-codex-turn-metadata`
+(`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`); each is relayed only when the caller
+sent it, and none is invented.
 `Authorization` and the ChatGPT account id are proxy-owned on ChatGPT-backed routes (Pool replaces
 them with the stored account, Direct forwards the validated caller bearer) and an API-key provider
 gets its own bearer. Codex only sends the join to the proxy when `experimental_realtime_ws_base_url`
@@ -688,3 +695,17 @@ that repair, it becomes a normal user message. If a current v2 task remains genu
 but the selected routed target cannot read native ChatGPT ciphertext, opencodex fails with
 `unreadable_encrypted_agent_task` instead of sending unreadable bytes to that provider. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the client behavior around worker tasks.
+
+History is handled too, and differently, because losing a replayed message should not end a
+conversation. A replayed `agent_message` that mixes readable text with backend ciphertext cannot
+be lowered to a public message, so a routed Responses destination would otherwise receive the
+ciphertext along with an item type only the ChatGPT backend declares. Before dispatch, opencodex
+replaces that ciphertext with `[encrypted content omitted]` — the same marker it already
+substitutes after an upstream decrypt failure — which leaves the item lowerable and the readable
+text intact. The provider never sees the ciphertext or the private item, and the conversation
+continues. Combo targets are repaired individually, since each receives its own copy of the
+request. The canonical ChatGPT Codex backend is exempt because it is the destination that minted
+and can read those bytes; a `forward` provider pointed at any other origin is not exempt.
+Explicitly trusted `allowEncryptedV2AgentTasks` routes and translated Chat or Anthropic wires are
+unaffected, as are other item types such as reasoning and tool-output blobs, which keep their
+existing decrypt-failure recovery.

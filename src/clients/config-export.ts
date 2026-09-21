@@ -41,7 +41,7 @@ export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProv
 export { buildRaycastClientConfig, summarizeRaycast, buildRaycastContribution } from "./config-export/raycast";
 
 import type { OpencodeLaunchEnv, OpencodeCatalogModel, ExportContext, PiModelEntry, ManagedContribution, ManagedFragment, ExportClientId, ExportClientSpec } from "./config-export/contracts";
-import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, GAJAE_API_KEY_ENV, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
+import { OPENCODE_API_KEY_ENV_REF, OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG, OPENCODE_CONFIG_SCHEMA, OPENCODE_PROVIDER_ID, PI_API_DIALECT, LOOPBACK_API_KEY_PLACEHOLDER, HERMES_API_KEY_ENV_REF, OPENCLAW_API_KEY_ENV_REF, OPENCODE_API_KEY_ENV, HERMES_API_KEY_ENV, OPENCLAW_API_KEY_ENV } from "./config-export/constants";
 import { exportModelLabel, authoritativeContextWindow, outputBudgetFor, normalizeExportModels, inputModalitiesForClient, opencodeModelCapabilities, proxyAdmissionHeaders, singleFragment } from "./config-export/model-metadata";
 import { buildOmpClientConfig, summarizeOmp, buildOmpContribution } from "./config-export/omp";
 import { buildDshClientConfig, summarizeDsh, buildDshContribution } from "./config-export/dsh";
@@ -627,10 +627,20 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
  * override a default the user controls in opencodex. Variants are opt-in per selection,
  * which is the same reason we never emit `defaultModel` for MCode.
  *
- * `none` is dropped even when a ladder declares it. It is a valid *declared* effort, but the
- * chat ingress filters wire efforts against `OUTPUT_CONFIG_EFFORTS`, which has no `none`, so
- * selecting it would send no effort at all and silently fall back to the proxy default — a
- * selectable value that cannot do what its label says. Same call MCode makes for its picker.
+ * `none` is dropped even when a ladder declares it.
+ *
+ * The original reason no longer holds and is recorded here so it is not repeated: the chat
+ * ingress `OUTPUT_CONFIG_EFFORTS` allowlist DID omit `none`, so selecting it sent no effort
+ * at all and fell back to the proxy default. That allowlist now accepts `none` (audit F7),
+ * because it is the runtime's disable sentinel and dropping it let a provider default
+ * re-enable thinking a caller had turned off.
+ *
+ * The variant stays filtered anyway, deliberately and narrowly: emitting it would change
+ * what this exporter writes into a user's opencode config, and whether opencode's own
+ * picker round-trips `reasoningEffort: "none"` to the wire this proxy reads has not been
+ * verified here. Re-enabling it is a scoped follow-up that needs that check first, not a
+ * side effect of an ingress fix. MCode and ZCode filter `none` for their own separate
+ * reasons, documented at their call sites.
  */
 function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVariant[] | undefined {
   if (model.reasoningEfforts === undefined) return undefined;
@@ -802,6 +812,7 @@ export interface OpenclawModelEntry {
   id: string;
   name: string;
   contextWindow?: number;
+  input?: string[];
 }
 
 export interface OpenclawProviderBlock {
@@ -829,15 +840,15 @@ export interface KimiProviderBlock {
 /**
  * `max_context_size` is mandatory and must be positive, so a model with no
  * authoritative context window is omitted from the document entirely rather
- * than guessed at. `capabilities` is never emitted: our catalog does not
- * assert them, and Kimi's own inference works off OpenAI-style name prefixes
- * that a routed selector will not match.
+ * than guessed at. Catalog image input becomes `image_in`; other capabilities
+ * are not inferred from routed model names.
  */
 export interface KimiModelBlock {
   provider: string;
   model: string;
   max_context_size: number;
   display_name?: string;
+  capabilities?: ["image_in"];
 }
 
 export interface KimiGeneratedConfig {
@@ -856,7 +867,7 @@ export interface GajaeModelEntry {
 /** Gajae validates strictly: an unknown field fails the whole config. */
 export interface GajaeProviderBlock {
   baseUrl: string;
-  apiKeyEnv: string;
+  apiKey: string;
   api: "openai-completions";
   models: GajaeModelEntry[];
 }
@@ -964,10 +975,12 @@ function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
 function buildOpenclawClientConfig(ctx: ExportContext): OpenclawGeneratedConfig {
   const models: OpenclawModelEntry[] = normalizeExportModels(ctx.models).map(model => {
     const context = authoritativeContextWindow(model.contextWindow);
+    const input = [...new Set(model.inputModalities?.filter(value => ["text", "image", "video", "audio"].includes(value)))];
     return {
       id: model.namespaced,
       name: exportModelLabel(model),
       ...(context !== undefined ? { contextWindow: context } : {}),
+      ...(input.length > 0 ? { input } : {}),
     };
   });
   const headers = proxyAdmissionHeaders(ctx.config, OPENCLAW_API_KEY_ENV_REF);
@@ -1005,6 +1018,7 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
       model: model.namespaced,
       max_context_size: context,
       ...(model.displayName ? { display_name: model.displayName } : {}),
+      ...(model.inputModalities?.includes("image") ? { capabilities: ["image_in"] as ["image_in"] } : {}),
     };
   }
   return {
@@ -1042,7 +1056,7 @@ function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
     providers: {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
-        apiKeyEnv: GAJAE_API_KEY_ENV,
+        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         api: "openai-completions",
         models,
       },
@@ -1306,8 +1320,8 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     id: "gajae",
     filename: "gajae-models.yaml",
     destination: env => gajaeConfigPath(env),
-    apiKeyEnv: GAJAE_API_KEY_ENV,
-    exportHint: `export ${GAJAE_API_KEY_ENV}=<your key>`,
+    apiKeyEnv: "",
+    exportHint: "No environment variable is needed for the loopback provider.",
     build: buildGajaeClientConfig,
     format: "yaml",
     summarize: summarizeGajae,

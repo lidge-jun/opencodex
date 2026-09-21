@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create, fromBinary } from "@bufbuild/protobuf";
@@ -12,13 +12,22 @@ import {
 import {
   AgentClientMessageSchema,
   BackgroundShellSpawnArgsSchema,
+  DeleteArgsSchema,
   ExecServerMessageSchema,
   FetchArgsSchema,
+  GrepArgsSchema,
+  LsArgsSchema,
   ReadArgsSchema,
   ShellArgsSchema,
+  WriteArgsSchema,
+  WriteShellStdinArgsSchema,
 } from "../../../src/adapters/cursor/gen/agent_pb";
-import { handleCursorNativeExec } from "../../../src/adapters/cursor/native-exec";
 import {
+  cursorNativeExecRedirectHint,
+  handleCursorNativeExec,
+} from "../../../src/adapters/cursor/native-exec";
+import {
+  nativeShellDisabledMessage,
   resetBackgroundShellStateForTests,
   setBackgroundShellRuntimeForTests,
 } from "../../../src/adapters/cursor/native-exec-shell";
@@ -383,4 +392,144 @@ describe("Cursor native exec sandbox policy", () => {
     expect(spawnCalls).toBe(1);
   });
 
+});
+
+/**
+ * A delegation-only client (an orchestrator that exposes nothing but its own Responses tools —
+ * no shell bridge, no unified exec) still gets Cursor-native Read/Shell attempts from the model.
+ * The default denial steers the model to `shell_command` / `exec_command`; when those are not in
+ * the catalog the model concludes every tool is unavailable and gives up. The hint names the
+ * catalog that actually exists instead.
+ */
+describe("Cursor native exec catalog-aware redirect hint", () => {
+  const SILENT_REDIRECT_FORBIDDEN = [/blocked/i, /\bdisabled\b/i, /not executed/i, /\bdenied\b/i, /cannot execute/i, /차단/];
+  type CatalogTool = { name: string; namespace?: string; freeform?: boolean };
+  const delegationOnlyCatalog: CatalogTool[] = [{ name: "task" }, { name: "ask_user" }];
+
+  function stringifyReplies(replies: Uint8Array[]): string {
+    return replies.map(bytes => stringify(fromBinary(AgentClientMessageSchema, bytes))).join("\n");
+  }
+
+  test("names the request's client wire names when the catalog has no shell bridge or execution path", () => {
+    const hint = cursorNativeExecRedirectHint(delegationOnlyCatalog);
+    expect(hint).toBeDefined();
+    expect(hint).toContain("`ocx_client_task`");
+    expect(hint).toContain("`ocx_client_ask_user`");
+    expect(hint).toContain("mcp_opencodex-responses_<name>");
+    expect(hint).toContain("Do NOT narrate");
+    expect(hint).not.toContain("shell_command");
+    expect(hint).not.toContain("exec_command");
+    // Neutral about capabilities: a listed file/search/fetch tool must never be contradicted.
+    expect(hint).not.toMatch(/no (shell|read|grep|ls|write|fetch) tool/i);
+    expect(hint).not.toMatch(/ONLY callable/i);
+    for (const pattern of SILENT_REDIRECT_FORBIDDEN) expect(hint).not.toMatch(pattern);
+  });
+
+  test("names configured MCP tools advertised for the turn by their harness display form", () => {
+    const hint = cursorNativeExecRedirectHint(
+      [{ name: "task" }],
+      [{ name: "read_file", providerIdentifier: "opencodex" }],
+    ) ?? "";
+    expect(hint).toContain("`ocx_client_task`");
+    expect(hint).toContain("`mcp_opencodex_read_file`");
+    // No client tools at all, but configured MCP tools: those are the catalog, so name them.
+    const mcpOnly = cursorNativeExecRedirectHint(undefined, [{ name: "read_file", providerIdentifier: "opencodex" }]) ?? "";
+    expect(mcpOnly).toContain("`mcp_opencodex_read_file`");
+    expect(mcpOnly).not.toContain("ocx_client_");
+    expect(mcpOnly).not.toContain("shell_command");
+    // Nothing advertised anywhere keeps the default bridge wording.
+    expect(cursorNativeExecRedirectHint(undefined, [])).toBeUndefined();
+    expect(cursorNativeExecRedirectHint([], [])).toBeUndefined();
+  });
+
+  test.each<[string, CatalogTool[] | undefined]>([
+    ["an undefined catalog", undefined],
+    ["an empty catalog", []],
+    ["a bare exec_command bridge", [{ name: "exec_command" }]],
+    ["a bare shell_command bridge next to client tools", [{ name: "task" }, { name: "shell_command" }]],
+    ["unified exec next to client tools", [{ name: "task" }, { name: "exec", freeform: true }]],
+  ])("keeps the default bridge wording for %s", (_name, tools) => {
+    expect(cursorNativeExecRedirectHint(tools)).toBeUndefined();
+  });
+
+  test("lists namespaced tools by wire name and caps a long catalog", () => {
+    const hint = cursorNativeExecRedirectHint([{ namespace: "mcp__docker", name: "ps" }, { name: "task" }]) ?? "";
+    expect(hint).toContain("`mcp__docker__ps`");
+    expect(hint).toContain("`ocx_client_task`");
+    const capped = cursorNativeExecRedirectHint(Array.from({ length: 20 }, (_, index) => ({ name: `tool_${index}` }))) ?? "";
+    expect(capped).toContain("`ocx_client_tool_15`");
+    expect(capped).not.toContain("`ocx_client_tool_16`");
+    expect(capped).toContain("(+4 more)");
+  });
+
+  test("without a hint the bridge wording is unchanged", () => {
+    expect(nativeShellDisabledMessage()).toContain("shell_command");
+    expect(nativeShellDisabledMessage("custom hint")).toBe("custom hint");
+  });
+
+  test("every denied native fs, shell, and fetch frame carries the hint and executes nothing", async () => {
+    const hint = cursorNativeExecRedirectHint(delegationOnlyCatalog);
+    expect(hint).toBeDefined();
+    const dir = mkdtempSync(join(tmpdir(), "ocx-cursor-hint-"));
+    const existing = join(dir, "grounding.txt");
+    const content = "HINT-GROUNDING-01 must not leak";
+    writeFileSync(existing, content);
+    const newPath = join(dir, "must-not-exist.txt");
+    let fetchCalled = false;
+    const deps = {
+      unsafeAllowNativeLocalExec: false,
+      nativeExecRedirectHint: hint,
+      fetch: async () => {
+        fetchCalled = true;
+        return new Response("SHOULD_NOT_FETCH");
+      },
+    };
+    const frames = [
+      execMessage({ case: "readArgs", value: create(ReadArgsSchema, { path: existing }) }),
+      execMessage({ case: "lsArgs", value: create(LsArgsSchema, { path: dir }) }),
+      execMessage({ case: "grepArgs", value: create(GrepArgsSchema, { pattern: "HINT", path: dir }) }),
+      execMessage({ case: "writeArgs", value: create(WriteArgsSchema, { path: newPath, fileText: "SHOULD_NOT_WRITE" }) }),
+      execMessage({ case: "deleteArgs", value: create(DeleteArgsSchema, { path: existing }) }),
+      execMessage({ case: "shellArgs", value: create(ShellArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir, hardTimeout: 2000 }) }),
+      execMessage({ case: "shellStreamArgs", value: create(ShellArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir }) }),
+      execMessage({ case: "backgroundShellSpawnArgs", value: create(BackgroundShellSpawnArgsSchema, { command: "printf RAN_%s MARKER", workingDirectory: dir }) }),
+      execMessage({ case: "writeShellStdinArgs", value: create(WriteShellStdinArgsSchema, { shellId: 999, chars: "SHOULD_NOT_WRITE" }) }),
+      execMessage({ case: "fetchArgs", value: create(FetchArgsSchema, { url: "https://metadata.invalid/latest" }) }),
+    ];
+    for (const frame of frames) {
+      const text = stringifyReplies(await handleCursorNativeExec(frame, deps));
+      expect(text).toContain("`ocx_client_task`");
+      expect(text).toContain("Do NOT narrate");
+      expect(text).not.toContain("shell_command");
+      expect(text).not.toContain("exec_command");
+      expect(text).not.toContain(content);
+      // Denied shell frames echo the command text; only an executed command could produce the joined marker.
+      expect(text).not.toContain("RAN_MARKER");
+      expect(text).not.toContain("SHOULD_NOT_WRITE");
+      expect(text).not.toContain("SHOULD_NOT_FETCH");
+    }
+    expect(fetchCalled).toBe(false);
+    expect(existsSync(existing)).toBe(true);
+    expect(existsSync(newPath)).toBe(false);
+  });
+
+  // The hint only helps if the live transport actually derives it per request. Asserting that
+  // through LiveCursorTransport means stubbing a private method, which pins a seam rather than
+  // the production path; read the production path instead. Both carried contributor PRs were
+  // drafts whose hosted suite never ran, so nothing else proves this line exists.
+  test("the live transport derives the hint from each turn's visible catalog", async () => {
+    const { repoPath } = await import("../../helpers/repo-root");
+    const source = readFileSync(repoPath("src/adapters/cursor/live-transport.ts"), "utf8");
+    const assignment = source.match(/nativeExecRedirectHint:\s*cursorNativeExecRedirectHint\(([^)]*)\)/)?.[1];
+    expect(assignment).toBeDefined();
+    // Derived from THIS turn's visible catalog and advertised MCP tools, not from the raw request
+    // or a value cached across turns: a catalog that gains or loses a shell alias must re-derive.
+    expect(assignment).toContain("cursorVisibleTools");
+    expect(assignment).toContain("mcpToolDefs");
+    // Inside the per-request execContext assignment, not module or constructor scope.
+    const perRequest = source.indexOf("rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch");
+    const hint = source.indexOf("nativeExecRedirectHint: cursorNativeExecRedirectHint");
+    expect(perRequest).toBeGreaterThan(-1);
+    expect(Math.abs(hint - perRequest)).toBeLessThan(400);
+  });
 });

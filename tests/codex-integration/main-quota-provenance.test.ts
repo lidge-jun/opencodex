@@ -1,6 +1,6 @@
 import { capturePoolQuotaWriter, saveCodexAccountCredential, saveCodexAccountCredentialIfGeneration } from "../../src/codex/account-store";
 import { getAccountQuotaHistory, isValidWhamHistoryObservation } from "../../src/codex/quota";
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,9 +33,15 @@ import {
   updateAccountQuota,
   type StoredAccountQuota,
 } from "../../src/codex/quota";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+
+const QUOTA_PROVENANCE_IMPORT_PROLOGUE = `
+        import { getAccountQuota, getMainPolicyQuota } from ${JSON.stringify(repoPath("src/codex/quota.ts"))};
+        import { observeMainQuotaIdentity, matchesMainQuotaCredential } from ${JSON.stringify(repoPath("src/codex/main-account-cache.ts"))};
+`;
 
 let testDir: string;
 let previousHome: string | undefined;
@@ -292,6 +298,16 @@ describe("main policy quota writes", () => {
 });
 
 describe("main policy quota durability and lifecycle", () => {
+  // The first loop iteration is this graph's cold child; warm quota provenance imports before its
+  // spawn timeout starts measuring the restart behavior.
+  beforeAll(async () => {
+    await warmModuleGraph({
+      graph: "codex/quota-provenance-eval",
+      source: QUOTA_PROVENANCE_IMPORT_PROLOGUE,
+      cwd: repoRoot(),
+    });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   for (const resetAt of [undefined, 4_000_000_000]) {
     test(`restart beyond six hours retains ${resetAt ? "future-reset" : "missing-reset"} policy evidence only for observed A`, () => {
       const writer = writerFor();
@@ -301,8 +317,7 @@ describe("main policy quota durability and lifecycle", () => {
       };
       writeSnapshot({ version: 1, quotas: { [MAIN]: quota }, mainPolicyQuota: { identityKey: writer.identityKey, quota } });
       const script = `
-        import { getAccountQuota, getMainPolicyQuota } from ${JSON.stringify(repoPath("src/codex/quota.ts"))};
-        import { observeMainQuotaIdentity, matchesMainQuotaCredential } from ${JSON.stringify(repoPath("src/codex/main-account-cache.ts"))};
+        ${QUOTA_PROVENANCE_IMPORT_PROLOGUE}
         const before = getMainPolicyQuota();
         observeMainQuotaIdentity("fixture-main-b");
         const other = getMainPolicyQuota();

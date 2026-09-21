@@ -236,6 +236,69 @@ test("a transient refresh failure does not quarantine the account", async () => 
   expect(quotaRecoveryRecordForTests("slow-grant")).toMatchObject({ state: "backoff" });
 });
 
+test("same-grant aliases share one quota recovery budget after propagation", async () => {
+  const { listCodexAuthAccounts } = await import("../../src/codex/auth-api");
+  const { readCodexAccountRecord, saveCodexAccountCredential } = await import("../../src/codex/account-store");
+  const { loadConfig, saveConfig } = await import("../../src/config");
+  const { quotaRecoveryRecordForTests } = await import("../../src/codex/quota-401-recovery");
+
+  const expiresAt = Date.now() + 3600_000;
+  for (const id of ["alias-owner", "alias-later"]) {
+    saveCodexAccountCredential(id, {
+      accessToken: REJECTED,
+      refreshToken: "shared-grant",
+      expiresAt,
+      chatgptAccountId: "shared-account",
+    });
+  }
+  for (let index = 0; index < 3; index += 1) {
+    saveCodexAccountCredential(`queue-${index}`, {
+      accessToken: `queue-bearer-${index}`,
+      refreshToken: `queue-grant-${index}`,
+      expiresAt,
+      chatgptAccountId: `queue-account-${index}`,
+    });
+  }
+  const config = loadConfig();
+  saveConfig({
+    ...config,
+    // Four workers start the owner and three queued probes. The alias cannot begin until
+    // the owner's refresh has propagated, reproducing the interleaving that bypassed the
+    // old per-account-only fence.
+    codexAccounts: ["alias-owner", "queue-0", "queue-1", "queue-2", "alias-later"]
+      .map(id => ({ id, label: id })),
+  });
+
+  let finishOwnerRefresh!: () => void;
+  const ownerRefreshed = new Promise<void>(resolve => { finishOwnerRefresh = resolve; });
+  let tokenCalls = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/oauth/token")) {
+      tokenCalls += 1;
+      return Response.json({ access_token: ROTATED, refresh_token: "rotated-grant", expires_in: 3600 });
+    }
+    if (!url.includes("/wham/usage")) return new Response("{}", { status: 401 });
+    const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+    const bearer = headers.get("authorization");
+    if (bearer === `Bearer ${ROTATED}`) {
+      finishOwnerRefresh();
+      return new Response("{}", { status: 401 });
+    }
+    if (bearer === `Bearer ${REJECTED}`) {
+      return new Response("{}", { status: 401 });
+    }
+    await ownerRefreshed;
+    return Response.json({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 1 } } });
+  }) as typeof fetch;
+
+  await listCodexAuthAccounts(loadConfig(), true);
+
+  expect(tokenCalls).toBe(1);
+  const aliasGeneration = readCodexAccountRecord("alias-later")!.generation;
+  expect(quotaRecoveryRecordForTests("alias-later")).toEqual({ state: "spent", lineage: aliasGeneration });
+});
+
 test("an already-aborted caller starts no refresh at all", async () => {
   const { forceRefreshCodexPoolToken } = await import("../../src/codex/account-store");
   const { claimQuotaRecovery, quotaRecoveryRecordForTests, releaseQuotaRecovery, settleQuotaRecovery } =

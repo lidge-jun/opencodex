@@ -1,9 +1,16 @@
 # Adapter Registry Authority
 
-The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+Request-local adapter bindings are separate from registry authority in the Responses
+[core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
+
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## Decision
 
@@ -32,6 +39,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   does not. `devin-cli` survives only as a deprecated alias — `ocx login devin-cli` routes to
   `devin`, and a startup merge migration rewrites any saved row still keyed under the old
   provider id, so the registry carries one Devin provider, not two.
+  Its `GetChatMessage` inference POSTs, including the two bounded pre-output stated-reset
+  replays, pass through the request's provider executor and shared physical-send budget.
+  Catalog and JWT RPCs remain adapter support traffic rather than inference sends.
   `AdapterFactoryContext.providerId` still tells the shared adapter which configured row it is
   serving: the Cognition tenant is recorded on the credential, not in the registry, so the
   adapter has to know the row before it can resolve a host. That adapter advertises bare local
@@ -48,8 +58,28 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   credential turned out to be the ordinary cloud token, so the child process bought nothing that
   importing the token did not, and it cost a placeholder `buildRequest`, a disabled
   `parseStream`, an identity-only `baseUrl`, and a subprocess running in the operator's tree.
-  `projectDevinCliAuthMode` rewrites any saved row that still names the retired adapter id,
-  alongside the merge migration that retires the `devin-cli` provider id itself.
+  The merge migration rewrites the canonical `devin-cli` provider id. A custom-named row that
+  still names the retired adapter is left on that unknown id so requests fail closed until the
+  operator explicitly selects `devin` and configures Devin authentication.
+
+  Before spending a chat roundtrip the adapter runs a catalog pre-flight:
+  `src/adapters/devin/cloud-direct/catalog.ts` fetches `GetCascadeModelConfigs` and preserves
+  `ClientModelConfig` field #4 as the per-account disabled gate, field #18 as the per-account
+  context window, and field #5 as an optional `supportsImages` tri-state — a present value
+  asserts image support or its absence, while an omitted field stays unknown (the #1796
+  precedent). `src/adapters/devin/live-models.ts` collapses that tri-state across the
+  rows each base model's collapsed UID gathers — the EFFORT_TOKENS suffixes, tier rows
+  like `-1m` included: unmeasured rows abstain, unanimous measured rows advertise
+  `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
+
+  At dispatch the adapter reads the same per-account/host cache once more for the
+  exact selected wire UID and forwards `completionOpts.maxInputTokens`: the smallest
+  of that row's field #18 window and any valid configured model/provider input
+  hints, so `CompletionConfiguration` field #3 no longer serializes the encoder's
+  128000 fallback. Smaller operator hints cap live evidence and never enlarge it;
+  with no evidence the adapter hint is omitted and the encoder still serializes
+  its own 128000 fallback for field #3. Investigation and limits:
+  `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
@@ -76,6 +106,10 @@ Do not add a second switch/list of adapter factories in request routing. Focused
 
 This decision does not change routed `apply_patch` behavior, Cursor structured-edit conversion, Azure/MiMo request construction, or provider wire selection. Those behaviors remain owned by their existing modules and focused tests. The registry exposes the universe and semantic relationships; the next stack layer consumes that metadata for generic conformance.
 
+Registry selection neither derives nor consumes Google's endpoint-scoped
+[tool-schema loss report](../providers/google.md#google-tool-schema-loss-reporting). That report is
+owned by the selected adapter's final compiler and cannot affect adapter selection.
+
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
 ## Moonshot `$ref`-with-siblings normalization
@@ -86,7 +120,7 @@ so the schema is not something a user can fix from configuration (issue #2673).
 
 > Decision record: [ADR-0093](../decisions/ADR-0093-moonshot-ref-with-siblings-normalization.md)
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
 
@@ -98,6 +132,8 @@ Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.
 The bridge keeps an open function, custom, or tool-search call incomplete when an adapter ends with a recognized truncated stop reason. Streaming emits no argument/input completion frame for that open call, and buffered JSON applies the same status. A call already closed by its own tool-call end retains its completed state. The response remains incomplete, partial output is preserved, and truncated compaction never replaces history.
 
 A provider web search still in flight at that truncated terminal is finalized as `failed`, the same status it already receives from the error and explicit-incomplete terminals. It never returned results, so reporting it as `completed` would leave the client showing a finished search for a turn the provider cut short.
+
+`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). Codex otherwise treats a filter incomplete without retryable as a dropped stream and retries a refusal that cannot succeed. Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
 
 Chat helper admission in `src/server/responses/core.ts` follows the
 [deferred stored-main contract](../providers/openai-tiers.md): only a needed Direct OpenAI helper
@@ -141,3 +177,44 @@ medium/high/max UID before accepting a suffix already present in the model id.
 The merged `devin` provider uses this resolver for every account, whichever login
 path minted the credential. Omitted effort preserves an explicit
 variant; unrelated model families retain their existing suffix precedence.
+
+
+## Untranslated input media
+
+`src/responses/input-media.ts` inspects actual content blocks and typed tool-output arrays
+without parsing text or function arguments, copying attachment payloads, resolving file IDs,
+or fetching URLs. Audio, files/documents and file-ID-only images have no lossless normalized
+carrier. The scanner returns only an input-kind name, never client content.
+
+`src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
+wire selection. A translated `buildRequest` refuses these inputs through the existing 400
+error path; `runTurn` emits one nonretryable `unsupported_input_modality` error without
+starting its underlying transport. `localTerminal` declines a success shortcut for such a
+request, letting the guarded builder return the error instead. The original raw body stays
+unchanged, including when another final adapter is selected after a failed attempt.
+
+The effective Responses wire, including both Azure aliases, is excluded: it forwards the
+original body and leaves native media acceptance to its upstream. This exception does not
+claim that every Responses model supports every attachment. Native Chat also keeps its
+existing wire; only an actual Chat-to-Responses projection rejects audio/file blocks before
+losing them. Legacy function-result images fail explicitly because that projection does not
+implement legacy call/result pairing. Modern tool-image carriers are unchanged.
+
+`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, error events and
+raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
+translation boundary and verifies that rejection sends no upstream request.
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+## Devin image boundary
+
+The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.

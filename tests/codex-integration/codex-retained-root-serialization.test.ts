@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -16,6 +16,7 @@ import {
   resolveCodexCatalogSerializationDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../../src/codex/user-identity";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
@@ -24,6 +25,13 @@ import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 import { watchdogMs } from "../helpers/ci-watchdog";
 
 const repoRoot = resolveRepoRoot();
+const CATALOG_WRITE_SERIALIZATION_IMPORT_PROLOGUE = `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { withCatalogWriteSerialization } from "./src/codex/catalog-write-serialization.ts";
+`;
+const CATALOG_SYNC_IMPORT_PROLOGUE = `
+    const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
+`;
 const sandboxes: Sandbox[] = [];
 
 interface Sandbox {
@@ -213,8 +221,7 @@ async function holdCatalogLock(sandbox: Sandbox): Promise<{
   const ready = join(sandbox.root, "lock-ready");
   const release = join(sandbox.root, "lock-release");
   const script = `
-    import { existsSync, writeFileSync } from "node:fs";
-    import { withCatalogWriteSerialization } from "./src/codex/catalog-write-serialization.ts";
+    ${CATALOG_WRITE_SERIALIZATION_IMPORT_PROLOGUE}
     const home = process.env.CODEX_HOME;
     const outcome = withCatalogWriteSerialization(home, () => {
       writeFileSync(${JSON.stringify(ready)}, "ready");
@@ -254,6 +261,16 @@ afterEach(async () => {
     removeTreeWithRetry(sandbox.root);
   }
 });
+
+// The lock holder is this file's first bounded catalog-write-serialization child, so it pays that
+// module graph's cold load before it can publish the ready marker measured below.
+beforeAll(async () => {
+  await warmModuleGraph({
+    graph: "codex/catalog-write-serialization-eval",
+    source: CATALOG_WRITE_SERIALIZATION_IMPORT_PROLOGUE,
+    cwd: repoRoot,
+  });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
 test("startup and CLI sync-cache cannot write models_cache while another process owns K", async () => {
   const sandbox = makeSandbox("ocx-retained-cache-");
@@ -320,7 +337,7 @@ test("native restore cannot read-transform-write the catalog while another proce
     `);
     expect(restored.exitCode).toBe(0);
     expect(readFileSync(catalogPath, "utf8")).toBe(before);
-    const source = readFileSync(join(repoRoot, "src/codex/inject.ts"), "utf8");
+    const source = readFileSync(join(repoRoot, "src/codex/inject/restore.ts"), "utf8");
     const restoreRoot = source.slice(source.indexOf("const owningCodexHome"), source.indexOf("// Design B", source.indexOf("const owningCodexHome")));
     expect(restoreRoot).toContain("withCatalogWriteSerialization(owningCodexHome");
     expect(restoreRoot).toContain("restoreCodexCatalogWithPermit");
@@ -430,6 +447,16 @@ for (const publisher of ["convergence", "retained"] as const) {
   }, SPAWN_BUDGET_MS * 2);
 }
 
+// This is the first bounded child to load catalog sync, so warm its graph before the provider
+// barrier begins measuring time to the requested marker.
+beforeAll(async () => {
+  await warmModuleGraph({
+    graph: "codex/catalog-sync-eval",
+    source: CATALOG_SYNC_IMPORT_PROLOGUE,
+    cwd: repoRoot,
+  });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
 /**
  * Runtime authority can move without touching the catalog at all.
  *
@@ -480,7 +507,7 @@ test("a persisted runtime selection moved by another process during the await bl
       while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
       return Response.json({ data: [{ id: "runtime-move-model" }] });
     };
-    const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
+    ${CATALOG_SYNC_IMPORT_PROLOGUE}
     console.log(JSON.stringify(await syncCatalogModels(config)));
   `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
   sandbox.children.add(sync);

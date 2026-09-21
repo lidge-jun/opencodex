@@ -11,6 +11,9 @@ import { providerConfigSeed } from "../../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { handleResponses } from "../../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 interface SseEvent {
   event?: string;
@@ -164,6 +167,9 @@ describe("GitHub Copilot Responses client stream contract", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
+    // Release the preload-home lease before later teardown can replace or remove that home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
   });
 
@@ -177,6 +183,8 @@ describe("GitHub Copilot Responses client stream contract", () => {
       providers: { "github-copilot": copilotProvider() },
     } as unknown as OcxConfig;
 
+    // Direct dispatch needs the writer lease that startServer normally owns for this home.
+    releaseSpendHome = acquireOwnedSpendHome();
     const response = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",

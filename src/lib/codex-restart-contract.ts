@@ -32,6 +32,19 @@ export interface CodexAppServerStateResponse {
   runningCount: number;
 }
 
+/**
+ * The desktop half of a restart. Scalar-only for the same reason as the rest of this
+ * contract: pid lists and a closed-vocabulary reason, never a command line or an OS
+ * error message, both of which routinely embed a path or a username.
+ */
+export interface CodexDesktopRestartSummary {
+  attempted: boolean;
+  stopped: number[];
+  surviving: number[];
+  relaunch: "started" | "skipped";
+  reason?: string;
+}
+
 /** POST response. All four arrays are pid lists — never command lines. */
 export interface CodexRestartResponse {
   success: boolean;
@@ -44,6 +57,12 @@ export interface CodexRestartResponse {
   surviving: number[];
   failed: number[];
   code: CodexRestartCode;
+  /**
+   * Absent on a proxy older than this change, which is why it is optional rather than
+   * required: this guard is a version-skew check the GUI runs, and a dashboard talking
+   * to an older proxy has to keep working.
+   */
+  desktopApp?: CodexDesktopRestartSummary;
 }
 
 const APP_SERVER_STATES: readonly string[] = ["fresh", "stale", "not_running", "unknown"];
@@ -102,6 +121,18 @@ export function isCodexRestartResponse(value: unknown): value is CodexRestartRes
   // Nothing can be reported stopped when the service says nothing was running.
   if ((code === "nothing_running" || code === "enumeration_unavailable") && stopped.length > 0) {
     return false;
+  }
+  if ("desktopApp" in view && view.desktopApp !== undefined) {
+    const desktop = view.desktopApp;
+    if (typeof desktop !== "object" || desktop === null) return false;
+    const d = desktop as Record<string, unknown>;
+    if (typeof d.attempted !== "boolean") return false;
+    if (!isPidList(d.stopped) || !isPidList(d.surviving)) return false;
+    if (d.relaunch !== "started" && d.relaunch !== "skipped") return false;
+    if (d.reason !== undefined && typeof d.reason !== "string") return false;
+    // A started relaunch cannot have left anything behind: the ladder refuses to
+    // relaunch beside a survivor precisely so a second shell never appears.
+    if (d.relaunch === "started" && (d.surviving as number[]).length > 0) return false;
   }
   return true;
 }

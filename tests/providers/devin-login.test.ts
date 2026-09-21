@@ -11,6 +11,7 @@ import {
   type DevinCliLoginDeps,
 } from "../../src/oauth/devin/cli-import";
 import { loginDevin, refreshDevinToken, resolveDevinApiServer } from "../../src/oauth/devin";
+import { saveCredential } from "../../src/oauth/store";
 import type { OAuthController } from "../../src/oauth/types";
 
 /**
@@ -207,6 +208,38 @@ describe("devin merged login is import-first", () => {
 });
 
 describe("devin tenant selection is provider-scoped", () => {
+  // resolveDevinApiServer reads auth.json through getCredential. Isolate the
+  // home so these cases cannot pick up a live Devin login, and so seeding a
+  // slot cannot write the operator's real store.
+  const tmp = mkdtempSync(join(tmpdir(), "ocx-devin-tenant-"));
+  let savedHome: string | undefined;
+
+  const EU_HOST = "https://eu.windsurf.com/_route/api_server";
+  const FEDSTART_HOST = "https://windsurf.fedstart.com/_route/api_server";
+  const US_HOST = "https://server.codeium.com";
+
+  async function seedSlot(provider: string, apiBaseUrl: string) {
+    await saveCredential(provider, {
+      access: KEY,
+      refresh: KEY,
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl,
+    });
+  }
+
+  beforeEach(() => {
+    savedHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = tmp;
+    rmSync(join(tmp, "auth.json"), { force: true });
+  });
+
+  afterEach(() => {
+    rmSync(join(tmp, "auth.json"), { force: true });
+    if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = savedHome;
+  });
+
   test("the default still reads the devin slot", () => {
     // Every existing one-argument caller must keep its behaviour.
     expect(resolveDevinApiServer("https://server.codeium.com")).toBe("https://server.codeium.com");
@@ -218,6 +251,54 @@ describe("devin tenant selection is provider-scoped", () => {
     // both ids share one credential slot after the merge, so the alias must
     // read the same place rather than an orphaned slot.
     expect(resolveDevinApiServer(undefined, "devin-cli")).toBe("https://server.codeium.com");
+  });
+
+  test("an unmigrated EU tenant on the alias slot is used after the config row is rewritten", async () => {
+    // The config rewriter can land providers["devin"] while rekeyProviderCredentials
+    // has not yet moved the auth slot. Asking for "devin" must still find the
+    // tenant host sitting on "devin-cli"; otherwise the key is sent to the US
+    // default and Cognition answers permission_denied.
+    await seedSlot("devin-cli", EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin")).toBe(EU_HOST);
+  });
+
+  test("the signed-in alias tenant wins over a configured baseUrl", async () => {
+    // RegisterUser recorded the tenant on the credential. A leftover US
+    // baseUrl on the rewritten config row must not override that account.
+    await seedSlot("devin-cli", EU_HOST);
+    expect(resolveDevinApiServer(US_HOST, "devin")).toBe(EU_HOST);
+  });
+
+  test("the literal slot wins when both alias ids hold a tenant", async () => {
+    // An unmigrated "devin-cli" row must keep reading its own slot even if a
+    // "devin" credential already exists; swapping them would send each key
+    // to the other account's host.
+    await seedSlot("devin", EU_HOST);
+    await seedSlot("devin-cli", FEDSTART_HOST);
+    expect(resolveDevinApiServer(undefined, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin-cli")).toBe(FEDSTART_HOST);
+  });
+
+  test("a credential that exists but has no usable tenant does not borrow the alias tenant", async () => {
+    // rekeyProviderCredentials refuses when both slots are occupied, so this
+    // pair can be two different accounts. If the alias host were consulted
+    // whenever the literal host is merely unusable — rather than when the
+    // literal slot is empty — this account's key would go to the other
+    // account's FedStart tenant.
+    await seedSlot("devin", "https://api.githubcopilot.com");
+    await seedSlot("devin-cli", FEDSTART_HOST);
+    expect(resolveDevinApiServer(undefined, "devin")).toBe(US_HOST);
+    expect(resolveDevinApiServer(EU_HOST, "devin")).toBe(EU_HOST);
+  });
+
+  test("an alias slot with a non-Devin apiBaseUrl is not trusted", async () => {
+    // The store allowlists Copilot and Devin together, so a Copilot origin is
+    // the host that survives persist and still fails validateDevinApiBaseUrl.
+    // Without that check on the alias candidate, the merge window would send
+    // a Devin key to GitHub.
+    await seedSlot("devin-cli", "https://api.githubcopilot.com");
+    expect(resolveDevinApiServer(EU_HOST, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin")).toBe(US_HOST);
   });
 });
 

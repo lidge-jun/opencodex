@@ -1,5 +1,5 @@
 import { CodexStaleBanner } from "../components/codex-stale-banner";
-import ModelPickerOrderEditor from "../components/ModelPickerOrderEditor";
+import ModelCatalogSettingsPanels from "../components/ModelCatalogSettingsPanels";
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
@@ -13,6 +13,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
 import { formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import { ownRecordValue } from "../own-record-value";
 import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { setClientResourceData } from "../client-resource";
@@ -81,6 +82,7 @@ import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningMod
 import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { ModelCatalogStateSummary } from "./models-catalog-state";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -116,7 +118,6 @@ function parseContextWindowDraft(raw: string): number | null | undefined {
   return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-
 /** #2465 per-provider model-preset view, as `GET /api/model-presets` returns it. */
 interface ModelPresetView {
   mode: "preset" | "all" | "custom";
@@ -139,7 +140,7 @@ interface AliasView {
   defaults: { global: boolean; providers: Record<string, boolean> };
 }
 
-export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string; restartEpoch?: number }) {
+export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: { apiBase: string; restartEpoch?: number; catalogSyncedAt?: string }) {
   // Codex app-server staleness (devlog/_fin/260815_gui_codex_restart). Named
   // appServerState, not catalogState: this file already binds that name to the
   // model-catalog resource state, which is an unrelated concept. (Spelling the
@@ -816,16 +817,16 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       setContextError(t("models.contextInvalid"));
       return;
     }
-    const modelWindows: Record<string, number | null> = {};
+    const modelWindows: Record<string, number | null> = Object.create(null); // null prototype: a "__proto__" model ID must store an entry, not invoke the inherited setter
     for (const modelId of contextTouchedModels) {
-      const draft = contextModelDrafts[modelId] ?? "";
+      const draft = ownRecordValue(contextModelDrafts, modelId) ?? "";
       const parsed = parseContextWindowDraft(draft);
       if (parsed === undefined) {
         setContextError(t("models.contextInvalid"));
         return;
       }
       // Compare VALUES, not text. Retyping 64000 as "64,000" is not a change.
-      if (parsed === (contextSnapshot.modelContextWindows[modelId] ?? null)) continue;
+      if (parsed === (ownRecordValue(contextSnapshot.modelContextWindows, modelId) ?? null)) continue;
       modelWindows[modelId] = parsed;
     }
     const defaultChanged = contextDefaultTouched
@@ -2155,8 +2156,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         </>}
         <span className="muted text-label leading-body">{t("models.pickerOrder.hint")}</span>
       </div>
-      {pickerMode === "custom" && <ModelPickerOrderEditor key={apiBase} apiBase={apiBase} active={catalogActive}
-        identities={models} onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} />}
+      <ModelCatalogSettingsPanels showOrderEditor={pickerMode === "custom"} apiBase={apiBase} active={catalogActive}
+        identities={models} onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} onSaved={() => catalogResource.refresh()} />
 
 
       {(() => {
@@ -2285,7 +2286,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                     <input
                       className="input"
                       inputMode="numeric"
-                      value={contextModelDrafts[contextModelId] ?? ""}
+                      value={ownRecordValue(contextModelDrafts, contextModelId) ?? ""}
                       onChange={event => {
                         setContextModelDrafts(current => ({
                           ...current,
@@ -2499,15 +2500,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                 onClick={() => {
                   const modelId = customFormModelId.trim();
                   const displayName = customFormDisplayName.trim();
-                  const ctxVal = customFormContextWindow ? Number(customFormContextWindow.replace(/[_,\s]/g, "")) : undefined;
-                  const contextWindow = ctxVal && ctxVal > 0 ? Math.floor(ctxVal) : undefined;
+                  const parsedContextWindow = parseContextWindowDraft(customFormContextWindow); // "350k" -> undefined, never "omitted / cleared"
+                  if (parsedContextWindow === undefined) { setCustomError(t("models.contextInvalid")); return; }
                   if (customModalMode === "add") {
                     const reasoningEfforts = customFormReasoning ? customFormReasoningEfforts : undefined;
                     void addCustomModel(
                       customModalProvider,
                       modelId,
                       displayName || undefined,
-                      contextWindow,
+                      parsedContextWindow ?? undefined,
                       customFormModalities.length > 0 ? customFormModalities : undefined,
                       reasoningEfforts,
                     );
@@ -2517,7 +2518,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                     void updateCustomModel(customModalId, {
                       modelId,
                       displayName,
-                      contextWindow: contextWindow ?? null,
+                      contextWindow: parsedContextWindow,
                       inputModalities: customFormModalities,
                       reasoningEfforts: customFormReasoning ? customFormReasoningEfforts : null,
                     });
@@ -2651,12 +2652,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       />
       <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />
       {/*
-        One subtitle for the active tab, rendered between the strip and the panels.
-        Only one panel is visible, so a subtitle per panel would be three copies of a
-        thing the user can only ever see one of — and the catalog's five-line copy was
-        pushing the full-height Combos workspace off the viewport.
+        One summary for the active tab. The catalog also names its delivery states;
+        other tabs keep the compact subtitle so their workspaces stay in view.
       */}
-      <p className="page-sub">{t(SUBTITLE_TKEY[tab])}</p>
+      <ModelCatalogStateSummary subtitleKey={SUBTITLE_TKEY[tab]} catalogSyncedAt={catalogSyncedAt} />
 
       {/*
         Panels mount lazily and then stay mounted, hidden — a half-typed combo draft

@@ -112,6 +112,20 @@ ocx logout <provider>
 
 Google Antigravity 账户和提供方的配额查询（包括模型列表回退）使用固定的 Google 计量端点。这些目标支持透明 Fake-IP DNS，同时保留 TLS 验证、重定向拒绝和私有地址检查。自定义 base URL 仅改变模型请求，不改变配额目标；`NO_PROXY` 仍使用直连策略。
 
+### Google 工具架构损失诊断
+
+Google 工具声明会按所选端点类别进行编译。通过 `ocx debug provider on`、仪表盘 Logs 开关或
+`OCX_DEBUG=1` 启用提供方调试后，在省略策略或使用 `compatible` 的路径上，兼容性转换中的架构损失会输出一条
+`[ocx:google:google-tool-schema-loss]` 记录（可用 `ocx debug provider logs -f` 持续查看），
+其中仅包含报告版本、端点类别、`lossy` 指示器、有上限的不确定比较计数、带有上限计数的固定损失类别和截断标志，
+绝不包含工具名、属性名、路径、值或架构文本。省略策略或使用 `compatible` 时只观察转换。
+在 `reject-lossy` 下，如果初始编译有损或有界比较结果不确定，则会在发送前拒绝；被拒绝的
+请求不会另行输出损失记录。在 `reject-lossy` 下，会移除约束的
+Vertex 或 Cloud Code Assist 修复会输出同样不含内容的 `google-tool-schema-repair` 记录，并在不发送
+修改请求的情况下返回原始 400；省略策略或使用 `compatible` 时，会像以前一样重放修复后的请求。
+直连 AI Studio 不执行该修复。原生输出架构不属于这两条策略路径。
+请参阅[调试命令参考](/zh-cn/reference/cli/agents/)。
+
 
 Nous refresh 发生终止性失败后，请运行 `ocx login nous` 重新认证。
 
@@ -159,7 +173,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 79 个预设：67 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 94 个预设：78 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -200,6 +214,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -287,6 +302,11 @@ inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制
 由于模型目录本身是公开的，手填 key 时会诚实显示“无法验证”，不会把公开目录的 200 响应误当成
 密钥有效证明。
 
+OrcaRouter 浏览器登录（`ocx login orcarouter-oauth`）的密钥交换成功响应正文必须是不超过
+64 KiB 的有效 UTF-8 JSON。该交换请求现有的 30 秒时限覆盖响应头和完整正文的接收；超大或
+格式错误的正文会在保存密钥前被拒绝。这些限制仅适用于登录密钥交换，不是推理请求负载的
+限制。`scope` 校验规则保持不变：允许省略，明确无效的值仍会被拒绝。
+
 单域名自托管环境可在第一次 PKCE 登录前设置统一 origin；推理地址会从同一个 origin 派生：
 
 ```bash
@@ -329,6 +349,16 @@ ORCAROUTER_BASE_URL=https://router.example ocx login orcarouter-oauth
 的记录，从而排除 embedding 和 image-generation 模型。它保留含 `/` 的原生模型 id、上游报告的 context
 和 input modality metadata，并将发现限制为 512 KiB 和 512 条原始记录。dedicated deployment 主机不在
 范围内。密钥可在 [Nebius Token Factory](https://tokenfactory.nebius.com) 创建。
+
+**Crusoe 发现：**密钥预设使用 `openai-chat` adapter，并只向 Crusoe 固定的 Serverless Inference 主机发送
+Bearer key。`/v1/models` 会以 401 拒绝未认证请求，因此成功列出模型即视为密钥验证通过。发现会按 Crusoe
+返回的原样保留 `zai-org/GLM-5.3`、`moonshotai/Kimi-K2.6` 这类带斜杠的原生 id，上限为 256 KiB 和 256 条原始记录。只保留 `is_public: true` 且 `architecture.modality` 为 text 或 multimodal 的记录，因此账户私有部署以及 embedding、媒体类记录会被排除。
+推理模型通过 Chat Completions 的 `reasoning` 字段返回思考内容，adapter 会读取该字段。只有
+`openai/gpt-oss-120b` 接受 `reasoning_effort` 档位（`low`、`medium`、`high`），其他推理模型把该字段当作
+开关，因此预设不声明 provider-wide effort 档位，也不声明 provider-wide parallel tool calls。速率限制按
+project 和 model 生效（超限返回 429，共享部署扩容时返回 503），新账户可获得 $5 免费额度。密钥可在
+[Crusoe Cloud 控制台](https://console.crusoecloud.com) 的 Intelligence Foundry > Inference 中创建。
+
 **DigitalOcean 发现：**该预设使用 model access key 访问固定的共享 Serverless Inference 主机，只公开
 已鉴权 `/v1/models` 响应与 DigitalOcean 官方文档确认的 Chat Completions allowlist 的交集。未知、
 Responses-only、embedding 和 media-generation 模型 id 会按 fail closed 原则排除。发现上限为 256 KiB

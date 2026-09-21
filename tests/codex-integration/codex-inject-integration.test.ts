@@ -16,9 +16,28 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
+// Reads back what a TOML consumer would see for a top-level string key. A Windows path
+// is stored with escaped separators, so the raw file text never contains the unescaped path.
+function readRootTomlString(toml: string, key: string): string | undefined {
+  const value = Bun.TOML.parse(toml)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+test("catalog readback requires a root string rather than a nested namesake", () => {
+  const key = "model_catalog_json";
+  const catalog = String.raw`C:\Codex\catalog.json`;
+  expect(readRootTomlString(`${key} = ${JSON.stringify(catalog)}\n[profile]\n${key} = "nested"\n`, key)).toBe(catalog);
+  expect(readRootTomlString(`[profile]\n${key} = ${JSON.stringify(catalog)}\n`, key)).toBeUndefined();
+  expect(readRootTomlString(`[[profiles]]\n${key} = ${JSON.stringify(catalog)}\n`, key)).toBeUndefined();
+});
+
 // Full injectCodexConfig runs in a subprocess with isolated CODEX_HOME/OPENCODEX_HOME so
 // module-level path constants bind to the temp dirs (same pattern as codex-journal.test.ts).
-function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { stdout: string; status: number } {
+function runInject(
+  codexHome: string,
+  ocxHome: string,
+  configJson = "{}",
+): { stdout: string; stderr: string; status: number } {
   const script = `
     const { injectCodexConfig } = require("./src/codex/inject");
     injectCodexConfig(10100, JSON.parse(process.env.TEST_OCX_CONFIG)).then(r => {
@@ -31,7 +50,11 @@ function runInject(codexHome: string, ocxHome: string, configJson = "{}"): { std
     encoding: "utf8",
     timeout: SPAWN_BUDGET_MS - 5_000,
   });
-  return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
+  return {
+    stdout: result.stdout?.trim() ?? "",
+    stderr: result.stderr?.trim() ?? "",
+    status: result.status ?? 1,
+  };
 }
 
 function runRestore(codexHome: string, ocxHome: string, asyncRestore = false): { stdout: string; status: number } {
@@ -68,7 +91,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     removeTreeWithRetry(ocxHome);
   });
 
-  test.each(["sync", "async"])("manifest-owned native rows refuse restore before artifact changes (%s)", (kind) => {
+  test.each(["sync", "async"])("paginated manifest-owned rows stand down while routing is restored (%s)", (kind) => {
     writeFileSync(join(codexHome, "config.toml"), 'model="test"\n');
     const script = `
       const fs = require("node:fs");
@@ -79,36 +102,60 @@ describe("injectCodexConfig integration (Design B)", () => {
       const { resolveCodexStateDbPath } = require("./src/codex/paths");
       const enabled = await injectCodexConfig(10100, {});
       if (!enabled.success) throw new Error("fixture injection failed");
-      const dbPath = join(process.env.CODEX_HOME, "state_5.sqlite");
+      // Match the runtime authority: Windows Temp may spell CODEX_HOME with an 8.3 alias,
+      // while getCodexHome resolves its long path. Manifest names bind to that path spelling.
+      const dbPath = require("./src/codex/paths").resolveCodexStateDbPath();
       const rollout = join(process.env.CODEX_HOME, "manifest-fixture.jsonl");
+      fs.appendFileSync(join(process.env.CODEX_HOME,"config.toml"), [
+        "# Auto-injected by opencodex",
+        "[model_providers.opencodex]",
+        'name="OpenCodex"',
+        'base_url="http://127.0.0.1:10100/v1"',
+        'wire_api="responses"',
+        "",
+      ].join(String.fromCharCode(10)));
       fs.writeFileSync(rollout, JSON.stringify({type:"session_meta",payload:{id:"fixture",model_provider:"openai",source:"cli"}})+String.fromCharCode(10));
       const db = new Database(dbPath);
       db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT, source TEXT, first_user_message TEXT, has_user_event INTEGER)");
       db.run("INSERT INTO threads VALUES ('fixture', ?, 'openai', 'cli', 'hello', 1)", rollout);
       const routed = syncCodexHistoryProvider("opencodex", dbPath);
       if (routed.failed || routed.rows !== 1) throw new Error("fixture history route failed");
-      db.run("UPDATE threads SET model_provider='openai'");
       db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
       db.close();
       const backup = historyBackupPathFor(dbPath);
       const entries = Object.keys(JSON.parse(fs.readFileSync(backup,"utf8")).entries).length;
       const defaultEntries = Object.keys(JSON.parse(fs.readFileSync(historyBackupPathFor(resolveCodexStateDbPath()),"utf8")).entries).length;
-      const paths = ["config.toml","opencodex.config.toml","opencodex-journal.json"].map(p=>join(process.env.CODEX_HOME,p)).concat([backup,rollout]);
-      const before = paths.map(p=>fs.readFileSync(p,"utf8"));
+      const historyPaths = [backup,rollout];
+      const beforeHistory = historyPaths.map(p=>fs.readFileSync(p,"utf8"));
       const result = ${kind === "sync" ? "restoreNativeCodex()" : "await restoreNativeCodexAsync()"};
-      console.log(JSON.stringify({entries,defaultEntries,result,preserved:paths.every((p,i)=>fs.readFileSync(p,"utf8")===before[i])}));
+      const restoredDb = new Database(dbPath, { readonly: true });
+      const provider = restoredDb.query("SELECT model_provider FROM threads WHERE id='fixture'").get().model_provider;
+      restoredDb.close();
+      const config = fs.readFileSync(join(process.env.CODEX_HOME,"config.toml"),"utf8");
+      console.log(JSON.stringify({entries,defaultEntries,result,provider,config,historyPreserved:historyPaths.every((p,i)=>fs.readFileSync(p,"utf8")===beforeHistory[i])}));
     `;
     const child = spawnSync(process.execPath, ["--eval", script], {
-      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, CODEX_SQLITE_HOME: "", OPENCODEX_HOME: ocxHome },
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
     expect(child.status, child.stderr).toBe(0);
     const result = JSON.parse(child.stdout);
     expect(result.entries).toBe(1);
     expect(result.defaultEntries).toBe(1);
-    expect(result.result.success).toBe(false);
-    expect(result.result.message).toContain("history_paginated_requires_native_writer");
-    expect(result.preserved).toBe(true);
+    expect(result.result.success).toBe(true);
+    expect(result.result.historyPreflightRefusal).toBeUndefined();
+    expect(result.result.artifacts.config).toMatchObject({
+      state: "partial",
+      action: "routing-restored-provider-retained",
+      retained: { reason: "history_paginated_requires_native_writer" },
+    });
+    expect(result.result.retainedCodexProviderTable).toEqual(result.result.artifacts.config.retained);
+    expect(result.result.retainedCodexProviderTable.followUp).toContain("ocx restore --remove-codex-provider-table");
+    expect(result.result.artifacts.history).toMatchObject({ state: "skipped", changed: false, rows: 0, files: 0 });
+    expect(result.provider).toBe("opencodex");
+    expect(result.config).not.toContain('model_provider = "opencodex"');
+    expect(result.config).toContain("[model_providers.opencodex]");
+    expect(result.historyPreserved).toBe(true);
   });
 
   // The denial has to be a real filesystem permission. `inject-coordination.ts`
@@ -163,8 +210,104 @@ describe("injectCodexConfig integration (Design B)", () => {
     });
   });
 
+  test.each([
+    ["before-preflight", false, false],
+    ["after-preflight", false, false],
+    ["after-config", false, false],
+    ["after-artifacts", false, false],
+    ["after-config", true, false],
+    ["after-config", false, true],
+  ] as const)("late pagination preserves an existing provider (%s, coordinated=%s, authless=%s)", (stage, coordinated, authless) => {
+    const original = 'model_provider="opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\nrequires_openai_auth=true\n';
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    writeFileSync(configPath, original);
+    if (!coordinated) writeFileSync(profilePath, "# original profile\n");
+    if (coordinated) {
+      writeFileSync(configPath, 'model="test"\n');
+      const seed = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+      expect(seed.status).toBe(0);
+      expect(JSON.parse(seed.stdout).success).toBe(true);
+    }
+    const journalPath = join(codexHome, "opencodex-journal.json");
+    const before = [configPath, profilePath, journalPath].map(path => existsSync(path) ? readFileSync(path, "utf8") : null);
+    const script = `
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {injectCodexConfig,setBeforeHistoryArtifactCommitForTests,setHistoryArtifactStageForTests}=require("./src/codex/inject");
+      const migrate=()=>{
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES (\'fixture\',\'opencodex\',\'paginated\')");
+        db.close();
+      };
+      let kind;
+      setBeforeHistoryArtifactCommitForTests(value=>{kind=value;if(${JSON.stringify(stage)}==="before-preflight")migrate();});
+      setHistoryArtifactStageForTests(value=>{if(value===${JSON.stringify(stage)})migrate();});
+      const readState=${coordinated ? 'require("./src/codex/transition-state").readCodexTransitionState' : "()=>null"};
+      const before=readState();
+      const result=await injectCodexConfig(10100,{codexDesktopAuthless:${authless}});
+      console.log(JSON.stringify({kind,result,before,after:readState()}));
+    `;
+    const child=spawnSync(process.execPath,["--eval",script],{cwd:repoRoot,env:{...process.env,CODEX_HOME:codexHome,OPENCODEX_HOME:ocxHome},encoding:"utf8",timeout:SPAWN_BUDGET_MS-5000});
+    expect(child.status, child.stderr).toBe(0);
+    const value = JSON.parse(child.stdout);
+    expect(value.kind, child.stdout).toBe(coordinated ? "coordinated" : "legacy-uncoordinated");
+    expect(value.result).toMatchObject({success:true,historyPreflightFailureReason:"history_paginated_requires_native_writer"});
+    const config = Bun.TOML.parse(readFileSync(configPath,"utf8")) as any;
+    expect(config.model_provider).toBe(authless ? "opencodex" : undefined);
+    expect(config.model_providers.opencodex.base_url).toBe("http://127.0.0.1:10100/v1");
+    expect(readFileSync(profilePath,"utf8")).not.toBe(before[1]);
+    if (coordinated) expect(value.after).not.toEqual(value.before);
+    const db = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    try {
+      expect(db.query("SELECT model_provider FROM threads").get()).toEqual({model_provider:"opencodex"});
+    } finally { db.close(); }
+  });
+
+  test.each([false, true])("pagination after artifact commit keeps the existing provider (coordinated=%s)", coordinated => {
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, coordinated ? 'model="test"\n' : DESIGN_B_BLOCK + "\n");
+    if (coordinated) {
+      const seed = runInject(codexHome, ocxHome, JSON.stringify({ codexClientCompaction: true }));
+      expect(seed.status, seed.stderr).toBe(0);
+      expect(JSON.parse(seed.stdout).success).toBe(true);
+    } else {
+      writeFileSync(configPath, 'model_provider="opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n');
+      writeFileSync(join(codexHome, "opencodex.config.toml"), "# legacy profile\n");
+    }
+    const script = `
+      const {Database}=require("bun:sqlite");
+      const {join}=require("node:path");
+      const {injectCodexConfig,setHistoryArtifactStageForTests}=require("./src/codex/inject");
+      let migrated=false;
+      setHistoryArtifactStageForTests(stage=>{
+        if(stage!=="before-history-worker") return;
+        const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.close();migrated=true;
+      });
+      const result=await injectCodexConfig(10100,{});
+      console.log(JSON.stringify({migrated,result}));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const value = JSON.parse(child.stdout);
+    expect(value.migrated).toBe(true);
+    const parsed = Bun.TOML.parse(readFileSync(configPath, "utf8")) as any;
+    expect(parsed.model_providers?.opencodex?.base_url).toBe("http://127.0.0.1:10100/v1");
+    expect(value.result.success).toBe(true);
+    const db = new Database(join(codexHome, "state_5.sqlite"), { readonly: true });
+    try { expect(db.query("SELECT model_provider FROM threads").get()).toEqual({ model_provider: "opencodex" }); }
+    finally { db.close(); }
+  });
+
   for (const stage of ["before-preflight", "after-preflight", "after-config", "after-artifacts"]) {
-  test.each([false,true])(`commit-boundary history refusal returns a result after rollback (${stage}, legacy=%s)`,(legacy)=>{
+  test.each([false,true])(`a store that migrates mid-transaction retires the relabel unit and keeps the config (${stage}, legacy=%s)`,(legacy)=>{
     const original=legacy ? DESIGN_B_BLOCK+"\n" : 'model="test"\n';
     writeFileSync(join(codexHome,"config.toml"),original);
     if(legacy) writeFileSync(join(codexHome,"opencodex.config.toml"),"[invalid profile\n");
@@ -191,12 +334,17 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(child.status).toBe(0);
     const value=JSON.parse(child.stdout);
     expect(value.kind).toBe(legacy?"legacy-uncoordinated":"coordinated");
-    expect(value.result).toMatchObject({success:false});
-    expect(value.result.message).toContain("history_paginated_requires_native_writer");
-    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe(original);
-    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
-    if(legacy) expect(readFileSync(join(codexHome,"opencodex.config.toml"),"utf8")).toBe("[invalid profile\n");
-    else expect(existsSync(join(codexHome,"opencodex.config.toml"))).toBe(false);
+    // A migration observed at ANY point in the transaction stands the relabel unit down and
+    // says so. With no prior provider table to retire, it need not roll the config back:
+    // rolling it back is what left every paginated home with no OpenCodex models at all.
+    expect(value.result).toMatchObject({success:true,historyPreflightFailureReason:"history_paginated_requires_native_writer"});
+    expect(value.result.message).toContain("left to Codex's native writer");
+    // The profile is replaced inside the artifact transaction, so a profile that is no longer
+    // the fixture's is proof the config half ran to completion instead of compensating away.
+    const profileAfter=readFileSync(join(codexHome,"opencodex.config.toml"),"utf8");
+    expect(profileAfter).not.toBe("[invalid profile\n");
+    expect(profileAfter.length).toBeGreaterThan(0);
+    expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toContain("127.0.0.1:10100");
   });
   }
 
@@ -207,6 +355,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     const catalog = '{"models":[],"sentinel":"preserve"}\n';
     writeFileSync(join(codexHome, "models_cache.json"), catalog);
     const script = `
+      const fs=require("node:fs");
       const {Database}=require("bun:sqlite");
       const {join}=require("node:path");
       const {restoreNativeCodex,restoreNativeCodexAsync,setBeforeRestoreConfigForTests}=require("./src/codex/inject");
@@ -215,9 +364,11 @@ describe("injectCodexConfig integration (Design B)", () => {
       let observed;
       setBeforeRestoreConfigForTests(value=>{
         observed=value;
+        const rollout=join(process.env.CODEX_HOME,"invalid-rollout.jsonl");
+        fs.writeFileSync(rollout,"not-json\\n");
         const db=new Database(join(process.env.CODEX_HOME,"state_5.sqlite"));
-        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
-        db.run("INSERT INTO threads VALUES ('fixture','opencodex','paginated')");
+        db.run("CREATE TABLE threads (rollout_path TEXT, model_provider TEXT)");
+        db.run("INSERT INTO threads VALUES (?, 'opencodex')",rollout);
         db.close();
       });
       const result=${kind === "sync" ? "restoreNativeCodex()" : "await restoreNativeCodexAsync()"};
@@ -336,7 +487,10 @@ describe("injectCodexConfig integration (Design B)", () => {
       expect(value.reachedSuccessfulWrite).toBe(true);
       if (migration === "none") {
         expect(value.result.success).toBe(true);
-        expect(value.result.artifacts.config.action).toBe(path === "journal" ? "journal-restored" : "owned-fields-stripped");
+        expect([
+          path === "journal" ? "journal-restored" : "owned-fields-stripped",
+          "routing-restored-provider-retained",
+        ]).toContain(value.result.artifacts.config.action);
         expect(value.result.artifacts.history).toMatchObject({state:"ok",rows:1});
         expect(value.provider).toBe("openai");
         expect(value.after[1]).toBeNull();
@@ -346,22 +500,25 @@ describe("injectCodexConfig integration (Design B)", () => {
         expect(value.afterState.state).toMatchObject({nativeGeneration:1,history:{status:"converged"},historySchedule:{direction:"remove"}});
         return;
       }
-      expect(value.after).toEqual(value.before);
+      expect(value.result.success).toBe(true);
+      expect(value.result.historyPreflightRefusal).toBeUndefined();
+      expect(value.result.artifacts.config).toMatchObject({
+        state: "partial",
+        changed: true,
+        action: "routing-restored-provider-retained",
+        retained: { reason: "history_paginated_requires_native_writer" },
+      });
+      expect(value.result.retainedCodexProviderTable).toEqual(value.result.artifacts.config.retained);
+      expect(value.result.artifacts.history).toMatchObject({ state: "skipped", changed: false });
       expect(value.provider).toBe("opencodex");
-      if (kind === "coordinated") {
-        expect(value.beforeState).toMatchObject({kind:"ready",state:{nativeGeneration:0,currentTxId:null}});
-      }
-      expect(value.afterState).toEqual(value.beforeState);
-      expect(value.result.success).toBe(false);
-      expect(value.result.message).toContain("history_paginated_requires_native_writer");
-      expect(value.result.artifacts.config).toMatchObject({ state: "failed", changed: false });
-      for (const artifact of [value.result.artifacts.catalog, value.result.artifacts.history]) {
-        expect(artifact).toMatchObject({ state: "skipped", changed: false });
-      }
+      expect(value.after[0]).not.toContain('model_provider="opencodex"');
+      expect(value.after[0]).toContain("[model_providers.opencodex]");
+      expect(value.after[5]).toBe(value.before[5]);
+      expect(value.after[6]).toBe(value.before[6]);
     });
   }
 
-  test.each([false, true])("paginated history preserves config and profile before provider transition (authless=%s)", (authless) => {
+  test.each([false, true])("a paginated home still gets its config written, and keeps the provider table its rows need (authless=%s)", (authless) => {
     const original = 'model_provider = "opencodex"\n[model_providers.opencodex]\nname="OpenCodex"\nbase_url="http://127.0.0.1:10100/v1"\nwire_api="responses"\n';
     const configPath = join(codexHome, "config.toml");
     const profilePath = join(codexHome, "opencodex.config.toml");
@@ -374,17 +531,29 @@ describe("injectCodexConfig integration (Design B)", () => {
     db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
     db.run("INSERT INTO threads VALUES ('fixture', ?, 'opencodex', 'paginated')", rollout);
     db.close();
+    // Apply: the config transitions and the relabel unit stands down by name. The rollout is
+    // the thing that must not move, because its ordinals belong to Codex's own writer.
     const result = runInject(codexHome, ocxHome, JSON.stringify({codexDesktopAuthless:authless}));
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({success:false});
-    expect(result.stdout).toContain("history_paginated_requires_native_writer");
-    expect(readFileSync(configPath,"utf8")).toBe(original);
-    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: true,
+      historyPreflightFailureReason: "history_paginated_requires_native_writer",
+    });
+    expect(result.stdout).toContain("left to Codex's native writer");
     expect(readFileSync(rollout,"utf8")).toBe(bytes);
-    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+    // The profile is replaced inside the artifact transaction; no longer holding the fixture
+    // sentinel is proof the config half committed rather than being compensated away.
+    expect(readFileSync(profilePath,"utf8")).not.toBe("# preserve profile\n");
+    // The relabel stood down, so the rows still say `opencodex`. Retiring the table that
+    // publishes that provider id would leave those conversations pointing at nothing, so a
+    // table this home already had survives the write even in the root-override form.
+    expect(readFileSync(configPath,"utf8")).toContain("[model_providers.opencodex]");
+
+    // Routing can come out without rewriting these rows. The table remains as thread-resolution
+    // state, and each entry point reports the degraded result as a successful partial restore.
     const restoreScript = `
       const { restoreNativeCodex, restoreNativeCodexAsync, removeCodexConfig } = require("./src/codex/inject");
-      const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig()];
+      const results = [restoreNativeCodex(), await restoreNativeCodexAsync(), removeCodexConfig({ historyDisposition: "stand-down-retain" })];
       console.log(JSON.stringify(results));
     `;
     const restored = spawnSync(process.execPath, ["--eval", restoreScript], {
@@ -392,11 +561,245 @@ describe("injectCodexConfig integration (Design B)", () => {
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
     expect(restored.status).toBe(0);
-    for (const outcome of JSON.parse(restored.stdout)) expect(outcome.success).toBe(false);
-    expect(readFileSync(configPath,"utf8")).toBe(original);
-    expect(readFileSync(profilePath,"utf8")).toBe("# preserve profile\n");
+    const outcomes = JSON.parse(restored.stdout);
+    for (const outcome of outcomes) expect(outcome.success).toBe(true);
+    for (const outcome of outcomes.slice(0, 2)) {
+      expect(outcome.historyPreflightRefusal).toBeUndefined();
+      expect(outcome.artifacts.config).toMatchObject({
+        state: "partial",
+        action: "routing-restored-provider-retained",
+        retained: { reason: "history_paginated_requires_native_writer" },
+      });
+      expect(outcome.artifacts.history).toMatchObject({ state: "skipped", changed: false });
+    }
+    const restoredConfig = readFileSync(configPath,"utf8");
+    expect(restoredConfig).not.toContain('model_provider = "opencodex"');
+    expect(restoredConfig).toContain("[model_providers.opencodex]");
     expect(readFileSync(rollout,"utf8")).toBe(bytes);
-    expect(existsSync(join(codexHome,"opencodex-journal.json"))).toBe(false);
+  });
+
+  test.each([
+    ["sync", false],
+    ["async", false],
+    ["sync", true],
+    ["async", true],
+  ] as const)("paginated %s restore removes every root route and honors removeProviderTable=%s", (kind, removeProviderTable) => {
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    const rolloutPath = join(codexHome, "paginated-contract.jsonl");
+    const dbPath = join(codexHome, "state_5.sqlite");
+    const providerBlock = [
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+      "[model_providers.opencodex.env_http_headers]",
+      '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
+    ];
+    writeFileSync(configPath, [
+      'user_owned = "keep-me"',
+      'model_provider = "opencodex"',
+      "# Auto-injected by opencodex",
+      'openai_base_url = "http://127.0.0.1:10100/v1"',
+      "# Auto-injected by opencodex",
+      'experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"',
+      'model = "vendor/routed-model"',
+      `model_catalog_json = ${JSON.stringify(catalogPath)}`,
+      "",
+      "[profiles.opencodex]",
+      'model_provider = "opencodex"',
+      "",
+      ...providerBlock,
+      "",
+      "[user_table]",
+      'value = "preserve"',
+      "",
+    ].join("\n"));
+    writeFileSync(profilePath, "# generated profile\n");
+    writeFileSync(catalogPath, '{"models":[]}\n');
+    const rolloutBytes = JSON.stringify({
+      ordinal: 0,
+      type: "session_meta",
+      payload: { id: "paginated-contract", history_mode: "paginated", model_provider: "opencodex" },
+    }) + "\n";
+    writeFileSync(rolloutPath, rolloutBytes);
+    const db = new Database(dbPath);
+    db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT, history_mode TEXT, user_note TEXT)");
+    db.run("INSERT INTO threads VALUES ('paginated-contract', ?, 'opencodex', 'paginated', 'preserve-me')", rolloutPath);
+    db.close();
+    const beforeRow = new Database(dbPath, { readonly: true });
+    const rowBytes = JSON.stringify(beforeRow.query("SELECT * FROM threads WHERE id='paginated-contract'").get());
+    beforeRow.close();
+
+    const script = `
+      const { restoreNativeCodex, restoreNativeCodexAsync } = require("./src/codex/inject");
+      const options = { removeProviderTable: ${JSON.stringify(removeProviderTable)} };
+      const result = ${kind === "sync" ? "restoreNativeCodex(options)" : "await restoreNativeCodexAsync(options)"};
+      console.log(JSON.stringify(result));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8",
+      timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout);
+    const restored = readFileSync(configPath, "utf8");
+    const root = Bun.TOML.parse(restored);
+    const afterRow = new Database(dbPath, { readonly: true });
+    const restoredRowBytes = JSON.stringify(afterRow.query("SELECT * FROM threads WHERE id='paginated-contract'").get());
+    afterRow.close();
+
+    expect(result.success).toBe(true);
+    expect(result.historyPreflightRefusal).toBeUndefined();
+    expect(result.artifacts.history).toMatchObject({ state: "skipped", changed: false, rows: 0, files: 0 });
+    expect(root.user_owned).toBe("keep-me");
+    expect(root.user_table).toEqual({ value: "preserve" });
+    expect(root.model_provider).toBeUndefined();
+    expect(root.openai_base_url).toBeUndefined();
+    expect(root.experimental_realtime_ws_base_url).toBeUndefined();
+    expect(root.model).toBeUndefined();
+    expect(root.model_catalog_json).toBeUndefined();
+    expect(restored).not.toContain("[profiles.opencodex]");
+    expect(existsSync(profilePath)).toBe(false);
+    expect(readFileSync(rolloutPath, "utf8")).toBe(rolloutBytes);
+    expect(restoredRowBytes).toBe(rowBytes);
+    // Upstream rejects the whole config when this root id has no matching table. Every
+    // output, including explicit full removal, must avoid that catastrophic combination.
+    expect(root.model_provider === "opencodex" && !restored.includes("[model_providers.opencodex]")).toBe(false);
+    if (removeProviderTable) {
+      expect(result.retainedCodexProviderTable).toBeUndefined();
+      expect(result.artifacts.config.state).toBe("ok");
+      expect(restored).not.toContain("[model_providers.opencodex]");
+    } else {
+      expect(result.artifacts.config).toMatchObject({
+        state: "partial",
+        action: "routing-restored-provider-retained",
+        retained: { reason: "history_paginated_requires_native_writer", lines: providerBlock },
+      });
+      expect(result.retainedCodexProviderTable).toEqual(result.artifacts.config.retained);
+      expect(result.retainedCodexProviderTable.followUp).toContain("ocx restore --remove-codex-provider-table");
+      expect(restored).toContain(providerBlock.join("\n"));
+    }
+  });
+
+  test("restore, stop teardown, and uninstall restore are idempotent on a paginated home", () => {
+    const configPath = join(codexHome, "config.toml");
+    const rolloutPath = join(codexHome, "paginated-idempotent.jsonl");
+    const dbPath = join(codexHome, "state_5.sqlite");
+    writeFileSync(configPath, [
+      'user_owned = "survives-every-pass"',
+      'model_provider = "opencodex"',
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'wire_api = "responses"',
+      "",
+    ].join("\n"));
+    const rolloutBytes = JSON.stringify({
+      ordinal: 0,
+      type: "session_meta",
+      payload: { id: "paginated-idempotent", history_mode: "paginated", model_provider: "opencodex" },
+    }) + "\n";
+    writeFileSync(rolloutPath, rolloutBytes);
+    const db = new Database(dbPath);
+    db.run("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, model_provider TEXT, history_mode TEXT, user_note TEXT)");
+    db.run("INSERT INTO threads VALUES ('paginated-idempotent', ?, 'opencodex', 'paginated', 'unchanged')", rolloutPath);
+    db.close();
+    const before = new Database(dbPath, { readonly: true });
+    const rowBytes = JSON.stringify(before.query("SELECT * FROM threads WHERE id='paginated-idempotent'").get());
+    before.close();
+
+    const script = `
+      const { restoreNativeCodex, restoreNativeCodexAsync } = require("./src/codex/inject");
+      const { performStopTeardown } = require("./src/server/stop-teardown");
+      const restored = restoreNativeCodex();
+      const stopped = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+        restoreNativeCodex: () => restoreNativeCodexAsync(),
+        stripGrok: () => ({ ok: true, changed: false, message: "clean" }),
+      });
+      const uninstalled = await restoreNativeCodexAsync();
+      console.log(JSON.stringify({ restored, stopped, uninstalled }));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", script], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
+      encoding: "utf8",
+      timeout: SPAWN_BUDGET_MS - 5_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const outcomes = JSON.parse(child.stdout);
+    const finalConfig = readFileSync(configPath, "utf8");
+    const after = new Database(dbPath, { readonly: true });
+    const restoredRowBytes = JSON.stringify(after.query("SELECT * FROM threads WHERE id='paginated-idempotent'").get());
+    after.close();
+
+    expect(outcomes.restored.success).toBe(true);
+    expect(outcomes.stopped).toMatchObject({ success: true, sharedTeardown: "performed" });
+    expect(outcomes.uninstalled.success).toBe(true);
+    expect(finalConfig).toContain('user_owned = "survives-every-pass"');
+    expect(finalConfig).not.toContain('model_provider = "opencodex"');
+    expect(finalConfig).toContain("[model_providers.opencodex]");
+    expect(readFileSync(rolloutPath, "utf8")).toBe(rolloutBytes);
+    expect(restoredRowBytes).toBe(rowBytes);
+  });
+
+  test("a provider-table transition refuses rather than strand a paginated openai thread", () => {
+    const original = 'model_provider = "openai"\n# >>> opencodex managed openai_base_url >>>\nopenai_base_url = "http://127.0.0.1:10100/v1"\n# <<< opencodex managed openai_base_url <<<\n';
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, original);
+    const rollout = join(codexHome, "openai-paginated.jsonl");
+    const bytes = JSON.stringify({ ordinal: 0, type: "session_meta", payload: { id: "fixture", history_mode: "paginated", model_provider: "openai" } }) + "\n";
+    writeFileSync(rollout, bytes);
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('fixture', ?, 'openai', 'paginated')", rollout);
+    db.close();
+
+    const result = runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true }));
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: false,
+      historyPreflightFailureReason: "history_paginated_openai_requires_native_writer",
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(readFileSync(rollout, "utf8")).toBe(bytes);
+  });
+
+  test("a paginated home still receives the model catalog path the picker reads", () => {
+    // The user-visible regression this pins. A paginated rollout made the injector refuse
+    // the whole write, so `model_catalog_json` never reached config.toml: the Codex app and
+    // CLI both fell back to their native model list while `ocx sync` still said synchronized.
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, 'model = "gpt-5.5"\n');
+    const catalogPath = join(codexHome, "opencodex-catalog.json");
+    writeFileSync(catalogPath, JSON.stringify({ models: [{ slug: "xai/grok-4.6", display_name: "Grok 4.6" }] }));
+    const rollout = join(codexHome, "paginated.jsonl");
+    const bytes = JSON.stringify({ ordinal: 0, type: "session_meta", payload: { id: "paginated", history_mode: "paginated", model_provider: "opencodex" } }) + "\n";
+    writeFileSync(rollout, bytes);
+    const db = new Database(join(codexHome, "state_5.sqlite"));
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('paginated', ?, 'opencodex', 'paginated')", rollout);
+    db.close();
+
+    const result = runInject(codexHome, ocxHome);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: true,
+      historyPreflightFailureReason: "history_paginated_requires_native_writer",
+    });
+    const written = readFileSync(configPath, "utf8");
+    expect(written).toContain("model_catalog_json");
+    // What the picker reads is the decoded TOML value, not the raw file text. A Windows path
+    // is written as a basic string with escaped separators, so asserting on the raw text
+    // compared an unescaped path against escaped bytes and failed on Windows only.
+    expect(readRootTomlString(written, "model_catalog_json")).toBe(catalogPath);
+    expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 
   test("remote target validate-only writes nothing; commit journals client ownership and restores exact preimage", () => {
@@ -472,11 +875,11 @@ describe("injectCodexConfig integration (Design B)", () => {
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
     expect(config).toContain("# Auto-injected by opencodex");
-    expect(config).not.toContain("[model_providers.opencodex]");
+    expect(config).toContain("[model_providers.opencodex]");
     expect(config).not.toContain('model_provider = "opencodex"');
     expect(config).toContain('model = "gpt-5.5"');
-    // Exactly the Design B markers survive (routing + realtime sideband) — no accumulation.
-    expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(2);
+    // Routing, realtime sideband and the retained compatibility provider each have one marker.
+    expect(config.match(/Auto-injected by opencodex/g)?.length).toBe(3);
     expect(config).toContain(DESIGN_B_BLOCK);
   });
 
@@ -1200,9 +1603,10 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(runInject(codexHome, ocxHome).status).toBe(0);
     const back = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(back).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
-    expect(back).not.toContain("[model_providers.opencodex]");
+    expect(back).toContain("[model_providers.opencodex]");
+    expect(back).toContain("requires_openai_auth = true");
     expect(back).not.toContain('model_provider = "opencodex"');
-    expect(back.match(/Auto-injected by opencodex/g)?.length).toBe(2);
+    expect(back.match(/Auto-injected by opencodex/g)?.length).toBe(3);
     expect(back).toContain(DESIGN_B_BLOCK);
 
     expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
@@ -1230,7 +1634,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(runInject(codexHome, ocxHome).status).toBe(0);
     const designB = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(designB).toContain(DESIGN_B_BLOCK);
-    expect(designB).not.toContain("[model_providers.opencodex]");
+    expect(designB).toContain("[model_providers.opencodex]");
     expect(designB).not.toContain('model_provider = "opencodex"');
     // Disabling leaves exactly one root override, not the table form's copy plus a new one.
     expect(designB.match(/openai_base_url/g)?.length).toBe(1);

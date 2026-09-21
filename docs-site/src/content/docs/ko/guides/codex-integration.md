@@ -205,13 +205,26 @@ Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 
 네이티브 ChatGPT forward 요청의 로컬 재생 상태가 만료되었거나 없으면 opencodex는
 upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
 일반 스트림 재시도 한도 안에서 다시 연결하고, 완료된 도구 호출과 결과를 포함한 현재 보유
-컨텍스트 전체를 다시 보낼 수 있습니다. 따라서 프록시의 1시간 캐시가 만료되었다는 이유만으로
-새 작업을 만들 필요는 없습니다. 캐시 한도와 보존 기간은 그대로이며, 클라이언트가 더 이상
-보유하지 않는 기록을 복구하는 기능은 아닙니다. HTTP 클라이언트는 이 오류를 직접 처리하고
-`previous_response_id` 없이 전체 컨텍스트를 다시 보내야 합니다. 같은 ID만 재시도해서는
-누락된 상태를 복구할 수 없습니다.
+컨텍스트 전체를 다시 보낼 수 있습니다. 따라서 프록시의 재생 캐시가 만료되었다는 이유만으로
+새 작업을 만들 필요는 없습니다. 재생 상태는 24시간 보존하며 기존 메모리·디스크·항목 수
+상한은 그대로입니다. 클라이언트가 더 이상 보유하지 않는 기록을 복구하는 기능은 아닙니다.
+HTTP 클라이언트는 이 오류를 직접 처리하고 `previous_response_id` 없이 전체 컨텍스트를 다시
+보내야 합니다. 같은 ID만 재시도해서는 누락된 상태를 복구할 수 없습니다.
 
-`statelessResponses: true`로 설정한 routed Responses provider에도 같은 복구 신호가 적용됩니다.
+참조한 상태의 client task scope가 현재 요청과 다를 때도 같은 거부 응답을 반환합니다. 새 요청이
+전체 입력처럼 보여도 프록시는 그것이 완전한 대화인지 증명할 수 없으므로
+`previous_response_id`를 조용히 제거하거나 일치하는 상태의 존재 여부를 노출하지 않습니다.
+전체 대화를 담고 `previous_response_id`를 뺀 요청으로 명시적으로 다시 시도하세요. 정규화된
+scope가 같거나 양쪽 scope가 모두 없거나 비어 있는 기존 unscoped continuation은 계속 replay합니다.
+
+routed 목적지에는 모두 같은 복구 신호가 적용됩니다. 프록시가 잃어버린 기록을 대신 볼 수 있는
+것은 네이티브 Responses 패스스루뿐입니다. 체인을 저장해 둔 백엔드로 `previous_response_id`를
+그대로 넘기기 때문입니다. 나머지 wire는 매 턴 요청에 담긴 입력만으로 대화를 다시 구성하므로,
+재생이 실패한 채 전달하면 이번 턴 한 줄만 올라가고 대화가 조용히 사라집니다. 상태를 들고
+있어 보이는 셋도 마찬가지입니다. Devin은 매 턴 전체 대화를 다시 보내고, Cursor의 체크포인트
+참조는 방금 만료된 그 저장소에 있어 없으면 full-replay로 떨어지며, Kiro는 넘겨받은 턴으로
+conversation history를 다시 만듭니다.
+`statelessResponses: true`로 설정한 routed Responses provider에도 같은 신호가 적용됩니다.
 routed 경로에서 custom 도구를 function으로 낮췄는데 증분 결과에 대응하는 로컬 호출 기록이
 없을 때도 전체 기록을 다시 요청합니다. 호출과 결과, reasoning을 함께 재생하며 결과 유형을
 추측하거나 버리지 않습니다. 상태를 저장하는 provider의 네이티브 function 및 네이티브 custom
@@ -314,7 +327,7 @@ Codex에서 model이 빠졌거나 catalog 순서/가시성이 이상해 보이�
    이 규칙은 라이브 발견 실패 시 폴백 동작을 바꾸지 않습니다.
 4. **Cursor `GetUsableModels`** - Cursor adapter는 `/models`가 아니라 protobuf `GetUsableModels` RPC로 model을 찾습니다. 그래서 Cursor 쪽 변경이 다른 provider와 무관하게 어떤 id가 보이는지 바꿀 수 있습니다.
 5. **캐시와 `ocx sync`** - live catalog는 약 5분(`modelCacheTtlMs`, 기본값 `300000`) 동안 캐시됩니다. `ocx sync`를 실행하면 새로 가져와서 catalog를 즉시 다시 쓸 수 있습니다.
-6. **실행 중인 Codex `app-server`** - 오래 살아 있는 Codex `app-server`(Desktop / CLI background host)가 이전 목록을 메모리에 쥐고 있으면 디스크 catalog를 다시 쓰는 것만으로는 부족합니다. `ocx sync`와 `ocx sync-cache`는 그런 process를 감지하면 경고합니다. `ocx sync --restart-codex`로 다시 시작하거나(아니면 일치하는 `app-server` process를 직접 중지한 뒤), Codex가 다시 만들게 해서 새 목록이 보이게 하세요.
+6. **실행 중인 Codex `app-server`** - 오래 살아 있는 Codex `app-server`(Desktop / CLI background host)가 이전 목록을 메모리에 쥐고 있으면 디스크 catalog를 다시 쓰는 것만으로는 부족합니다. `ocx sync`와 `ocx sync-cache`는 그런 process를 감지하면 경고합니다. `ocx sync --restart-codex`는 그 process를 재시작하고 macOS·Linux·Windows에서 Codex 데스크톱 앱을 완전히 종료한 뒤 다시 띄워 선택기가 카탈로그를 다시 읽게 합니다. 데스크톱 앱을 그대로 두려면 `--restart-app-server-only`를 쓰거나 일치하는 `app-server` process를 직접 중지하세요.
 
 :::caution[다른 로컬 writer]
 catalog write(`opencodex-catalog.json`, `config.toml`)는 opencodex 내부에서만 원자적입니다. 이것은 두 개의 opencodex 소유 writer가 경합할 때 반쯤만 써진 파일을 막아줄 뿐입니다. 다른 로컬 process, file watcher, sync agent가 opencodex가 쓴 뒤에 catalog visibility나 순서를 다시 쓸 가능성은 막지 못합니다. Codex는 별도의 `models_cache.json`을 유지하고 독립적으로 갱신할 수 있으므로, 이 과정에서 `opencodex-catalog.json`을 다시 쓰지 않고도 보이는 목록이 바뀔 수 있습니다. proxy가 실행 중인데 model이 예상치 않게 바뀌면, 경쟁 writer를 중지하거나 재설정한 뒤 `ocx sync`를 실행하세요. 이것은 외부 writer 위험이지, 확인된 opencodex 결함이 아닙니다.
@@ -378,6 +391,12 @@ opencodex가 managed [background service](/reference/cli/#ocx-service)로 실행
 
 ## 페이지 분할 기록 보호에 따른 거부
 
-영향받는 기록 저장소가 페이지 분할을 지원하면 프로바이더 전환이 `history_paginated_requires_native_writer`로 거부될 수 있습니다. OpenCodex는 Codex 밖에서 순번을 지정하는 대신 현재 설정, 프로필, 카탈로그, 대화 원본과 복원 근거를 보존합니다. 변환 가능한 저장소의 `legacy` 행도 포함됩니다. 외부 프로바이더 보존처럼 전환을 하지 않는 경로는 계속 사용할 수 있습니다.
+영향받는 기록 저장소가 페이지 분할을 지원하면 프로바이더 전환이 `history_paginated_requires_native_writer`를 반환할 수 있습니다. 이 이유로는 Codex 설정, 참조 프로필, 모델 카탈로그를 더 이상 거부하지 않습니다. `ocx sync`와 `ocx start`는 해당 파일과 `model_catalog_json`을 계속 쓰므로 Codex 모델 선택기에는 OpenCodex가 라우팅하는 모델이 모두 그대로 보입니다. 대화 기록의 프로바이더 재지정을 건너뛰는 것은 이 이유뿐이며, 페이지 분할 순번은 Codex 자체의 네이티브 기록 작성자가 할당하고 재시도해도 달라지지 않기 때문입니다. 읽을 수 없는 상태 데이터베이스, 식별자가 바뀐 대화 원본, 실행하지 못한 사전 검사처럼 다른 기록 사전 검사 이유는 나중에 성공할 수 있으므로 전환 전체를 거부하고 되돌립니다. 이 상태에서 OpenCodex는 페이지 분할 대화 원본이나 스레드 행을 수정하지 않습니다. 기존 대화는 이미 붙어 있는 프로바이더를 유지하고 이전되지 않으며, 새 대화는 평소처럼 프록시를 통해 라우팅됩니다. 재지정을 건너뛸 때 홈에 이미 있던 `[model_providers.opencodex]` 테이블은 폐기하지 않고 유지합니다. root-override(loopback) 형식에서도 같아서, 행이 `opencodex`로 표시된 대화는 아직 존재하는 프로바이더 id를 유지합니다. 변환 가능한 저장소의 `legacy` 행도 포함됩니다. CLI는 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`를 출력합니다. `ocx restore`와 Codex 설정 제거는 여전히 `history_paginated_requires_native_writer`로 거부됩니다. 스레드 행이 아직 참조하는데 `[model_providers.opencodex]` 정의를 걷어내면 그 대화를 해석할 수 없고, 복원 경로에는 호환 프로바이더 테이블을 남겨 둘 방법이 없습니다. 이미 페이지 분할된 홈은 지금은 제품으로 제거할 수 없습니다. 의도한 동작이 아니라 알려진 미해결 작업입니다.
 
-대화가 참조하는 프로바이더 정의를 삭제하거나, `ocx sync`·레거시 복구를 반복하거나, 실행 중인 대화 원본을 고쳐 우회하지 마세요. 현재 파일을 보존하고 복구 전에 해당 대화를 닫은 뒤, 개인 대화 내용을 올리지 말고 정확한 오류와 버전을 보고하세요. 네이티브 기록 작성자와 조정하는 검증된 수정이 필요합니다. 백업이나 스크립트 성공만으로 표시 복구가 증명되지는 않으므로 Codex를 다시 열어 확인하세요.
+루트 URL 재정의 방식으로 돌아갈 때 OpenCodex는 기록 사전 점검이 통과하더라도 기존 `[model_providers.opencodex]` 정의를 설정 적용 전에 유지합니다. 설정 적용 후나 백그라운드 기록 작업 시작 중에 Codex가 기록 형식을 전환해도 이전 `opencodex` 대화가 제공자를 계속 찾을 수 있습니다. 새 대화는 선택된 루트 제공자를 사용하며, 명시적 복원에는 기존의 별도 제거 검사가 적용됩니다.
+
+대화를 강제로 이전하려고 실행 중인 페이지 분할 대화 원본이나 스레드 행을 고치지 마세요. 복구 전에 해당 대화를 닫은 뒤, 개인 대화 내용을 올리지 말고 정확한 오류와 버전을 보고하세요. 백업이나 스크립트 성공만으로 표시 복구가 증명되지는 않으므로 Codex를 다시 열어 확인하세요.
+
+## 메인 계정 재인증 취소
+
+메인 계정의 기기 코드 재인증을 취소할 때 DELETE 요청의 일시적 실패, 네트워크 오류, 알 수 없거나 아직 종료되지 않은 상태의 응답이 발생하면 진행 중인 흐름과 취소 실패 표시를 유지하여 취소를 다시 시도할 수 있게 합니다. 일반적으로는 상태 조회도 계속하므로 로그인이 완료되면 이를 확인할 수 있습니다. 흐름이 `pending` 또는 `committing`일 때 재시도 가능한 취소 실패와 GET 상태 조회의 2xx 이외 HTTP 응답이 겹치면, 응답 도착 순서와 관계없이 서버가 마지막으로 제공한 기기 코드·확인 URL·진행 단계를 유지하거나 복원하여 같은 흐름의 취소를 다시 시도할 수 있게 합니다. GET의 HTTP 실패는 상태 조회를 종료하지만, 두 번째 로그인 POST를 보내지 않고 취소를 다시 시도할 수 있습니다. 종료 상태인 `failed` 응답은 흐름을 해제하고 정규화된 실패 사유를 표시하며, `succeeded` 응답만 로그인 성공을 알립니다. `cancelled`로 확인된 응답은 흐름을 해제하여 새 기기 코드 로그인을 시작할 수 있게 합니다. HTTP 404와 `unknown_flow` 코드가 명확하게 반환된 경우에도 만료된 흐름 ID를 해제하여 새 기기 코드 로그인을 시작할 수 있게 하지만, 로그인 성공이나 취소 확정으로 표시하지 않습니다. 이전 흐름에서 늦게 도착한 POST·GET·DELETE 응답은 새 흐름을 변경하거나 새 흐름의 로그인이 성공했다고 알릴 수 없습니다.

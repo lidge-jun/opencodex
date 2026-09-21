@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { isTranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import {
   restoreRoutedToolSearchCallsInJson,
@@ -7,7 +7,15 @@ import {
 import { createRoutedToolSearchRestoreBlockRewrite } from "../../src/server/responses-tool-search-repair";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 function frame(event: string, payload: Record<string, unknown>): string {
   return `event: ${event}\ndata: ${JSON.stringify({ type: event, ...payload })}`;
@@ -349,6 +357,8 @@ describe("routed Responses tool-search compatibility", () => {
     }) as typeof fetch;
 
     try {
+      // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -395,6 +405,7 @@ describe("routed Responses tool-search compatibility", () => {
     }) as typeof fetch;
 
     try {
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -433,6 +444,7 @@ describe("routed Responses tool-search compatibility", () => {
     }) as typeof fetch;
 
     try {
+      releaseSpendHome = acquireOwnedSpendHome();
       await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -495,6 +507,7 @@ describe("routed Responses tool-search compatibility", () => {
     }), { headers: { "content-type": "application/json" } })) as typeof fetch;
 
     try {
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

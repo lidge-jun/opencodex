@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { CodexWarmupError, warmCodexAccount } from "../../src/codex/warmup";
 
 const originalFetch = globalThis.fetch;
@@ -150,6 +150,50 @@ describe("codex warmup", () => {
     expect(fetchCalls).toBe(1);
     expect(cancellations).toBe(1);
     expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  test("preserves HTTP 429 classification when the error body stalls until the deadline", async () => {
+    let fetchCalls = 0;
+    let cancellations = 0;
+    const privateBody = "private upstream quota details";
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      fetchCalls += 1;
+      const stalledBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(privateBody));
+        },
+        cancel() {
+          cancellations += 1;
+          return new Promise<void>(() => {});
+        },
+      });
+      return new Response(stalledBody, { status: 429 });
+    });
+
+    const startedAt = performance.now();
+    try {
+      let failure: unknown;
+      try {
+        await warmCodexAccount({
+          accessToken: "a",
+          chatgptAccountId: "c",
+          timeoutMs: 20,
+        });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(CodexWarmupError);
+      if (!(failure instanceof CodexWarmupError)) throw new Error("expected CodexWarmupError");
+      expect(failure.code).toBe("http_status");
+      expect(failure.status).toBe(429);
+      expect(failure.message).not.toContain(privateBody);
+      expect(fetchCalls).toBe(1);
+      expect(cancellations).toBe(1);
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   test("accepts a completed SSE stream at the exact byte limit", async () => {

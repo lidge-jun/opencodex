@@ -2,6 +2,7 @@ import { useId, useRef, useState } from "react";
 import { clampNumberDraft } from "../clamp-draft";
 import { useT } from "../i18n/shared";
 import { NumberStepper } from "./NumberStepper";
+import "./account-auto-switch-control.css";
 
 export interface AccountAutoSwitchControlProps {
   accountLabel: string;

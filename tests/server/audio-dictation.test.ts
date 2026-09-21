@@ -10,6 +10,7 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { createDictationFrameValidator } from "../../src/server/audio-dictation";
 import { abortAndReleaseAllTurns, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
+import { LiveCallBindings } from "../../src/server/live-call-bindings";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -32,7 +33,7 @@ const startEvent = { type: "session.start", config: {
   vad: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
 } };
 
-function createFixture(options: { failDictation?: boolean } = {}) {
+function createFixture(options: { failDictation?: boolean; answer?: "invalid" | "ok200" } = {}) {
   const creates: Headers[] = [];
   const handshakes: Array<{ url: string; headers: Headers; protocols?: string[] }> = [];
   const frames: string[] = [];
@@ -71,6 +72,8 @@ function createFixture(options: { failDictation?: boolean } = {}) {
     if (["chatgpt.com", "api.openai.com"].includes(new URL(req.url).hostname)) {
       if (new URL(req.url).pathname.endsWith("/realtime/calls") || new URL(req.url).pathname === "/v1/live") {
         creates.push(new Headers(req.headers));
+        if (options.answer === "invalid") return new Response("", { status: 200 });
+        if (options.answer === "ok200") return new Response("v=0\r\n", { status: 200, headers: { "content-type": "application/sdp", location: `https://api.openai.com/v1/live/rtc_upstream_${creates.length}` } });
         return new Response("v=0\r\n", { status: 201, headers: { "content-type": "application/sdp", location: `https://api.openai.com/v1/live/rtc_upstream_${creates.length}` } });
       }
       return Response.json({});
@@ -269,6 +272,36 @@ describe("external audio sockets", () => {
       await response.text();
     }
     expect(fixture.handshakes).toHaveLength(0);
+  });
+  test("invalid live answer books the upstream 200 while the client gets 502", async () => {
+    fixture = createFixture({ answer: "invalid" });
+    const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
+    try {
+      const response = await fetchOriginal(new URL("/v1/live", fixture.server.url), {
+        method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" }, body: JSON.stringify({ sdp: "v=0\r\n" }),
+      });
+      expect(response.status).toBe(502);
+      const body = await response.text();
+      expect(body).toContain("invalid call answer");
+      const accountId = fixture.creates[0]!.get("chatgpt-account-id") === "acct-b" ? "pool-b" : "pool-a";
+      expect(outcomes.mock.calls.filter(call => call[1] === accountId).map(call => call[2])).toEqual([200]);
+    } finally { outcomes.mockRestore(); }
+  });
+  test("alias registration failure books the upstream 200 while the client gets 503", async () => {
+    fixture = createFixture({ answer: "ok200" });
+    const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
+    const create = spyOn(LiveCallBindings.prototype, "create").mockReturnValue(null);
+    try {
+      const response = await fetchOriginal(new URL("/v1/live", fixture.server.url), {
+        method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" }, body: JSON.stringify({ sdp: "v=0\r\n" }),
+      });
+      expect(response.status).toBe(503);
+      const body = await response.text();
+      expect(body).toContain("Live call could not be registered");
+      expect(body).not.toContain("Live call capacity reached");
+      const accountId = fixture.creates[0]!.get("chatgpt-account-id") === "acct-b" ? "pool-b" : "pool-a";
+      expect(outcomes.mock.calls.filter(call => call[1] === accountId).map(call => call[2])).toEqual([200]);
+    } finally { outcomes.mockRestore(); create.mockRestore(); }
   });
   test("missing reserved aliases never become legacy native joins", async () => {
     fixture = createFixture();

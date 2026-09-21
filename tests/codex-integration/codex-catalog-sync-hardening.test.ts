@@ -228,8 +228,13 @@ describe("Codex catalog sync hardening", () => {
       expect(passes).toHaveLength(2);
       expect(passes[0]!.written).toBe(true);
       expect(passes[1]!.catalog).toEqual(passes[0]!.catalog);
+      // The first pass rewrites both files; the second reproduces byte-identical content,
+      // so the cache no-op guard skips it and must report that honestly. This is the same
+      // no-op the catalog half already asserts above, and it is what keeps the startup
+      // stale-app-server warning from firing on a start where nothing changed.
+      expect(passes[0]!.invalidated).toBe(true);
+      expect(passes[1]!.invalidated).toBe(false);
       for (const pass of passes) {
-        expect(pass.invalidated).toBe(true);
         for (const rows of [pass.catalog, pass.cache]) {
           expect(rows.some(row => row.slug === "gpt-5.3-codex-spark" || row.slug.endsWith("/gpt-5.3-codex-spark"))).toBe(false);
           expect(rows.some(row => row.slug === "desktop/gpt-future-native")).toBe(true);
@@ -1306,6 +1311,59 @@ describe("Codex catalog sync hardening", () => {
     expect(out.thirdWritten).toBe(true);
     expect(out.realChangeBumpedMtime).toBe(true);
   }, 15_000);
+
+  test("an identical cache resync leaves models_cache untouched, so the startup stale warning stays quiet", () => {
+    // `refreshCodexModelCatalog` reports `invalidateCodexModelsCache`'s return value as
+    // `cacheSynced`, and `handleStart` ORs that into the stale-app-server warning. The
+    // catalog got this no-op rule in #1459/#1460, but the models cache kept rewriting
+    // identical bytes and returning true on every `ocx start`, so the warning announced
+    // "Disk catalog/cache were updated" and told the operator their Codex model list might
+    // be stale on a start where nothing on disk had changed.
+    const catalogPath = join(codexHome, "catalog.json");
+    const cachePath = join(codexHome, "models_cache.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [nativeEntry("gpt-5.5", 0)],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { statSync, readFileSync } = require("node:fs");
+      const { syncCatalogModels, invalidateCodexModelsCache } = require("./src/codex/catalog");
+      const path = ${JSON.stringify(cachePath)};
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+      (async () => {
+        await syncCatalogModels({ providers: {} });
+        const first = invalidateCodexModelsCache();
+        const afterFirst = statSync(path).mtimeMs;
+        const bytesAfterFirst = readFileSync(path, "utf8");
+        await sleep(1100);
+        await syncCatalogModels({ providers: {} });
+        const second = invalidateCodexModelsCache();
+        const afterSecond = statSync(path).mtimeMs;
+        console.log(JSON.stringify({
+          firstWritten: first,
+          secondWritten: second,
+          identicalResyncKeptMtime: afterFirst === afterSecond,
+          bytesUnchanged: readFileSync(path, "utf8") === bytesAfterFirst,
+        }));
+      })();
+    `);
+    expect(r.status, r.stderr).toBe(0);
+
+    const out = JSON.parse(r.stdout) as {
+      firstWritten: boolean;
+      secondWritten: boolean;
+      identicalResyncKeptMtime: boolean;
+      bytesUnchanged: boolean;
+    };
+    // The first pass is a real change (the bare catalog is rewritten into Codex's cache
+    // wrapper), so it must still write. That is what keeps this test from passing on a
+    // guard that simply refuses every write.
+    expect(out.firstWritten).toBe(true);
+    expect(out.secondWritten).toBe(false);
+    expect(out.identicalResyncKeptMtime).toBe(true);
+    expect(out.bytesUnchanged).toBe(true);
+  }, 20_000);
 
   test("the no-op guard compares bytes, so a malformed byte decoding to U+FFFD is still repaired", () => {
     // The guard above must not preserve corruption. `readFileSync(path, "utf8")`

@@ -339,3 +339,63 @@ test("an invalid desktopProfile is dropped without resetting providers (#4430)",
     expect(error.mock.calls.join("\n")).not.toContain("Using default config");
   } finally { error.mockRestore(); }
 });
+
+function writePoolConfig(credentialGroups: unknown): string {
+  const bytes = JSON.stringify({
+    ...candidate(undefined),
+    pool: { kernel: true, cacheAffinity: false, credentialGroups },
+  });
+  writeFileSync(getConfigPath(), bytes);
+  return bytes;
+}
+
+test("a malformed credentialGroups entry costs the list, not the rest of pool (#4546)", () => {
+  const bytes = writePoolConfig([
+    { id: "team", credentials: ["openai:key-a"] },
+    { id: "", credentials: [] },
+  ]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const loaded = loadConfig();
+    expect(loaded.pool?.credentialGroups).toBeUndefined();
+    // The two siblings are live routing settings: an outer catch used to take them both
+    // because one group failed the nested object.
+    expect(loaded.pool?.kernel).toBe(true);
+    expect(loaded.pool?.cacheAffinity).toBe(false);
+    expect(loaded.providers.xai.note).toBe("keep me");
+    expect(warn.mock.calls.flat().join("\n")).toContain("pool.credentialGroups");
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+  } finally { warn.mockRestore(); }
+});
+
+test("an ambiguous credentialGroups declaration is rejected on write, never ordered away (#4546)", () => {
+  const base = candidate(undefined);
+  const withGroups = (credentialGroups: unknown) => ({ ...base, pool: { kernel: true, credentialGroups } });
+
+  const twoGroups = validateConfigCandidate(withGroups([
+    { id: "left", credentials: ["openai:key-a"] },
+    { id: "right", credentials: ["openai:key-a"] },
+  ]));
+  expect(twoGroups.ok).toBe(false);
+  expect(twoGroups.ok === false && twoGroups.error).toContain("pool.credentialGroups");
+
+  const duplicateId = validateConfigCandidate(withGroups([
+    { id: "team", credentials: ["openai:key-a"] },
+    { id: "team", credentials: ["openai:key-b"] },
+  ]));
+  expect(duplicateId.ok).toBe(false);
+  expect(duplicateId.ok === false && duplicateId.error).toContain("duplicate group id");
+
+  const bareId = validateConfigCandidate(withGroups([{ id: "team", credentials: ["key-a"] }]));
+  expect(bareId.ok).toBe(false);
+  expect(bareId.ok === false && bareId.error).toContain("provider-qualified");
+
+  const empty = validateConfigCandidate(withGroups([{ id: "team", credentials: [] }]));
+  expect(empty.ok).toBe(false);
+
+  const valid = validateConfigCandidate(withGroups([
+    { id: "team", credentials: ["openai:key-a", "azure:key-a"], note: "one billed org" },
+  ]));
+  expect(valid.ok).toBe(true);
+  expect(valid.ok === true && valid.config.pool?.credentialGroups).toHaveLength(1);
+});

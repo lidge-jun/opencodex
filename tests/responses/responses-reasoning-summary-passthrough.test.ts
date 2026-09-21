@@ -3,6 +3,9 @@ import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
 
 /**
  * The passthrough relay for DeepSeek's native /responses endpoint emits
@@ -59,6 +62,8 @@ async function runHandleResponses(body: Record<string, unknown>, upstreamBody: u
     { status: 200, headers: { "content-type": contentType } },
   )) as typeof fetch;
   const config = { providers: { deepseek: deepseekSeed() } } as unknown as OcxConfig;
+  // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+  releaseSpendHome = acquireOwnedSpendHome();
   return handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
@@ -73,7 +78,12 @@ async function runHandleResponses(body: Record<string, unknown>, upstreamBody: u
 
 describe("passthrough reasoning summary rewrite honors hideThinkingSummary", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the lease before later teardown can replace the preload sandbox home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   test("SSE: hidden thinking stays on the content channel", async () => {
     // No reasoning.summary in the request -> parseRequest sets hideThinkingSummary.

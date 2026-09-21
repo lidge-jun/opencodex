@@ -123,7 +123,7 @@ Go ネイティブポートを担っていた `dev2-go` は廃止し、2 本の�
 
 ## カタログにプロバイダーを追加
 
-すべてのプロバイダー選択肢と seed は canonical レジストリ(`src/providers/registry.ts`)から派生します。
+すべてのプロバイダー選択肢と seed は canonical レジストリ(`src/providers/registry/entries-extended.ts`)から派生します。
 
 ```ts
 {

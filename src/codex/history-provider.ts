@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
 import { resolveCodexStateDbPath } from "./paths";
+import { openCodexStateForPreflight } from "./history-state-open";
 import { atomicWriteFile, getConfigDir } from "../config";
 import {
   CODEX_HISTORY_RESUMABLE_SOURCES,
@@ -74,6 +75,22 @@ let historyDbBusyTimeoutMs = 5000;
  */
 export function setHistoryDbBusyTimeoutForTests(ms: number): void {
   historyDbBusyTimeoutMs = ms;
+}
+
+/**
+ * Carry that timeout across a realm boundary. A Worker starts from the default above and cannot
+ * observe a parent that shortened the window — the same reason its run message carries the homes
+ * explicitly — so `history-job.ts` sends this value and `history-worker.ts` adopts it. In
+ * production both sides already hold the codex-rs-matching 5s. A non-finite or negative value is
+ * refused rather than allowed to disable the wait the app expects.
+ */
+export function currentHistoryDbBusyTimeoutMs(): number {
+  return historyDbBusyTimeoutMs;
+}
+
+export function adoptHistoryDbBusyTimeout(ms: number): void {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  historyDbBusyTimeoutMs = Math.floor(ms);
 }
 
 function openStateDb(stateDbPath: string): Database {
@@ -169,6 +186,41 @@ function readFirstRolloutLine(fd: number): string | null {
     if (collected.length > MAX_FIRST_LINE) return null;
   }
   return nlIndex === -1 ? null : collected.subarray(0, nlIndex).toString("utf8");
+}
+
+/**
+ * Bounded tail of complete JSONL lines, newest-last.
+ *
+ * Used to refuse a rollout that *became* paginated after a legacy first line
+ * (#4311). Line 1 can still look writable after a newer Codex migrates the
+ * thread in place, and the native projector then dies on the first
+ * out-of-sequence ordinal a legacy append introduces. Every record written
+ * after such a migration carries an ordinal, so the newest records are where
+ * the evidence is.
+ *
+ * One read of a fixed window from EOF, split once. An earlier draft grew the
+ * window chunk by chunk and re-decoded the accumulated buffer on every
+ * iteration, which is quadratic: a rollout whose only `session_meta` sits at
+ * the top would have decoded and split up to the whole window ~256 times. The
+ * window is a cap, not a target — it is not walked and it is not the file.
+ *
+ * Returns `null` only when the file cannot be measured, which the caller
+ * treats as an unreadable record rather than a writable rollout.
+ */
+const ROLLOUT_TAIL_WINDOW_BYTES = 1 << 20;
+
+function readRolloutTailCompleteLines(fd: number): string[] | null {
+  const size = Number(fstatSync(fd).size);
+  if (!Number.isFinite(size) || size < 0) return null;
+  if (size === 0) return [];
+  const start = Math.max(0, size - ROLLOUT_TAIL_WINDOW_BYTES);
+  const window = Buffer.alloc(size - start);
+  const read = readSync(fd, window, 0, window.length, start);
+  if (read === 0) return [];
+  const lines = window.subarray(0, read).toString("utf8").split("\n");
+  // Unless the window reached BOF, the first element starts mid-record (and
+  // possibly mid-codepoint), so it is not a complete line.
+  return (start === 0 ? lines : lines.slice(1)).filter(line => line.length > 0);
 }
 
 function planFirstLineProvider(firstLine: string, expectedId: string, provider: string): FirstLineProviderPlan {
@@ -276,6 +328,19 @@ class CodexHistoryIntegrityError extends Error {
  * O_APPEND does not allocate an ordinal or update that writer's in-memory cursor.
  * Refuse before changing the DB, manifest, or first-line provider; never guess N+1.
  */
+/**
+ * The one refusal reason that means "the native writer owns this history", as opposed
+ * to "something is wrong". It is a stand-down for the relabel unit on apply
+ * (`src/codex/inject.ts`) and for the history half of a restore; every other reason is
+ * a hard refusal in both directions.
+ *
+ * Exported as a constant rather than repeated as a literal because the apply and restore
+ * directions have to agree on it exactly. They drifted once already: apply learned to
+ * stand down while restore kept refusing, which is how #4812's uninstall deadlock
+ * survived the fix that was supposed to end it.
+ */
+export const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
+
 function assertLegacyHistoryRecord(line: string): void {
   let value: unknown;
   try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }
@@ -285,7 +350,7 @@ function assertLegacyHistoryRecord(line: string): void {
   const record = value as Record<string, unknown>;
   const payload = record.payload;
   if (Object.hasOwn(record, "ordinal") || (payload !== null && typeof payload === "object" && (payload as Record<string, unknown>).history_mode === "paginated")) {
-    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+    throw new CodexHistoryIntegrityError(HISTORY_RELABEL_STANDS_DOWN);
   }
 }
 
@@ -315,6 +380,26 @@ function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
     const first = readFirstRolloutLine(fd);
     if (!first) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
     assertLegacyHistoryRecord(first);
+    // Line 1 is not enough: a newer Codex can migrate a live rollout in place,
+    // leaving the original session_meta and writing ordinals / history_mode only
+    // onto later records (#4311). The native projector then stops at the first
+    // cloned ordinal-0 append. Inspect a bounded window of the newest records
+    // and refuse before any mutation of the rollout, the row, or the manifest.
+    const tail = readRolloutTailCompleteLines(fd);
+    if (tail === null) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    if (tail.length === 0) return;
+    const last = tail[tail.length - 1];
+    if (!last) throw new CodexHistoryIntegrityError("history_rollout_record_invalid");
+    if (last !== first) assertLegacyHistoryRecord(last);
+    // Cheap filter: only re-parse tail lines that look paginated. Needed because
+    // a compensating append can make the last line look legacy again while an
+    // earlier-in-tail native conversion still carries ordinals (#4311).
+    for (const line of tail) {
+      if (line === first || line === last) continue;
+      if (line.includes("\"ordinal\"") || line.includes("\"history_mode\"")) {
+        assertLegacyHistoryRecord(line);
+      }
+    }
   } finally {
     if (heldFd === undefined) closeSync(fd);
   }
@@ -326,7 +411,7 @@ function assertLegacyHistoryWritable(path: string, heldFd?: number): void {
 function assertLegacyHistoryStore(db: Database): void {
   const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
   if (columns.some(column => column.name === "history_mode")) {
-    throw new CodexHistoryIntegrityError("history_paginated_requires_native_writer");
+    throw new CodexHistoryIntegrityError(HISTORY_RELABEL_STANDS_DOWN);
   }
 }
 
@@ -349,23 +434,39 @@ export function preflightCodexHistoryInjection(
     if (!existsSync(resolvedPath)) {
       return restoreEntries.length > 0 ? "history_state_database_missing" : null;
     }
-    db = new Database(resolvedPath, { readonly: true });
+    // Read-only, and narrowed so a cleanly-closed WAL store is inspected rather than refused
+    // (#4943). The open order is the safety property; see history-state-open.ts.
+    db = openCodexStateForPreflight(resolvedPath);
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all();
     const paginatedColumn = columns.some(column => column.name === "history_mode");
-    if (paginatedColumn && restoreEntries.length > 0) return "history_paginated_requires_native_writer";
+    if (paginatedColumn && restoreEntries.length > 0) return HISTORY_RELABEL_STANDS_DOWN;
     for (const entry of restoreEntries) assertLegacyHistoryWritable(entry.rolloutPath);
-    const rows = db.query<{ rollout_path: string; history_mode: string | null }, []>(`
-      SELECT rollout_path, ${paginatedColumn ? "history_mode" : "NULL AS history_mode"}
+    const rows = db.query<{ rollout_path: string; history_mode: string | null; model_provider: string }, []>(`
+      SELECT rollout_path, ${paginatedColumn ? "history_mode" : "NULL AS history_mode"}, model_provider
       FROM threads
       WHERE ${providerTableMode
         ? resumeHistory ? "model_provider IN ('openai', 'opencodex')" : "0"
         : "model_provider = 'opencodex'"}
     `).all();
+    // No ORDER BY: a paginated opencodex row can precede a paginated openai one, so the
+    // verdict waits for the full scan instead of standing down on the first paginated row.
+    let foundPaginatedRow = false;
+    let foundPaginatedOpenaiRow = false;
     for (const row of rows) {
-      if (paginatedColumn || row.history_mode === "paginated") return "history_paginated_requires_native_writer";
+      if (paginatedColumn || row.history_mode === "paginated") {
+        foundPaginatedRow = true;
+        // A provider-table transition removes the root openai_base_url, and a row already
+        // paginated cannot be relabeled: standing it down would route the openai-tagged
+        // thread to Codex's built-in OpenAI endpoint. A still-legacy row only stands down.
+        if (providerTableMode && row.history_mode === "paginated" && row.model_provider === "openai") {
+          foundPaginatedOpenaiRow = true;
+        }
+        continue;
+      }
       assertLegacyHistoryWritable(row.rollout_path);
     }
-    return null;
+    if (foundPaginatedOpenaiRow) return "history_paginated_openai_requires_native_writer";
+    return foundPaginatedRow ? HISTORY_RELABEL_STANDS_DOWN : null;
   } catch (error) {
     return error instanceof CodexHistoryIntegrityError
       ? error.message

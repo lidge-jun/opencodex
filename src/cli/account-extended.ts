@@ -403,16 +403,16 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
     // shared kernel, and absent is a server that does not speak this field at all. Collapsing
     // false into absent would render the live feature as an unknown capability.
     const inert = typeof settings.inert === "boolean" ? settings.inert : null;
-    // A stored threshold only steers selection once the pool consumes it, which is exactly
-    // what `inert: false` reports.
-    const enabled = inert === false && storedThreshold !== null;
+    // A positive stored threshold only steers selection once the pool consumes it, which is
+    // exactly what `inert: false` reports. Zero remains the explicit disabled value.
+    const enabled = inert === false && storedThreshold !== null && storedThreshold > 0;
     if (wantsJson) {
       console.log(JSON.stringify({ provider: name, autoSwitchThreshold: storedThreshold, enabled, poolEnabled, inert }, null, 2));
     } else {
       const value = storedThreshold === null ? "unset" : `${storedThreshold}%`;
       const state = inert === false ? (enabled ? "on" : "off") : inert === true ? "inactive" : "unavailable";
       const why = inert === false
-        ? (enabled ? "applied by this pool" : "no threshold stored")
+        ? (enabled ? "applied by this pool" : storedThreshold === 0 ? "usage-based switching disabled" : "no threshold stored")
         : inert === true ? "not applied by this pool" : "threshold support is unknown";
       console.log(`auto-switch: ${state} (stored threshold ${value}; ${why})`);
     }
@@ -925,12 +925,32 @@ async function poolSetting(
     if (response.status !== 200) return apiError(response.json, `failed to read ${label}`, response.status);
     const strategy = response.json[transport.strategyKey];
     const sticky = response.json[transport.stickyKey];
+    const autoSwitchThreshold = typeof response.json.autoSwitchThreshold === "number"
+      ? response.json.autoSwitchThreshold
+      : undefined;
     if (wantsJson) {
       // Pool-neutral key names: the two routes spell the same two settings differently, and a
       // `--json` consumer should not have to branch on which pool answered.
-      console.log(JSON.stringify({ ok: true, provider: name, strategy, stickyLimit: sticky }, null, 2));
+      const payload: Record<string, unknown> = { ok: true, provider: name, strategy, stickyLimit: sticky };
+      if (autoSwitchThreshold !== undefined) {
+        payload.autoSwitchThreshold = autoSwitchThreshold;
+      }
+      console.log(JSON.stringify(payload, null, 2));
     } else {
-      console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      if (field === "strategy" && autoSwitchThreshold !== undefined) {
+        const thresholdSummary = strategy === "round-robin"
+          ? "threshold not used"
+          : autoSwitchThreshold > 0
+          ? (strategy === "fill-first"
+              ? `drain at ${autoSwitchThreshold}%`
+              : strategy === "reset-first"
+              ? `nearest reset below ${autoSwitchThreshold}%`
+              : `switch at ${autoSwitchThreshold}%`)
+          : "proactive switching off";
+        console.log(`${name}: ${label} is ${String(strategy)} (${thresholdSummary})`);
+      } else {
+        console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      }
     }
     return 0;
   }

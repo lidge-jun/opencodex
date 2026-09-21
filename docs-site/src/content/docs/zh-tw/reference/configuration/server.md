@@ -11,14 +11,14 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理監聽連接埠。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 綁定位址。非回送綁定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
-| `proxy?` | `string` | — | 對外 HTTP(S) 代理 URL 或 `${ENV_VAR}`。僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`；回送保留在 `NO_PROXY` 中。 |
+| `proxy?` | `string` | — | 對外 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`）或 `${ENV_VAR}`。HTTP URL 僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用內建的真實 SOCKS5 通道，也會套用至 `ALL_PROXY`（`ocx start --socks5`），並清除此行程繼承的 `HTTP(S)_PROXY`。回送保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 明確啟用：當 Responses 完成時沒有文字或工具呼叫，以相同請求重試一次。重試可能產生費用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不變更設定的情況下停用；combo 與 routed-compaction turn 不適用。 |
 | `stallTimeoutSec?` | `number` | `300` | 上游無有效進展的秒數，適用於 Responses 與原生 Chat；最小 1 秒。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次嘗試的 DNS/TCP/TLS/final-header 截止時間；它在 body 生成前結束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 在中止活躍回合前的優雅排空截止時間。 |
 | `websockets?` | `boolean` | `false` | 廣告並允許面向 client 的 Responses WebSocket 路徑。False 時 client 使用 HTTP/SSE；不會停用符合條件的 canonical ChatGPT upstream WS 最佳化。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | 額外的精確 CORS 來源。回送來源恆被允許。 |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` 憑證，在非回送綁定上被管理與 data-plane 認證接受。由儀表板管理。 |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` data-plane 准入憑證（用於非回送綁定）。它們不授權管理 API；管理存取使用[管理 API 參考](/zh-tw/reference/management-api/)中說明的獨立憑證。由儀表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | 停用 | 選擇加入的已封存 session 清理政策。永不隱含啟用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 以 MiB 為單位、可被驅逐的 app 擁有日誌、快取、blob 與 continuation payload 上限。範圍 64–4096；非 RSS 上限。 |
 | `codexAutoStart?` | `boolean` | `true` | 讓 Codex shim 在啟動 Codex 前執行 `ocx ensure`。False 使 ensure 為 no-op。 |

@@ -9,15 +9,19 @@ import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../../src/codex
 import { withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
 import type { NativeProfileContext } from "../../src/codex/native-profile-store";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
+import { resolveResponsesApiAuth } from "../../src/server/auth-cors";
+import { tryAdmitTurn } from "../../src/server/lifecycle";
 import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 let home = "";
 let previousOcxHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 const OTHER_ACCOUNT_ID = "other";
 
 function config(options: { secondAccount?: boolean } = {}): OcxConfig {
@@ -55,6 +59,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
@@ -69,6 +75,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
@@ -109,6 +118,54 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
 }
 
 describe("native main 401 refresh and replay", () => {
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "%s strips caller account identity when a bearer key selects stored Direct",
+    async path => {
+      const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 86_400 })).toString("base64url");
+      const storedCredential = `header.${payload}.signature`;
+      writeFileSync(join(home, "auth.json"), JSON.stringify({
+        tokens: { access_token: storedCredential },
+      }));
+      const cfg = config();
+      cfg.hostname = "0.0.0.0";
+      cfg.providers.openai!.codexAccountMode = "direct";
+      cfg.apiKeys = [{
+        id: "direct-test", name: "direct-test", key: "ocx_data_direct_ingress",
+        createdAt: "2026-09-14T00:00:00.000Z",
+      }];
+      const req = request(path);
+      req.headers.set("authorization", "Bearer ocx_data_direct_ingress");
+      req.headers.set("chatgpt-account-id", "caller-account");
+      const admission = resolveResponsesApiAuth(req, cfg);
+      expect(admission?.source).toBe("bearer");
+      const sent: Headers[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.pathname.endsWith("/responses") || url.pathname.endsWith("/responses/compact")) {
+          sent.push(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
+          return Response.json({ id: "resp_direct", object: "response", status: "completed", output: [] });
+        }
+        return Response.json({ rate_limit: { primary_window: { used_percent: 10 } } });
+      }) as typeof fetch;
+
+      const turn = tryAdmitTurn();
+      expect(turn).not.toBeNull();
+      try {
+        const log = { model: "", provider: "" } as RequestLogContext;
+        const response = path === "/v1/responses"
+          ? await handleResponses(req, cfg, log, { admission: admission!, turnAdmissionLease: turn! })
+          : await handleResponsesCompact(req, cfg, log, turn!, admission!);
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(sent).toHaveLength(1);
+        expect(sent[0]!.get("authorization")).toBe(`Bearer ${storedCredential}`);
+        expect(sent[0]!.get("chatgpt-account-id")).toBeNull();
+      } finally {
+        turn?.release();
+      }
+    },
+  );
+
   test("refreshes a refresh-only native main credential before upstream I/O", async () => {
     writeFileSync(join(home, "auth.json"), JSON.stringify({
       tokens: { refresh_token: "refresh-grant", account_id: "account-main" },

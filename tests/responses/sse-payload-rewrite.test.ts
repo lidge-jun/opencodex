@@ -71,6 +71,57 @@ describe("SSE payload rewrite composition", () => {
     expect(sseDataPayload("database")).toBeNull();
   });
 
+  test("sseDataPayload handles complex multiline, colonless data, and boundary cases", () => {
+    // No data lines
+    expect(sseDataPayload("")).toBeNull();
+    expect(sseDataPayload("event: ping\nid: 123\n\n")).toBeNull();
+    expect(sseDataPayload("data-field: ignore\ndatabase: ignore")).toBeNull();
+
+    // Single colonless data
+    expect(sseDataPayload("data")).toBe("");
+    expect(sseDataPayload("data\n")).toBe("");
+    expect(sseDataPayload("data\r")).toBe("");
+    expect(sseDataPayload("data\r\n")).toBe("");
+
+    // Single data with colon
+    expect(sseDataPayload("data:")).toBe("");
+    expect(sseDataPayload("data: ")).toBe("");
+    expect(sseDataPayload("data:hello")).toBe("hello");
+    expect(sseDataPayload("data: hello world")).toBe("hello world");
+    expect(sseDataPayload("data:  spaced  ")).toBe(" spaced  ");
+
+    // Multiline data concatenation
+    expect(sseDataPayload("data: line1\ndata: line2")).toBe("line1\nline2");
+    expect(sseDataPayload("data: line1\r\ndata: line2\r\n")).toBe("line1\nline2");
+    expect(sseDataPayload("data\ndata: line1\ndata\ndata: line2")).toBe("\nline1\n\nline2");
+    expect(sseDataPayload("event: message\r\ndata: first\r\nid: 1\r\ndata: second\r\n: comment")).toBe("first\nsecond");
+
+    // Trailing without newline
+    expect(sseDataPayload("event: ping\ndata: chunk")).toBe("chunk");
+
+    // Comments only
+    expect(sseDataPayload(": comment\n: another")).toBeNull();
+
+    // Preserves UTF-8 multi-byte / emoji safely
+    expect(sseDataPayload("data: 中文😀测试")).toBe("中文😀测试");
+    expect(sseDataPayload("data: 🚀✨\ndata: 🌍")).toBe("🚀✨\n🌍");
+
+    // Tab after colon (ASCII 9) must be preserved
+    expect(sseDataPayload("data:\thello")).toBe("\thello");
+
+    // Consecutive empty data lines
+    expect(sseDataPayload("data:\ndata:\ndata:")).toBe("\n\n");
+    expect(sseDataPayload("data\ndata\ndata")).toBe("\n\n");
+
+    // Trailing solitary CR
+    expect(sseDataPayload("data: chunk\r")).toBe("chunk");
+    expect(sseDataPayload("data\r")).toBe("");
+
+    // Distinguishes near-prefix non-data fields
+    expect(sseDataPayload("data-entry: 1\ndatabase: 2")).toBeNull();
+    expect(sseDataPayload("date: today")).toBeNull();
+  });
+
   test("encodes only delivered blocks and counts coalesced input in linear space", async () => {
     const text = Array.from({ length: 256 }, (_, index) => `data: ${index} 中文😀${"x".repeat(128)}\n\n`).join("");
     const upstream = streamFromText(text);

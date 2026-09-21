@@ -16,16 +16,28 @@ Codex 자동 시작 shim도 설치합니다.
 
 ## 프록시 수명 주기
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-프록시 서버를 시작합니다(권장 포트는 `10100`). 해당 포트가 이미 사용 중이면 opencodex가 다른
-사용 가능한 포트를 골라 기록합니다. PID와 런타임 포트 상태를 기록하고, 두 번째 활성 인스턴스는 시작하지
-않습니다. 시작할 때는 각 공급자의 모델을 Codex 카탈로그로 동기화합니다. 종료할 때는 기본 Codex를
-복원합니다. 단, 관리형 서비스로 실행한 경우(`OCX_SERVICE=1`)는 예외입니다.
+프록시 서버를 시작합니다(권장 포트는 `10100`). PID와 런타임 포트 상태를 기록하고, 두 번째 활성
+인스턴스는 시작하지 않습니다. 권장 포트가 이미 사용 중이면 `start`가 점유자를 확인한 뒤 어느 경우든
+실행을 멈춥니다. opencodex가 응답하면 시작을 거부하고, 그렇지 않으면 점유자를 식별할 수 없다고
+알립니다. 첫 번째 프록시를 실행한 채 Codex가 두 번째 프록시를 가리키게 되므로, 리스너를 다른 포트로
+자동 이동하지 않습니다. 활성 프록시와 같은 `OPENCODEX_HOME`을 사용하면 다른 `--port`를 명시해도
+시작을 거부합니다. 관찰 전용과 제한 적용 모드 모두 같은 지출 저널에 기록하기 때문입니다. 독립된 형제
+인스턴스에는 별도의 `OPENCODEX_HOME`을 사용하세요. `port: 0`은 포트만 OS에 맡기며 상태를 분리하지
+않습니다. 시작할 때는 각 공급자의 모델을 Codex 카탈로그로 동기화합니다. 종료할 때는
+기본 Codex를 복원합니다. 단, 관리형 서비스로 실행한 경우(`OCX_SERVICE=1`)는 예외입니다.
+
+`--socks5`(기본값 `127.0.0.1:10808`)는 SOCKS5 URL을 `config.proxy`에 저장하고 실제 SOCKS5
+터널을 통해 송신 HTTP(S) 요청을 전달합니다. `--socks5-off`는 저장된 SOCKS5 프록시만 지우며
+HTTP 프록시는 삭제하지 않습니다. 값은 구성에 저장되므로 `ocx update` 후에도 유지됩니다. URL에
+사용자 이름과 비밀번호를 포함할 수 있지만 시작 로그에서는 숨겨집니다.
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -107,7 +119,7 @@ dedicated-provider history도 포함됩니다. 상태를 백업하고 이 전체
 
 status와 `ocx doctor`는 현재 CLI와 실행 중인 프록시의 버전을 비교합니다. CLI가 더 새로우면
 원하는 최신 설치로 프록시를 재시작하십시오. 백그라운드 서비스라면 `ocx service restart`를
-실행합니다. 버전 불일치는 서비스 정의를 그대로 두기 때문에 `ocx service repair`는 아무것도
+실행합니다. macOS에서는 버전 불일치가 서비스 정의를 바이트 단위로 그대로 두기 때문에 `ocx service repair`는 아무것도
 reload하지 않고 예전 프로세스가 계속 서비스합니다. 프록시가 더 새로우면 CLI를 업그레이드하거나
 `PATH`가 원하는 설치를 가리키도록 수정하십시오. 이 진단은 서비스를 복구하거나 요청 허용
 여부를 바꾸지 않습니다.
@@ -220,33 +232,50 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 
 ## 카탈로그 동기화
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 설정된 모든 공급자에서 라이브 모델 목록을 가져와 병합된 카탈로그를 Codex에 다시 주입합니다.
 공급자를 추가한 뒤나 사용 가능한 모델을 새로 고칠 때 실행합니다.
 
 오래 실행 중인 Codex `app-server` 프로세스가 아직 살아 있으면, `opencodex-catalog.json` /
 `models_cache.json`가 업데이트되었더라도 이전 인메모리 모델 목록을 계속 서비스할 수 있다고 경고합니다.
-`--restart-codex`를 붙이면 현재 사용자가 소유한 `codex … app-server`와 `codex-code-mode-host`
-프로세스 중 일치하는 것에만 `SIGTERM`을 보냅니다(활성 작업이 중단될 수 있습니다). 광범위한
+`--restart-codex`를 붙이면 일치하는 `codex … app-server`와 `codex-code-mode-host` 프로세스를
+재시작하는 데 더해, macOS·Linux·Windows에서 Codex 데스크톱 앱을 완전히 종료했다가 다시 띄웁니다.
+모델 선택기가 카탈로그를 다시 읽도록 하기 위해서이며, 진행 중인 대화는 끝납니다. 광범위한
 `pkill -f codex` 매칭은 의도적으로 피합니다.
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app`은 `--restart-codex`의 폐기 예정 별칭입니다. 여전히 동작하고 폐기
+안내를 출력하며, Windows 전용이 아닙니다.
+
+`--restart-app-server-only`는 예전처럼 좁은 범위만 수행합니다. 현재 사용자가 소유한 일치
+app-server / code-mode-host 프로세스에만 `SIGTERM`을 보내고 데스크톱 앱은 그대로 둡니다(활성
+작업이 중단될 수 있습니다). `--restart-codex`나 `--restart-desktop-app`과 함께 쓰면 좁은
+범위가 이깁니다. 진행 중인 대화를 잃는 것은 되돌릴 수 없고, 오래된 선택기는 그렇지 않기
+때문입니다.
+
+명령을 Codex 앱 안에서 실행하면 재시작은 분리된 helper에 넘기고, 이 세션은 앱과 함께
+종료됩니다.
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카탈로그에서 다시 빌드되게 합니다.
-`ocx sync`와 같은 오래된 `app-server` 경고와 선택적 `--restart-codex` 동작이 적용됩니다.
+`ocx sync`와 같은 오래된 `app-server` 경고와 선택적 재시작 플래그가 적용됩니다.
 
-### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 다른 OpenCodex 인스턴스의 `/v1/catalog` 엔드포인트가 제공하는 완성된 카탈로그를 설치한 뒤
 `models_cache.json`을 맞춥니다. URL은 HTTPS여야 하고 HTTP는 루프백만 허용합니다. URL에 박힌
 자격증명, 쿼리, 프래그먼트, 리다이렉트, 크기를 넘는 응답, 잘못된 카탈로그는 로컬에 쓰기 전에
 거절합니다. 인증은 선택이며 환경변수 이름(`--auth-env`)으로만 읽고 argv로는 받지 않습니다.
 
+`HTTP_PROXY` 또는 `http_proxy`가 적용되고 `NO_PROXY` 또는 `no_proxy`에 일치하는 우회 항목이 없으면 루프백 HTTP 요청은 인증 헤더를 붙이거나 요청을 보내기 전에 거부됩니다. `ALL_PROXY`/`all_proxy` 또는 `HTTPS_PROXY`/`https_proxy`만 설정한 경우에는 이 HTTP 제한에 해당하지 않으며, HTTPS 카탈로그 취득은 계속 허용됩니다. 거부 메시지에는 프록시 주소나 인증 토큰이 포함되지 않습니다. 값이 비어 있지 않은 `http_proxy`와 `no_proxy`는 각각 `HTTP_PROXY`와 `NO_PROXY`보다 우선합니다. Bun과 호환되는 우회 규칙에는 호스트 이름, 일치하는 `host:port`, `[::1]`처럼 대괄호로 감싼 IPv6 주소 또는 `*`를 사용하고, URL·경로·`*.` 접두사는 사용하지 마세요.
+
 카탈로그와 캐시는 공유 Codex 카탈로그 잠금 아래에서 쓰고, 실패하면 직전까지 정상이던 파일을
-그대로 둡니다. 바이트가 같으면 mtime까지 건드리지 않는 no-op입니다. `--restart-codex`는 실제로
-쓴 뒤에만 적용됩니다. `ETag` 조건부 요청과 Desktop 앱 재시작은 이 명령에 없습니다. `--json`
-envelope 필드와 종료 코드는 [영문 레퍼런스](/reference/cli/lifecycle/)를 보세요.
+그대로 둡니다. 바이트가 같으면 mtime까지 건드리지 않는 no-op입니다. `--restart-codex`,
+`--restart-app-server-only`, 폐기 예정 별칭 `--restart-desktop-app`은 실제로 쓴 뒤에만
+적용되며, `ocx sync` / `ocx sync-cache`와 같은 뜻입니다. `ETag` 조건부 요청은 이 명령에
+없습니다. `--json` envelope 필드와 종료 코드는 [영문 레퍼런스](/reference/cli/lifecycle/)를
+보세요.
 
 ## 백그라운드 서비스
 
@@ -266,8 +295,8 @@ Windows 작업 스케줄러로 설치하는 서비스는 보통 프로세스 우
 | --- | --- |
 | 없음 | 서비스가 없으면 설치하고 시작하며, 이미 있으면 `repair`를 수행합니다. 정상인 Windows 작업 스케줄러 정의는 재사용하지만, 오래된 정의는 다시 등록되어 관리자 권한 승인이 필요할 수 있습니다. |
 | `install` | 서비스를 생성하고 시작합니다. |
-| `repair` | 설치된 서비스를 제자리에서 새로 고치고, 바뀐 것이 있을 때만 관리자를 reload합니다. macOS에서 정상이고 변경이 없는 작업은 그대로 실행된 채 남으므로 repair가 장애가 되지 않습니다. 정상인 Windows 작업 스케줄러 정의는 재사용하지만, 오래된 정의는 다시 등록되어 관리자 권한 승인이 필요할 수 있습니다. |
-| `restart` | 같은 갱신이지만 항상 재시작합니다. macOS에서 변경이 없고 이미 로드된 작업은 제자리에서 kickstart됩니다. `repair`의 별칭이 아닙니다. |
+| `repair` | 설치된 서비스를 제자리에서 새로 고칩니다. macOS에서는 바뀐 것이 있을 때만 launchd를 reload하므로, 정상이고 변경이 없는 작업은 그대로 실행된 채 남아 repair가 장애가 되지 않습니다. Linux와 Windows에서는 서비스를 재시작합니다. 정상인 Windows 작업 스케줄러 정의는 재사용하지만, 오래된 정의는 다시 등록되어 관리자 권한 승인이 필요할 수 있습니다. |
+| `restart` | 같은 갱신을 수행하며 모든 플랫폼에서 반드시 재시작합니다. macOS에서 변경이 없고 이미 로드된 작업은 제자리에서 kickstart됩니다. `repair`의 별칭이 아닙니다. |
 | `start` | 설치된 서비스를 시작합니다. |
 | `stop` | 서비스를 중지하고 기본 Codex를 복원합니다. |
 | `status` | 서비스와 프록시 진단, 로그 경로를 보고합니다. |
@@ -367,7 +396,7 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 ### `ocx gui`
 
 프록시가 실행 중이 아니면 자동으로 시작하면서 [웹 대시보드](/guides/web-dashboard/)를
-`http://localhost:<port>`에서 엽니다.
+`http://localhost:<port>`에서 엽니다. 허브에서 관리 리스너를 켜 두면 `http://127.0.0.1:<관리 포트>`에서 엽니다.
 
 ## 업데이트
 

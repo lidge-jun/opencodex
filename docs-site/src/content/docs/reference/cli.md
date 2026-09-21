@@ -56,10 +56,12 @@ remain report-only (`managed: false`, normally `selection_unattested`) and `sele
 The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
-`candidate_unavailable`. On Windows this first slice performs no candidate or configuration filesystem I/O:
+`candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. On Windows this first slice performs no candidate or configuration filesystem I/O:
 only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
 every other Windows candidate fails closed. The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
+
+For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
 List or status is the default where unambiguous. Use `--json` for structured snapshots and
 `ocx observe logs --follow --jsonl` for a streaming request-log feed. Theme, language, navigation,

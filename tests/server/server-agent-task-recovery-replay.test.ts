@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createKiroAdapter } from "../../src/adapters/kiro";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { parseRequest } from "../../src/responses/parser";
@@ -7,7 +7,18 @@ import { conversationIdFromResponsesRequest } from "../../src/server/request-log
 import type { OcxParsedRequest } from "../../src/types";
 import { recoverEncryptedAgentTask, resetAgentTaskRecoveryState, restoreCachedEncryptedAgentTasks } from "../../src/server/responses/agent-task-recovery";
 import { codexHeaders, encryptedInput, fakeChatGptJwt, FERNET_TASK, SECOND_FERNET_TASK, originalFetch, recoverySse, routedConfig } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 afterEach(() => { globalThis.fetch = originalFetch; resetAgentTaskRecoveryState(); });
+
+// Direct handler dispatch never takes the writer lease that startServer would take, so it is refused.
+let releaseSpendHome: (() => void) | undefined;
+beforeEach(() => {
+  releaseSpendHome = acquireOwnedSpendHome();
+});
+afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 test("replay reuses admitted recovery after a tool result without another network call", async () => {
   let calls = 0;

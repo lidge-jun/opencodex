@@ -15,7 +15,7 @@ ocx gui
 ```
 
 Bu, gerekirse önce proxy'yi otomatik olarak başlatarak tarayıcınızda
-`http://localhost:<port>` adresini açar. Geliştirme sırasında GUI geliştirme
+`http://localhost:<port>` adresini açar; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar. Geliştirme sırasında GUI geliştirme
 sunucusunu çalışan bir proxy'ye karşı ayrı olarak çalıştırabilirsiniz:
 
 ```bash
@@ -54,7 +54,7 @@ kararıdır.
 | **Sağlayıcı ekle** | Hesap girişi, API anahtarı hizmetleri, yerel sunucular veya özel bir uç nokta için kayıt defteri destekli önayarları arayın. |
 | **Codex Auth** | ChatGPT/Codex havuz hesapları ekleyin, sonraki oturum hesabını seçin, 5 saatlik / haftalık / 30 günlük kotaları yenileyin, kota otomatik geçişini etkinleştirin veya devre dışı bırakın, %1–100 eşiğini ayarlayın ve geçici arıza yük devretmesini yapılandırın. |
 | **Alt Ajanlar** | `spawn_agent` geçersiz kılma listesinde en fazla beş yalın yerel veya ad alanlı yönlendirilen modeli öne çıkarın. |
-| **Modeller** | Yerel GPT ve yönlendirilen modelleri açıp kapatın, sağlayıcı izin listelerini ve bağlam sınırlarını ayarlayın, v1/base/v2'yi seçin ve v2 iş parçacığı sınırını yapılandırın. Yapılandırılmış sağlayıcılar, keşif kapalı olduğunda veya hiçbir satır döndürmediğinde sıfır modelli gruplar olarak görünür kalır. |
+| **Modeller** | Yerel GPT ve yönlendirilen modelleri açıp kapatın, sağlayıcı izin listelerini ve bağlam sınırlarını ayarlayın, v1/base/v2'yi seçin ve v2 iş parçacığı sınırını yapılandırın. Sayfa hub'a kaydedilen kataloğu, bu istemcinin getirdiği kataloğu ve çalışan bir istemcideki etkinleştirmeyi ayrı durumlar olarak gösterir. Getirme zamanı en son hub kaydının alındığını kanıtlamaz; çalışma zamanı etkinleştirmesi doğrulanmamış olarak gösterilir. Yapılandırılmış sağlayıcılar, keşif kapalı olduğunda veya hiçbir satır döndürmediğinde sıfır modelli gruplar olarak görünür kalır. |
 | **Günlükler** | Belirteçler, talep edilen çaba ve (varsa) etkili giden çaba, çözümlenen model, sağlayıcı, durum, istek kimliği, süre ve hata ayrıntılarıyla son istekleri otomatik yenileyin. Ayrıntı görünümü, adaptör bir tane yaydığında tam akıl yürütme hat alanını içerir. Yüklenen Günlükler halkası için toplam belirteçleri ve tahmini liste fiyatı maliyetini görmek üzere donuk görüşme/oturum kimliğine göre (istemci bir tane gönderdiğinde) filtreleyin. |
 | **Kullanım / Hata Ayıklama** | Belirteç kullanımı kapsamını ve eğilimlerini inceleyin veya isteğe bağlı sağlayıcı aktarımı ve kullanım çıkarma tanılamalarını etkinleştirin. |
 | **Depolama** | Salt okunur CODEX_HOME disk dökümü (oturumlar, arşivler, DB'ler, ekler). İsteğe bağlı arşivlenmiş temizleme: en eski %N'yi önizleyin, ardından `CODEX_HOME/.trash` konumuna karantinaya alın (varsayılan) veya açık bir onay kutusu arkasında kalıcı olarak silin. **Otomatik temizleme politikası** isteğe bağlıdır ve **varsayılan olarak KAPALIDIR** (`storageCleanupPolicy.enabled`); Depolama sayfasında eşik/hedef/zamanlama/mod yapılandırın veya **Şimdi çalıştır (Run now)**'ı tetikleyin. Karantinaya alınan girdiler Depolama sayfasından geri yüklenebilir (JSONL + iş parçacıkları). Aktif oturumlar salt okunur kalır. Codex en yeni/aktif `state_*.sqlite` dosyasını kilitli tuttuğu sürece temizleme ve geri yükleme reddedilir. |
@@ -175,10 +175,12 @@ ve diğer sağlayıcılardan ayrıdır.
   (ana) hesabı diğerleri gibi sıralanır, böylece **Son** olarak ayarlanabilir ve
   yedek olarak tutulabilir. Bu beş önayarın dışındaki `ocx account priority`'den
   ayarlanan bir sıra kartta görünür ve seçilebilir kalır.
-- İş parçacığı bağlılığı istek başına dalgalanmayı önler. Kota otomatik geçişi
-  etkinken uzun süredir çalışan bir iş parçacığı düzenli olarak yeniden
-  değerlendirilir ve ilgili kullanımı eşiğe ulaştıktan ve kesinlikle daha düşük
-  kullanımlı uygun bir hesap mevcut olduğunda yeniden bağlanabilir.
+- İş parçacığı bağlılığı istek başına dalgalanmayı önler. `pool.cacheAffinity`
+  varsayılan olarak açıkken uzun süredir çalışan bir iş parçacığı, kullanım eşiğe
+  ulaştı diye yeniden bağlanmaz; hesap tükenene veya hizmet veremez hale gelene
+  kadar kalır ve o zaman yalnızca kullanımı kesin olarak daha düşük ve gerçek kota
+  payı olan bir hesaba geçer. Bayrağı kapatınca, kesinlikle daha düşük kullanımlı
+  uygun bir hesap varsa eşik yeniden bağlaması geri gelir.
 - Yeni oturumlar en düşük kullanımlı uygun hesabı seçebilir. Ücretli planlar
   bilinen en sıcak 5 saatlik, haftalık veya 30 günlük pencereyi puanlar;
   Go/Ücretsiz planlar yalnızca 30 günlük pencereyi kullanır.
@@ -286,4 +288,3 @@ metin ve vizyon sınıflandırmasını kaydedilen sağlayıcı yapılandırması
 kopyalar, böylece [vizyon sidecar'ı](/tr/guides/sidecars/) manuel sınıflandırma
 olmadan doğru şekilde geçişlenir.
 :::
-

@@ -4,11 +4,15 @@ import {
   runStartupReadinessSync,
 } from "../../src/server/readiness";
 import {
+  DEFAULT_PROBE_TIMEOUT_MS,
   findLiveProxy,
   isOpencodexHealthz,
+  loopbackProbeHosts,
   probeHostname,
+  probePortOwner,
   probeReadiness,
   proxyIdentityAt,
+  START_OWNERSHIP_LIVENESS,
   validateReadyzBody,
 } from "../../src/server/proxy-liveness";
 import {
@@ -161,6 +165,73 @@ describe("proxyIdentityAt", () => {
     expect(identity).toBeNull();
     // First attempt spends the budget; remaining retries must not fire.
     expect(calls).toBe(1);
+  });
+});
+
+/**
+ * #5004. A bare `ocx start` beside a healthy proxy printed the port-busy warning, hopped to
+ * an ephemeral port, and left two proxies running with Codex pointed at the second. The hop
+ * path never asked who held the port — it read this home's records, and a probe that came
+ * back empty was enough. These pin the narrower question the start path now asks instead.
+ */
+describe("probePortOwner asks the port itself who holds it", () => {
+  test("a loopback bind is asked on both families; anything else is asked where it was configured", () => {
+    expect(loopbackProbeHosts(undefined)).toEqual(["127.0.0.1", "[::1]"]);
+    expect(loopbackProbeHosts("127.0.0.1")).toEqual(["127.0.0.1", "[::1]"]);
+    expect(loopbackProbeHosts("0.0.0.0")).toEqual(["127.0.0.1", "[::1]"]);
+    // `startServer` canonicalizes a literal `localhost` bind to 127.0.0.1 exactly because
+    // Windows resolves the name ::1-first. Leaving the family to the resolver here is how a
+    // healthy listener reads as an empty port.
+    expect(loopbackProbeHosts("localhost")).toEqual(["127.0.0.1", "[::1]"]);
+    expect(loopbackProbeHosts("::1")).toEqual(["[::1]", "127.0.0.1"]);
+    expect(loopbackProbeHosts("192.168.1.20")).toEqual(["192.168.1.20"]);
+  });
+
+  test("finds the owner when it answers on the other loopback family", async () => {
+    const urls: string[] = [];
+    const owner = await probePortOwner(58285, { hostname: "localhost" }, {
+      fetchFn: (async (url: string | URL | Request) => {
+        urls.push(String(url));
+        if (String(url).includes("[::1]")) return healthz(OURS);
+        throw new Error("ECONNREFUSED");
+      }) as typeof fetch,
+    });
+
+    expect(owner).toEqual({ pid: 4242, version: "2.6.17", hostname: "[::1]" });
+    expect(urls).toEqual(["http://127.0.0.1:58285/healthz", "http://[::1]:58285/healthz"]);
+  });
+
+  test("one lost probe is not an empty port", async () => {
+    let calls = 0;
+    const owner = await probePortOwner(58285, {}, {
+      ...START_OWNERSHIP_LIVENESS,
+      sleepFn: async () => { /* no real delay */ },
+      fetchFn: (async () => {
+        calls += 1;
+        if (calls < 3) throw new Error("timeout");
+        return healthz(OURS);
+      }) as typeof fetch,
+    });
+
+    expect(owner).toEqual({ pid: 4242, version: "2.6.17", hostname: "127.0.0.1" });
+    expect(calls).toBe(3);
+  });
+
+  test("a holder that does not identify as opencodex is not reported as one", async () => {
+    const foreign = await probePortOwner(58285, {}, {
+      fetchFn: (async () => healthz({ ok: true })) as typeof fetch,
+    });
+    expect(foreign).toBeNull();
+
+    const silent = await probePortOwner(58285, {}, {
+      fetchFn: (async () => { throw new Error("ECONNREFUSED"); }) as typeof fetch,
+    });
+    expect(silent).toBeNull();
+  });
+
+  test("the start-ownership budget is larger than the default single short probe", () => {
+    expect(START_OWNERSHIP_LIVENESS.attempts ?? 1).toBeGreaterThan(1);
+    expect(START_OWNERSHIP_LIVENESS.timeoutMs ?? 0).toBeGreaterThan(DEFAULT_PROBE_TIMEOUT_MS);
   });
 });
 
@@ -886,5 +957,63 @@ describe("probeReadiness adversarial contract (never counts ready)", () => {
       fetchFn: (async () => readyz(READY_BODY, 500)) as typeof fetch,
     });
     expect(probe).toBeNull();
+  });
+});
+
+/**
+ * #4662: the connected-client machine listener binds `config.port ?? 10100` — the same address
+ * the standalone proxy would — and answers /healthz as opencodex with an extra `role: "client"`.
+ * That role was parsed away here, so every management-backed `ocx` subcommand on a connected
+ * client resolved a base URL pointing at a listener that serves only /api/machine/*, and died on
+ * its opaque `{"error":"not_found","method":…,"path":…}` 404.
+ *
+ * Carrying the role is the whole liveness-side fix. Liveness itself must keep ACCEPTING the
+ * client role: `ocx stop` and orphan cleanup act on whichever of our processes holds the port,
+ * and a predicate that rejected the client would make them blind to a real one.
+ */
+describe("client-role discrimination (#4662)", () => {
+  const CLIENT = { service: "opencodex", version: "2.6.17", role: "client", uptime: 3, pid: 4242, port: 10100 };
+
+  test("a client-role body is still live: stop and orphan cleanup must find that process", () => {
+    expect(isOpencodexHealthz(CLIENT)).toBe(true);
+  });
+
+  test("proxyIdentityAt carries the reported role", async () => {
+    const identity = await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz(CLIENT)) as typeof fetch });
+    expect(identity).toEqual({ pid: 4242, version: "2.6.17", role: "client" });
+  });
+
+  test("a standalone body has no role at all, rather than a coerced one", async () => {
+    const identity = await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz(OURS)) as typeof fetch });
+    expect(identity).toEqual({ pid: 4242, version: "2.6.17" });
+    expect(identity && "role" in identity).toBe(false);
+  });
+
+  test("a non-string role is absent, not coerced (same guard as pid and version)", async () => {
+    const identity = await proxyIdentityAt(10100, {}, {
+      fetchFn: (async () => healthz({ ...OURS, role: 7 })) as typeof fetch,
+    });
+    expect(identity).toEqual({ pid: 4242, version: "2.6.17" });
+  });
+
+  test("findLiveProxy reports the role on the runtime-record path", async () => {
+    const live = await findLiveProxy({
+      readPidFn: () => 4242,
+      readRuntimeFn: pid => (pid === 4242 ? { port: 10100 } : null),
+      configFn: () => ({ port: 10100 }),
+      fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
+    });
+    expect(live).toEqual({ pid: 4242, port: 10100, source: "runtime", version: "2.6.17", role: "client" });
+  });
+
+  test("findLiveProxy reports the role on the configured-port path", async () => {
+    const live = await findLiveProxy({
+      readPidFn: () => null,
+      readRuntimeFn: () => null,
+      configFn: () => ({ port: 10100 }),
+      verifyPidFn: candidate => candidate,
+      fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
+    });
+    expect(live).toEqual({ pid: 4242, port: 10100, hostname: undefined, source: "config", version: "2.6.17", role: "client" });
   });
 });

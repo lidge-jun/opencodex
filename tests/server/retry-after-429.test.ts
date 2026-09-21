@@ -6,6 +6,7 @@ import {
 } from "../../src/lib/retry-after";
 import { formatPassthroughUpstreamError } from "../../src/server/responses/passthrough-error";
 import { consumeComboFailure } from "../../src/server/responses/core";
+import { fetchWithResetRetry } from "../../src/lib/upstream-retry";
 
 describe("resolveClientRetryAfter (#507)", () => {
   test("prefers a validated upstream Retry-After header", () => {
@@ -89,6 +90,58 @@ describe("resolveClientRetryAfter (#507)", () => {
       includeDefault: false,
     })).toBe("9");
   });
+
+  test("reads the reset delay a Cognition-style trailer states in seconds", () => {
+    // Devin cloud error resource_exhausted: "... Your limit will reset in 35
+    // seconds." Previously fell through to the synthetic 2s default, so a
+    // retry fired straight back into the live cap.
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Devin cloud error resource_exhausted: Reached free model rate limit. Upgrade to Max for higher limits, or switch to a different model. Your limit will reset in 35 seconds. (trace ID: 814519e)",
+    })).toBe("35");
+  });
+
+  test("reads a stated reset in minutes and hours, not just seconds", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Your limit will reset in 13 minutes",
+    })).toBe("780");
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "quota window resets in 1 hour",
+    })).toBe("3600");
+  });
+
+  test("a stated reset feeds cooldown metadata too (includeDefault:false)", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Your limit will reset in 35 seconds",
+      includeDefault: false,
+    })).toBe("35");
+  });
+
+  test("reset phrasing without a time unit is not a delay", () => {
+    // "reset in 2026" names a year, not a wait.
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Your limit will reset in 2026",
+    })).toBe(DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC);
+  });
+
+  test("existing phrasings still parse with their original units", () => {
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Throttled. Please try again in 7s.",
+    })).toBe("7");
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "retry after 2 minutes",
+    })).toBe("120");
+    expect(resolveClientRetryAfter({
+      status: 429,
+      message: "Retry-After: 30",
+    })).toBe("30");
+  });
 });
 
 describe("formatErrorResponse Retry-After (#507)", () => {
@@ -101,6 +154,35 @@ describe("formatErrorResponse Retry-After (#507)", () => {
 });
 
 describe("formatPassthroughUpstreamError Retry-After (#507)", () => {
+  // The refusal shares the status of a retryable rate limit, so the default below would have
+  // handed it a "Retry-After: 2" -- an instruction to send a turn that may already be running.
+  // The bytes come from the helper rather than a literal so the recognition is pinned against
+  // the shape the proxy actually emits.
+  test("a replay refusal gets no Retry-After and keeps none it is handed", async () => {
+    const refusal = await fetchWithResetRetry(async () => {
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    });
+    const body = await refusal.text();
+
+    const bare = formatPassthroughUpstreamError(429, body);
+    expect(bare.status).toBe(429);
+    expect(bare.headers.get("Retry-After")).toBeNull();
+
+    const headers = new Headers({ "retry-after": "30", "content-type": "application/json" });
+    const withUpstreamHeader = formatPassthroughUpstreamError(429, body, { headers });
+    expect(withUpstreamHeader.headers.get("Retry-After")).toBeNull();
+    expect(await withUpstreamHeader.text()).toBe(body);
+  });
+
+  test("a refusal whose body did not survive the read still gets no Retry-After", () => {
+    // The bounded reader answers "" for anything not display-safe, and the empty-body branch
+    // is the one that invents the default. Caller provenance is what covers this case.
+    expect(formatPassthroughUpstreamError(429, "").headers.get("Retry-After"))
+      .toBe(DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC);
+    expect(formatPassthroughUpstreamError(429, "", { replayRefusal: true }).headers.get("Retry-After"))
+      .toBeNull();
+  });
+
   test("empty-body retryable 429 gets a default Retry-After", async () => {
     const response = formatPassthroughUpstreamError(429, "");
     expect(response.status).toBe(429);

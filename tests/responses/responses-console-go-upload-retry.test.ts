@@ -6,6 +6,7 @@ import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { handleResponses } from "../../src/server/responses/core";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
@@ -32,13 +33,19 @@ const EFFORT_REFUSAL = JSON.stringify({
 });
 
 let testDir = "";
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-console-go-upload-retry-"));
   process.env.OPENCODEX_HOME = testDir;
+  // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(() => {
+  // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalOpenCodexHome;
@@ -107,6 +114,24 @@ describe("Console Go transient upload refusal recovery", () => {
     // The replay must preserve the exact serialized request.
     expect(outbound[1]).toBe(outbound[0]);
     expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["console-go-upload-retry"]);
+  });
+
+  test("a configured one-send total returns the original refusal without using the reserve", async () => {
+    const cfg = config();
+    cfg.providers.go!.transientRetryOn5xx = { attempts: 1 };
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      return refusal();
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    const response = await handleResponses(request(), cfg, logCtx);
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(UPLOAD_REFUSAL);
+    expect(sends).toBe(1);
+    expect(logCtx.activeAttempt?.recoveryKinds).toEqual([]);
   });
 
   test("does not replay a different 400 from the same wire", async () => {

@@ -1,6 +1,8 @@
 import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
@@ -624,6 +626,223 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  test("a refresh lock that is still being initialized is not reclaimed as stale", async () => {
+    const { getValidCodexToken, saveCodexAccountCredential } = await import("../../src/codex/account-store");
+    saveCodexAccountCredential("refresh-empty-lock", { accessToken: "old", refreshToken: "empty-r", expiresAt: 0, chatgptAccountId: "acc" });
+    // The owner creates the lock file and writes its metadata as two steps, so a live lock is
+    // briefly unreadable. Treating that window as stale let a waiter delete a lock whose owner
+    // was still inside its critical section, and both then ran the refresh.
+    const lockPath = refreshLockPathForToken("empty-r");
+    writeFileSync(lockPath, "");
+    let fetchCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ access_token: "new", expires_in: 3600 }), { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const pending = getValidCodexToken("refresh-empty-lock");
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(existsSync(lockPath)).toBe(true);
+      expect(fetchCalls).toBe(0);
+      unlinkSync(lockPath);
+      const result = await pending;
+      expect(result.accessToken).toBe("new");
+      expect(fetchCalls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("releasing a refresh lock leaves a lock another owner recreated in place", async () => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const lockKey = "recreated-owner";
+    const lockPath = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(lockKey).digest("hex").slice(0, 32)}.lock`);
+    await withCodexRefreshFileLock(lockKey, new AbortController().signal, async () => {
+      // A waiter reclaimed this path and a second owner took it over while we held it.
+      renameSync(lockPath, `${lockPath}.reclaimed`);
+      writeFileSync(lockPath, JSON.stringify({ acquiredAt: Date.now(), pid: 999_001 }) + "\n");
+    });
+    expect(existsSync(lockPath)).toBe(true);
+    expect((JSON.parse(readFileSync(lockPath, "utf-8")) as { pid: number }).pid).toBe(999_001);
+    unlinkSync(lockPath);
+    unlinkSync(`${lockPath}.reclaimed`);
+  });
+
+  test.each([false, true])("refresh release prevents inode reuse before comparison (callback failure=%s)", async (callbackFails) => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const key = `release-inode-reuse-${callbackFails}`;
+    const path = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(key).digest("hex").slice(0, 32)}.lock`);
+    const originalFstat = fs.fstatSync;
+    const originalStat = fs.statSync;
+    let fd: number | undefined;
+    let owned: ReturnType<typeof fs.fstatSync> | undefined;
+    let openDuringComparison = false;
+    const descriptor = spyOn(fs, "fstatSync").mockImplementation((...args: Parameters<typeof fs.fstatSync>) => {
+      fd = args[0];
+      owned = originalFstat(...args);
+      return owned;
+    });
+    const probe = spyOn(fs, "statSync").mockImplementation((...args: Parameters<typeof fs.statSync>) => {
+      if (args[0] === path && fd !== undefined && owned) {
+        try { originalFstat(fd); openDuringComparison = true; } catch { /* Descriptor closed early. */ }
+        // Model an allocator reusing the unlinked owner's inode only after its last fd closes.
+        // Holding that fd alive must prevent this ABA regardless of the host filesystem.
+        if (!openDuringComparison) return owned;
+      }
+      return originalStat(...args);
+    });
+    const failure = new Error("original refresh failure");
+    try {
+      const pending = withCodexRefreshFileLock(key, new AbortController().signal, async () => {
+        unlinkSync(path);
+        writeFileSync(path, "successor");
+        if (callbackFails) throw failure;
+        return "refreshed";
+      });
+      if (callbackFails) await expect(pending).rejects.toBe(failure);
+      else expect(await pending).toBe("refreshed");
+      expect(openDuringComparison).toBe(true);
+      expect(readFileSync(path, "utf8")).toBe("successor");
+      expect(fd).toBeDefined();
+      expect(() => originalFstat(fd!)).toThrow();
+    } finally { descriptor.mockRestore(); probe.mockRestore(); }
+  });
+
+  test("refresh release preserves the path when descriptor identity cannot be read", async () => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const lockKey = "unknown-owner";
+    const lockPath = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(lockKey).digest("hex").slice(0, 32)}.lock`);
+    const original = fs.fstatSync;
+    let released = false;
+    const probe = spyOn(fs, "fstatSync").mockImplementation((...args: Parameters<typeof fs.fstatSync>) => {
+      if (released) throw new Error("identity probe unavailable");
+      return original(...args);
+    });
+    try {
+      await withCodexRefreshFileLock(lockKey, new AbortController().signal, async () => {
+        renameSync(lockPath, `${lockPath}.reclaimed`);
+        writeFileSync(lockPath, "replacement-owner");
+        released = true;
+      });
+      expect(readFileSync(lockPath, "utf8")).toBe("replacement-owner");
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  for (const code of ["EACCES", "EIO"]) {
+    for (const callbackFails of [false, true]) {
+      test(`refresh release preserves the callback outcome after ${code} path probe failure (${callbackFails})`, async () => {
+        const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+        const lockKey = `path-probe-${code}-${callbackFails}`;
+        const lockPath = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(lockKey).digest("hex").slice(0, 32)}.lock`);
+        const original = fs.statSync;
+        const callbackError = new Error("refresh failed");
+        let released = false;
+        const probe = spyOn(fs, "statSync").mockImplementation((...args: Parameters<typeof fs.statSync>) => {
+          if (released && args[0] === lockPath) throw Object.assign(new Error("path probe unavailable"), { code });
+          return original(...args);
+        });
+        try {
+          const pending = withCodexRefreshFileLock(lockKey, new AbortController().signal, async () => {
+            released = true;
+            if (callbackFails) throw callbackError;
+            return "refreshed";
+          });
+          if (callbackFails) await expect(pending).rejects.toBe(callbackError);
+          else expect(await pending).toBe("refreshed");
+          expect(existsSync(lockPath)).toBe(true);
+        } finally { probe.mockRestore(); }
+      });
+    }
+  }
+
+  test.each(["ENOENT", "EACCES"])("refresh release preserves confirmed-owner unlink handling for %s", async (code) => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const lockKey = `unlink-${code}`;
+    const lockPath = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(lockKey).digest("hex").slice(0, 32)}.lock`);
+    const original = fs.unlinkSync;
+    const unlinkError = Object.assign(new Error("unlink failed"), { code });
+    let attempts = 0;
+    const probe = spyOn(fs, "unlinkSync").mockImplementation((path) => {
+      if (path === lockPath) { attempts++; throw unlinkError; }
+      return original(path);
+    });
+    try {
+      const pending = withCodexRefreshFileLock(lockKey, new AbortController().signal, async () => "refreshed");
+      if (code === "ENOENT") expect(await pending).toBe("refreshed");
+      else await expect(pending).rejects.toBe(unlinkError);
+      expect(attempts).toBe(1);
+    } finally { probe.mockRestore(); }
+  });
+
+  test("refresh stale reclamation excludes a second SQLite writer until acquisition finishes", async () => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const key = "serialized-stale";
+    const path = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(key).digest("hex").slice(0, 32)}.lock`);
+    writeFileSync(path, JSON.stringify({ acquiredAt: 0 }));
+    const db = new Database(join(TEST_DIR, "config-mutation.sqlite"), { create: true });
+    const original = fs.unlinkSync;
+    let blocked = false;
+    const probe = spyOn(fs, "unlinkSync").mockImplementation((candidate) => {
+      if (candidate === path && !blocked) {
+        try { db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK"); }
+        catch (error) { blocked = (error as { code?: string }).code === "SQLITE_BUSY"; }
+      }
+      return original(candidate);
+    });
+    try {
+      await withCodexRefreshFileLock(key, new AbortController().signal, async () => {
+        expect(blocked).toBe(true);
+        // The callback must not hold the metadata transaction across network/async work.
+        db.exec("BEGIN IMMEDIATE"); db.exec("ROLLBACK");
+      });
+      expect(existsSync(path)).toBe(false);
+    } finally { probe.mockRestore(); db.close(); }
+  });
+
+  test.each([false, true])("refresh metadata failure closes its descriptor and preserves replacement=%s", async (replacement) => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const key = `metadata-write-${replacement}`;
+    const path = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(key).digest("hex").slice(0, 32)}.lock`);
+    const original = fs.writeFileSync;
+    const failure = Object.assign(new Error("metadata write failed"), { code: "EIO" });
+    let descriptor: number | undefined;
+    let called = false;
+    const probe = spyOn(fs, "writeFileSync").mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (typeof args[0] === "number") {
+        descriptor = args[0];
+        if (replacement) { renameSync(path, `${path}.reclaimed`); original(path, "successor"); }
+        throw failure;
+      }
+      return original(...args);
+    });
+    try {
+      await expect(withCodexRefreshFileLock(key, new AbortController().signal, async () => { called = true; })).rejects.toBe(failure);
+      expect(called).toBe(false);
+      expect(descriptor).toBeDefined();
+      expect(() => fs.fstatSync(descriptor!)).toThrow();
+      expect(existsSync(path)).toBe(replacement);
+      if (replacement) expect(readFileSync(path, "utf8")).toBe("successor");
+    } finally { probe.mockRestore(); }
+  });
+
+  test("refresh release keeps its result and lock when metadata coordination is busy", async () => {
+    const { withCodexRefreshFileLock } = await import("../../src/codex/account-store");
+    const key = "release-coordination-busy";
+    const path = join(TEST_DIR, `codex-refresh-${createHash("sha256").update(key).digest("hex").slice(0, 32)}.lock`);
+    const db = new Database(join(TEST_DIR, "config-mutation.sqlite"), { create: true });
+    try {
+      expect(await withCodexRefreshFileLock(key, new AbortController().signal, async () => {
+        db.exec("BEGIN IMMEDIATE");
+        return "refreshed";
+      })).toBe("refreshed");
+      expect(existsSync(path)).toBe(true);
+    } finally { db.exec("ROLLBACK"); db.close(); }
+  });
+
   test("same refresh grant joins a live flight", async () => {
     const {
       getCodexAccountCredential,
@@ -1150,6 +1369,82 @@ describe("codex-account-store CRUD", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(TokenRefreshError);
       expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("revoked");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("nested error object with refresh_token_invalidated classifies as revoked", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential, TokenRefreshError } =
+      await import("../../src/codex/account-store");
+    saveCodexAccountCredential("invalidated-grant", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("invalidated-grant")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      Response.json(
+        {
+          error: {
+            message: "Your session has ended. Please log in again.",
+            type: "invalid_request_error",
+            param: null,
+            code: "refresh_token_invalidated",
+          },
+        },
+        { status: 401 },
+      )) as typeof fetch;
+
+    try {
+      await forceRefreshCodexPoolToken("invalidated-grant", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      throw new Error("expected a TokenRefreshError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("revoked");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("nested error object with refresh_token_expired classifies as expired", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential, TokenRefreshError } =
+      await import("../../src/codex/account-store");
+    saveCodexAccountCredential("expired-grant", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("expired-grant")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      Response.json(
+        {
+          error: {
+            message: "The refresh token has expired.",
+            type: "invalid_request_error",
+            param: null,
+            code: "refresh_token_expired",
+          },
+        },
+        { status: 401 },
+      )) as typeof fetch;
+
+    try {
+      await forceRefreshCodexPoolToken("expired-grant", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      throw new Error("expected a TokenRefreshError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("expired");
     } finally {
       globalThis.fetch = originalFetch;
     }

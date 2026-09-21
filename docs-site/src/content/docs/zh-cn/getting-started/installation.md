@@ -78,7 +78,7 @@ opencodex 状态文件位于 `$OPENCODEX_HOME`（默认 `~/.opencodex`），Code
 | --- | --- |
 | `$OPENCODEX_HOME/config.json` | 你的 provider、默认 provider、端口及选项。 |
 | `$OPENCODEX_HOME/ocx.pid` | 正在运行的代理的 PID（单实例保护）。 |
-| `$OPENCODEX_HOME/runtime-port.json` | 当前 PID、主机名和端口，包括自动选择的备用端口。 |
+| `$OPENCODEX_HOME/runtime-port.json` | 当前 PID、主机名和端口，包括 `config.port` 为 `0` 时由操作系统分配的端口。 |
 | `$OPENCODEX_HOME/auth.json` | 执行 `ocx login` 后保存的 OAuth 凭据。 |
 | `$OPENCODEX_HOME/catalog-backup*.json` | opencodex 修改 Codex 模型目录前创建的备份。 |
 | `$CODEX_HOME/config.toml` | 仅监听回环地址时，opencodex 会添加由自身标记管理的根级 `openai_base_url`；监听非回环地址时，则使用 `model_provider = "opencodex"` 和 `[model_providers.opencodex]`，以便 Codex 发送 API 认证 header。 |

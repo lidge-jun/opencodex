@@ -125,14 +125,14 @@ Codex 認証用の **ChatGPT アカウントプール**も管理できます。C
 <details>
 <summary>Docker Compose</summary>
 
-このリポジトリには、digest 固定で非 root の Compose ビルドが入っています。ホストに Git と Bun があれば、
-イメージをビルドするたびに正式な互換性マニフェストを生成し、データプレーンのトークンを stdin から一度
-だけ初期化してハブを起動します:
+このリポジトリには、digest 固定で非 root の Compose ビルドが入っています。ビルドは、選択した Git
+スナップショットから正式な互換性マニフェストを生成して検証します。ローカルクローンには Git と Docker
+Compose、リモート Git コンテキストには Docker Compose が必要です。どちらの方法でも、ホスト上の Bun や
+準備手順は不要です。データプレーンのトークンを stdin から一度だけ初期化してハブを起動します:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -143,12 +143,30 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 既定のホストバインドは `127.0.0.1:10100` です。リモートへ公開するには
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d` を明示する必要があり、
 `0.0.0.0` はホストのすべてのインターフェースを開きます。ファイアウォールと、認証付きの TLS または
-tailnet のフロントエンドでアクセスを制限してください。生成された JSON は追跡されず、`.git` を含めずに
-イメージへコピーされます。ソースを変更したら再生成し、生成からビルドまでの間はソースを触らないで
-ください。ビルドは古いマニフェスト、欠けているファイルや不一致のファイル、余分なソースファイル、
-シンボリックリンクを拒否します。記録された SHA-256 は、ビルドコンテキストとコピーされたランタイム
+tailnet のフロントエンドでアクセスを制限してください。生成された JSON は追跡されません。ビルド
+コンテキストが受け入れるのは `.git/index` と `.git/HEAD`、つまり `git ls-files` が読み取るインベントリ
+だけです。オブジェクトストア全体ではなく約 1 MB であり、読み取り専用マウントを通じてビルド専用の
+マニフェストステージからのみ参照できるため、`.git` を含む `COPY` はありません。ホストで生成済みの
+マニフェストは検証後にのみ受け入れられ、それ以外の場合はビルドが自動生成します。ビルドは古い
+マニフェスト、欠けているファイルや不一致のファイル、余分なソースファイル、シンボリックリンクを
+拒否します。記録された SHA-256 は、ビルドコンテキストとコピーされたランタイム
 ファイル（`package.json`、`bun.lock`、明示的に含めた `scripts/model-metadata.source.json`）の
 すべてと照合されます。
+
+リモート Git コンテキストでは、BuildKit が Git メタデータを保持する必要があります。次の Compose
+ビルド断片はリモートスナップショットを選択し、必要な組み込み引数を渡します:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 トークンと可変状態は `ocx-state` という named volume に残り、イメージ、Compose ファイル、環境変数、
 シェル引数のどこにも認証情報は置かれません。プロバイダーの設定、認証付きの受け入れ確認、リモート管理、
@@ -299,7 +317,7 @@ Qwen Cloud、Qoder Global と CN（公式 PAT + CLI）、SiliconFlow などが�
 
 ```bash
 ocx init                       # 対話式セットアップ（config を書き、Codex を接続し、shim を提案）
-ocx start [--port 10100]       # プロキシをフォアグラウンドで起動
+ocx start [--port 10100] [--socks5 [host:port] | --socks5-off]  # SOCKS5 の既定値は socks5://127.0.0.1:10808
 ocx stop                       # 停止してネイティブの Codex を復元
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # バックグラウンドサービス
 ocx codex-shim install         # `codex` の起動時にプロキシをオンデマンドで立ち上げる
@@ -314,8 +332,9 @@ ocx v2 <...>                   # マルチエージェント v1/v2 の表面制�
 ocx update [--tag preview]     # opencodex の更新
 ```
 
-ポートを固定せずに起動した場合、希望のポートが埋まっていれば別の空きポートへ移ることがあります。
-`--port` を明示した起動は決して移りません。全リファレンスは
+希望するポートが使用中の場合、起動は別のポートへ移らずに停止し、そのポートを保持しているプロセスを示します。
+そのため、既存のプロキシと並んで 2 つ目のプロキシが動き続けることはありません。ポートを空けるか、`--port` で
+別のポートを指定してください。全リファレンスは
 [CLI のドキュメント](https://opencodex.me/ja/reference/cli/)にあります。
 
 ### ヘルスと準備状態

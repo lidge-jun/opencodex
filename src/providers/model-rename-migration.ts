@@ -14,9 +14,12 @@
 // This migration is deliberately NOT general reconciliation. It rewrites exactly
 // one thing: an id this file declares retired, on a provider that still carries
 // the registry's transport, and only when the registry currently seeds the
-// replacement. Everything else in the row is left alone.
+// replacement — and it skips a field where the retired entry is registry residue
+// with nothing left to carry forward (see `isRegistryResidue`, issue #5066).
+// Everything else in the row is left alone.
 
 import { PROVIDER_REGISTRY } from "./registry";
+import { providerConfigSeed } from "./derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
 export interface ModelRename {
@@ -86,6 +89,7 @@ const MODEL_KEYED_RECORDS = [
   "modelMaxOutputTokens",
   "modelInputModalities",
   "modelReasoningEfforts",
+  "modelSuppressSyntheticMax",
   "modelDefaultReasoningEfforts",
   "modelReasoningEffortMap",
 ] as const;
@@ -193,6 +197,54 @@ function registrySeedsTarget(rename: ModelRename): boolean {
   return !!entry?.models?.includes(rename.to);
 }
 
+/** The row the registry contributes to a saved config, or `undefined` when it dropped the id. */
+function registrySeed(provider: string): Record<string, unknown> | undefined {
+  const entry = PROVIDER_REGISTRY.find(row => row.id === provider);
+  return entry ? (providerConfigSeed(entry) as unknown as Record<string, unknown>) : undefined;
+}
+
+/** Whether a saved list or model-keyed record names this id at all. */
+function publishes(container: unknown, id: string): boolean {
+  if (Array.isArray(container)) return container.includes(id);
+  if (!container || typeof container !== "object") return false;
+  return id in (container as Record<string, unknown>);
+}
+
+/**
+ * Whether this field’s retired entry is registry residue rather than something to repair.
+ *
+ * Two things have to be true. The registry’s own seed — `providerConfigSeed`, the row both the
+ * OAuth preset (`deriveOAuthProviderConfig`) and `enrichProviderFromRegistry` contribute — must
+ * still publish the retired id in this field, so the entry arrives in the config on its own. And
+ * the saved field must already carry the supported id, so the rename would only DELETE a key,
+ * with nothing to carry forward.
+ *
+ * Under those two conditions the rewrite is worse than a no-op, because it never converges.
+ * `startServer` runs this migration and then `reconcileOAuthProviders`, and
+ * `applyOAuthPresetCatalog` copies the preset’s record over the saved one whenever the two
+ * differ. The deletion is undone inside the same boot, the config is written twice, and the user
+ * is told about a rename that never sticks on every single start. Issue #5066 is exactly that:
+ * `ANTIGRAVITY_MODEL_CONTEXT_WINDOWS` derives a window for every compatibility alias, so
+ * `modelContextWindows` holds a key for all nine retired Flash ids beside the live ones — the
+ * nine `[model-rename-migration]` lines the reporter saw at every `ocx start`, none of which
+ * required them to have selected any of those nine models.
+ *
+ * Those registry entries are deliberate and stay: a request that still names `gemini-3.6-flash`
+ * routes to 3.7 and needs a context window under the id it asked for. The second condition is
+ * what keeps this narrow. A row that saved `{ "gemini-3.6-flash": 1048576 }` and nothing else
+ * still gets the value carried onto the supported id, because dropping it there would blank the
+ * record instead of moving it (`tests/adapters/google/gemini-37-flash-migration.test.ts`).
+ */
+function isRegistryResidue(
+  seed: Record<string, unknown> | undefined,
+  field: string,
+  saved: unknown,
+  rename: ModelRename,
+): boolean {
+  if (!seed) return false;
+  return publishes(seed[field], rename.from) && publishes(saved, rename.to);
+}
+
 export interface ModelRenameProjection {
   config: OcxConfig;
   changed: boolean;
@@ -225,14 +277,17 @@ export function projectModelRenames(
     // Provider config is a closed interface, so index through one unknown-cast
     // view rather than casting at each assignment.
     const row = prov as unknown as Record<string, unknown>;
+    const seed = registrySeed(rename.provider);
     let touched = false;
     for (const field of MODEL_ID_LISTS) {
+      if (isRegistryResidue(seed, field, row[field], rename)) continue;
       const next = renameInList(row[field], rename.from, rename.to);
       if (!next) continue;
       row[field] = next;
       touched = true;
     }
     for (const field of MODEL_KEYED_RECORDS) {
+      if (isRegistryResidue(seed, field, row[field], rename)) continue;
       const next = rename.dropReasoningEffortMap && field === "modelReasoningEffortMap"
         ? dropFromRecord(row[field], rename.from)
         : renameInRecord(row[field], rename.from, rename.to);

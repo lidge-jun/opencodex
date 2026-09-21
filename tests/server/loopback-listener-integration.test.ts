@@ -857,7 +857,16 @@ describe("seams the runtime cannot defend", () => {
   // Two properties have no runtime oracle on this Bun version, and both would regress
   // silently. A source assertion is a weak instrument, but a weak instrument aimed at a known
   // blind spot beats none — the alternative is a comment nobody runs.
-  const serverSource = readFileSync(join(process.cwd(), "src", "server", "index.ts"), "utf-8");
+  // src/server/index.ts is a facade now. The three assertions below split across it and the
+  // serve-options leaf: the upgrade call sites moved with the fetch handler, while both
+  // explicit 127.0.0.1 binds stayed in the composition root next to Bun.serve. Read both.
+  // Reading the facade alone would leave requestServer.upgrade at zero matches, and
+  // `.toBe(3)` would fail on undefined rather than pass silently -- but the two bind
+  // assertions would still hold, so only one of the three would have told us anything.
+  const serverSource = [
+    readFileSync(join(process.cwd(), "src", "server", "index.ts"), "utf-8"),
+    readFileSync(join(process.cwd(), "src", "server", "index", "serve-options.ts"), "utf-8"),
+  ].join("\n");
 
   test("the WebSocket upgrade uses the receiving server, never the captured binding", () => {
     // Swapping in `server.upgrade` stays green at runtime here: this Bun accepts an upgrade

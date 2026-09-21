@@ -42,7 +42,7 @@ function routeCarryingFiles(): string[] {
     "src/server/management-api.ts",
     // Mounted outside the `??` chain (management-api.ts:284, :289), which is why a scan
     // scoped to `src/server/management/` misses 29 route literals entirely.
-    "src/codex/auth-api.ts",
+    "src/codex/auth-api/routes.ts",
     "src/codex/native-profile-api.ts",
   ];
   for (const f of readdirSync(join(repoRoot, "src/server/management")).sort()) {

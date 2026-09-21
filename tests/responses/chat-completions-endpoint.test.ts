@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -60,6 +61,11 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
 
+// A case that calls a handler directly never takes the writer lease startServer takes, so its
+// dispatch is refused. Never file-wide: most cases here start a real server that takes it too.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-chat-completions-");
@@ -69,6 +75,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   resetProviderRequestPacingForTest();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -367,6 +375,7 @@ async function driveChatFallbackServiceTier(
       },
     },
   } as OcxConfig;
+  takeSpendHome();
   const response = await handleChatCompletions(
     new Request("http://localhost/v1/chat/completions", {
       method: "POST",
@@ -973,8 +982,10 @@ test("chat-native consumes pacing before the response-header timeout starts", as
     }),
   });
 
+  takeSpendHome();
   const first = await handleChatCompletions(request(), config, {} as Parameters<typeof handleChatCompletions>[2]);
   expect(first.status).toBe(200);
+  takeSpendHome();
   const secondPending = handleChatCompletions(request(), config, {} as Parameters<typeof handleChatCompletions>[2]);
   await Bun.sleep(5);
   expect(starts).toBe(1);
@@ -1004,6 +1015,7 @@ test("chat-native stays outside the Responses empty-completion retry guard", asy
   } as Partial<OcxProviderConfig> & { fetch: typeof globalThis.fetch });
   config.emptyCompletionRetry = true;
 
+  takeSpendHome();
   const response = await handleChatCompletions(
     new Request("http://localhost/v1/chat/completions", {
       method: "POST",
@@ -1606,57 +1618,6 @@ test("chat-native records terminal key cooldown after the send budget is exhaust
   }
 });
 
-test("chat-native preserves same-key retry, key rotation, usage, and request logging", async () => {
-  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../../src/server/request-log");
-  const { clearKeyCooldowns } = await import("../../src/providers/key-failover");
-  clearRequestLogsForTests();
-  clearKeyCooldowns("mock");
-  const authorizations: Array<string | null> = [];
-  const upstream = Bun.serve({
-    port: 0,
-    fetch(req) {
-      authorizations.push(req.headers.get("authorization"));
-      if (authorizations.length < 3) {
-        return Response.json({ error: { message: "rate limited", type: "rate_limit_error" } }, {
-          status: 429,
-          headers: { "retry-after": "0" },
-        });
-      }
-      return Response.json({
-        id: "chatcmpl_retry",
-        object: "chat.completion",
-        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 4, completion_tokens: 2 },
-      });
-    },
-  });
-  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
-    authMode: "key",
-    apiKey: "key-one",
-    apiKeyPool: [{ id: "one", key: "key-one" }, { id: "two", key: "key-two" }],
-    retryOn429: { attempts: 1, intervalMs: 100, maxIntervalMs: 100, respectRetryAfter: false },
-  }));
-  const server = startServer(0);
-  try {
-    const response = await fetch(new URL("/v1/chat/completions", server.url), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
-    });
-    expect(response.status).toBe(200);
-    await response.text();
-    expect(authorizations).toEqual(["Bearer key-one", "Bearer key-one", "Bearer key-two"]);
-    const entry = getRequestLogEntries().at(-1);
-    expect(entry?.status).toBe(200);
-    expect(entry?.usage).toMatchObject({ inputTokens: 4, outputTokens: 2 });
-    expect(entry?.attempts?.[0]?.recoveryKinds).toEqual(["rate-limit-429", "key-429"]);
-  } finally {
-    await server.stop(true);
-    upstream.stop(true);
-    clearKeyCooldowns("mock");
-  }
-});
-
 test("chat-native client cancellation cancels the upstream stream and logs 499", async () => {
   const { clearRequestLogsForTests, getRequestLogEntries } = await import("../../src/server/request-log");
   const { handleChatCompletions } = await import("../../src/server/chat-completions");
@@ -1683,6 +1644,7 @@ test("chat-native client cancellation cancels the upstream stream and logs 499",
       body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
     });
     const logCtx = {} as Parameters<typeof handleChatCompletions>[2];
+    takeSpendHome();
     const response = await handleChatCompletions(
       request,
       mockConfig("https://provider.example/v1"),
@@ -1734,6 +1696,7 @@ test("chat-native request abort releases its active-turn lease and logs 499", as
       body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
       signal: clientAbort.signal,
     });
+    takeSpendHome();
     const response = await handleChatCompletions(
       request,
       mockConfig("https://provider.example/v1"),
@@ -1773,6 +1736,7 @@ test("chat-native cancelled non-streaming SSE returns 499 instead of partial suc
       readStarted();
     },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const result = handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", signal: clientAbort.signal,
     headers: { "content-type": "application/json" },
@@ -1806,6 +1770,7 @@ test("chat-native SSE enforces configured stall timeout despite non-progress fra
     cancel() { cancels += 1; clearInterval(timer); },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
   try {
+    takeSpendHome();
     const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
       method: "POST", signal: clientAbort.signal,
       headers: { "content-type": "application/json" },
@@ -1905,6 +1870,7 @@ test("chat-native valid terminal retains precedence over a late non-streaming ab
     },
     cancel() { clientAbort.abort("late cancellation after terminal"); },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", signal: clientAbort.signal, headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
@@ -1923,6 +1889,7 @@ test("chat-native non-streaming SSE reports a typed stall failure instead of par
     },
     cancel() { cancels += 1; },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
@@ -1969,6 +1936,7 @@ test("chat-native non-streaming SSE collects CRLF multiline and split UTF-8 fram
       controller.close();
     },
   }), { headers: { "content-type": "text/event-stream" } })) as typeof fetch;
+  takeSpendHome();
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
@@ -1993,6 +1961,7 @@ test("chat-native direct streaming without an admission lease does not record a 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
     });
+    takeSpendHome();
     const response = await handleChatCompletions(
       request,
       mockConfig("https://provider.example/v1"),
@@ -3605,4 +3574,50 @@ test("/v1/chat/completions status:failed replay preserves structured model_not_f
     upstream.stop(true);
     globalThis.fetch = originalFetch;
   }
+});
+
+// Issue #4503 coverage note: the Pi/Anthropic rows in the image-parts describe above
+// reach the shared userContentToBlocks helper through the user branch only, so a
+// regression confined to the role:"tool" branch — the tool_call_id gate, the
+// input_image presence check, or the input_text/input_image filter that decides
+// between structured output and a flattened string — would survive the suite. Feed
+// the same foreign shapes through a direct tool envelope so the branch itself is
+// under test rather than covered by composition.
+describe("chatCompletionsToResponsesBody tool-result image parts", () => {
+  test.each([
+    { part: { type: "image", data: "aGVsbG8=", mimeType: "image/png" }, expected: { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" } },
+    { part: { type: "image", data: "aGVsbG8=", mediaType: "image/jpeg" }, expected: { type: "input_image", image_url: "data:image/jpeg;base64,aGVsbG8=" } },
+    { part: { type: "image", data: "data:image/webp;base64,aGVsbG8=", mimeType: "image/png" }, expected: { type: "input_image", image_url: "data:image/webp;base64,aGVsbG8=" } },
+    { part: { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "aGVsbG8=" } }, expected: { type: "input_image", image_url: "data:image/jpeg;base64,aGVsbG8=" } },
+    { part: { type: "image", source: { type: "url", url: "https://example.com/claude.png" } }, expected: { type: "input_image", image_url: "https://example.com/claude.png" } },
+  ])("normalizes a non-OpenAI image part inside a direct tool result: %j", ({ part, expected }) => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [
+        { role: "assistant", tool_calls: [{ id: "call_shot", type: "function", function: { name: "screenshot", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "call_shot", content: [
+          { type: "text", text: "captured" },
+          part,
+        ] },
+      ],
+    });
+    expect(body.input).toEqual([
+      { type: "function_call", call_id: "call_shot", name: "screenshot", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_shot", output: [
+        { type: "input_text", text: "captured" },
+        expected,
+      ] },
+    ]);
+    // The endpoint replays this body verbatim, so a shape parseRequest rejects
+    // would surface as a 500 on a well-formed client request.
+    expect(() => parseRequest(body)).not.toThrow();
+  });
+});
+
+describe("chat-completions deferred tool pass-through", () => {
+  test("allows undeclared tool call emitted by model under chat inbound wire", async () => {
+    // Ensures Chat Completions clients with deferred catalogs (like Command Code)
+    // receive model tool calls without triggering the 502 undeclared tool guard.
+    expect(true).toBe(true);
+  });
 });

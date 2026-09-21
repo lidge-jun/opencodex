@@ -100,7 +100,7 @@ export async function handleExternalLive(
       ? frameless ? forwardLiveUrl(relay.providerBaseUrl, false) : keyedLiveUrl(relay.providerBaseUrl)
       : forwardLiveUrl(relay.providerBaseUrl, true);
     const upstream = await fetch(url, { method: "POST", headers, body, signal: deadline.signal, redirect: "manual" });
-    outcome = upstream.ok ? 502 : upstream.status;
+    outcome = upstream.status;
     const detach = cancelBodyOnAbort(upstream.body, deadline.signal);
     let responseBody: ArrayBuffer | Response;
     try { responseBody = await readBodyCapped(upstream.body, LIVE_RESPONSE_MAX_BYTES, () => "Live answer too large", deadline.signal); }
@@ -122,7 +122,6 @@ export async function handleExternalLive(
       sidebandBaseUrl: config.experimentalRealtimeWsBaseUrl,
     });
     if (!alias) return formatErrorResponse(503, "server_busy", "Live call could not be registered");
-    outcome = upstream.status;
     return new Response(responseBody, { status: upstream.status, headers: {
       "content-type": upstream.headers.get("content-type") ?? "application/sdp",
       location: `/v1/${frameless ? "live" : "realtime/calls"}/${alias}`,

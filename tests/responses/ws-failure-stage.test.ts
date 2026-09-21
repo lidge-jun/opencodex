@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { relaySseEagerBounded } from "../../src/server/relay-eager";
+import { appendUsageEntry, type PersistedUsageEntry } from "../../src/usage/log";
 import {
   classifyCodexWsFailure,
   closedBeforeTerminalMessage,
@@ -12,6 +17,9 @@ import {
   codexWsUpstreamFetch,
   CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
 } from "../../src/server/responses/ws-upstream";
+import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
+import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
+import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 
 /**
  * #4191: a long Codex thread died only through the proxy, and every variant of
@@ -32,6 +40,7 @@ class FakeWebSocket {
   static script: (ws: FakeWebSocket) => void = () => {};
   url: string;
   sent: string[] = [];
+  closed = false;
   listeners = new Map<string, Listener[]>();
 
   constructor(url: string) {
@@ -58,7 +67,7 @@ class FakeWebSocket {
     this.sent.push(data);
   }
 
-  close() {}
+  close() { this.closed = true; }
 }
 
 const RealWebSocket = globalThis.WebSocket;
@@ -304,29 +313,155 @@ describe("codex ws stage record marker (#4191)", () => {
     expect(readCodexWsStage(response)).toEqual(stage);
   });
 
-  test("a committed exchange ends with the final counters on its stage record", async () => {
+  test("updating one response preserves its adopted record and leaves another response unchanged", () => {
+    const first = new Response("first");
+    const second = new Response("second");
+    markCodexWsStage(first, { ...stage });
+    markCodexWsStage(second, { ...stage, reused: true });
+    const firstAdopted = readCodexWsStage(first);
+    const secondAdopted = readCodexWsStage(second);
+    const finalStage = { ...stage, requestBytes: null, closeCode: null, upstreamFrames: 5, relayedEvents: 4 };
+
+    markCodexWsStage(first, finalStage);
+
+    expect(readCodexWsStage(first)).toBe(firstAdopted);
+    expect(firstAdopted).toEqual(finalStage);
+    expect(readCodexWsStage(second)).toBe(secondAdopted);
+    expect(secondAdopted).not.toBe(firstAdopted);
+    expect(secondAdopted).toEqual({ ...stage, reused: true });
+  });
+
+  test("a successful exchange finalizes the stage reference adopted before its terminal", async () => {
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
-      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
     });
-    const noFallback = async () => {
-      throw new Error("fallback must not run after open");
-    };
     const response = await codexWsUpstreamFetch(
       CODEX_URL,
       streamingInit(),
       noFallback as unknown as typeof fetch,
       BOUNDED_WS_RUNTIME,
     );
-    expect(response.status).toBe(200);
+    // handleResponses keeps this reference when the Response resolves, before the body settles.
+    const adopted = readCodexWsStage(response);
+    const ws = FakeWebSocket.instances[0]!;
+    ws.emit("message", { data: JSON.stringify({
+      type: "response.output_text.delta", delta: "hi", item_id: "m1", output_index: 0, content_index: 0,
+    }) });
+    ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
     await response.text();
-    const stage = readCodexWsStage(response);
-    expect(stage).toBeDefined();
-    expect(stage?.requestBytes).toBeNull();
-    expect(stage?.closeCode).toBeNull();
-    expect(stage?.sent).toBe(true);
-    expect(stage?.relayedEvents).toBeGreaterThan(0);
+
+    expect(response.status).toBe(200);
+    expect(readCodexWsStage(response)).toBe(adopted);
+    expect(adopted).toBeDefined();
+    expect(adopted?.requestBytes).toBeNull();
+    expect(adopted?.closeCode).toBeNull();
+    expect(adopted?.sent).toBe(true);
+    expect(adopted?.upstreamFrames).toBe(3);
+    expect(adopted?.relayedEvents).toBe(3);
+  });
+
+  test("a body failure finalizes the stage reference adopted before the socket closes", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+    });
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit(),
+      noFallback as unknown as typeof fetch,
+      BOUNDED_WS_RUNTIME,
+    );
+    const adopted = readCodexWsStage(response);
+    const committedBytes = adopted?.requestBytes;
+    const committedCloseCode = adopted?.closeCode;
+    const ws = FakeWebSocket.instances[0]!;
+    const failure = failureMessageOf(response);
+    ws.emit("message", { data: JSON.stringify({
+      type: "response.output_text.delta", delta: "hi", item_id: "m1", output_index: 0, content_index: 0,
+    }) });
+    ws.emit("close", { code: 1006 });
+    const message = await failure;
+
+    expect(response.status).toBe(200);
+    expect(committedBytes).toBeNull();
+    expect(committedCloseCode).toBeNull();
+    expect(message).toContain("closed before a Responses terminal event (close 1006)");
+    expect(readCodexWsStage(response)).toBe(adopted);
+    expect(adopted?.requestBytes).toBe(Buffer.byteLength(ws.sent[0]!, "utf8"));
+    expect(adopted?.closeCode).toBe(1006);
+    expect(adopted?.upstreamFrames).toBe(2);
+    expect(adopted?.relayedEvents).toBe(2);
+  });
+
+  test("cancel-drain byte expiry persists the finalized WS stage in usage.jsonl", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-ws-stage-cancel-"));
+    const upstream = new AbortController();
+    let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    let relayStarted = false;
+    try {
+      installFake(ws => {
+        ws.emit("open", {});
+        ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      });
+      const response = await codexWsUpstreamFetch(
+        CODEX_URL,
+        { ...streamingInit(), signal: upstream.signal },
+        noFallback as unknown as typeof fetch,
+        BOUNDED_WS_RUNTIME,
+      );
+      const adopted = readCodexWsStage(response);
+      expect(adopted).toBeDefined();
+      expect(adopted?.requestBytes).toBeNull();
+      const entry: PersistedUsageEntry = {
+        requestId: "req-ws-stage-cancel", timestamp: 1, provider: "openai", model: "gpt-5.5",
+        status: 499, durationMs: 1000, usageStatus: "unreported",
+        attempts: [{ ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai-responses",
+          status: 499, durationMs: 1000, sendCount: 1, recoveryKinds: [], usageStatus: "unreported",
+          codexWsStage: adopted }],
+      };
+      const synthetic = jest.fn();
+      const onClientCancel = jest.fn(() => {
+        // The real writer is synchronous: keep this test-only path override in the same turn.
+        const previous = process.env.OPENCODEX_HOME;
+        process.env.OPENCODEX_HOME = dir;
+        try { appendUsageEntry(entry); }
+        finally {
+          if (previous === undefined) delete process.env.OPENCODEX_HOME;
+          else process.env.OPENCODEX_HOME = previous;
+        }
+      });
+      const reader = relaySseEagerBounded(response.body!, upstream, {
+        inspectChunk: () => {}, finishInspection: () => {}, sawTerminal: () => false,
+        onSynthetic: synthetic, onClientCancel, onDone: finish,
+      }, { postCancelDrainBytes: 1 }).getReader();
+      relayStarted = true;
+      await reader.read();
+      await reader.cancel();
+      const ws = FakeWebSocket.instances[0]!;
+      ws.emit("message", { data: JSON.stringify({
+        type: "response.output_text.delta", delta: "hi", item_id: "m1", output_index: 0, content_index: 0,
+      }) });
+      await done;
+
+      const rows = readFileSync(join(dir, "usage.jsonl"), "utf8").trim().split("\n");
+      expect(rows).toHaveLength(1);
+      const persisted = JSON.parse(rows[0]!) as PersistedUsageEntry;
+      const logged = persisted.attempts?.[0]?.codexWsStage;
+      expect(logged?.requestBytes).toBe(Buffer.byteLength(ws.sent[0]!, "utf8"));
+      expect(logged?.upstreamFrames).toBe(2);
+      expect(logged?.relayedEvents).toBe(2);
+      expect(logged?.closeCode).toBeNull();
+      expect(logged).toEqual(adopted);
+      expect(onClientCancel).toHaveBeenCalledTimes(1);
+      expect(synthetic).not.toHaveBeenCalled();
+      expect(upstream.signal.aborted).toBe(true);
+    } finally {
+      upstream.abort();
+      if (relayStarted) await done;
+      rmSync(dir, { recursive: true });
+    }
   });
 
   test("the serialized record is numeric/boolean/semver only", () => {
@@ -338,5 +473,38 @@ describe("codex ws stage record marker (#4191)", () => {
       if (typeof value === "string") expect(value.length).toBeLessThan(64);
       expect(key).not.toContain("reason");
     }
+  });
+});
+
+describe("native-control attach conflict", () => {
+  test("an already-owned channel fails the turn instead of falling back to HTTP", async () => {
+    installFake(ws => { ws.emit("open", {}); });
+    const init = streamingInit();
+    const prepared = prepareCodexWsRequest(CODEX_URL, init)!;
+    const session = new CodexWsSession("wss://chatgpt.com/backend-api/codex/responses", prepared.headers, true);
+    let fallbacks = 0;
+    const nativeControl = {
+      kind: "injection" as const,
+      relayActive: false,
+      attached: true,
+      ended: false,
+      attach() { throw new Error("Native injection transport is already owned."); },
+      observe() { return false; },
+      steer() { throw new Error("unreachable"); },
+      continue() { return false; },
+    };
+    const options = { session, url: CODEX_URL, init, prepared, nativeControl,
+      sseFallback: (async () => { fallbacks++; throw new Error("attach conflict must not fall back"); }) as typeof fetch };
+    try {
+      expect(session.reserve()).toBe(true);
+      const response = await codexWsExchange(options);
+      const ws = FakeWebSocket.instances.at(-1)!;
+      expect(fallbacks).toBe(0);
+      expect(ws.sent).toHaveLength(0);
+      expect(response.status).toBe(502);
+      expect(((await response.json()) as { error: { message: string } }).error.message).toContain("already owned");
+      expect(ws.closed).toBe(true);
+      expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
+    } finally { session.dispose(); }
   });
 });

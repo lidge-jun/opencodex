@@ -19,7 +19,7 @@ export interface CodexSyncResult {
   /**
    * `skipped` is policy truth, never evidence that Codex was written.
    * `catalog-only` means an explicit sync refreshed the catalog/cache while
-   * config/history injection was skipped (OFF, externally owned, or protected history).
+   * config/history injection was skipped (integration OFF, or externally owned).
    */
   status: "applied" | "skipped" | "catalog-only" | "refused";
   ok: boolean;
@@ -51,8 +51,9 @@ export interface CodexSyncOptions {
    * Explicit `ocx sync` is also the refresh path for side profiles that consume
    * the OpenCodex catalog without injection. When set, the sync still refreshes
    * the catalog and models cache even if the Codex integration toggle is OFF or
-   * an external `model_provider` owns config.toml, or paginated history refuses
-   * injection. Config/history injection is skipped in those cases.
+   * an external `model_provider` owns config.toml. Config/history injection is
+   * skipped in those two cases. A paginated-history refusal is NOT one of them:
+   * the injector writes config and stands only its relabel unit down.
    */
   catalogEvenWhenNotInjected?: boolean;
 }
@@ -209,25 +210,12 @@ export async function syncModelsToCodex(
   // working catalog/cache into the partial result of an otherwise unnecessary refresh.
   const preflight = await deps.injectCodexConfig(p, config, { validateOnly: true });
   if (!preflight.success) {
-    // Explicit model refresh does not require legacy history relabeling. Keep the
-    // injector's refusal intact and publish only through the existing catalog owner.
-    // Unattended sync and other config/integrity refusals retain their hard failure.
-    if (catalogEvenWhenNotInjected
-      && preflight.historyPreflightFailureReason === "history_paginated_requires_native_writer") {
-      applyProxyEnv(config);
-      const refreshed = await refreshCatalogForSync(config, deps, undefined, log);
-      const ok = refreshed.refreshOutcome === "committed" && refreshed.catalogExists;
-      const message = ok
-        ? "Model catalog synchronized; Codex config and conversation history left unchanged because paginated history requires its native writer."
-        : "Model catalog refresh did not complete; Codex config and conversation history were left unchanged.";
-      reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
-      return {
-        ...refreshed,
-        status: "catalog-only",
-        ok,
-        message,
-      };
-    }
+    // A paginated-history refusal used to be downgraded here to a `catalog-only` success.
+    // That is what made the model picker regression silent: the catalog file was rewritten
+    // and reported synchronized while config.toml kept no provider table and no catalog
+    // path, so Codex offered only its native models. The injector now writes config and
+    // stands the relabel unit down instead, so nothing reaches this branch for that reason
+    // and a surviving refusal is a real config/integrity failure again.
     log?.error(preflight.message);
     reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
     return {
@@ -300,6 +288,12 @@ export async function syncModelsToCodex(
   }
   if (result.success) log?.log(result.message);
   else log?.error(result.message);
+  // The config was written; only the relabel unit stood down. Carry that as a warning so a
+  // caller reading the structured result sees it without parsing the display message.
+  if (result.success && result.historyPreflightFailureReason) {
+    const historyWarning = `Codex conversation-history relabel left to Codex's native writer: ${result.historyPreflightFailureReason}.`;
+    warning = warning ? `${warning} ${historyWarning}` : historyWarning;
+  }
   reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
   const projectConfigWarnings = printProjectCodexConfigWarnings(log, { cwd: process.cwd() });
   return {

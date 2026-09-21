@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as retry from "../../../src/lib/upstream-retry";
+import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
 import { safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
@@ -30,6 +33,106 @@ function vertexError(code: number, status: string, message: string): string {
 }
 
 describe("vertex retry fetch", () => {
+  for (const [name, fetchResponse] of [["Vertex", fetchVertexWithRetry], ["Antigravity", fetchAntigravityWithRetry]] as const) {
+    test.each([400, 429, 503, "reset"] as const)(`${name} prepaid final send prevents another inference or backoff (%s)`, async status => {
+      const parent = createRequestExecutionBudget();
+      parent.used = 3;
+      const { owner, dispose } = budgetOwner(parent);
+      const raw = status === 400 ? vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid") : `fixture ${status}`;
+      const first = status === "reset" ? Object.assign(new Error("fixture reset"), { code: "ECONNRESET" })
+        : new Response(raw, { status, headers: { "Retry-After": "60" } });
+      const fixture = mockFetch([first, new Response("unexpected replay")]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      const ordinals: number[] = [];
+      try {
+        const hop = owner.reserveCredentialHop("auth-recovery", request.url, true);
+        if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+        owner.pendingHopPermit = hop.permit;
+        const scope = owner.adapterDispatchBudget;
+        if (!scope) throw new Error("Expected an adapter dispatch budget");
+        const result = fetchResponse({ ...request, body: JSON.stringify({ request: {
+          contents: [{ role: "user", parts: [{ text: "hi" }] }],
+          tools: [{ functionDeclarations: [{ name: "replace_in_files", parameters: {
+            type: "object", properties: { occurrence_ids: { type: "array", items: { type: "string" } } },
+          } }] }],
+        } }) }, { sendBudget: scope, returnRawErrors: true, onPhysicalSend: send => ordinals.push(send.ordinal) });
+        if (status === "reset") await expect(result).rejects.toBeInstanceOf(retry.SendBudgetExhaustedError);
+        else {
+          const response = await result;
+          expect(response).toBe(first);
+          expect(await response.text()).toBe(raw);
+        }
+        expect(fixture.calls).toHaveLength(1);
+        expect(waits).not.toHaveBeenCalled();
+        expect(parent.used).toBe(4);
+        expect(ordinals).toEqual([1]);
+      } finally { waits.mockRestore(); dispose(); }
+    });
+  }
+
+  // #5044. A refused recovery used to leave nothing behind: one physical send, no recovery
+  // kind, and a real upstream response — byte-identical in the log to a request where no
+  // retry was ever eligible. Those two need opposite follow-ups.
+  test.each([429, 503] as const)("a retry the budget refuses is attributed, not silent (%s)", async status => {
+    const parent = createRequestExecutionBudget();
+    parent.used = 3;
+    const { owner, dispose } = budgetOwner(parent);
+    const first = new Response(`fixture ${status}`, { status, headers: { "Retry-After": "60" } });
+    const fixture = mockFetch([first, new Response("unexpected replay")]);
+    const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    const ordinals: number[] = [];
+    const withheld: string[] = [];
+    try {
+      const hop = owner.reserveCredentialHop("auth-recovery", request.url, true);
+      if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+      owner.pendingHopPermit = hop.permit;
+      const scope = owner.adapterDispatchBudget;
+      if (!scope) throw new Error("Expected an adapter dispatch budget");
+      const response = await fetchVertexWithRetry(request, {
+        sendBudget: scope,
+        returnRawErrors: true,
+        onPhysicalSend: send => ordinals.push(send.ordinal),
+        onRecoveryWithheld: event => withheld.push(event.reason),
+      });
+
+      // The upstream answer is preserved exactly; the attribution is additional evidence, not
+      // a substitute for it.
+      expect(response).toBe(first);
+      expect(withheld).toEqual(["retry-send-budget"]);
+      // And it did not become a send: `sendCount` must keep meaning "requests actually made".
+      expect(ordinals).toEqual([1]);
+      expect(fixture.calls).toHaveLength(1);
+      expect(parent.used).toBe(4);
+      expect(waits).not.toHaveBeenCalled();
+    } finally { waits.mockRestore(); dispose(); }
+  });
+
+  test("a status the ladder would never retry reports nothing withheld", async () => {
+    // The other half of the four-way distinction: no recovery kind AND no withheld reason has
+    // to keep meaning "nothing was eligible", or the new field says everything and so nothing.
+    const parent = createRequestExecutionBudget();
+    parent.used = 3;
+    const { owner, dispose } = budgetOwner(parent);
+    const first = new Response(vertexError(404, "NOT_FOUND", "no such model"), { status: 404 });
+    mockFetch([first, new Response("unexpected replay")]);
+    const withheld: string[] = [];
+    try {
+      const hop = owner.reserveCredentialHop("auth-recovery", request.url, true);
+      if (!hop.allowed || !hop.permit) throw new Error("Expected final prepaid send");
+      owner.pendingHopPermit = hop.permit;
+      const scope = owner.adapterDispatchBudget;
+      if (!scope) throw new Error("Expected an adapter dispatch budget");
+      const response = await fetchVertexWithRetry(request, {
+        sendBudget: scope,
+        returnRawErrors: true,
+        onRecoveryWithheld: event => withheld.push(event.reason),
+      });
+      expect(response).toBe(first);
+      expect(withheld).toEqual([]);
+    } finally { dispose(); }
+  });
+
+
   test("successful response bodies survive beyond the response-header timeout", async () => {
     globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
       async start(controller) {

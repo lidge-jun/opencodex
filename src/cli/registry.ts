@@ -20,7 +20,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     usage: "ocx setup",
     summary: "Interactive setup for providers and Codex config injection (alias of init).",
   },
-  { name: "start", usage: "ocx start [--port <port>]", summary: "Start the proxy server and sync models to Codex." },
+  {
+    name: "start",
+    usage: "ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]",
+    summary: "Start the proxy server and sync models to Codex.",
+    details: [
+      "--socks5 [host:port]  Route outbound provider traffic through SOCKS5 (default 127.0.0.1:10808). Saved as config.proxy.",
+      "--socks5-off          Clear a saved SOCKS5 outbound proxy from config.proxy.",
+    ],
+  },
   { name: "stop", usage: "ocx stop", summary: "Stop the proxy and restore native Codex config." },
   {
     name: "restore",
@@ -125,27 +133,29 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--restart-codex] [--restart-desktop-app]",
+    usage: "ocx sync [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
-      "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
-      "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
+      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, so its model picker re-reads the catalog. It ends live conversations.",
+      "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
+      "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
     ],
   },
   {
     name: "sync-cache",
-    usage: "ocx sync-cache [--restart-codex] [--restart-desktop-app]",
+    usage: "ocx sync-cache [--restart-codex] [--restart-app-server-only]",
     summary: "Refresh Codex's model cache from the active catalog.",
     details: [
       "Warns when Codex app-server processes still hold an in-memory model list.",
-      "--restart-codex sends SIGTERM only to matching app-server / code-mode-host processes (may interrupt active turns).",
-      "--restart-desktop-app (Windows only, opt-in) fully restarts the Codex desktop app so its model picker re-reads the catalog. Never implied by --restart-codex: it ends live conversations.",
+      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, so its model picker re-reads the catalog. It ends live conversations.",
+      "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
+      "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
     ],
   },
   {
     name: "catalog",
-    usage: "ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]",
+    usage: "ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]",
     summary: "Install a validated remote /v1/catalog snapshot into Codex.",
     details: [
       "Authentication is read only from the named environment variable and sent as a Bearer token.",
@@ -388,6 +398,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "system update manages OpenCodex itself.",
       "ocx system codex-cli-update check [--json]",
+      "ocx system codex-cli-update attest [--json]",
+      "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
       "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
     ],
   },
@@ -405,7 +417,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Ensures the proxy is running, then execs `claude` with ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN,",
       "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 and model slots from config.claudeCode.",
       "When Claude routing is explicitly disabled, it launches natively after removing proven OpenCodex-owned proxy state.",
-      "Routed models appear in the native /model picker with stable claude-opus-4-8-2026MMDD slot aliases (Claude Code >= 2.1.129).",
+      "Routed models appear in the native /model picker with stable claude-opus-4-8-YYYYMMDD slot aliases,",
+      "where the year runs 2026-2035 and 2026 slots are allocated first (Claude Code >= 2.1.129).",
       "Older versions: pick models via ANTHROPIC_MODEL or /model <id> directly (any string passes through).",
       "User-exported ANTHROPIC_* variables take precedence for routed launches; native fallback removes only proven OpenCodex-owned proxy values.",
       "",

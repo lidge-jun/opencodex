@@ -15,6 +15,7 @@ import { clearGenericFailoverHealth } from "../../../src/oauth/generic-account-f
 import { getAccountSet, saveCredential, setActiveAccount } from "../../../src/oauth/store";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testHome = "";
@@ -84,15 +85,24 @@ beforeAll(async () => {
   ({ handleResponses } = await import("../../../src/server/responses"));
 });
 
+let releaseSpendHome: (() => void) | undefined;
+
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-kiro-continuation-auth-"));
   process.env.OPENCODEX_HOME = testHome;
   kiroBuilds = [];
   clearAnthropicAccountPoolState();
   clearGenericFailoverHealth();
+  // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+  // last because the lease binds the home in effect at the moment it is taken.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(() => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   clearAnthropicAccountPoolState();
   clearGenericFailoverHealth();
   removeTreeWithRetry(testHome);

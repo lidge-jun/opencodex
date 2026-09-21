@@ -1,3 +1,7 @@
+import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
+import { comboProviderFactory } from "../helpers/combo-provider";
+import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
+import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
@@ -34,6 +38,9 @@ import { startServer } from "../../src/server";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess } from "../helpers/combo-failover-upstream";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { heldResponse } from "../helpers/held-response";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -58,6 +65,7 @@ const { createCursorAdapter } = await import("../../src/adapters/cursor");
 import type { CursorTransportFactory } from "../../src/adapters/cursor/transport";
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
+const provider = comboProviderFactory(() => customFetchResponse);
 let customTransientResponse: (() => Promise<Response>) | undefined;
 let customUsageEstimate: ((model: string) => number | undefined) | undefined;
 let customCursorTransportFactory: CursorTransportFactory | undefined;
@@ -102,7 +110,8 @@ mock.module("../../src/server/adapter-resolve", () => ({
         },
         async fetchResponse(request, context) {
           if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
-          return customFetchResponse(request, context);
+          return context!.executor!(request.url, { method: request.method, headers: request.headers,
+            body: request.body, signal: context?.abortSignal });
         },
       };
     }
@@ -135,6 +144,17 @@ let originalFetch: typeof fetch;
 let originalNow: () => number;
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
+// A case that calls a handler directly never takes the writer lease startServer takes, so its
+// dispatch is refused. Taken at the dispatch helpers rather than file-wide: the cases that do
+// start a real server already own it, and this only ever adds a reference on the same home.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+// Every turn these helpers hand back. A row that asserts only on a status leaves a
+// transformed body unread, and cancelling those before the listeners stop is what keeps a
+// reader from settling against the journal after its lease is gone.
+const pendingTurns: Response[] = [];
+function trackTurn(response: Response): Response { pendingTurns.push(response); return response; }
+
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalNow = Date.now;
@@ -161,11 +181,25 @@ beforeEach(() => {
 
 afterEach(async () => {
   let responseStatePending = true;
+  let cancelFailure: unknown;
   try {
+    // Rows that assert only on a status leave a transformed body unread. Cancelling those first
+    // means no reader is still attached when the listeners stop and the lease is given back. A
+    // cancel that throws fails the case rather than being swallowed, but not before every other
+    // turn and the listeners below have had their chance to close.
+    for (const turn of pendingTurns.splice(0)) {
+      if (turn.bodyUsed || !turn.body || turn.body.locked) continue;
+      try { await turn.body.cancel(); }
+      catch (error) { cancelFailure ??= error; }
+    }
     for (const server of servers.splice(0)) await server.stop(true);
     await flushResponseState();
     responseStatePending = responseStatePersistPendingForTests();
   } finally {
+    // After the listeners are stopped and the response state is flushed, both of which can
+    // still account against the journal, and before the home below is removed.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     clearResponseStateForTests();
     clearCursorThreadContinuityForTests();
     globalThis.fetch = originalFetch;
@@ -184,6 +218,7 @@ afterEach(async () => {
     clearCodexUpstreamHealth();
     clearRequestLogsForTests();
   }
+  if (cancelFailure !== undefined) throw cancelFailure;
   expect(responseStatePending).toBe(false);
 });
 
@@ -195,76 +230,6 @@ function serve(handler: (request: Request) => Response | Promise<Response>) {
 
 function baseUrl(server: ReturnType<typeof Bun.serve>): string {
   return `${server.url.toString().replace(/\/$/, "")}/v1`;
-}
-
-function chatSuccess(text: string, model = "model"): Response {
-  return Response.json({
-    id: `chatcmpl-${model}`,
-    object: "chat.completion",
-    model,
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
-  });
-}
-
-function chatStream(text: string): Response {
-  const frames = [
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } })}\n\n`,
-    "data: [DONE]\n\n",
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function chatTruncatedZeroOutputStream(): Response {
-  const frames = [
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: null }] })}\n\n`,
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function chatErrorStream(message: string, prefix?: string): Response {
-  const frames = [
-    ...(prefix
-      ? [`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: prefix }, finish_reason: null }] })}\n\n`]
-      : []),
-    `data: ${JSON.stringify({ error: { type: "server_error", code: "upstream_server_error", message } })}\n\n`,
-    "data: [DONE]\n\n",
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function responsesSuccess(text: string, model = "responses-model"): Record<string, unknown> {
-  return {
-    id: `resp-${model}`,
-    object: "response",
-    status: "completed",
-    model,
-    output: [{
-      id: "msg_backup",
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text, annotations: [] }],
-    }],
-    usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
-  };
-}
-
-function provider(
-  adapter: string,
-  url: string,
-  apiKey: string,
-  extra: Partial<OcxProviderConfig> = {},
-): OcxProviderConfig {
-  return {
-    adapter,
-    baseUrl: url,
-    allowPrivateNetwork: url.includes("127.0.0.1"),
-    authMode: "key",
-    apiKey,
-    ...extra,
-  };
 }
 
 function comboConfig(
@@ -286,11 +251,12 @@ async function post(
   options: HandleOptions = {},
   headers: Record<string, string> = {},
 ): Promise<Response> {
-  return handleResponses(new Request("http://localhost/v1/responses", {
+  takeSpendHome();
+  return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
-  }), config, { model: "", provider: "" }, options);
+  }), config, { model: "", provider: "" }, options));
 }
 
 let loggedRequestSequence = 0;
@@ -303,18 +269,19 @@ async function postLogged(
 ): Promise<Response> {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
+  takeSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
   }), config, logCtx, options);
   loggedRequestSequence += 1;
-  return responseWithDeferredRequestLog(
+  return trackTurn(responseWithDeferredRequestLog(
     response,
     `combo-test-${loggedRequestSequence}`,
     start,
     logCtx,
-  );
+  ));
 }
 
 async function postModelLogged(
@@ -326,18 +293,19 @@ async function postModelLogged(
 ): Promise<Response> {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
+  takeSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model, input: "hello", stream: false, ...raw }),
   }), config, logCtx, options);
   loggedRequestSequence += 1;
-  return responseWithDeferredRequestLog(
+  return trackTurn(responseWithDeferredRequestLog(
     response,
     `direct-test-${loggedRequestSequence}`,
     start,
     logCtx,
-  );
+  ));
 }
 
 async function latestAttemptReceipts(config: OcxConfig) {
@@ -1834,7 +1802,7 @@ describe("server combo failover 030 activation matrix", () => {
       .toEqual({ inputTokens: 17, outputTokens: 3, totalTokens: 20 });
   });
 
-  test("provider-local retry keeps one attempt, two sends, recovery kind, and latest estimate", async () => {
+  test("provider-local key retry keeps separate attempts and the latest estimate on the selected key", async () => {
     const estimates = [10, 25];
     customUsageEstimate = () => estimates.shift();
     let calls = 0;
@@ -1855,11 +1823,14 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await postLogged(config);
     expect(response.status).toBe(200);
     await response.text();
-    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    const attempts = (await latestAttemptReceipts(config)).usage.attempts;
+    expect(attempts).toHaveLength(2);
+    expect(attempts?.[0]).toMatchObject({ sendCount: 1, usageStatus: "unreported" });
+    const attempt = attempts?.[1];
     expect(attempt).toMatchObject({
       provider: "a",
       model: "m1",
-      sendCount: 2,
+      sendCount: 1,
       inputTokenEstimate: 25,
       recoveryKinds: ["key-429"],
     });
@@ -2069,6 +2040,7 @@ describe("server combo failover 030 activation matrix", () => {
       "chatgpt-account-id": authKind === "mismatched-account" ? "other-account"
         : authKind === "org-only-jwt" ? "org-foreign" : "acct-scoped-sidecar",
     };
+    takeSpendHome();
     const response = authKind === "chat-valid"
       ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { "content-type": "application/json", ...headers },
@@ -2085,59 +2057,11 @@ describe("server combo failover 030 activation matrix", () => {
     expect(primaryHits.every(hit => hit.webTool === valid)).toBe(true);
   });
 
-  test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {
-    let stopBackupHits = 0;
-    const context = serve(() => Response.json({ error: { code: "context_length_exceeded", message: "too many tokens" } }, { status: 400 }));
-    const unused = serve(() => {
-      stopBackupHits += 1;
-      return chatSuccess("must not run");
-    });
-    const stopConfig = comboConfig({
-      a: provider("openai-chat", baseUrl(context), "key-a"),
-      b: provider("openai-chat", baseUrl(unused), "key-b"),
-    });
-    const stopped = await post(stopConfig);
-    expect(stopped.status).toBe(400);
-    expect(stopBackupHits).toBe(0);
-
-    const order: string[] = [];
-    const first = serve(() => {
-      order.push("a");
-      return new Response("secret sk-a-should-redact", { status: 503 });
-    });
-    const last = serve(() => {
-      order.push("b");
-      return Response.json({ error: { message: "missing model" } }, { status: 404 });
-    });
-    const exhausted = await post(comboConfig({
-      a: provider("openai-chat", baseUrl(first), "key-a"),
-      b: provider("openai-chat", baseUrl(last), "key-b"),
-    }));
-    expect(exhausted.status).toBe(404);
-    expect(order).toEqual(["a", "b"]);
-    expect(await exhausted.text()).not.toContain("sk-a-should-redact");
+  registerComboContextOverflowCases({
+    serve, baseUrl, chatSuccess, chatStream, provider, comboConfig, post, collectSse,
   });
 
-  test("provider-specific prompt-too-long 400 hops to a larger-context combo target", async () => {
-    let backupHits = 0;
-    const capped = serve(() => Response.json({ error: {
-      message: "Prompt 346030 > 262144 maximum context length",
-      type: "invalid_request_prompt_too_long",
-      code: "5059",
-      raw_status_code: 400,
-    } }, { status: 400 }));
-    const backup = serve(() => {
-      backupHits += 1;
-      return chatSuccess("larger context backup", "m2");
-    });
-    const response = await post(comboConfig({
-      a: provider("openai-chat", baseUrl(capped), "key-a"),
-      b: provider("openai-chat", baseUrl(backup), "key-b"),
-    }));
-    expect(response.status).toBe(200);
-    expect(backupHits).toBe(1);
-    expect(await response.text()).toContain("larger context backup");
-  });
+  registerComboContextHeadroomCases({ serve, baseUrl, chatSuccess, provider, comboConfig, post });
 
   test("429 Retry-After 120 keeps A cooling at 60 seconds and restores it at 120", async () => {
     const t0 = Date.parse("2026-07-18T00:00:00.000Z");
@@ -2269,6 +2193,59 @@ describe("server combo failover 030 activation matrix", () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.text()).toContain("No available targets for combo: free");
     expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
+  });
+
+  test("single-target combo with waitForCooldownMs waits and retries on failure", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return hits === 1
+        ? Response.json({ error: { message: "service unavailable" } }, { status: 503 })
+        : chatSuccess("single target recovered", "m1");
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("single target recovered");
+    expect(hits).toBe(2);
+  });
+
+  test("single-target combo with waitForCooldownMs stops after one retry when upstream fails continuously", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const cooldown = { cooldownMs: 50, waitForCooldownMs: 500 };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], cooldown));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(2);
+  });
+
+  test("single-target combo with unset waitForCooldownMs fails immediately on 503", async () => {
+    let hits = 0;
+    const upstream = serve(() => {
+      hits += 1;
+      return Response.json({ error: { message: "service unavailable" } }, { status: 503 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(upstream), "key-a"),
+    };
+    const response = await post(comboConfig(providers, [
+      { provider: "a", model: "m1" },
+    ], { cooldownMs: 50 }));
+    expect(response.status).toBe(503);
+    expect(hits).toBe(1);
   });
 
   test("a past Retry-After date remains immediate through response consumption", async () => {
@@ -2445,23 +2422,36 @@ describe("server combo failover 030 activation matrix", () => {
     });
     const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") });
     const headers = { "x-codex-parent-thread-id": "combo-task" };
-
     const legacyResponse = await post(config, {
       previous_response_id: "resp_combo_legacy_unscoped",
       input: "fresh scoped input",
     }, {}, headers);
+    const fullInput = [{ role: "user", content: "complete history" }, { role: "user", content: "current turn" }];
+    const fullMismatch = await post(config, {
+      previous_response_id: "resp_combo_scoped",
+      input: fullInput,
+    }, {}, { "x-codex-parent-thread-id": "other-task" });
+    const genericError = {
+      error: { message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+        type: "invalid_request_error", code: "previous_response_not_found" },
+    };
+    expect(legacyResponse.status).toBe(400);
+    expect(await legacyResponse.json()).toEqual(genericError);
+    expect(fullMismatch.status).toBe(400);
+    expect(await fullMismatch.json()).toEqual(genericError);
+    expect(bodies).toHaveLength(0);
+    const retried = await post(config, { input: fullInput }, {}, { "x-codex-parent-thread-id": "other-task" });
     const scopedResponse = await post(config, {
       previous_response_id: "resp_combo_scoped",
       input: "continue scoped task",
     }, {}, headers);
-
-    expect(legacyResponse.status).toBe(200);
-    expect(scopedResponse.status).toBe(200);
-    expect(bodies).toHaveLength(2);
-    expect(JSON.stringify(bodies[0])).not.toContain("legacy private history");
-    expect(JSON.stringify(bodies[0])).toContain("fresh scoped input");
+    const legacyUnscoped = await post(config, { previous_response_id: "resp_combo_legacy_unscoped",
+      input: "legacy continuation" });
+    expect([retried.status, scopedResponse.status, legacyUnscoped.status]).toEqual([200, 200, 200]);
+    expect(bodies).toHaveLength(3);
+    expect(JSON.stringify(bodies[0])).toContain("complete history");
     expect(JSON.stringify(bodies[1])).toContain("scoped private history");
-    expect(JSON.stringify(bodies[1])).toContain("continue scoped task");
+    expect(JSON.stringify(bodies[2])).toContain("legacy private history");
   });
 
   test("combo child preserves replay provenance for compaction and generated guidance", async () => {
@@ -3027,6 +3017,7 @@ describe("server combo failover 030 activation matrix", () => {
       }),
       b: provider("openai-chat", baseUrl(b), "key-b", {
         reasoningEfforts: ["low", "high"],
+        modelInputModalities: { m2: ["text", "image"] },
       }),
     }, undefined, { defaultEffort: "high" });
     const response = await post(config, {
@@ -3058,19 +3049,8 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bodies.map(row => row.body.reasoning_effort)).toEqual(["low", "low"]);
   });
 
-  test("backup noReasoningModels removes the fresh combo default", async () => {
-    const a = serve(() => Response.json({ error: { message: "retry" } }, { status: 503 }));
-    let backupBody: Record<string, unknown> | undefined;
-    const b = serve(async request => {
-      backupBody = await request.json() as Record<string, unknown>;
-      return chatSuccess("no reasoning", "m2");
-    });
-    const config = comboConfig({
-      a: provider("openai-chat", baseUrl(a), "key-a"),
-      b: provider("openai-chat", baseUrl(b), "key-b", { noReasoningModels: ["m2"] }),
-    }, undefined, { defaultEffort: "high" });
-    expect((await post(config)).status).toBe(200);
-    expect(backupBody).not.toHaveProperty("reasoning_effort");
+  registerComboForcedEffortCases({
+    serve, baseUrl, chatSuccess, chatStream, provider, comboConfig, post, latestAttemptReceipts,
   });
 
   test("bare third-party defaultModel keeps max off the native clamp path", async () => {
@@ -3381,7 +3361,8 @@ describe("server combo failover 030 activation matrix", () => {
     let cancels = 0;
     const parent: RequestLogContext = { model: "", provider: "" };
     const snapshots: RequestLogContext[] = [];
-    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", session_id: "hop-recall" },
       body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
     }), config, parent, {
@@ -3392,7 +3373,7 @@ describe("server combo failover 030 activation matrix", () => {
         finalized.resolve();
       },
       onNativePassthroughCancel: () => { cancels += 1; },
-    });
+    }));
     expect(response.status).toBe(200);
     await response.text();
     await within(finalized.promise);
@@ -3424,6 +3405,7 @@ describe("server combo failover 030 activation matrix", () => {
     const finalized = deferred();
     const observed: Array<{ status: number; log: RequestLogContext }> = [];
     try {
+      takeSpendHome();
       const response = await within(handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
@@ -3472,14 +3454,10 @@ describe("server combo failover 030 activation matrix", () => {
 
   test("connect cancellation wins with 499, no backup, warning, or cooldown", async () => {
     let bHits = 0;
-    const aStarted = deferred();
-    const a = serve(() => {
-      aStarted.resolve();
-      return new Promise<Response>(() => {});
-    });
+    const a = heldResponse(serve);
     const b = serve(() => { bHits += 1; return chatSuccess("must not run"); });
     const config = comboConfig({
-      a: provider("openai-chat", baseUrl(a), "key-a"),
+      a: provider("openai-chat", baseUrl(a.server), "key-a"),
       b: provider("openai-chat", baseUrl(b), "key-b"),
     });
     const abort = new AbortController();
@@ -3488,9 +3466,9 @@ describe("server combo failover 030 activation matrix", () => {
     console.warn = (...args: unknown[]) => { warnings.push(args); };
     try {
       const pending = postLogged(config, {}, { abortSignal: abort.signal });
-      await aStarted.promise;
+      await within(a.started, 10_000);
       abort.abort(new DOMException("client closed", "AbortError"));
-      const response = await pending;
+      const response = await within(pending, 10_000);
       expect(response.status).toBe(499);
       expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
       await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "openai-chat" });
@@ -3498,6 +3476,8 @@ describe("server combo failover 030 activation matrix", () => {
       expect(warnings.some(row => String(row[0]).includes("[combo]"))).toBe(false);
       expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
     } finally {
+      abort.abort();
+      a.release();
       console.warn = originalWarn;
     }
   });
@@ -3688,11 +3668,12 @@ describe("cursor conversation continuity across store:false chains", () => {
   }
 
   async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
-    return handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ stream: false, store: false, ...raw }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
   }
 
   function cursorConfig(): OcxConfig {
@@ -3784,7 +3765,8 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const postThreadTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3797,7 +3779,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         store: false,
         prompt_cache_key: "shared-cache-key",
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postThreadTurn("start")).status).toBe(200);
     expect((await postThreadTurn([
@@ -3814,7 +3796,8 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postDesktopTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const postDesktopTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3827,7 +3810,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         stream: false,
         store: false,
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postDesktopTurn("start")).status).toBe(200);
     expect((await postDesktopTurn([
@@ -3844,7 +3827,8 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const postThreadTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3857,7 +3841,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         store: false,
         prompt_cache_key: "shared-cache-key",
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postThreadTurn("hello")).status).toBe(200);
     expect((await postThreadTurn([
@@ -3883,13 +3867,14 @@ describe("combo compact failover", () => {
   async function postCompactLogged(config: OcxConfig): Promise<Response> {
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const start = Date.now();
+    takeSpendHome();
     const response = await handleResponsesCompact(compactRequest({
       model: "combo/free",
       stream: false,
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] }],
     }), config, logCtx);
     loggedRequestSequence += 1;
-    return responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx);
+    return trackTurn(responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx));
   }
 
   function canonicalPoolConfig(
@@ -4082,4 +4067,126 @@ describe("thinking-summary defaults follow the serving combo route", () => {
       expect(output).toContain("Final fallback answer");
     });
   }
+});
+
+describe("optional-control rejection failover regression", () => {
+  for (const stream of [false, true]) {
+    test.each(["user", "reasoning.effort"])(`429 -> optional %s 400 -> 200, stream=${stream}`, async parameter => {
+      const hits: string[] = [];
+      const first = serve(() => {
+        hits.push("quota");
+        return Response.json({ error: { type: "rate_limit_error", message: "Rate limit exceeded" } }, { status: 429 });
+      });
+      const incompatible = serve(async request => {
+        hits.push("incompatible");
+        const raw = await request.json() as Record<string, unknown>;
+        expect(raw.user).toBe("synthetic-client");
+        const error = parameter === "user"
+          ? { type: "invalid_request_error", message: "Unsupported parameter: user" }
+          : { type: "invalid_request_error", code: "unsupported_value", param: "reasoning.effort",
+            message: "Unsupported value: 'none' is not supported with this model. Supported values are: 'low', 'medium', 'high', and 'xhigh'." };
+        return Response.json({ error }, { status: 400 });
+      });
+      const backup = serve(() => {
+        hits.push("backup");
+        return stream ? chatStream("recovered optional control") : chatSuccess("recovered optional control", "m3");
+      });
+      const config = comboConfig({
+        a: provider("openai-chat", baseUrl(first), "key-a"),
+        b: provider("openai-responses", baseUrl(incompatible), "key-b"),
+        c: provider("openai-chat", baseUrl(backup), "key-c"),
+      });
+      const response = await post(config, {
+        stream, user: "synthetic-client", prompt_cache_key: "synthetic-cache",
+        reasoning: { effort: "none" },
+      });
+      const text = await response.text();
+      expect(response.status).toBe(200);
+      expect(text).toContain("recovered optional control");
+      expect(text).not.toContain("Unsupported parameter");
+      expect(text).not.toContain("Unsupported value");
+      expect(hits).toEqual(["quota", "incompatible", "backup"]);
+      expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
+    });
+  }
+
+  for (const stream of [false, true]) {
+    test(`Responses tool-routing mismatch advances to a healthy target, stream=${stream}`, async () => {
+      const hits: string[] = [];
+      const toolResult = { type: "function_call_output", call_id: "call_exec", output: "tool result" };
+      const incompatible = serve(async request => {
+        hits.push("incompatible");
+        const raw = await request.json() as { input?: unknown[] };
+        expect(raw.input).toEqual([toolResult]);
+        return Response.json({ error: {
+          type: "invalid_request_error", code: null, param: "reasoning_effort",
+          message: "Function tools with reasoning_effort are not supported for gpt-6-astra-2026-09-03 in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+        } }, { status: 400 });
+      });
+      const backup = serve(async request => {
+        hits.push("backup");
+        const raw = await request.json() as { input?: unknown[] };
+        expect(raw.input).toEqual([toolResult]);
+        const response = responsesSuccess("recovered tool request", "m2");
+        return stream
+          ? new Response([
+            `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "recovered tool request", item_id: "msg_backup", output_index: 0, content_index: 0 })}\n\n`,
+            `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\n`,
+          ].join(""), { headers: { "content-type": "text/event-stream" } })
+          : Response.json(response);
+      });
+      const config = comboConfig({
+        a: provider("openai-responses", baseUrl(incompatible), "key-a"),
+        b: provider("openai-responses", baseUrl(backup), "key-b"),
+      });
+      const response = await post(config, { stream, input: [toolResult], reasoning: { effort: "high" }, tools: [{
+        type: "function", name: "exec", description: "Run a command",
+        parameters: { type: "object", properties: {} },
+      }] });
+      const text = await response.text();
+      expect(response.status).toBe(200);
+      expect(text).toContain("recovered tool request");
+      expect(text).not.toContain("chat/completions");
+      expect(hits).toEqual(["incompatible", "backup"]);
+      expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
+    });
+  }
+});
+
+describe("image-capability rejection failover regression", () => {
+  test("429 -> model-scoped image 400 -> healthy target does not abort the turn", async () => {
+    const hits: string[] = [];
+    const quota = serve(() => {
+      hits.push("quota");
+      return Response.json({ error: { type: "rate_limit_error", message: "Rate limit exceeded" } }, { status: 429 });
+    });
+    const textOnly = serve(() => {
+      hits.push("text-only");
+      return Response.json({ error: {
+        type: "invalid_request_error", code: null, param: "input",
+        message: "Model 'gpt-5.3-codex-spark' does not support image inputs. Try again with a vision model.",
+      } }, { status: 400 });
+    });
+    const vision = serve(() => {
+      hits.push("vision");
+      return chatSuccess("vision fallback recovered", "m3");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(quota), "key-a"),
+      b: provider("openai-responses", baseUrl(textOnly), "key-b"),
+      c: provider("openai-chat", baseUrl(vision), "key-c"),
+    });
+    const response = await post(config, {
+      input: [{ type: "message", role: "user", content: [
+        { type: "input_text", text: "inspect this" },
+        { type: "input_image", image_url: "data:image/png;base64,AA==" },
+      ] }],
+    });
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(text).toContain("vision fallback recovered");
+    expect(text).not.toContain("does not support image inputs");
+    expect(hits).toEqual(["quota", "text-only", "vision"]);
+    expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
+  });
 });

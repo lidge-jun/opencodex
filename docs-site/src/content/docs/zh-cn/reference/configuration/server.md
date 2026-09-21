@@ -12,7 +12,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理监听端口。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
-| `proxy?` | `string` | — | 出站 HTTP(S) 代理 URL，或 `${ENV_VAR}`。仅当 `HTTP_PROXY` / `HTTPS_PROXY` 未设置时才会应用；回环地址始终保留在 `NO_PROXY` 中。 |
+| `proxy?` | `string` | — | 出站 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`），或 `${ENV_VAR}`。HTTP URL 仅在未设置时写入 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用内置的真实 SOCKS5 隧道，也会写入 `ALL_PROXY`（`ocx start --socks5`）；并清除本进程继承的 `HTTP(S)_PROXY`。回环地址始终保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 显式启用：当 Responses turn 既无文本也无工具调用时，使用相同请求重试一次，包括流在终止事件之前结束的情况。重试可能产生费用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不修改配置的情况下禁用；combo 与 routed-compaction turn 不参与。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | 从 Codex Responses 透传响应中移除 Codex safety-buffering 提示：`x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头、类型为 `safety_buffering` 的 `response.metadata` SSE 事件，以及其他 SSE 事件中的 `safety_buffering` 字段。Codex TUI 会将这些提示显示为“使用更快模型重试”的提示框，其默认操作会把会话切换到较弱的模型。其他 `x-codex-*` 响应头和其他所有 SSE 事件内容均保持不变，但会移除该字段。默认关闭。 |
 | `stallTimeoutSec?` | `number` | `300` | 上游无有效进展的秒数，适用于 Responses 和原生 Chat；最小 1 秒。 |
@@ -20,7 +20,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `shutdownTimeoutMs?` | `number` | `5000` | 优雅停机截止时间，超过后会中止仍在进行中的请求。 |
 | `websockets?` | `boolean` | `false` | 声明并允许面向客户端的 Responses WebSocket 路径。设为 false 时客户端使用 HTTP/SSE；它不会禁用符合条件的 canonical ChatGPT 上游 WS 优化。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS 额外允许的精确 origin。loopback origin 始终允许；支持 `chrome-extension://<扩展 ID>` 等基于 authority 的浏览器扩展 origin，`*` 不是通配符。Firefox 和 Safari 会（每次安装/启动浏览器时）重新生成扩展 UUID，origin 变化后请更新该条目。 |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | 管理平面和非回环绑定上的数据平面身份验证可接受的已生成 `ocx_…` 凭据。由仪表板管理。 |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` 数据平面准入凭据（用于非回环绑定）。它们不授权管理 API；管理访问使用[管理 API 参考](/zh-cn/reference/management-api/)中说明的独立凭据。由仪表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |

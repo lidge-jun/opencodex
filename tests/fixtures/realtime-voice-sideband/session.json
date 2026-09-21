@@ -1,0 +1,30 @@
+{
+  "stage": "session",
+  "kind": "frames",
+  "title": "The session preamble reaches a client that was not connected yet",
+  "protocol": "frameless-bidi-v3",
+  "provenance": "Synthetic. Event names and payload shapes follow the Frameless Bidi v3 parser in codex-rs/codex-api/src/endpoint/realtime_websocket/protocol_frameless_bidi.rs; every identifier and string is invented for this fixture.",
+  "note": "A v3 WebRTC sideband carries no client session.update: the session is configured in the call-create HTTP body, and the socket only reports what the server decided. Both frames here therefore arrive before the client socket exists, which is exactly the preamble-capture path.",
+  "deidentified": true,
+  "callId": "rtc_fixture_session",
+  "preamble": [
+    {
+      "type": "session.started",
+      "session": {
+        "id": "sess_fixture_0001",
+        "model": "gpt-live-1-codex",
+        "instructions": "You are a fixture assistant."
+      }
+    }
+  ],
+  "clientFrames": [],
+  "upstreamFrames": [
+    {
+      "type": "session.updated",
+      "session": {
+        "id": "sess_fixture_0001",
+        "instructions": "You are a fixture assistant."
+      }
+    }
+  ]
+}

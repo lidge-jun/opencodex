@@ -3,7 +3,14 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
+import {
+  applyUpstreamRecoveryInit,
+  fetchWithResetRetry,
+  releaseResponseBodyBestEffort,
+  retryBackoffDelayMs,
+  sleepWithAbort,
+  RETRY_AFTER_CEILING_MS,
+} from "../lib/upstream-retry";
 import { withUpstreamHttpVersion } from "../lib/upstream-http-version";
 import { parseSidecarSSE, type WebSearchResult } from "./parse";
 import type { CodexUpstreamOutcome } from "../codex/routing";
@@ -35,6 +42,22 @@ export const IMAGE_INSTRUCTION =
 
 /** A search result, or an `error` string when the search couldn't run (surfaced as a tool result). */
 export type SidecarOutcome = WebSearchResult & { error?: string };
+
+/**
+ * Bounded same-search 429 replays for the sidecar POST.
+ *
+ * The forward backend throttles burst sidecar traffic, and without a replay the 429 becomes a
+ * failed tool result that poisons the query for the whole turn (see failedQueries in loop.ts).
+ * 1 initial send + 2 replays; Retry-After is honored as a lower bound and capped by
+ * RETRY_AFTER_CEILING_MS (an instruction past the ceiling ends with the 429 instead of
+ * parking the search). Each wait releases the unread 429 body first so sockets do not
+ * accumulate under a rate-limit storm. Abort or timeout ends the wait through the existing
+ * catch, exactly like an abort during the SSE parse.
+ */
+const SIDECAR_429_MAX_ATTEMPTS = 3;
+const SIDECAR_429_BASE_DELAY_MS = 1_000;
+const SIDECAR_429_MAX_DELAY_MS = 10_000;
+
 export type SidecarOutcomeRecorder = (outcome: CodexUpstreamOutcome) => void;
 
 /**
@@ -79,7 +102,7 @@ export async function runWebSearch(
   const sidecarExit = sidecarEnter("web-search");
   const t0 = Date.now();
   try {
-    const res = await fetchWithResetRetry(
+    const sendOnce = () => fetchWithResetRetry(
       // Recovery nests INSIDE the version helper: applyUpstreamRecoveryInit then always receives a
       // defined init, and withUpstreamHttpVersion spreads the result, so `protocol` and the
       // recovery fields (`connection: close` + Bun's transport-level `keepalive: false`) survive
@@ -94,8 +117,24 @@ export async function runWebSearch(
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
       }, recovery), forwardProvider)),
-      { abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
+      { replaySafe: true, abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
     );
+    let res = await sendOnce();
+    for (let attempt = 0; res.status === 429 && attempt + 1 < SIDECAR_429_MAX_ATTEMPTS; attempt++) {
+      const delay = retryBackoffDelayMs(attempt, {
+        baseDelayMs: SIDECAR_429_BASE_DELAY_MS,
+        maxDelayMs: SIDECAR_429_MAX_DELAY_MS,
+        headers: res.headers,
+        retryAfterIsLowerBound: true,
+      });
+      // A deadline, not a clamp: an instruction past the ceiling ends the search with the
+      // 429 instead of parking it at a provider that already said it would refuse.
+      if (delay > RETRY_AFTER_CEILING_MS) break;
+      console.warn(`[web-search] sidecar HTTP 429 — retrying (${attempt + 2}/${SIDECAR_429_MAX_ATTEMPTS}) after ${delay}ms`);
+      await releaseResponseBodyBestEffort(res.body, linkedSignal.signal);
+      await sleepWithAbort(delay, linkedSignal.signal);
+      res = await sendOnce();
+    }
     // Attach the body guard before ANY branch reads it. The success path guarded itself below,
     // but the failure branch's `res.text()` runs first, so a cancel landing between fetch
     // resolution and reader attach orphaned the internal rejection (found investigating #1419).

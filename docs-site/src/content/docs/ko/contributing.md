@@ -122,7 +122,7 @@ Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 
 
 ## 카탈로그에 프로바이더 추가하기
 
-모든 프로바이더 선택기와 seed는 canonical registry(`src/providers/registry.ts`)에서 파생됩니다.
+모든 프로바이더 선택기와 seed는 canonical registry(`src/providers/registry/entries-extended.ts`)에서 파생됩니다.
 
 ```ts
 {

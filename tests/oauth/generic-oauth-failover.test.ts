@@ -1,3 +1,4 @@
+import { readResponsesCoreSource } from "../helpers/responses-core-source";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
@@ -279,10 +280,7 @@ describe("#2568 generic OAuth account failover", () => {
  * first place: the main response path grew generic rotation and the two sidecars did not.
  */
 describe("sidecar on429 wiring", () => {
-  const coreSource = readFileSync(
-    repoPath("src", "server", "responses", "core.ts"),
-    "utf8",
-  );
+  const coreSource = readResponsesCoreSource();
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
     const hooks = coreSource.match(/^\s*on429: (\w+),$/gm)?.map(line => line.trim()) ?? [];
@@ -354,6 +352,25 @@ describe("sidecar on429 wiring", () => {
     expect(bearerWrites.length).toBe(1);
     const helperStart = coreSource.indexOf("const applyFailoverSnapshot =");
     expect(coreSource.indexOf("apiKey: snapshot.accessToken")).toBeGreaterThan(helperStart);
+  });
+
+  test("terminal continuation rotation rebinds both OAuth replay owners", () => {
+    // The continuation loop's generic OAuth arm rotates the credential through
+    // applyFailoverSnapshot, but until now it never rebound the reasoning replay scope. The
+    // terminal-guard clone (nextParsed) and the outer request (parsed) kept the FAILED
+    // account's replay identity, so the replayed turn could disclose or cache reasoning under
+    // the previous account's scope. The key-pool arm right above rebinds both owners; this
+    // arm must do the same.
+    const armStart = coreSource.indexOf("// Generic OAuth rotation for the continuation loop.");
+    expect(armStart).toBeGreaterThan(-1);
+    const armEnd = coreSource.indexOf("if (shouldAttemptImageTierRetry", armStart);
+    const arm = coreSource.slice(armStart, armEnd);
+
+    expect(arm).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
+    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(2);
+    expect(arm).toContain("parsed: nextParsed");
+    expect(arm).toMatch(/bindRouteReasoningReplayScope\(\{\s*parsed,/);
+    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(2);
   });
 
   test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {
@@ -590,6 +607,16 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
     // Over threshold: it advances, and to the NEXT account in the sorted roster rather than
     // to whichever id the login order happened to put first.
     expect(preferredInitialAccount(cfg, "xai")).toBe(sorted[1]!);
+  });
+
+  test("fill-first treats a zero threshold as disabling proactive switching", async () => {
+    const ids = await seed(2);
+    const active = [...ids].sort((left, right) => left.localeCompare(right))[0]!;
+    await setActiveAccount("xai", active);
+    const cfg = kernelConfig("fill-first", { autoSwitchThreshold: 0 });
+
+    setCachedProviderAccountQuotaForTests("xai", active, { weeklyPercent: 100, updatedAt: Date.now() });
+    expect(preferredInitialAccount(cfg, "xai")).toBeNull();
   });
 
   test("fill-first advances through the sorted roster, not the eligible subset", async () => {

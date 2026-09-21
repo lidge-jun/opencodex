@@ -1,7 +1,9 @@
 # Chat Provider Compatibility
 
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
-is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
+is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](cursor.md#cursor-native-exec).
 
 Native Codex Spark-specific request exceptions are absent. General Lite and namespace repair
 remain shared [Responses compatibility](../transports/responses.md#responses-httpsse), including
@@ -23,6 +25,15 @@ and does not guarantee upstream cache hits. Regression coverage is in
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
 ## Reasoning and tool-result compatibility
+
+Google tool-declaration narrowing is observed by the Google final compiler, not this shared Chat
+compatibility layer. Its endpoint profile and privacy boundary are specified in the
+[Google provider contract](google.md#google-tool-schema-loss-reporting).
+
+Chat models sometimes return a freeform call body under a common alternate field or wrap the whole
+body in a Markdown fence. Restoration in `src/responses/apply-patch-envelope.ts` is deliberately
+narrow: only bare `exec` and `apply_patch` accept one recognized alternate field or one complete
+outer fence, while ambiguous wrappers and provider-owned freeform grammars remain byte-exact.
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
 the originating call. Its wire-ID map retains the original ID privately so replacement or
@@ -55,6 +66,15 @@ messages until the round completes, reattaching real results to their original c
 and synthesizing explicit "no tool result was recorded" answers only when no real result exists
 (Kimi/Moonshot 400 `ocx-mrqaiw05-269`; unit `devlog/_fin/260718_dangling_toolcall_hardening`).
 
+The native Ollama wire carries the same contract. `src/adapters/ollama-native.ts`
+`buildNativeMessages` defers `user`/`developer` messages that arrive while a batch is open and
+releases them after the tool messages, and answers a call with no result anywhere in the replayed
+history with the same `[ocx] no tool result was recorded for "<name>"` marker. The shape it
+absorbs is ordinary Codex history, not a malformed one: Codex records mid-turn items (a
+`PostToolUse` hook verdict, a context notice) between an assistant `tool_calls` message and that
+call's own result. The strict pair checks (orphan result, duplicate result, result naming another
+tool) still throw on both wires (#4842).
+
 Forward-mode OpenAI passthrough also repairs replayed `call_id` values longer than the Responses
 API's 64-character limit. Sidechat/fork replay can namespace routed-provider ids beyond that limit,
 so each oversized id and all matching call/output items receive the same deterministic,
@@ -62,10 +82,20 @@ request-local alias. Raw API-key continuations deliberately preserve ids because
 continuation may reference a call stored upstream under its original id; proxy-expanded API-key
 replays are explicit and receive the same repair.
 
-Separately, Meta Muse Responses (`src/responses/muse-tool-name-alias.ts`) aliases function *tool
-names* that exceed 64 characters or contain characters outside `[a-zA-Z0-9_-]` on `api.meta.ai`
-only. That map is not the call-id repair: it covers tools, `additional_tools`, history calls, and
-`tool_choice`, then restores original names inbound.
+Tool-name normalization stays adapter-scoped. The translated Chat Completions path uses a
+request-scoped registry in `src/adapters/openai-chat/`: only flattened namespaced names over 64
+characters receive a deterministic, charset-safe alias. Catalog declarations, replayed calls and
+`tool_choice` share that registry, and streamed or buffered echoes restore to the original flattened
+name before the Responses bridge restores `{namespace, name}`. Names at or below the bound and bare
+names pass through unchanged, except declarations matching the reserved alias shape; those are
+re-aliased so they cannot shadow an identity-derived alias.
+
+The 64-character bound is a Chat Completions and strict-gateway compatibility concern: Command Code
+rejects a 66-character function name (#4679). Upstream Codex raised its own MCP ceiling to 128 bytes
+in `openai/codex#39594` because native Responses accepts 128, so that Responses limit does not govern
+this translated wire. Kiro (`src/adapters/kiro-tools.ts`), Google (its wire compiler), and Meta Muse
+Responses (`src/responses/muse-tool-name-alias.ts`, gated to `api.meta.ai`) each retain their own
+equivalent normalization and restoration.
 
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
@@ -91,8 +121,9 @@ boundary so the proxy does not retain request state across the whole stream. Thi
 pre-flight is the primary path and covers threads the process has served while their record remains
 inside the TTL/LRU bounds. Missing, expired, evicted, and
 pre-process history stays fail-soft on the first send. If a Responses upstream then returns its own
-self-identifying opaque-blob 4xx (`invalid_encrypted_content`, or xAI's two `invalid-argument`
-decoder errors), the proxy rebuilds once through the same sanitation path: reasoning
+self-identifying opaque-blob 4xx (`invalid_encrypted_content`, a reasoning `encrypted_content`
+that "was not issued to this caller" (#4469), or xAI's two `invalid-argument` decoder errors),
+the proxy rebuilds once through the same sanitation path: reasoning
 `encrypted_content` is removed and compaction blobs use the existing text degradation. A one-shot
 guard makes a second rejection terminal, and a successful recovery records the current serving
 identity so later route changes return to deterministic pre-flight. A cold-record cross-backend
@@ -130,7 +161,67 @@ dropped. This preserves #1292's single-call adjacency repair without splitting a
 batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
 and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
 
+That pass is gated by `requiresAdjacentResponsesToolResults`, not by provider name. Kimi's Code Plan
+Responses endpoint enforces the same strict shape and rejects a hook-split pair with HTTP 400 (#4726),
+so `kimi` and `kimi-code` carry the flag as well. The flag is inert while those presets use the Chat
+wire and takes effect when a row is configured onto `openai-responses`, which is the configuration the
+report exercised. xAI Grok 4.6/4.5 subscription Responses carries the same flag: after a mid-stream
+interrupt, Codex can replay a `function_call` with hook-injected developer context between it and
+its output, and later turns 400. The adjacency pass itself still does not invent duplicate or
+backwards pairs. No upstream specification documents the adjacency requirement; the evidence is the observed
+400 and DeepSeek's identical failure shape, which is why this stays a per-provider capability rather
+than a wire-wide default — upstream Codex leaves an intervening developer message where it is.
+
+A mid-stream interrupt produces a second, different shape: a call whose output never arrived at all.
+That is `requiresPairedResponsesToolResults`, a separate capability, and the separation is the whole
+point. Adjacency reorders items the upstream would accept in some order; pairing synthesizes an item
+the client never sent, which puts a tool turn into the conversation that did not happen. The evidence
+differs too — #4726 shows Kimi accepting a call with no result at all, so `kimi` and `kimi-code` keep
+adjacency and do not receive placeholders. `xai` carries both. `statelessResponses` implies pairing,
+which is how DeepSeek already had it: an upstream that stores nothing cannot resolve the missing half
+from its own history either.
+
+xAI's public Responses API is stateful (`store` defaults true; `previous_response_id` continues a
+stored conversation), so the provider is not marked `statelessResponses`. The pairing repair
+synthesizes an honest unknown-status placeholder without touching `store` or
+`previous_response_id`: repairing an interrupted history must not cost the thread its server-side
+state. Forward auth suppresses the synthesis regardless of the flag, because the backend that holds
+the conversation can resolve the pair itself.
+
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
+
+## Declared hosted-tool denials
+
+A gateway that speaks the Responses API does not necessarily accept everything OpenAI accepts.
+`unsupportedHostedTools` is how such a destination says so: it names the hosted tool declarations
+this provider rejects, and `stripUnsupportedHostedTools` in
+`src/adapters/openai-responses/tool-schema.ts` removes them from `tools`, from client-loaded
+`additional_tools`, and from `tool_choice` before the body is serialized.
+
+The capability is provider-declared rather than destination-matched, and that is the point. The
+original mechanism in `src/responses/hosted-tool-policy.ts` was a table of `(model, baseUrl)`
+predicates, so a narrower gateway could only be supported by shipping a proxy release naming its
+endpoint. The reported destination (#5002) accepted plain Responses requests and `function` tools
+but rejected hosted `web_search` with HTTP 400 `unsupported_request`, which meant a text-only
+prompt failed before the model answered, because Codex's hosted declaration travelled with it. A
+provider nobody has classified can now describe itself in config.
+
+The declaration is additive to that table, not a replacement for it. The table still covers
+destinations that reject a tool regardless of configuration, so an operator who never heard of the
+field stays protected; a declaration can only deny more, never re-enable a known-broken pairing.
+
+Two properties are deliberate. Spelling variants of one capability are aliased, so declaring
+`web_search` also denies `web_search_preview` — the rest of the proxy already folds that pair into
+a single tool, and honouring only the spelling the operator happened to write would reproduce the
+original 400 while the config claimed to have prevented it. And the value is validated against a
+closed vocabulary in `src/config/schema/leaf-validators.ts` and `src/server/auth-cors.ts`, because
+the provider schema ends in `.passthrough()`: an unvalidated misspelling would be persisted and
+then match no tool, leaving the operator with the upstream rejection this field exists to prevent
+and nothing explaining why. That is the `codexToolMode` lesson from #2106.
+
+This capability is independent of `supportsResponsesCustomTools`, which denies native `custom`
+tools and `custom_tool_call` items. A gateway that rejects both sets both; neither implies the
+other.
 
 ## OpenRouter provider routing
 
@@ -292,3 +383,57 @@ byte-limit boundaries.
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+## Anthropic parallel tool use
+
+`options.parallelToolCalls === false` maps onto Anthropic's nested
+`tool_choice.disable_parallel_tool_use`. Because the flag lives inside
+`tool_choice`, a request that carries only the parallel intent and no explicit
+choice gets a synthesized `{type:"auto"}` so the flag has somewhere to live;
+`required` maps to `{type:"any"}` and a named choice to `{type:"tool"}`, and both
+accept it. `{type:"none"}` does not receive the flag because tool use is already off,
+and a request with no tools on the wire emits no `tool_choice` at all. An unset or
+true `parallelToolCalls` is byte-identical to previous behavior.
+
+The flag constrains the model's output, not execution ordering. Sequential tool use
+is enforced by the caller's own loop returning each `tool_result` before issuing the
+next request; this mapping does not provide that.
+## Unmapped modalities are recorded, not dropped
+
+The translated Chat route has no video mapping — this adapter does not implement one.
+Both serialization branches emit a bounded marker for a video part: the image-bearing
+branch previously produced `{type:"text", text: undefined}`, a malformed part, and the
+text-only branch joined it to `""` so a video-only or text-plus-video message was
+dropped entirely. The marker names opencodex's own missing mapping; it does not assert
+anything about the provider's or model's capability, which the proxy has not
+established. Native Chat passthrough and Google inline video are separate routes and
+are unaffected.
+
+`input_audio` parts are recognized in the shared Responses parser and recorded as a
+presence marker in the translated IR. This is **presence only and not audio support**:
+the IR has no audio carrier and no adapter consumes one. The parser stays non-throwing
+because the native Responses passthrough also runs through `parseRequest` before the
+adapter forwards `_rawBody`, so refusing there would regress raw passthrough.
+
+The final registered adapter also checks the original input under the
+[untranslated-media contract](../adapters/registry.md#untranslated-input-media). Audio/file
+attachments cannot succeed merely because the normalized representation retained a text
+marker: translated adapters refuse them, while native Responses retains the original body.
+Chat conversion rejects recognized audio/file parts before projection; the native Chat wire
+is unchanged. No audio/file transport or automatic URL fetch is added, and no client filename,
+payload, URL or metadata is included in the new error messages.
+
+The shared coding-agent projection (CodeBuddy, Qoder) carries tool-result images as
+real image blocks rather than flattening them to the text `[image]`, and orders image
+blocks chronologically — history before current — so attachment order matches the
+prose the model reads beside them. Vendor tool execution stays disabled on both
+adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
+container followed by a named bare or namespaced invoke control line in either output channel; it
+preserves preceding answer text, never promotes vendor prose into execution authority,
+and leaves discussed or quoted literals and code examples untouched. Qoder's explicit
+refusal of original images is unchanged.
+
+Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
+
+Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+
+Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.

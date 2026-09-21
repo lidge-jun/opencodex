@@ -19,18 +19,31 @@ otomatik başlatma dolgusunu kurar.
 
 ## Proxy yaşam döngüsü
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Proxy sunucusunu başlatın (tercih edilen port `10100`). Bu port doluysa
-opencodex başka bir kullanılabilir port seçer ve kaydeder. PID/çalışma zamanı
-portu durumunu yazar ve ikinci bir canlı örneği başlatmayı reddeder. Başlangıçta
-her sağlayıcının modellerini Codex'in kataloğuna senkronize eder. Kapatıldığında
-— yönetilen bir servis olarak başlatılmadığı sürece (`OCX_SERVICE=1`) — yerel
-Codex'i geri yükler.
+Proxy sunucusunu başlatın (tercih edilen port `10100`). PID/çalışma zamanı portu
+durumunu yazar ve ikinci bir canlı örneği başlatmayı reddeder. Tercih edilen port
+doluysa `start`, portu tutan süreci sorgular ve her iki durumda da durur: orada bir
+opencodex yanıt veriyorsa başlatmayı reddeder, aksi halde portu tutan sürecin
+tanımlanamadığını bildirir. İlk proxy'yi çalışır durumda bırakıp Codex'i ikinciye
+yönlendireceği için dinleyiciyi kendiliğinden başka bir porta taşımaz. Aynı
+`OPENCODEX_HOME` kullanılırken farklı bir `--port` açıkça verilse de başlangıç reddedilir;
+yalnızca gözlem ve sınır uygulama kiplerinin ikisi de aynı harcama günlüğüne yazar. Bağımsız
+bir kardeş örnek için ayrı bir `OPENCODEX_HOME` kullanın. `port: 0` yalnızca port seçimini
+işletim sistemine bırakır, durumu ayırmaz. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
+senkronize eder. Kapatıldığında — yönetilen bir servis olarak başlatılmadığı sürece
+(`OCX_SERVICE=1`) — yerel Codex'i geri yükler.
+
+`--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
+HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş
+SOCKS5 proxy'sini temizler; HTTP proxy'sini silmez. Değer yapılandırmada tutulduğu için `ocx update`
+sonrasında da korunur. URL kullanıcı adı ve parola içerebilir, ancak başlangıç günlüklerinde gizlenir.
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -215,7 +228,7 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 
 ## Katalog senkronizasyonu
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 Yapılandırılmış her sağlayıcıdan canlı model listesini alın ve birleştirilmiş
 kataloğu Codex'e yeniden enjekte edin. Bir sağlayıcı ekledikten sonra veya
@@ -231,18 +244,33 @@ kontrolü kullanır.
 Uzun ömürlü Codex `app-server` süreçleri hala çalışıyorsa `ocx sync`,
 `opencodex-catalog.json` / `models_cache.json` güncellenmiş olsa bile önceki
 bellek içi model listesini sunmaya devam edebilecekleri konusunda uyarır.
-Yalnızca geçerli kullanıcıya ait eşleşen `codex … app-server` ve
-`codex-code-mode-host` süreçlerine `SIGTERM` göndermek için `--restart-codex`
-iletin (aktif turlar kesintiye uğrayabilir). Geniş `pkill -f codex`
+Eşleşen `codex … app-server` ve `codex-code-mode-host` süreçlerini yeniden
+başlatmak **ve** model seçicinin kataloğu yeniden okuması için Codex masaüstü
+uygulamasını macOS, Linux ve Windows'ta tamamen kapatıp yeniden başlatmak üzere
+`--restart-codex` iletin. Canlı konuşmalar sona erer. Geniş `pkill -f codex`
 eşleştirmesinden kasıtlı olarak kaçınılır.
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app`, `--restart-codex` için kullanımdan kaldırılmış bir
+takma addır. Hâlâ çalışır, bir kullanımdan kaldırma bildirimi basar ve yalnızca
+Windows'a özgü değildir.
+
+`--restart-app-server-only` eski dar davranışı geri getirir: yalnızca geçerli
+kullanıcıya ait eşleşen app-server / code-mode-host süreçlerine `SIGTERM`
+gönderir, masaüstü uygulamasını çalışır bırakır (aktif turlar yine kesintiye
+uğrayabilir). `--restart-codex` veya `--restart-desktop-app` ile birlikte
+verilirse dar kapsam kazanır; çünkü canlı konuşmaları kaybetmek geri
+alınamaz, eski bir seçici ise alınabilir.
+
+Komut Codex uygulamasının içinden çalıştırıldığında yeniden başlatma ayrılmış
+bir yardımcıya devredilir ve bu oturum uygulamayla birlikte sona erer.
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Codex'in yerel model seçici önbelleğini geçersiz kılın, böylece aktif opencodex
 kataloğundan yeniden oluşturulur. `ocx sync` ile aynı eski `app-server` uyarısı
-ve isteğe bağlı `--restart-codex` davranışı geçerlidir.
+ve isteğe bağlı yeniden başlatma bayrakları geçerlidir.
 
-### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 Başka bir OpenCodex örneğinin `/v1/catalog` uç noktasının sunduğu eksiksiz kataloğu kurar ve
 ardından `models_cache.json` dosyasını eşitler. URL HTTPS olmalıdır; HTTP yalnızca loopback için
@@ -251,11 +279,14 @@ yanıtlar ve geçersiz kataloglar, herhangi bir yerel yazma işleminden önce re
 doğrulama isteğe bağlıdır ve yalnızca ortam değişkeni adıyla (`--auth-env`) okunur, argv'den
 alınmaz.
 
+`HTTP_PROXY` veya `http_proxy` geçerliyken `NO_PROXY` ya da `no_proxy` içinde eşleşen bir istisna yoksa loopback HTTP istekleri, kimlik doğrulama başlıkları eklenmeden ve herhangi bir istek gönderilmeden reddedilir. `ALL_PROXY`/`all_proxy` ve yalnızca `HTTPS_PROXY`/`https_proxy` ayarları bu HTTP kısıtlamasını tetiklemez; HTTPS üzerinden katalog alımına izin verilmeye devam edilir. Ret mesajı proxy adresini veya kimlik doğrulama belirtecini içermez. Boş olmayan `http_proxy` ve `no_proxy` değerleri sırasıyla `HTTP_PROXY` ve `NO_PROXY` değerlerinden önce gelir. Bun ile uyumlu proxy atlama kuralları için ana makine adları, eşleşen `host:port` girdileri, `[::1]` gibi köşeli parantez içindeki IPv6 adresleri veya `*` kullanın; URL, yol veya `*.` öneki kullanmayın.
+
 Katalog ve önbellek, paylaşılan Codex katalog kilidi altında yazılır; bir hata durumunda
 last-known-good dosyalar korunur. Aynı baytlar, mtime değerlerini koruyan bir no-op'tur.
-`--restart-codex` yalnızca gerçek bir yazmadan sonra uygulanır. `ETag` koşullu istekleri ve Desktop
-uygulamasının yeniden başlatılması bu komutun kapsamında değildir. Tam `--json` zarfı ve çıkış
-kodları için [İngilizce referansa](/reference/cli/lifecycle/) bakın.
+`--restart-codex`, `--restart-app-server-only` ve kullanımdan kaldırılmış takma ad
+`--restart-desktop-app` yalnızca gerçek bir yazmadan sonra uygulanır ve `ocx sync` /
+`ocx sync-cache` ile aynı anlama gelir. `ETag` koşullu istekleri bu komutun kapsamında
+değildir. Tam `--json` zarfı ve çıkış kodları için [İngilizce referansa](/reference/cli/lifecycle/) bakın.
 
 ## Arka plan servisi
 
@@ -275,10 +306,10 @@ UAC onayı gerekebilir. Zaten normal veya yüksek öncelik ayarlanmışsa yalnı
 
 | Alt komut | Eylem |
 | --- | --- |
-| none | Servis yoksa kurup başlatın; varsa yenileyip yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
+| none | Servis yoksa kurup başlatın; varsa mevcut servise `repair` uygulayın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `install` | Servisi oluşturun ve başlatın. Kaydeder, bu da Windows'ta yükseltme gerektirir. |
-| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
-| `restart` | `repair` komutunun takma adıdır. |
+| `repair` | Kurulu bir servisi yerinde yenileyin. macOS'ta yönetici yalnızca bir şey değiştiğinde yeniden yüklenir; böylece sağlıklı, değişmemiş bir iş çalışmaya devam eder ve yenileme bir kesinti olmaz. Linux ve Windows'ta servis yeniden başlatılır; sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır, eski bir tanım ise yeniden kaydedilebilir ve yükseltme gerektirebilir. |
+| `restart` | Aynı yenileme ve her platformda garantili yeniden başlatma. macOS'ta değişmemiş, zaten yüklü bir iş yerinde kickstart edilir. `repair` komutunun takma adı değildir. |
 | `start` | Kurulu bir servisi başlatın. |
 | `stop` | Servisi durdurun ve yerel Codex'i geri yükleyin. |
 | `status` | Servis ve proxy tanılamalarını artı günlük yollarını bildirin. |
@@ -445,7 +476,7 @@ simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 ### `ocx gui`
 
 Çalışmıyorsa proxy'yi otomatik olarak başlatarak `http://localhost:<port>`
-adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın.
+adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yönetim ingress'i etkinse `http://127.0.0.1:<yönetim portu>` adresini açar.
 
 ## Güncelleme
 

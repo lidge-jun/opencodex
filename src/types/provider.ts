@@ -87,11 +87,11 @@ export interface RateLimitRetryPolicy {
 }
 
 /**
- * Backend ids admitted by `providers.<name>.webSearchBridge.backend`. Only `"ollama"` has a
- * shipped executor; every other id is explicit-only and inert, the same contract the top-level
- * `webSearchSidecar` uses for backends whose executor has not landed. Naming one of them keeps
- * the bridge disarmed rather than silently falling back to a different search provider — in
- * particular it never auto-selects a paid Luna or Exa search.
+ * Backend ids admitted by `providers.<name>.webSearchBridge.backend`. Each id is explicit-only:
+ * an omitted backend keeps the bridge disarmed rather than silently falling back to a paid
+ * Luna or Exa search. `ollama` spends this provider's API key on the search endpoint.
+ * `openai` / `anthropic` / `xai` / `gemini` / `exa` reuse the matching sidecar executor and
+ * that executor's own credential; a missing credential leaves the bridge disarmed.
  */
 export const PROVIDER_WEB_SEARCH_BRIDGE_BACKENDS = [
   "ollama",
@@ -118,6 +118,7 @@ export type ProviderWebSearchBridgeBackend = typeof PROVIDER_WEB_SEARCH_BRIDGE_B
  *
  * Never armed for `authMode: "forward"` (ChatGPT) or for a provider that executes hosted search
  * upstream; see `planPassthroughWebSearchBridge` in `src/web-search/passthrough-bridge.ts`.
+ * A mixed `web_search` + client tool call still fails closed. Assistant text is not a search call.
  */
 export interface ProviderWebSearchBridgeConfig {
   /** Master switch. Absent or false keeps today's relay-and-fail behavior exactly. */
@@ -310,6 +311,19 @@ export interface OcxProviderConfig {
    * preserved after it, and parallel calls stay together with the reasoning turn that produced them.
    */
   requiresAdjacentResponsesToolResults?: boolean;
+  /**
+   * Responses upstream whose parser also rejects a tool call that has no matching output
+   * anywhere in the replayed input, not merely one whose result sits out of order. A call left
+   * dangling by an interrupted stream is answered with an explicit unknown-status placeholder
+   * so the thread can continue.
+   *
+   * Separate from `requiresAdjacentResponsesToolResults` on purpose: adjacency reorders items a
+   * strict parser already accepts in some order, while this synthesizes an item the client never
+   * sent. Kimi accepts a dangling call (#4726), so it must not inherit the synthesis.
+   * `statelessResponses` implies this, because an upstream that stores nothing cannot resolve
+   * the missing half from its own history either.
+   */
+  requiresPairedResponsesToolResults?: boolean;
   /**
    * When enabled, a tool result that is present but empty (no usable text or content
    * part) is rewritten to an explicit annotation before it reaches the upstream wire,
@@ -604,6 +618,8 @@ export interface OcxProviderConfig {
   reasoningEfforts?: string[];
   /** Model-specific Codex-visible reasoning tiers. An empty array means “do not expose effort”. */
   modelReasoningEfforts?: Record<string, string[]>;
+  /** Catalog-only: do not synthesize a missing max rung for matching routed models. */
+  modelSuppressSyntheticMax?: Record<string, boolean>;
   /** Model-specific default Codex reasoning tier; must also be present in the visible tier list. */
   modelDefaultReasoningEfforts?: Record<string, string>;
   /** Operator-owned effort override; none omits effort and uses the provider default. */
@@ -663,6 +679,23 @@ export interface OcxProviderConfig {
    * apply_patch passthrough compatibility for OpenAI and unclassified gateways.
    */
   supportsResponsesCustomTools?: boolean;
+  /**
+   * Hosted tool declarations this Responses destination rejects, so they are stripped from
+   * the request instead of being forwarded and 400'd.
+   *
+   * This is how an OpenAI-compatible gateway with a narrower capability set than OpenAI
+   * describes itself. Before it existed, a destination that accepted plain Responses and
+   * `function` tools but rejected hosted `web_search` could only be handled by adding a
+   * hard-coded baseUrl rule to `src/responses/hosted-tool-policy.ts`, so every such gateway
+   * needed a proxy release; a text-only prompt like "Reply exactly with OK" failed before
+   * the model answered because the hosted declaration travelled with it (#5002).
+   *
+   * Values come from `DECLARABLE_HOSTED_TOOL_TYPES`. Spelling variants of one capability
+   * are aliased, so `["web_search"]` also denies `web_search_preview`. Pair this with
+   * `supportsResponsesCustomTools: false` for a gateway that also rejects native custom
+   * tools; the two capabilities are independent and denied independently.
+   */
+  unsupportedHostedTools?: string[];
   /**
    * Provider-local repair for Responses gateways whose lifecycle snapshots omit canonical
    * fields or closing events (#893). Disabled by default and applied only to client-facing
@@ -868,6 +901,8 @@ export interface OcxProviderConfig {
    * "cloud-code-assist" = Google Antigravity (Cloud Code Assist) OAuth + CCA envelope.
    */
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
+  googleToolSchemaPolicy?: "compatible" | "reject-lossy";
   /** Vertex AI GCP project id (or GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env). */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global" (or GOOGLE_CLOUD_LOCATION env). */

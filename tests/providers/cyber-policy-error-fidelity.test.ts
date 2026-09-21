@@ -17,6 +17,7 @@ import { formatPassthroughUpstreamError } from "../../src/server/responses/passt
 import { consumeComboFailure } from "../../src/server/responses/core";
 import { handleResponses } from "../../src/server/responses";
 import type { AdapterEvent, OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
@@ -219,6 +220,8 @@ describe("cyber_policy error fidelity", () => {
         },
       },
     } as OcxConfig;
+    // Taken after the inherited test home is in effect so physical dispatch can open its ledger.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -235,6 +238,8 @@ describe("cyber_policy error fidelity", () => {
         },
       });
     } finally {
+      // Released before surrounding teardown can replace the home and strand its live ledger.
+      releaseSpendHome();
       upstream.stop(true);
     }
   });
@@ -475,4 +480,3 @@ describe("#2488 nested policy identity is not hidden by an outer envelope", () =
     expect(failure.response.status).toBe(502);
   });
 });
-

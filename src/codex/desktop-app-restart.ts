@@ -1,52 +1,94 @@
 /**
- * Full restart of the Codex desktop app (the Electron shell), Windows only.
+ * Full restart of the Codex desktop app (the Electron shell) on macOS, Linux and
+ * Windows.
  *
- * `--restart-codex` deliberately signals only `codex app-server` /
- * `codex-code-mode-host` processes: `isCodexAppServerCommandLine` requires a
- * `codex` executable token, so the shell that owns the model picker is never a
- * match. On macOS that is enough, because the respawned app-server re-emits
- * `codex-app-server-initialized` and the renderer drops its cached
- * `model/list`. On Windows MSIX it is not: externally terminating the child
- * does not reliably re-emit that event in the surviving shell, so the picker
- * keeps showing the old catalog until the app itself is restarted (#2292).
+ * WHY THIS EXISTS AT ALL. `--restart-codex` used to signal only `codex app-server` /
+ * `codex-code-mode-host` processes, and on every platform that turns out not to
+ * refresh the model picker. The app-server it signals is a CHILD of the desktop app
+ * (measured: pid 16733 under pid 15901 on macOS, 3285204 under 3284901 on Linux), so
+ * the app simply respawns it while the renderer keeps the roster it built at launch.
+ * The matcher was never the problem; the only thing that reliably refreshes the
+ * picker is restarting the shell that owns it.
  *
- * This is therefore a SEPARATE opt-in flag rather than a widening of
- * `--restart-codex`. Quitting the desktop app ends live conversations, which is
- * a different consent from restarting a background helper, and the CLI contract
- * for `--restart-codex` promises the narrow behavior.
+ * WHY THE CONSENT CHANGED. This capability was deliberately kept behind a separate
+ * Windows-only `--restart-desktop-app` flag, because quitting the app ends live
+ * conversations and that is a larger consent than restarting a background helper.
+ * That reasoning was sound and has been superseded by an explicit maintainer
+ * decision: `--restart-codex` now means the app is fully stopped and started again.
+ * The narrow behaviour did not disappear, it moved to `--restart-app-server-only`.
  *
- * Everything here fails CLOSED: if the package cannot be identified, if a
- * target is part of our own ancestry, or if any target survives termination,
- * nothing is relaunched and the caller is told to restart manually. A stale
- * picker is a much smaller problem than a wrongly killed process.
+ * WHAT IS SHARED AND WHAT IS NOT. The ladder below — discover, enumerate, find
+ * shells, check self-ancestry, graceful, wait, re-verify identity, force, wait,
+ * refuse-or-relaunch — is identical on all three platforms. Only identity,
+ * discovery, membership, the two stop primitives and relaunch differ, and those live
+ * behind DesktopAppAdapter. Re-deriving the PID-reuse and fail-closed reasoning once
+ * per operating system is how two of the three end up subtly wrong.
+ *
+ * EVERYTHING FAILS CLOSED. A failed discovery, a failed enumeration, an unreadable
+ * process identity or an unreadable ancestry chain never authorises a kill and is
+ * never reported as "nothing to do". A stale picker is a much smaller problem than a
+ * wrongly killed process.
+ *
+ * Design and audit history: devlog/_plan/260913_cross_platform_desktop_app_restart/.
  */
-import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsTaskkillExe } from "../lib/windows-elevation";
-import { execFileSync } from "node:child_process";
+import {
+  acquireDesktopRestartLock,
+  releaseDesktopRestartLock,
+  type DesktopRestartLockIo,
+} from "./desktop-app/lock";
+import { rootShells, type DesktopAppAdapter, type DesktopExec, type DesktopProcess } from "./desktop-app/types";
+import { darwinDesktopAppAdapter, darwinDefaultExec } from "./desktop-app/darwin";
+import { linuxDesktopAppAdapter, linuxDefaultExec } from "./desktop-app/linux";
+import { windowsDesktopAppAdapter, windowsDefaultExec } from "./desktop-app/windows";
 
-/** Bounded subprocess options. A hung Appx/CIM probe must never wedge `ocx sync`. */
-export interface DesktopAppExecOptions {
-  timeout?: number;
-  windowsHide?: boolean;
+export type { DesktopAppExecOptions } from "./desktop-app/types";
+
+/** How long a graceful close is given before the forced pass. */
+const GRACEFUL_EXIT_TIMEOUT_MS = 15_000;
+/** How long a forced kill is given before the target counts as surviving. */
+const FORCED_EXIT_TIMEOUT_MS = 5_000;
+
+export interface DesktopAppRestartHandoff {
+  helperPid: number;
+  logPath: string;
 }
 
 export interface DesktopAppRestartIo {
   platform?: NodeJS.Platform;
-  /** Returns stdout. Options are part of the seam so the timeout is testable. */
-  execFile?: (file: string, args: readonly string[], options?: DesktopAppExecOptions) => string;
+  /** Overrides the adapter chosen from `platform`. Tests drive every branch through this. */
+  adapter?: DesktopAppAdapter;
+  execFile?: DesktopExec;
   /** Process ancestry of the current process, innermost first. Used for the self-kill guard. */
   ancestryPids?: () => number[];
   isAlive?: (pid: number) => boolean;
   sleep?: (ms: number) => void;
   now?: () => number;
+  lock?: DesktopRestartLockIo;
+  /**
+   * Hand the restart to a detached helper when this process is inside the tree.
+   * Supplied by wp5; absent here means the ladder refuses instead, which is the
+   * behaviour that shipped before the handoff existed.
+   */
+  startHandoff?: () => DesktopAppRestartHandoff | null;
+  /**
+   * False forbids a handoff. The helper passes it so recursion is structurally
+   * impossible, and the management service passes it because it runs inside a proxy
+   * that never exits — a handoff waiting for the caller to exit would always time out
+   * after telling the operator it had been handed off.
+   */
+  allowHandoff?: boolean;
 }
 
 export type DesktopAppRestartReason =
-  | "windows_only"
+  | "unsupported_platform"
   | "package_discovery_failed"
   | "process_probe_failed"
   | "no_targets"
   | "self_ancestry"
-  | "targets_survived";
+  | "restart_in_flight"
+  | "handoff_started"
+  | "targets_survived"
+  | "relaunch_failed";
 
 export interface DesktopAppRestartResult {
   attempted: boolean;
@@ -54,181 +96,14 @@ export interface DesktopAppRestartResult {
   surviving: number[];
   relaunch: "started" | "skipped";
   reason?: DesktopAppRestartReason;
+  handoff?: DesktopAppRestartHandoff;
 }
 
-/** How long a graceful close is given before the forced pass. */
-const GRACEFUL_EXIT_TIMEOUT_MS = 15_000;
-/** How long a forced kill is given before the target counts as surviving. */
-const FORCED_EXIT_TIMEOUT_MS = 5_000;
-/** Every probe is bounded; PowerShell module loading is the slow part. */
-const PROBE_TIMEOUT_MS = 10_000;
-
-interface DesktopPackage {
-  family: string;
-  installLocation: string;
-  aumid: string;
-}
-
-/**
- * Runtime discovery, never a hardcoded identifier. The beta MSIX package family
- * changes between builds, so a literal AUMID would silently stop matching and
- * then either do nothing or — worse — match a package we did not mean.
- */
-function discoverPackage(exec: NonNullable<DesktopAppRestartIo["execFile"]>): DesktopPackage | null {
-  const script = [
-    "$ErrorActionPreference='SilentlyContinue'",
-    "Import-Module Appx -ErrorAction SilentlyContinue",
-    "$p = Get-AppxPackage -Name OpenAI.Codex",
-    "if (-not $p) { $p = Get-AppxPackage -Name OpenAI.CodexBeta }",
-    "if (-not $p -or -not $p.InstallLocation) { 'MISS' } else {",
-    "  $p.PackageFamilyName; $p.InstallLocation; \"$($p.PackageFamilyName)!App\"",
-    "}",
-  ].join("; ");
-  let stdout: string;
-  try {
-    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], {
-      timeout: PROBE_TIMEOUT_MS,
-      windowsHide: true,
-    });
-  } catch {
-    return null;
-  }
-  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
-  if (lines.length < 3 || lines[0] === "MISS") return null;
-  const [family, installLocation, aumid] = lines;
-  if (!family || !installLocation || !aumid) return null;
-  return { family, installLocation, aumid };
-}
-
-interface DesktopProcess {
-  pid: number;
-  parentPid: number;
-  /** Win32_Process CreationDate. Guards against PID reuse across the wait window. */
-  createdAt: string;
-}
-
-/**
- * Only `ChatGPT.exe` processes whose image lives under the discovered install
- * location AND owned by the current user. The install location alone is not
- * enough: an MSIX package under `WindowsApps` is shared, so on a multi-user
- * machine another account's Codex desktop matches the same path. The app-server
- * collector already pays for `GetOwner` for exactly this reason.
- *
- * `CreationDate` is captured so a PID can be re-verified before it is signalled;
- * a graceful-close window is long enough for Windows to recycle a PID.
- */
-function listPackageProcesses(
-  exec: NonNullable<DesktopAppRestartIo["execFile"]>,
-  installLocation: string,
-): DesktopProcess[] | null {
-  const literal = installLocation.replace(/'/g, "''");
-  const script = [
-    "$ErrorActionPreference='SilentlyContinue'",
-    `$root = '${literal}'`,
-    "$me = ([Security.Principal.WindowsIdentity]::GetCurrent()).Name",
-    "Get-CimInstance Win32_Process -Filter \"Name='ChatGPT.exe'\" |",
-    "  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, 'OrdinalIgnoreCase') } |",
-    "  ForEach-Object {",
-    "    $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner",
-    "    if ($o -and $o.ReturnValue -eq 0 -and $o.User) {",
-    "      $owner = if ($o.Domain) { \"$($o.Domain)\\$($o.User)\" } else { $o.User }",
-    "      if ($owner -ieq $me) {",
-    "        \"$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToString('o'))\"",
-    "      }",
-    "    }",
-    "  }",
-  // Statements must be newline-separated. Joining with a space concatenates
-  // `$ErrorActionPreference='SilentlyContinue' $root = '...'` into one malformed statement,
-  // which PowerShell rejects — so the probe threw and every caller read "not running" (#2557).
-  ].join("\n");
-  let stdout: string;
-  try {
-    stdout = exec(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", script], {
-      timeout: PROBE_TIMEOUT_MS,
-      windowsHide: true,
-    });
-  } catch {
-    // A probe that could not run is NOT proof the app is absent. Returning [] here made a
-    // failed enumeration indistinguishable from "no targets", so the CLI reported the app as
-    // not running and skipped a restart the user had explicitly asked for.
-    return null;
-  }
-  const processes: DesktopProcess[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    const parentPid = Number(match[2]);
-    const createdAt = match[3]!;
-    if (Number.isSafeInteger(pid) && Number.isSafeInteger(parentPid)) {
-      processes.push({ pid, parentPid, createdAt });
-    }
-  }
-  return processes;
-}
-
-/**
- * True when the PID still names the same process we verified. Between listing
- * and signalling there is a graceful-close window, and a `taskkill /T /F` on a
- * recycled PID would tear down an unrelated process tree.
- */
-function stillSameProcess(
-  exec: NonNullable<DesktopAppRestartIo["execFile"]>,
-  installLocation: string,
-  target: DesktopProcess,
-): boolean {
-  const processes = listPackageProcesses(exec, installLocation);
-  // Fail CLOSED on a failed re-probe: this guards a kill, and "we could not look" must not be
-  // read as "the pid was recycled and is now someone else's process".
-  if (processes === null) return false;
-  const current = processes.find(p => p.pid === target.pid);
-  return current !== undefined && current.createdAt === target.createdAt;
-}
-
-/** Roots are the package processes whose parent is not itself in the package tree. */
-function rootProcesses(processes: readonly DesktopProcess[]): DesktopProcess[] {
-  const inTree = new Set(processes.map(p => p.pid));
-  return processes.filter(p => !inTree.has(p.parentPid));
-}
-
-/**
- * Full Windows parent chain for this process, innermost first.
- *
- * `process.ppid` is one level, which is not enough: a terminal hosted inside the
- * desktop app sits several hops below `ChatGPT.exe`, so a one-level check would
- * miss the exact case the guard exists for and we would terminate our own host.
- * The chain therefore comes from CIM, with a bound so a corrupted parent cycle
- * cannot spin.
- */
-function windowsAncestryPids(exec: NonNullable<DesktopAppRestartIo["execFile"]>): number[] {
-  const chain: number[] = [process.pid];
-  let current = process.pid;
-  for (let hop = 0; hop < 16; hop++) {
-    let stdout: string;
-    try {
-      stdout = exec(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile", "-NonInteractive", "-Command",
-        `$ErrorActionPreference='SilentlyContinue'; (Get-CimInstance Win32_Process -Filter "ProcessId=${current}").ParentProcessId`,
-      ], { timeout: PROBE_TIMEOUT_MS, windowsHide: true });
-    } catch {
-      // An unreadable chain must not be read as "not our ancestor".
-      return [];
-    }
-    const parent = Number(stdout.trim());
-    if (!Number.isSafeInteger(parent) || parent <= 0 || chain.includes(parent)) break;
-    chain.push(parent);
-    current = parent;
-  }
-  return chain;
-}
-
-function defaultExecFile(file: string, args: readonly string[], options?: DesktopAppExecOptions): string {
-  return execFileSync(file, [...args], {
-    encoding: "utf-8",
-    timeout: options?.timeout ?? PROBE_TIMEOUT_MS,
-    windowsHide: options?.windowsHide ?? true,
-  });
-}
+const ADAPTERS: Partial<Record<NodeJS.Platform, { adapter: DesktopAppAdapter; exec: DesktopExec }>> = {
+  darwin: { adapter: darwinDesktopAppAdapter, exec: darwinDefaultExec },
+  linux: { adapter: linuxDesktopAppAdapter, exec: linuxDefaultExec },
+  win32: { adapter: windowsDesktopAppAdapter, exec: windowsDefaultExec },
+};
 
 function defaultIsAlive(pid: number): boolean {
   try {
@@ -243,113 +118,223 @@ function defaultSleep(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function waitForExit(
-  pid: number,
+/**
+ * True when the pid still names the process we verified.
+ *
+ * Between listing and signalling there is a graceful-close window long enough for the
+ * OS to recycle a pid, and the next step is a hard kill. A pid alone is not an
+ * identity across that window; the start-time token is what distinguishes a process
+ * from its replacement.
+ */
+type IdentityCheck = "same" | "gone" | "unknown";
+
+function checkIdentity(
+  adapter: DesktopAppAdapter,
+  exec: DesktopExec,
+  install: Parameters<DesktopAppAdapter["listProcesses"]>[1],
+  target: DesktopProcess,
+): IdentityCheck {
+  const processes = adapter.listProcesses(exec, install);
+  // THREE outcomes, not two. Collapsing them into a boolean is what made this ladder
+  // claim a restart it never performed: a re-probe that could not RUN looked identical
+  // to a process that had exited, and the caller recorded the pid as stopped, skipped
+  // the forced pass, and relaunched into an app that was still running - reporting
+  // success the whole way. Measured on a real Windows host, where the app kept its
+  // original pid and start time through a restart that said it had stopped it.
+  if (processes === null) return "unknown";
+  const current = processes.find(entry => entry.pid === target.pid);
+  if (current === undefined) return "gone";
+  // Same pid, different start time: the pid was recycled and now belongs to somebody
+  // else. Treated as gone, because the process we meant to stop no longer exists and
+  // signalling this pid would hit an unrelated process.
+  return current.createdAt === target.createdAt ? "same" : "gone";
+}
+
+/**
+ * Pids of the running desktop-app tree, or null when discovery or the probe failed.
+ *
+ * Read-only. Used by the CLI to exclude app-servers the desktop restart is about to
+ * take anyway, so an operator\u2019s in-flight turn is not interrupted twice in one command.
+ */
+/**
+ * Poll the platform's own process list until it stops listing this process.
+ *
+ * A single post-kill enumeration is not enough. Measured on Windows: `taskkill /T /F`
+ * succeeds, the process is genuinely dead a moment later, and yet the very next
+ * `Win32_Process` query still lists it. Checking once turned that lag into a reported
+ * survivor, which blocked the relaunch and left the machine with no app at all - the
+ * failure mode is the mirror of claiming a stop that never happened, and just as bad.
+ *
+ * Liveness is polled first because it is cheap; the enumeration is what decides. A probe
+ * that cannot run keeps the loop going rather than deciding either way, and if the
+ * deadline passes without a clean "gone" the caller treats it as a survivor.
+ */
+function waitUntilGone(
+  adapter: DesktopAppAdapter,
+  exec: DesktopExec,
+  install: Parameters<DesktopAppAdapter["listProcesses"]>[1],
+  target: DesktopProcess,
   timeoutMs: number,
   isAlive: (pid: number) => boolean,
   sleep: (ms: number) => void,
   now: () => number,
 ): boolean {
   const deadline = now() + timeoutMs;
-  while (now() < deadline) {
-    if (!isAlive(pid)) return true;
+  for (;;) {
+    if (!isAlive(target.pid) && checkIdentity(adapter, exec, install, target) === "gone") return true;
+    if (now() >= deadline) break;
     sleep(250);
   }
-  return !isAlive(pid);
+  // One last look after the deadline, so a process that exited during the final sleep is
+  // not reported as surviving purely because of poll timing.
+  return checkIdentity(adapter, exec, install, target) === "gone";
 }
 
-/**
- * Stop every package-tree root gracefully, force the stragglers, then relaunch
- * through the discovered AUMID. Returns without relaunching if anything
- * survived, because launching a second shell beside a stuck one is worse than
- * leaving the user to restart it.
- */
-export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopAppRestartResult {
+export function listCodexDesktopAppPids(io: DesktopAppRestartIo = {}): number[] | null {
   const platform = io.platform ?? process.platform;
+  const selected = ADAPTERS[platform];
+  const adapter = io.adapter ?? selected?.adapter;
+  if (!adapter) return null;
+  const exec = io.execFile ?? selected?.exec;
+  if (!exec) return null;
+  const install = adapter.discover(exec);
+  if (!install) return null;
+  const processes = adapter.listProcesses(exec, install);
+  return processes === null ? null : processes.map(entry => entry.pid);
+}
+
+export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopAppRestartResult {
   const skipped = (reason: DesktopAppRestartReason): DesktopAppRestartResult => ({
     attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason,
   });
-  if (platform !== "win32") return skipped("windows_only");
 
-  const exec = io.execFile ?? defaultExecFile;
-  const pkg = discoverPackage(exec);
-  if (!pkg) return skipped("package_discovery_failed");
+  const platform = io.platform ?? process.platform;
+  const selected = ADAPTERS[platform];
+  const adapter = io.adapter ?? selected?.adapter;
+  const exec = io.execFile ?? selected?.exec;
+  if (!adapter || !exec) return skipped("unsupported_platform");
 
-  const processes = listPackageProcesses(exec, pkg.installLocation);
-  // A probe that could not run is not evidence of absence. Reporting it as `no_targets` told
-  // the user the app was not running and silently skipped the restart they asked for (#2557).
-  if (processes === null) return skipped("process_probe_failed");
-  const roots = rootProcesses(processes);
-  if (roots.length === 0) return skipped("no_targets");
+  // Step 0. Two restarts at once are destructive rather than merely wasteful: the
+  // first quits and relaunches, the second sees the freshly started shell as a target
+  // and kills it. Own-pid reentrancy means the wp5 helper runs this same step and
+  // finds the lock its caller made out to it.
+  const acquisition = acquireDesktopRestartLock(io.lock);
+  if (!acquisition.acquired) return skipped("restart_in_flight");
 
-  const ancestryPids = io.ancestryPids ? io.ancestryPids() : windowsAncestryPids(exec);
-  if (ancestryPids.length === 0) {
-    // Fail closed: an unreadable ancestry chain cannot prove we are outside the
-    // tree we are about to terminate.
-    return skipped("self_ancestry");
-  }
-  const ancestry = new Set(ancestryPids);
-  if (processes.some(p => ancestry.has(p.pid))) {
-    // Terminating our own tree would kill this command mid-flight and leave the
-    // user with neither a restarted app nor an explanation.
-    return skipped("self_ancestry");
-  }
-
-  const isAlive = io.isAlive ?? defaultIsAlive;
-  const sleep = io.sleep ?? defaultSleep;
-  const now = io.now ?? (() => Date.now());
-  const stopped: number[] = [];
-  const surviving: number[] = [];
-
-  for (const root of roots) {
-    const pid = root.pid;
-    // Re-verify immediately before the graceful close: the listing is already
-    // one probe old.
-    if (!stillSameProcess(exec, pkg.installLocation, root)) {
-      stopped.push(pid);
-      continue;
-    }
-    try {
-      exec(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile", "-NonInteractive", "-Command",
-        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { [void]$p.CloseMainWindow() }`,
-      ], { timeout: PROBE_TIMEOUT_MS, windowsHide: true });
-    } catch {
-      /* a refused graceful close still gets the forced pass below */
-    }
-    if (waitForExit(pid, GRACEFUL_EXIT_TIMEOUT_MS, isAlive, sleep, now)) {
-      stopped.push(pid);
-      continue;
-    }
-    // The wait window is long enough for Windows to recycle a PID, and the next
-    // step is `/T /F` against a whole tree. Confirm the PID is still the process
-    // we verified, or leave it alone.
-    if (!stillSameProcess(exec, pkg.installLocation, root)) {
-      stopped.push(pid);
-      continue;
-    }
-    try {
-      exec(resolveTrustedWindowsTaskkillExe(), ["/PID", String(pid), "/T", "/F"], {
-        timeout: PROBE_TIMEOUT_MS, windowsHide: true,
-      });
-    } catch {
-      /* fall through to the liveness check: the process state decides, not the exit code */
-    }
-    if (waitForExit(pid, FORCED_EXIT_TIMEOUT_MS, isAlive, sleep, now)) stopped.push(pid);
-    else surviving.push(pid);
-  }
-
-  if (surviving.length > 0) {
-    return { attempted: true, stopped, surviving, relaunch: "skipped", reason: "targets_survived" };
-  }
-
+  let handedOff = false;
   try {
-    exec(resolveTrustedWindowsPowerShellExe(), [
-      "-NoProfile", "-NonInteractive", "-Command",
-      `Start-Process 'shell:AppsFolder\\${pkg.aumid}'`,
-    ], { timeout: PROBE_TIMEOUT_MS, windowsHide: true });
-  } catch {
-    return { attempted: true, stopped, surviving, relaunch: "skipped", reason: "targets_survived" };
+    const install = adapter.discover(exec);
+    if (!install) return skipped("package_discovery_failed");
+
+    const processes = adapter.listProcesses(exec, install);
+    // A probe that could not run is not evidence of absence. Reporting it as no_targets
+    // told users the app was not running and silently skipped the restart they asked
+    // for (#2557).
+    if (processes === null) return skipped("process_probe_failed");
+
+    const shells = rootShells(processes, install, adapter);
+    if (shells.length === 0) return skipped("no_targets");
+
+    const ancestryPids = io.ancestryPids ? io.ancestryPids() : adapter.ancestryPids(exec);
+    // An empty chain means "could not establish that we are outside the tree", which
+    // covers both an unreadable hop and a walk that hit its bound.
+    const insideTree = ancestryPids.length === 0
+      || processes.some(entry => ancestryPids.includes(entry.pid));
+    if (insideTree) {
+      if (io.allowHandoff === false || !io.startHandoff) return skipped("self_ancestry");
+      const handoff = io.startHandoff();
+      if (!handoff) return skipped("self_ancestry");
+      handedOff = true;
+      return {
+        attempted: false, stopped: [], surviving: [],
+        relaunch: "skipped", reason: "handoff_started", handoff,
+      };
+    }
+
+    // Captured while the tree is still ALIVE. On Linux the relaunch needs the
+    // graphical session variables, and after termination there is nothing to read them
+    // from. Ordering this wrongly works on macOS and Windows and produces a Linux app
+    // that cannot reach the compositor.
+    const context = adapter.captureRelaunchContext(exec, install, processes);
+
+    const isAlive = io.isAlive ?? defaultIsAlive;
+    const sleep = io.sleep ?? defaultSleep;
+    const now = io.now ?? (() => Date.now());
+    const stopped: number[] = [];
+    const surviving: number[] = [];
+
+    for (const shell of shells) {
+      const pid = shell.pid;
+      // The listing is already one probe old.
+      const before = checkIdentity(adapter, exec, install, shell);
+      if (before === "gone") {
+        stopped.push(pid);
+        continue;
+      }
+      if (before === "unknown") {
+        // We could not look, so we cannot claim this exited and we must not signal a
+        // process we failed to re-verify. Reporting it as surviving is the honest answer:
+        // it blocks the relaunch, which is exactly right when the tree state is unknown.
+        surviving.push(pid);
+        continue;
+      }
+      try {
+        adapter.requestQuit(exec, install, shell);
+      } catch {
+        /* a refused graceful close still gets the forced pass below */
+      }
+      // Liveness AND enumeration have to agree before a stop is claimed. A pid-based
+      // liveness probe is a weaker instrument than the platform's own process list, and
+      // on a packaged app the two disagree in BOTH directions.
+      if (waitUntilGone(adapter, exec, install, shell, GRACEFUL_EXIT_TIMEOUT_MS, isAlive, sleep, now)) {
+        stopped.push(pid);
+        continue;
+      }
+      // The wait window is long enough for a pid to be recycled, and the next step is a
+      // hard kill. Confirm it is still the process we verified, or leave it alone.
+      const afterGraceful = checkIdentity(adapter, exec, install, shell);
+      if (afterGraceful === "gone") {
+        stopped.push(pid);
+        continue;
+      }
+      if (afterGraceful === "unknown") {
+        surviving.push(pid);
+        continue;
+      }
+      try {
+        adapter.forceStop(exec, shell);
+      } catch {
+        /* the process state decides, not the exit code */
+      }
+      // Same rule after the forced pass: only an enumeration that no longer contains this
+      // process proves it stopped. Everything else is a survivor, and a survivor blocks
+      // the relaunch rather than producing a second shell beside a live one.
+      if (waitUntilGone(adapter, exec, install, shell, FORCED_EXIT_TIMEOUT_MS, isAlive, sleep, now)) {
+        stopped.push(pid);
+      } else {
+        surviving.push(pid);
+      }
+    }
+
+    if (surviving.length > 0) {
+      // Launching a second shell beside a stuck one is worse than leaving the operator
+      // to restart it.
+      return { attempted: true, stopped, surviving, relaunch: "skipped", reason: "targets_survived" };
+    }
+
+    try {
+      adapter.relaunch(exec, install, context);
+    } catch {
+      // Distinct from targets_survived on purpose. Everything DID die and the relaunch
+      // is what failed; the old code reported the two as one and sent operators looking
+      // for processes that were not there.
+      return { attempted: true, stopped, surviving, relaunch: "skipped", reason: "relaunch_failed" };
+    }
+    return { attempted: true, stopped, surviving: [], relaunch: "started" };
+  } finally {
+    // On the handoff path ownership was transferred to the helper, so releasing here
+    // would drop a lock that is still protecting a restart about to happen.
+    if (!handedOff) releaseDesktopRestartLock(io.lock);
   }
-  return { attempted: true, stopped, surviving, relaunch: "started" };
 }
+

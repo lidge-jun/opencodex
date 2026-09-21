@@ -129,7 +129,7 @@ describe("devin provider merge startup runner", () => {
       backupConfig: () => { order.push("backupConfig"); },
       backupAuth: () => { order.push("backupAuth"); },
       save: () => { order.push("save"); },
-      hasAuthSlot: () => opts.hasAuthSlot ?? false,
+      hasAuthSlot: (provider: string) => provider === "devin-cli" && (opts.hasAuthSlot ?? false),
       rekey: async (from: string, to: string) => { order.push(`rekey:${from}->${to}`); return opts.rekey ? opts.rekey() : "moved" as const; },
     };
   }
@@ -137,7 +137,7 @@ describe("devin provider merge startup runner", () => {
   test("snapshots config strictly before saving, and rekeys the auth slot", async () => {
     const order: string[] = [];
     const result = runDevinProviderMergeStartupMigration(migratableConfig(), depsWith(order, { hasAuthSlot: true }));
-    expect(order.slice(0, 2)).toEqual(["backupConfig", "save"]);
+    expect(order.slice(0, 3)).toEqual(["backupAuth", "backupConfig", "save"]);
     expect(order).toContain("backupAuth");
     expect(order).toContain("rekey:devin-cli->devin");
     expect(result.providers!['devin']).toBeDefined();
@@ -178,13 +178,41 @@ describe("devin provider merge startup runner", () => {
     expect(warnings.join(" ")).toContain("[devin-provider-merge]");
   });
 
-  test("a rekey conflict warns rather than throwing out of startup", async () => {
+  test("an auth destination collision refuses both halves of the migration", () => {
     const order: string[] = [];
     const warnings: string[] = [];
     const originalWarn = console.warn;
     console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
     try {
-      runDevinProviderMergeStartupMigration(migratableConfig(), depsWith(order, { hasAuthSlot: true, rekey: async () => "conflict" }));
+      const deps = depsWith(order, { hasAuthSlot: true });
+      deps.hasAuthSlot = provider => provider === "devin-cli" || provider === "devin";
+      const config = migratableConfig();
+      const result = runDevinProviderMergeStartupMigration(config, deps);
+      expect(result).toBe(config);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(order).toEqual([]);
+    expect(warnings.join(" ")).toContain('auth.json already has a "devin" credential slot');
+  });
+
+  test("a config collision never independently rekeys credentials", () => {
+    const order: string[] = [];
+    const config = migratableConfig();
+    config.providers!["devin"] = { adapter: "devin" } as never;
+    runDevinProviderMergeStartupMigration(config, depsWith(order, { hasAuthSlot: true }));
+    expect(order).toEqual([]);
+  });
+
+  test("a late rekey conflict warns rather than throwing out of startup", async () => {
+    const order: string[] = [];
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const deps = depsWith(order, { hasAuthSlot: true, rekey: async () => "conflict" });
+      deps.hasAuthSlot = provider => provider === "devin-cli";
+      runDevinProviderMergeStartupMigration(migratableConfig(), deps);
       // The detached promise needs a real tick, not one microtask.
       await new Promise(resolve => setTimeout(resolve, 0));
     } finally {

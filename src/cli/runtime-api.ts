@@ -42,10 +42,39 @@ export class RuntimeApiError extends Error {
   }
 }
 
+/**
+ * Refusal for a management request that resolved to a connected-client machine listener.
+ *
+ * A connected client runs `src/client/machine-listener.ts`, which binds the SAME address the
+ * standalone proxy would (`port ?? config.port ?? 10100`) and answers `/healthz` as opencodex.
+ * Liveness therefore finds it — correctly, it is our process — but it serves only
+ * `/api/machine/*` and returns a JSON 404 for every other `/api/*` path. Before this refusal
+ * every management-backed subcommand on such a machine died on that opaque 404:
+ * `{"error":"not_found","method":"PUT","path":"/api/custom-models/<id>"}`, one character away
+ * from the real handler's unknown-id `{"error":"not found"}` and indistinguishable from it
+ * (#4662). The role was already on the wire; only the parser was throwing it away.
+ *
+ * 503 rather than 404: the management plane is unavailable here, the resource is not missing,
+ * and `runCliAction` maps 404 to exit 4 ("no such thing") — the wrong answer to give a script.
+ */
+function clientRoleManagementRefusal(port: number): string {
+  return [
+    `The opencodex listener on port ${port} is running in the client role. It serves only the machine routes (/api/machine/*), so this machine has no management API to call.`,
+    "Custom-model edits and other management changes are made on the hub this machine is connected to: run the command there, or use the hub dashboard (the dashboard on this machine relays to it when the connection uses the relay transport).",
+    "To change this machine's own configuration instead: edit customModels in config.json, then run: ocx sync",
+  ].join("\n");
+}
+
 export async function runtimeBaseUrl(deps: RuntimeApiDeps = {}): Promise<string> {
   if (deps.baseUrl) return deps.baseUrl.replace(/\/$/, "");
   const live = await (deps.findLiveProxy ?? findLiveProxy)();
   if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ocx start", 503, null);
+  // The role comes from the same identity-checked /healthz body liveness already parsed, so
+  // this costs no extra request. Only the client role is refused: an absent role is a
+  // standalone or hub proxy (or a legacy body that predates the field), and both serve /api/*.
+  if (live.role === "client") {
+    throw new RuntimeApiError(clientRoleManagementRefusal(live.port), 503, null);
+  }
   return `http://${probeHostname(live.hostname)}:${live.port}`;
 }
 
@@ -62,11 +91,26 @@ function stringField(record: Record<string, unknown>, key: string): string | und
  * is unavailable). Both were dropped here, so a fenced management plane was
  * indistinguishable from a generic failure and an operator had no way to tell a port
  * collision from an ACL refusal from a stopped proxy (#2698).
+ *
+ * A 404 body that carries both `method` and `path` is a different statement again: some
+ * opencodex listener answered, and it does not route that request at all. Only the
+ * connected-client machine listener emits that shape today (`json404` in
+ * src/client/machine-listener.ts), and printing its bare `not_found` token read as though the
+ * resource were missing — a real handler's unknown-id 404 says `not found`, one space apart
+ * (#4662). Name the route instead, so any listener that does not serve a path stays legible
+ * even if another one starts answering this way.
  */
 function responseMessage(body: unknown, status: number): string {
   if (typeof body === "string" && body.trim()) return body.trim().slice(0, 400);
   if (!body || typeof body !== "object") return `Management request failed (${status})`;
   const record = body as Record<string, unknown>;
+  if (status === 404) {
+    const method = stringField(record, "method");
+    const path = stringField(record, "path");
+    if (method && path) {
+      return `This opencodex listener does not serve ${method.slice(0, 16)} ${path.slice(0, 200)}, so the request was refused before any handler ran (it is not a missing record). Check that the command is pointed at a proxy that serves the management API.`;
+    }
+  }
   let primary: string | undefined;
   for (const key of ["error", "message", "detail"]) {
     primary = stringField(record, key);
@@ -348,6 +392,31 @@ export async function readSecretLine(deps: RuntimeApiDeps, label: string): Promi
 export function printData(value: unknown, wantsJson: boolean, lines?: string[]): void {
   if (wantsJson || !lines) console.log(JSON.stringify(value, null, 2));
   else for (const line of lines) console.log(line);
+}
+
+/**
+ * Render untrusted diagnostic text without letting it control the operator's terminal. Catalog
+ * values are hub-supplied and surface on more than one CLI path -- first-time `ocx connect` and the
+ * connected `ocx sync` refresh both print them -- so the escaping sits beside `printData`, at the
+ * one boundary that already separates human output from structured output. Structured output keeps
+ * the exact value: escaping is a rendering decision for a tty, not a change to the data.
+ */
+export function terminalSafeText(value: string): string {
+  return value.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, character => {
+    const code = character.charCodeAt(0);
+    return code <= 0x7f
+      ? `\\x${code.toString(16).padStart(2, "0")}`
+      : `\\u${code.toString(16).padStart(4, "0")}`;
+  });
+}
+
+/**
+ * The same rendering for a failure about to be printed or rethrown. The original is kept as
+ * `cause` rather than discarded, so a caller that inspects the domain error still reads the exact
+ * message and fields it threw.
+ */
+export function terminalSafeError(error: unknown): Error {
+  return new Error(terminalSafeText(error instanceof Error ? error.message : String(error)), { cause: error });
 }
 
 /** Compact human view for safe management DTOs; JSON remains available for complete fidelity. */

@@ -1,3 +1,5 @@
+import { parseRetryAfterFromMessage } from "./retry-delay";
+
 export interface OcxErrorPayload {
   message: string;
   type: string;
@@ -6,6 +8,15 @@ export interface OcxErrorPayload {
 
 export const ENCRYPTED_FUNCTION_OUTPUT_REJECTION =
   "Encrypted function output content could not be decrypted or decoded.";
+
+/**
+ * The error identity for a send this proxy declined to make (#4708).
+ *
+ * Declared here rather than only on the error class because the classifier is what decides
+ * whether the identity survives serialization, and every dispatch path has to name the same
+ * string for a client to be able to tell this apart from a provider rate limit.
+ */
+export const SEND_BUDGET_EXHAUSTED_CODE = "request_send_budget_exhausted";
 
 /** Canonical human-readable message paths used by Responses upstream failures. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
@@ -253,6 +264,14 @@ export function classifyError(status: number, type: string, message: string): Oc
   ) {
     return { message, type: "insufficient_quota", code: "insufficient_quota" };
   }
+  // A refusal this proxy made itself, kept apart from the provider rate limits below. The HTTP
+  // semantics are identical -- 429, do not send this again now -- but the code is the only thing
+  // that tells an operator reading a log whether the provider throttled the request or whether
+  // this process declined to send it. Folding it into the generic rate-limit code sent them to
+  // the provider's dashboard to explain a decision that was never made there.
+  if (type === SEND_BUDGET_EXHAUSTED_CODE) {
+    return { message, type: "rate_limit_error", code: SEND_BUDGET_EXHAUSTED_CODE };
+  }
   if (
     status === 429 ||
     text.includes("rate limit") ||
@@ -359,21 +378,7 @@ export function isRateLimitOrQuotaFailureMessage(message: string): boolean {
   return normalized.toLowerCase().includes("usage limit");
 }
 
-/** Best-effort parse of a retry delay embedded in an upstream error message. */
-export function parseRetryAfterFromMessage(message: string): number | undefined {
-  const patterns = [
-    /try again in (\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i,
-    /retry after (\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?/i,
-    /retry[- ]after[:\s]+(\d+)/i,
-  ];
-  for (const pattern of patterns) {
-    const match = message.match(pattern);
-    if (!match?.[1]) continue;
-    const seconds = Number.parseFloat(match[1]);
-    if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
-  }
-  return undefined;
-}
+export { parseRetryAfterFromMessage };
 
 /** Infer HTTP status from adapter terminal error text (provider-agnostic keyword matching). */
 export function inferHttpStatusFromAdapterMessage(message: string): number {

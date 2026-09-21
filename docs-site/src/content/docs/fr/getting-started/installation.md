@@ -82,7 +82,7 @@ Codex actifs se trouvent sous `$CODEX_HOME` (par défaut `~/.codex`).
 | --- | --- |
 | `$OPENCODEX_HOME/config.json` | Vos fournisseurs, fournisseur par défaut, port et options. |
 | `$OPENCODEX_HOME/ocx.pid` | PID du proxy en cours d'exécution (garde à instance unique). |
-| `$OPENCODEX_HOME/runtime-port.json` | Le PID en direct, le nom d'hôte et le port, y compris un port de secours sélectionné automatiquement. |
+| `$OPENCODEX_HOME/runtime-port.json` | Le PID actif, le nom d’hôte et le port, y compris un port attribué par le système d’exploitation lorsque `config.port` vaut `0`. |
 | `$OPENCODEX_HOME/auth.json` | Informations d’identification OAuth enregistrées après `ocx login`. |
 | `$OPENCODEX_HOME/catalog-backup*.json` | Sauvegardes du catalogue de modèles Codex créées avant toute modification par opencodex. |
 | `$CODEX_HOME/config.toml` | Avec une liaison de bouclage, opencodex ajoute une valeur racine `openai_base_url` délimitée par ses marqueurs. Les liaisons hors bouclage utilisent `model_provider = "opencodex"` avec `[model_providers.opencodex]` afin que Codex puisse envoyer l’en-tête d’authentification API. |

@@ -51,6 +51,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel`（可選，也包括舊版 `ANTHROPIC_SMALL_FAST_MODEL`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可選） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
+| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
@@ -129,8 +130,9 @@ ocx claude desktop import <path> [--apply]
 檔案，因此無效檔案不會改動目前設定檔。加上 `--apply` 可在匯入有效設定檔後立即寫入 Desktop。
 `none` 僅適用於空系列；每個非空系列都必須保留一個預設。
 
-非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-2026MMDD`。看起來像日期的部分是合成的
-路由槽位，不是模型釋出日期。真正的 Anthropic Claude 路由保留真實 id。新路由預設落在 Opus
+非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-YYYYMMDD`，年份範圍為 2026 至 2035。看起來像日期的部分是合成的
+路由槽位，不是模型釋出日期。系統會先配置 2026 的槽位，因此既有別名的 id 不變；2026 用盡後才會用到後續年份。
+真正的 Anthropic Claude 路由保留真實 id。新路由預設落在 Opus
 系列，但移動路由不會改變它所呼叫的供應商或模型。舊版 apply 旗標 `--static`、`--hybrid` 與
 `--discovery-only` 仍可供既有腳本使用。
 

@@ -284,8 +284,9 @@ OpenCodex 直接注入路由，請先將 Codex 切回內建 `openai` provider，
    `ocx sync` 可強制重新抓取並立即重寫目錄。
 6. **正在執行的 Codex `app-server`**：長時間執行的 Codex `app-server`（Desktop／CLI 背景 host）可能
    仍在記憶體保留舊列表，因此只重寫磁碟目錄還不夠。`ocx sync` 與 `ocx sync-cache` 偵測到這些
-   process 時會警告。可執行 `ocx sync --restart-codex` 重新啟動，或自行停止對應的 `app-server`
-   process，再讓 Codex 重新建立它們，讓新列表出現。
+   process 時會警告。`ocx sync --restart-codex` 會重啟這些 process，並在 macOS、Linux 與 Windows
+   上完全結束再重新啟動 Codex 桌面應用程式，讓選擇器重新讀取目錄。若要讓桌面應用程式繼續執行，請傳入
+   `--restart-app-server-only`，或自行停止對應的 `app-server` process。
 
 :::caution[其他本機寫入者]
 目錄寫入（`opencodex-catalog.json`、`config.toml`）在 opencodex **內部**是原子的；這只避免兩個
@@ -362,6 +363,12 @@ ocx restore back # 讓普通 Codex 再次指向仍在執行的 proxy
 
 ## 分頁歷史記錄安全拒絕
 
-如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。OpenCodex 會保留目前設定、設定檔、模型目錄、歷史檔案及復原依據，而不在 Codex 之外分配序號；可遷移儲存區中的 legacy 記錄也受保護。不執行切換、僅保留外部提供者的路徑仍可使用。
+如果受影響的歷史儲存區支援分頁，提供者切換可能傳回 `history_paginated_requires_native_writer`。此原因不再拒絕寫入 Codex 設定、參考設定檔與模型目錄。`ocx sync` 與 `ocx start` 仍會寫入這些檔案並設定 `model_catalog_json`，因此 Codex 模型選擇器會繼續顯示所有經 OpenCodex 路由的模型。只有這一條原因會讓對話歷史的重新標記停手，因為分頁歷史序號由 Codex 自己的寫入器分配，重試也不會改變。無法讀取的狀態資料庫、身分已變的歷史檔案、未能執行的預檢等其他歷史預檢原因仍會拒絕整個切換並回復，因為那些情況以後可能成功。在此狀態下，OpenCodex 不會修改分頁歷史檔案或執行緒列。既有對話保留已標記的提供者，不會被遷移；新對話仍正常經代理路由。重新標記停手時，家目錄裡既有的 `[model_providers.opencodex]` 表會保留而不是撤下，即便是 root-override（loopback）形式也一樣，這樣列上標記為 `opencodex` 的對話仍能對應到還存在的提供者 id。可遷移儲存區中的 legacy 記錄也適用。CLI 會印出 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 與移除 Codex 設定仍會因 `history_paginated_requires_native_writer` 被拒絕。執行緒列仍在參照時撤掉 `[model_providers.opencodex]` 定義會使這些對話無法解析，而復原路徑沒有辦法留下相容提供者表。已經分頁的家目錄目前無法透過產品解除安裝；這是已知的未完成工作，而非預期行為。
 
-請勿刪除對話仍參照的提供者定義、反覆執行 `ocx sync` 或舊版復原，也不要改寫使用中的歷史檔案來繞過拒絕。保留檔案，復原前關閉相關對話，只回報確切錯誤與版本，不要公開私人歷史。需要與原生寫入器協調的已驗證修正。備份或指令碼成功不能證明顯示已復原；重新開啟 Codex 後確認對話。
+返回根 URL 覆寫模式時，即使歷史預檢通過，OpenCodex 也會在提交設定前保留既有的 `[model_providers.opencodex]` 定義。如此一來，即使 Codex 在提交後或背景歷史工作啟動時遷移歷史格式，舊的 `opencodex` 對話仍能找到其提供者。新對話繼續使用所選的根提供者；明確要求的還原仍執行原有的獨立刪除檢查。
+
+請勿改寫使用中的分頁歷史檔案或執行緒列來自行遷移這些對話。復原前關閉相關對話，只回報確切錯誤與版本，不要公開私人歷史。備份或指令碼成功不能證明顯示已復原；重新開啟 Codex 後確認對話。
+
+## 取消主帳號重新驗證
+
+取消主帳號的裝置代碼重新驗證時，如果 DELETE 請求暫時失敗、發生網路錯誤，或回應狀態未知或尚未結束，系統會保留目前的流程和取消失敗提示，以便重試取消。通常狀態輪詢會繼續，因此仍能偵測到登入完成。如果流程處於 `pending` 或 `committing` 狀態時，可重試的取消失敗與 GET 狀態查詢的非 2xx HTTP 回應同時發生，無論回應抵達順序如何，系統都會保留或還原伺服器最後提供的裝置代碼、驗證 URL 和階段，讓同一流程仍可重試取消。GET 的 HTTP 失敗仍會停止輪詢，但無須傳送第二次登入 POST 即可重試取消。終止狀態為 `failed` 的回應會釋放流程並顯示正規化的失敗原因，只有 `succeeded` 才表示登入成功。確認狀態為 `cancelled` 的回應會釋放流程，以便開始新的裝置代碼登入。明確回傳 HTTP 404 且代碼為 `unknown_flow` 的回應也會釋放已過期的流程 ID，以便開始新的裝置代碼登入，但不會顯示登入成功或已確認取消。先前流程中延遲抵達的 POST、GET 或 DELETE 回應不能改變新流程，也不能將新流程回報為登入成功。

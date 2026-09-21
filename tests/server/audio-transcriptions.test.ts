@@ -284,6 +284,27 @@ describe("standalone transcription API", () => {
     expect((await captured[0]!.formData()).get("model")).toBeNull();
   });
 
+  test("stored Direct credentials never inherit a caller account ID", async () => {
+    writeFileSync(join(codex.path, "auth.json"), JSON.stringify({ tokens: { access_token: "fixture-main-access" } }));
+    clearMainAccountInfoCache();
+    const cfg = config();
+    cfg.defaultProvider = "openai";
+    cfg.providers = { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } };
+    saveConfig(cfg);
+
+    for (const headers of [
+      { authorization: "", "x-opencodex-api-key": KEY, "chatgpt-account-id": "caller-workspace" },
+      { authorization: "", "x-api-key": KEY, "chatgpt-account-id": "caller-workspace" },
+    ]) {
+      expect((await request(form(), headers)).status).toBe(200);
+    }
+    expect(captured).toHaveLength(2);
+    for (const upstream of captured) {
+      expect(upstream.headers.get("authorization")).toBe("Bearer fixture-main-access");
+      expect(upstream.headers.get("chatgpt-account-id")).toBeNull();
+    }
+  });
+
   test("a missing stored Direct credential fails without paid-provider fallback", async () => {
     const cfg = config();
     cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" };
@@ -327,9 +348,19 @@ describe("standalone transcription API", () => {
     expect((await captured[0]!.formData()).get("model")).toBeNull();
   });
 
-  test("malformed Pool response records one failure and no provisional success", async () => {
+  test("malformed Pool response records upstream status before body validation (#4502)", async () => {
     savePoolConfig();
     respond = () => Response.json({ missing: "text" });
+    const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
+    try {
+      expect((await request()).status).toBe(502);
+      expect(outcomes.mock.calls.filter(call => call[1] === "pool-a").map(call => call[2])).toEqual([200]);
+    } finally { outcomes.mockRestore(); }
+  });
+
+  test("upstream HTTP error records real failure status for Pool account", async () => {
+    savePoolConfig();
+    respond = () => new Response("upstream failure", { status: 502 });
     const outcomes = spyOn(routing, "recordCodexUpstreamOutcome");
     try {
       expect((await request()).status).toBe(502);

@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` walks you through:
 
-1. **Pick a provider** — choose one of the 79 built-in registry presets or `custom` to type a base
+1. **Pick a provider** — choose one of the 94 built-in registry presets or `custom` to type a base
    URL and adapter.
 2. **API key** — paste a key, or reference an environment variable like `${ANTHROPIC_API_KEY}`.
 3. **Default model** — for key, local, and custom providers, accept the preset or enter a model id.
@@ -86,8 +86,10 @@ On start, opencodex:
   Codex's model catalog**,
 - listens on `http://localhost:<port>/v1`.
 
-If the requested port is busy, `ocx start` selects a free port, records it in `runtime-port.json`,
-and updates Codex to use the live listener.
+If the requested port is busy, `ocx start` stops and tells you what holds it: run `ocx stop` first
+when the holder is an opencodex, or start on a free port with `ocx start --port <port>`. It does not
+move to another port by itself — that is what used to leave two proxies running with Codex pointed
+at the newer one.
 
 Check it:
 

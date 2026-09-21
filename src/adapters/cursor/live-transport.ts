@@ -20,6 +20,7 @@ import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
   finalizeTurnEvents,
+  hasBufferedTextToolCalls,
   mapCursorProtobufServerMessage,
   mapSyntheticMcpExecToToolEvents,
   reportableContextTokens,
@@ -53,9 +54,11 @@ import {
 } from "./gen/agent_pb";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { classifyCursorError, CursorUnexpectedCancelError, isCursorAbortError, isCursorBenignCancelError, safeCursorErrorMessage } from "./cursor-errors";
+import { cursorPolicyErrorExplanation } from "./policy-error";
 import { mcpArgsFromToolCall } from "./protobuf-events";
 import { OCX_RESPONSES_TOOL_PROVIDER } from "./tool-definitions";
 import {
+  cursorNativeExecRedirectHint,
   handleCursorNativeExec,
   handleCursorNativeKv,
   releaseCursorBlobRequestScope,
@@ -84,7 +87,7 @@ import {
   type BackgroundShellTerminationReport,
 } from "./native-exec-shell";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
-import type { CursorTransport, CursorTransportFactoryInput } from "./transport";
+import type { CursorStreamHealthClock, CursorTransport, CursorTransportFactoryInput } from "./transport";
 import { CursorHttp1BidiConnection } from "./http1-bidi";
 import { isPinnedHttp1 } from "../../lib/upstream-http-version";
 
@@ -104,6 +107,16 @@ const CURSOR_STREAM_SILENCE_FAIL_MS = 30_000;
  * Reset on every decoded frame that is not liveness-only.
  */
 const CURSOR_STREAM_HEARTBEAT_ONLY_FAIL_MS = 90_000;
+/**
+ * The production T04 clock. The watchdog reads time and schedules its one timer through this
+ * object so a test can supply a clock it advances by hand; nothing else about the transport's
+ * timers moves with it.
+ */
+const REAL_STREAM_HEALTH_CLOCK: CursorStreamHealthClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: timer => clearTimeout(timer),
+};
 /**
  * After `turnEnded` is decoded, the application turn is complete. A server that keeps
  * HTTP/2 open past this point cannot hold the turn hostage (senpi #1062): we close our side
@@ -209,7 +222,8 @@ export function parseConnectEndStreamError(payload: Uint8Array): Error | null {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(payload)) as { error?: { code?: string; message?: string } };
     if (parsed?.error) {
-      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${parsed.error.message ?? "Unknown error"}`);
+      const explanation = cursorPolicyErrorExplanation(parsed.error);
+      return new Error(`Cursor Connect error ${parsed.error.code ?? "unknown"}: ${explanation ?? parsed.error.message ?? "Unknown error"}`);
     }
     return null;
   } catch {
@@ -490,6 +504,8 @@ class LiveCursorTransport implements CursorTransport {
   private lastInboundFrameAt = 0;
   private lastMeaningfulFrameAt = 0;
   private streamHealthFail?: (error: Error) => void;
+  /** Time source for the T04 watchdog only; the globals unless a test injects one. */
+  private readonly streamHealthClock: CursorStreamHealthClock;
   private committed = false;
   private expectedClose = false;
   /**
@@ -538,6 +554,7 @@ class LiveCursorTransport implements CursorTransport {
     // so the transport-level race test can drive it deterministically.
     this.clientToolFinalizeGraceMs = input.clientToolFinalizeGraceMs ?? CLIENT_TOOL_FINALIZE_GRACE_MS;
     this.activeClientToolFinalizeGraceMs = this.clientToolFinalizeGraceMs;
+    this.streamHealthClock = input.streamHealthClock ?? REAL_STREAM_HEALTH_CLOCK;
     // Desktop (computer-use / record-screen) executors are available even with no MCP servers.
     this.desktopDeps = desktopDepsFromConfig(input.provider.desktopExecutor);
     this.execContext = {
@@ -697,6 +714,7 @@ class LiveCursorTransport implements CursorTransport {
       clientToolDefs,
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
       structuredEditAvailable: syntheticStructuredEditToolNames.size > 0,
+      nativeExecRedirectHint: cursorNativeExecRedirectHint(cursorVisibleTools, this.execContext.mcpToolDefs ?? []),
     };
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();
@@ -728,6 +746,8 @@ class LiveCursorTransport implements CursorTransport {
         syntheticStructuredEditToolNames,
         translatorBudget: this.translatorBudget,
         contextUsage,
+        wireModelId: request.modelId,
+        identityScope: request._cursorIdentityScope,
         ...(prepared.estimatedInputTokens !== undefined
           ? { estimatedInputTokens: prepared.estimatedInputTokens }
           : {}),
@@ -840,7 +860,7 @@ class LiveCursorTransport implements CursorTransport {
 
   private clearStreamHealthTimer(): void {
     if (this.streamHealthTimer) {
-      clearTimeout(this.streamHealthTimer);
+      this.streamHealthClock.clearTimeout(this.streamHealthTimer);
       this.streamHealthTimer = undefined;
     }
     this.streamHealthFail = undefined;
@@ -851,24 +871,28 @@ class LiveCursorTransport implements CursorTransport {
    * failAndClear; the timer owns nothing else. Never armed before the first decoded
    * frame (the first-frame timer covers dial + first response), and disarmed by
    * every settle / expected-close path alongside the other timers.
+   *
+   * Both clocks and the timer go through `streamHealthClock`, which is the globals in
+   * production. The `elapsedMs` diagnostic below deliberately stays on the wall clock,
+   * because `turnStartedAt` is stamped there and the pair has to subtract coherently.
    */
   private armStreamHealthTimer(fail: (error: Error) => void): void {
-    if (this.streamHealthTimer) clearTimeout(this.streamHealthTimer);
+    if (this.streamHealthTimer) this.streamHealthClock.clearTimeout(this.streamHealthTimer);
     if (this.expectedClose) return;
     this.streamHealthFail = fail;
     const silenceMs = this.input.streamSilenceFailMs ?? CURSOR_STREAM_SILENCE_FAIL_MS;
     const heartbeatOnlyMs = this.input.streamHeartbeatOnlyFailMs ?? CURSOR_STREAM_HEARTBEAT_ONLY_FAIL_MS;
-    const now = Date.now();
+    const now = this.streamHealthClock.now();
     const deadline = Math.min(
       this.lastInboundFrameAt + silenceMs,
       this.lastMeaningfulFrameAt + heartbeatOnlyMs,
     );
-    this.streamHealthTimer = setTimeout(() => {
+    this.streamHealthTimer = this.streamHealthClock.setTimeout(() => {
       this.streamHealthTimer = undefined;
       const failFn = this.streamHealthFail;
       if (!failFn || this.expectedClose) return;
-      const stalledFor = Date.now() - this.lastInboundFrameAt;
-      const meaningfulStalledFor = Date.now() - this.lastMeaningfulFrameAt;
+      const stalledFor = this.streamHealthClock.now() - this.lastInboundFrameAt;
+      const meaningfulStalledFor = this.streamHealthClock.now() - this.lastMeaningfulFrameAt;
       if (stalledFor < silenceMs && meaningfulStalledFor < heartbeatOnlyMs) {
         // A frame landed between arming and firing — re-arm for the fresh deadline.
         this.armStreamHealthTimer(failFn);
@@ -899,7 +923,7 @@ class LiveCursorTransport implements CursorTransport {
    * heartbeat-only threshold.
    */
   private noteInboundFrame(livenessOnly: boolean): void {
-    const now = Date.now();
+    const now = this.streamHealthClock.now();
     this.lastInboundFrameAt = now;
     if (!livenessOnly) this.lastMeaningfulFrameAt = now;
     if (this.streamHealthFail) this.armStreamHealthTimer(this.streamHealthFail);
@@ -1261,6 +1285,7 @@ class LiveCursorTransport implements CursorTransport {
             state.openToolCalls.size > 0
             || this.sawAssistantText
             || hasPendingClientToolFinalization
+            || hasBufferedTextToolCalls(state)
           )
         ) {
           const terminal = hasPendingClientToolFinalization && state.openToolCalls.size === 0
@@ -1280,7 +1305,7 @@ class LiveCursorTransport implements CursorTransport {
       const decodedUpdate = decoded.message.case === "interactionUpdate" ? decoded.message.value.message?.case : undefined;
       const livenessOnly = decodedUpdate === "heartbeat" || decoded.message.case === "conversationCheckpointUpdate";
       if (!this.streamHealthFail) {
-        const now = Date.now();
+        const now = this.streamHealthClock.now();
         this.lastInboundFrameAt = now;
         this.lastMeaningfulFrameAt = now;
         this.streamHealthFail = failAndClear;
@@ -1427,7 +1452,7 @@ class LiveCursorTransport implements CursorTransport {
           settler.settleFinish();
           return;
         }
-        if (this.framesReceived > 0 && this.sawAssistantText) {
+        if (this.framesReceived > 0 && (this.sawAssistantText || hasBufferedTextToolCalls(state))) {
           for (const event of finalizeTurnEvents(state)) push(event);
           releaseBacklogLease();
           settler.settleFinish();

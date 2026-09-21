@@ -1,4 +1,5 @@
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { win32 } from "node:path";
 import { winswXmlPath } from "../lib/winsw";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
@@ -9,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmdirSync, unlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir } from "../config";
-import { runWindowsElevatedScheduledTaskRegistration, WindowsSchtasksError } from "../lib/windows-elevation";
+import { OCX_ELEVATED_STAGING_UNREADABLE, runWindowsElevatedScheduledTaskRegistration, WindowsSchtasksError, type StagedWindowsTaskXml } from "../lib/windows-elevation";
 import { defaultWinswEntry, installWinswService, statusWinswRaw, uninstallWinswService, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import { forgetEphemeralSecretDir, forgetEphemeralSecretPath, hardenSecretDir } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -165,6 +166,197 @@ function cleanupWindowsSchedulerStage(
   if (cleanupError) throw cleanupError;
 }
 
+/** A staged payload set for one elevated registration, plus the way to remove it. */
+export interface StagedElevatedSchedulerRegistration {
+  readonly xml: StagedWindowsTaskXml;
+  readonly expectedExisting?: StagedWindowsTaskXml;
+  /** Remove every staged artifact. Idempotent, so a second call after success is a no-op. */
+  cleanup(): void;
+}
+
+export interface ElevatedSchedulerStagingDeps {
+  createStageDir?: () => string;
+  hardenDir?: (path: string) => void;
+  writePayload?: (path: string, bytes: Buffer) => void;
+  hardenPath?: (path: string) => void;
+  inspect?: (path: string) => { isSymbolicLink(): boolean; isFile(): boolean; isDirectory(): boolean };
+  removeStageDir?: (path: string) => void;
+}
+
+/**
+ * Stage the captured definitions an elevated registration needs, as files rather than
+ * as command-line payloads (#4692).
+ *
+ * A file that an administrator process will read is itself a privilege-escalation
+ * surface, so three properties have to hold together and none of them is sufficient
+ * alone:
+ *
+ * - **Access.** The directory is created fresh by `mkdtemp`, then ACL-hardened before
+ *   anything is written into it, so another local account cannot read or replace the
+ *   payload while the UAC prompt is open. Hardening the directory first is what makes
+ *   the file private from the moment it exists.
+ * - **No reparse point.** Each artifact is inspected with `lstat` and rejected unless it
+ *   is what it claims to be. `wx` already refuses to create over an existing name, which
+ *   is the atomic step here — there is no replace path to race, because every path is
+ *   inside a directory that did not exist a moment ago. The explicit check is what keeps
+ *   that guarantee from depending on a reading of `O_EXCL` semantics.
+ * - **Tamper evidence.** The digest is taken over the exact bytes written, and the
+ *   elevated script recomputes it over the bytes it reads. An ACL cannot cover this:
+ *   a process running as the same user has the same SID and can rewrite the file, so
+ *   the digest is the only thing that makes such a swap fail closed rather than
+ *   silently register a different task definition.
+ *
+ * Payloads are UTF-16LE with no BOM, and the elevated process decodes them straight into
+ * `Register-ScheduledTask`. What is hashed is therefore exactly what is registered, with
+ * no trimming step in between that the two sides could disagree about.
+ */
+export function stageElevatedSchedulerRegistration(
+  xml: string,
+  expectedExistingXml?: string,
+  deps: ElevatedSchedulerStagingDeps = {},
+): StagedElevatedSchedulerRegistration {
+  const createStageDir = deps.createStageDir
+    ?? (() => mkdtempSync(join(tmpdir(), WINDOWS_SCHEDULER_STAGE_PREFIX)));
+  const hardenDir = deps.hardenDir ?? ((path: string) => { hardenSecretDir(path, { required: true }); });
+  const writePayload = deps.writePayload ?? ((path: string, bytes: Buffer) => {
+    writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+  });
+  const hardenPath = deps.hardenPath ?? ((path: string) => { hardenSecretPath(path, { required: true }); });
+  const inspect = deps.inspect ?? ((path: string) => lstatSync(path));
+  const removeStageDir = deps.removeStageDir ?? ((path: string) => { rmdirSync(path); });
+
+  const stageDir = createStageDir();
+  const files: string[] = [];
+  const cleanup = (): void => {
+    let failure: unknown;
+    for (const file of files.splice(0)) {
+      try {
+        unlinkSync(file);
+        forgetEphemeralSecretPath(file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") forgetEphemeralSecretPath(file);
+        else if (failure === undefined) failure = error;
+      }
+    }
+    try {
+      removeStageDir(stageDir);
+      forgetEphemeralSecretDir(stageDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") forgetEphemeralSecretDir(stageDir);
+      else if (failure) throw new AggregateError([failure, error], "Elevated Task Scheduler staging cleanup failed.");
+      else failure = error;
+    }
+    if (failure) throw failure;
+  };
+
+  try {
+    try { chmodSync(stageDir, 0o700); } catch { /* required Windows ACL is authoritative */ }
+    const dirStats = inspect(stageDir);
+    if (dirStats.isSymbolicLink() || !dirStats.isDirectory()) {
+      throw new Error(`Refusing to stage an elevated Task Scheduler payload under a redirected path: ${stageDir}`);
+    }
+    hardenDir(stageDir);
+    const stage = (name: string, value: string): StagedWindowsTaskXml => {
+      const path = join(stageDir, name);
+      const bytes = Buffer.from(value, "utf16le");
+      writePayload(path, bytes);
+      files.push(path);
+      const stats = inspect(path);
+      if (stats.isSymbolicLink() || !stats.isFile()) {
+        throw new Error(`Refusing to stage an elevated Task Scheduler payload through a redirected path: ${path}`);
+      }
+      hardenPath(path);
+      return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
+    };
+    return {
+      xml: stage("register.xml", xml),
+      ...(expectedExistingXml === undefined
+        ? {}
+        : { expectedExisting: stage("expected.xml", expectedExistingXml) }),
+      cleanup,
+    };
+  } catch (error) {
+    try {
+      cleanup();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Elevated Task Scheduler staging failed and could not be cleaned up.",
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Turn an elevated registration exit code into something an operator can act on.
+ *
+ * The elevated process runs hidden, so nothing it writes survives; only the exit code
+ * crosses back. That makes an unexplained code the whole user-facing error, which is
+ * exactly what made the ENAMETOOLONG in #4692 expensive to diagnose. Staging introduces
+ * one new failure of its own — the payload is readable only by the account that created
+ * it, so an elevation answered with a different administrator's credentials cannot open
+ * it — and that one gets named along with its remedy rather than surfacing as a number.
+ */
+export function describeElevatedRegistrationFailure(
+  failureLabel: string,
+  exitCode: number,
+  stageDir: string,
+): string {
+  if (exitCode === OCX_ELEVATED_STAGING_UNREADABLE) {
+    return `${failureLabel}: the elevated process could not read the staged task definition in `
+      + `${stageDir}. That directory is readable only by the account that staged it, so this `
+      + "happens when the UAC prompt was answered with a different administrator account. "
+      + "Approve the prompt as the signed-in user, or run the command again from a session "
+      + "already elevated as that user.";
+  }
+  return `${failureLabel} with exit code ${exitCode}.`;
+}
+
+/**
+ * Stage, elevate, and clean up — on every exit, including UAC cancellation and a
+ * synchronous spawn failure.
+ *
+ * A cleanup failure never replaces the registration failure it followed: an operator
+ * told only that a temp directory could not be removed would have no idea the task was
+ * never registered.
+ */
+async function runStagedElevatedSchedulerRegistration(
+  taskName: string,
+  xml: string,
+  replace: boolean,
+  expectedExistingXml: string | undefined,
+  failureLabel: string,
+): Promise<void> {
+  const staged = stageElevatedSchedulerRegistration(xml, expectedExistingXml);
+  let failure: unknown;
+  try {
+    const exitCode = await runWindowsElevatedScheduledTaskRegistration(
+      taskName,
+      staged.xml,
+      replace,
+      staged.expectedExisting,
+    );
+    if (exitCode !== 0) {
+      failure = new Error(describeElevatedRegistrationFailure(failureLabel, exitCode, dirname(staged.xml.path)));
+    }
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    staged.cleanup();
+  } catch (cleanupError) {
+    if (failure) {
+      throw new AggregateError(
+        [failure, cleanupError],
+        "Elevated Task Scheduler registration failed and its staging could not be cleaned up.",
+      );
+    }
+    throw cleanupError;
+  }
+  if (failure) throw failure;
+}
+
 export function stageWindowsSchedulerRegistrationXml(
   attemptNonce: string,
   deps: WindowsSchedulerRegistrationStageDeps = {},
@@ -294,7 +486,8 @@ export async function registerFreshWindowsSchedulerTask(
       throw error;
     }
     // Register from the captured XML string inside the elevated process. Another
-    // same-user process can mutate its own temp files, but cannot change this command.
+    // same-user process can mutate its own temp files, so the captured bytes are staged
+    // privately and the elevated script verifies their digest before registering them.
     // UAC can remain open for an arbitrary amount of time. Recheck the captured predecessor
     // before launch; the elevated helper repeats the same check after consent and before Force.
     assertReplacementPrecondition();
@@ -303,15 +496,13 @@ export async function registerFreshWindowsSchedulerTask(
       xml: string,
       replaceCurrent: boolean,
       previousXml?: string,
-    ) => {
-      const exitCode = await runWindowsElevatedScheduledTaskRegistration(
-        taskName,
-        xml,
-        replaceCurrent,
-        previousXml,
-      );
-      if (exitCode !== 0) throw new Error(`Background service install failed with exit code ${exitCode}.`);
-    });
+    ) => runStagedElevatedSchedulerRegistration(
+      taskName,
+      xml,
+      replaceCurrent,
+      previousXml,
+      "Background service install failed",
+    ));
     await elevate(TASK, expectedXml, replace, expectedExistingXml);
   }
 
@@ -501,10 +692,13 @@ export async function restoreWindowsSchedulerTaskIfAbsent(registeredXml: string)
       ) {
         throw error;
       }
-      const exitCode = await runWindowsElevatedScheduledTaskRegistration(TASK, registeredXml, false);
-      if (exitCode !== 0) {
-        throw new Error(`Task Scheduler rollback failed with exit code ${exitCode}.`);
-      }
+      await runStagedElevatedSchedulerRegistration(
+        TASK,
+        registeredXml,
+        false,
+        undefined,
+        "Task Scheduler rollback failed",
+      );
     }
     const recoveredXml = statusWindowsXml();
     if (!windowsSchedulerRegistrationMatchesSnapshot(recoveredXml, registeredXml)) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -13,6 +13,7 @@ import {
   flushPendingResponseSpillsForTests,
   rememberResponseState,
   responseStateMetrics,
+  RESPONSE_TTL_MS,
   setResponseStateByteCapForTests,
   type ResponseStateMetrics,
 } from "../../src/responses/state";
@@ -27,8 +28,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-const EXPIRED_AGE_MS = 2 * 60 * 60 * 1_000;
-const REPLAY_TTL_MS = 60 * 60 * 1_000;
+const REPLAY_TTL_MS = RESPONSE_TTL_MS;
+const EXPIRED_AGE_MS = REPLAY_TTL_MS + 60 * 60 * 1_000;
 const FIRST_RESPONSE_ID = "resp_issue_702_first";
 const HISTORICAL_USER_SENTINEL = "issue-702 historical user context";
 const HISTORICAL_ASSISTANT_SENTINEL = "issue-702 historical assistant context";
@@ -51,6 +52,19 @@ interface ForwardScenario {
 }
 
 type ForwardScenarioMode = "expired" | "fresh" | "ordinary";
+
+/**
+ * The one answer every local replay failure gives a client.
+ *
+ * Missing, corrupt and task-scope-mismatched state all mean "replay in full", so they share a
+ * response rather than each describing which one happened. Stated once here so a drift shows up
+ * as one failing constant instead of several assertions written from memory.
+ */
+const LOCAL_REPLAY_UNAVAILABLE = {
+  message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+  type: "invalid_request_error",
+  code: "previous_response_not_found",
+} as const;
 
 function forwardConfig(): OcxConfig {
   return {
@@ -379,7 +393,11 @@ describe("routed replay recovery", () => {
       expect(upstreamRequests).toHaveLength(1);
       expect(upstreamRequests[0]!.previous_response_id).toBeUndefined();
       expect(upstreamRequests[0]!.input).toEqual([
-        history[0], reasoning,
+        history[0],
+        // The client replayed this reasoning item with no `summary`; the reasoning sanitizer
+        // supplies the empty array the Responses API requires on a reasoning input item, so the
+        // forwarded item is the replayed one plus that field.
+        { ...reasoning, summary: [] },
         { type: "function_call", call_id: "call_replay", name: custom ? "exec" : "lookup",
           arguments: custom ? JSON.stringify({ input: "text(1)" }) : "{}", status: "completed" },
         { ...toolResult, type: "function_call_output" },
@@ -404,6 +422,165 @@ describe("routed replay recovery", () => {
       await upstream.stop(true);
     }
   }, SERVER_BUDGET_MS);
+
+  test("a translated wire refuses an expired continuation instead of sending the delta alone", async () => {
+    // The reported symptom: Codex chained by previous_response_id, a gap longer than retention,
+    // and a Chat-wire destination that rebuilds the conversation from this request's input. The
+    // expansion misses, the id is stripped, and what reaches the model is the single line the
+    // user just typed -- with a normal 200 hiding it. Refuse, so the client resends everything.
+    const upstreamRequests: Record<string, unknown>[] = [];
+    const realNow = Date.now;
+    let server: ReturnType<typeof startServer> | null = null;
+    const chunk = (delta: Record<string, unknown>, finish: string | null) =>
+      `data: ${JSON.stringify({
+        id: "chatcmpl-routed", object: "chat.completion.chunk", created: 1, model: "test-model",
+        choices: [{ index: 0, delta, finish_reason: finish }],
+      })}\n\n`;
+    const upstream = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        upstreamRequests.push(await request.json() as Record<string, unknown>);
+        return new Response(
+          chunk({ role: "assistant", content: "recovered" }, null) + chunk({}, "stop") + "data: [DONE]\n\n",
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+
+    try {
+      Date.now = () => realNow() - EXPIRED_AGE_MS;
+      rememberResponseState(
+        { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
+        {
+          id: FIRST_RESPONSE_ID,
+          status: "completed",
+          output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: HISTORICAL_ASSISTANT_SENTINEL }] }],
+        },
+        undefined,
+        { force: true },
+      );
+      Date.now = realNow;
+      expect(responseStateMetrics().oldestAgeMs).toBeGreaterThan(REPLAY_TTL_MS);
+
+      saveConfig({
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "chat-test",
+        providers: {
+          "chat-test": {
+            adapter: "openai-chat",
+            baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+            allowPrivateNetwork: true,
+            authMode: "key",
+            apiKey: "synthetic-key",
+            defaultModel: "test-model",
+            models: ["test-model"],
+          },
+        },
+      } as OcxConfig);
+      server = startServer(0);
+
+      const refused = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "chat-test/test-model",
+          previous_response_id: FIRST_RESPONSE_ID,
+          input: [inputMessage(CURRENT_USER_SENTINEL)],
+          stream: true,
+        }),
+      });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({
+        error: { type: "invalid_request_error", code: "previous_response_not_found" },
+      });
+      expect(upstreamRequests).toHaveLength(0);
+
+      // What the client does next: resend the whole conversation without the id.
+      const recovered = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "chat-test/test-model",
+          input: [inputMessage(HISTORICAL_USER_SENTINEL), inputMessage(CURRENT_USER_SENTINEL)],
+          stream: true,
+        }),
+      });
+      expect(recovered.status).toBe(200);
+      await recovered.text();
+      expect(upstreamRequests).toHaveLength(1);
+      const forwarded = JSON.stringify(upstreamRequests[0]);
+      expect(forwarded).toContain(HISTORICAL_USER_SENTINEL);
+      expect(forwarded).toContain(CURRENT_USER_SENTINEL);
+    } finally {
+      Date.now = realNow;
+      await server?.stop(true);
+      await upstream.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test.each(["kiro", "cursor", "devin", "anthropic"] as const)(
+    "%s refuses an expired continuation: none of these can resolve the omitted prefix upstream",
+    async adapter => {
+      // The three provider-session wires look stateful and are not. devin re-sends the whole
+      // conversation each turn, cursor's checkpointRef is read from the store that just expired
+      // and falls back to full replay, and kiro rebuilds conversationState.history from the turns
+      // it was handed. So the refusal is not limited to the obviously translated wires.
+      const realNow = Date.now;
+      let server: ReturnType<typeof startServer> | null = null;
+      let upstreamCalls = 0;
+      try {
+        Date.now = () => realNow() - EXPIRED_AGE_MS;
+        rememberResponseState(
+          { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
+          { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
+          undefined,
+          { force: true },
+        );
+        Date.now = realNow;
+        globalThis.fetch = (async () => {
+          upstreamCalls += 1;
+          throw new Error("upstream must not be called");
+        }) as typeof fetch;
+        saveConfig({
+          port: 0,
+          hostname: "127.0.0.1",
+          defaultProvider: "wire-test",
+          providers: {
+            "wire-test": {
+              adapter,
+              baseUrl: "https://example.invalid/v1",
+              authMode: "key",
+              apiKey: "synthetic-key",
+              defaultModel: "test-model",
+              models: ["test-model"],
+            },
+          },
+        } as OcxConfig);
+        server = startServer(0);
+        const response = await originalFetch(new URL("/v1/responses", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "wire-test/test-model",
+            previous_response_id: FIRST_RESPONSE_ID,
+            input: [inputMessage(CURRENT_USER_SENTINEL)],
+            stream: true,
+          }),
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: { type: "invalid_request_error", code: "previous_response_not_found" },
+        });
+        expect(upstreamCalls).toBe(0);
+      } finally {
+        Date.now = realNow;
+        globalThis.fetch = originalFetch;
+        await server?.stop(true);
+      }
+    },
+    SERVER_BUDGET_MS,
+  );
 });
 
 describe("Issue #702 expired forward replay state", () => {
@@ -485,13 +662,7 @@ describe("Issue #702 expired forward replay state", () => {
             }),
           });
           expect(response.status).toBe(400);
-          expect(await response.json()).toEqual({
-            error: {
-              message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-              type: "invalid_request_error",
-              code: "previous_response_not_found",
-            },
-          });
+          expect(await response.json()).toEqual({ error: LOCAL_REPLAY_UNAVAILABLE });
         } finally {
           await server.stop(true);
         }
@@ -521,11 +692,7 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.upstreamRequests).toHaveLength(1);
     expect(scenario.secondStatus).toBe(400);
     expect(JSON.parse(scenario.secondResponseText)).toMatchObject({
-      error: {
-        message: expect.stringMatching(/continuation state.*expired/i),
-        type: "invalid_request_error",
-        code: "previous_response_not_found",
-      },
+      error: LOCAL_REPLAY_UNAVAILABLE,
     });
   });
 
@@ -622,6 +789,145 @@ describe("Issue #702 expired forward replay state", () => {
     expect(serialized).toContain(CURRENT_USER_SENTINEL);
   });
 
+  test("a task-scope mismatch refuses the delta before ordinary HTTP upstream I/O", async () => {
+    const scenario = await runForwardScenario("fresh", { "x-codex-parent-thread-id": "other-task" });
+
+    expect(scenario.firstStatus).toBe(200);
+    expect(scenario.secondStatus).toBe(400);
+    expect(JSON.parse(scenario.secondResponseText)).toEqual({ error: LOCAL_REPLAY_UNAVAILABLE });
+    expect(scenario.upstreamRequests).toHaveLength(1);
+  });
+
+  test("missing, corrupt and mismatched local state answer identically on one route", async () => {
+    // All three mean the same thing to a client: replay in full. Each is produced for real here
+    // rather than inferred from the source strings - one spill deleted, one overwritten with
+    // bytes that do not parse, and one entry retained under a different task.
+    setResponseStateByteCapForTests(1_024);
+    const stored = async (id: string, threadId?: string): Promise<string> => {
+      rememberResponseState(
+        { model: "gpt-5.5", input: "x".repeat(8_000), store: false },
+        { id, status: "completed", output: [{ role: "assistant", content: "done" }] },
+        undefined,
+        { force: true, ...(threadId ? { clientThreadId: threadId } : {}) },
+      );
+      await flushPendingResponseSpillsForTests();
+      const spillDir = responseSpillDirectory(testHome);
+      const spill = readdirSync(spillDir).find(name => name.includes(id));
+      expect(spill, `spill for ${id}`).toBeDefined();
+      return join(spillDir, spill!);
+    };
+
+    const missingPath = await stored("resp_local_missing");
+    unlinkSync(missingPath);
+    const corruptPath = await stored("resp_local_corrupt");
+    writeFileSync(corruptPath, "{ this is not valid json", "utf8");
+    await stored("resp_local_foreign", "task-a");
+
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      throw new Error("upstream must not be called");
+    }) as typeof fetch;
+    saveConfig(forwardConfig());
+    const server = startServer(0);
+    const token = fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" });
+    const ask = async (previousResponseId: string, threadId: string): Promise<{ status: number; body: string }> => {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          "chatgpt-account-id": "acct-issue-702",
+          "x-codex-parent-thread-id": threadId,
+        },
+        body: JSON.stringify({
+          model: "gpt-5.5",
+          previous_response_id: previousResponseId,
+          input: [inputMessage(CURRENT_USER_SENTINEL)],
+          stream: true,
+          store: false,
+        }),
+      });
+      return { status: response.status, body: await response.text() };
+    };
+
+    try {
+      const missing = await ask("resp_local_missing", "task-a");
+      const corrupt = await ask("resp_local_corrupt", "task-a");
+      const mismatch = await ask("resp_local_foreign", "task-b");
+      const expected = { error: LOCAL_REPLAY_UNAVAILABLE };
+      for (const [label, outcome] of [["missing", missing], ["corrupt", corrupt], ["mismatch", mismatch]] as const) {
+        expect(outcome.status, label).toBe(400);
+        expect(JSON.parse(outcome.body), label).toEqual(expected);
+      }
+      // Byte-identical, not merely equivalent once parsed.
+      expect(corrupt.body).toBe(missing.body);
+      expect(mismatch.body).toBe(missing.body);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a WebSocket client whose task scope changed is refused and recovers by replaying in full", async () => {
+    // The existing WebSocket coverage exercises expired and missing state. A scope mismatch is
+    // the third way local replay becomes unusable, and it has to reach the client as the same
+    // frame so Codex reconnects with its full input instead of terminating the task.
+    const upstreamRequests: Record<string, unknown>[] = [];
+    const upstream = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        upstreamRequests.push(await request.json() as Record<string, unknown>);
+        return new Response(completedSse("resp_scope_ws", "replayed"), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    let server: ReturnType<typeof startServer> | null = null;
+    let socket: WebSocket | null = null;
+    try {
+      rememberResponseState(
+        { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
+        { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
+        undefined,
+        { force: true, clientThreadId: "task-a" },
+      );
+      saveConfig({
+        port: 0, hostname: "127.0.0.1", websockets: true, defaultProvider: "routed-test",
+        providers: {
+          "routed-test": {
+            adapter: "openai-responses", baseUrl: upstream.url.toString(), allowPrivateNetwork: true,
+            authMode: "key", apiKey: "synthetic-key", defaultModel: "test-model", statelessResponses: true,
+          },
+        },
+      } as OcxConfig);
+      server = startServer(0);
+      socket = await openResponseSocket(server.url, { "x-codex-parent-thread-id": "task-b" });
+      const refused = await sendSocketTurn(socket, {
+        model: "routed-test/test-model", previous_response_id: FIRST_RESPONSE_ID,
+        input: [inputMessage(CURRENT_USER_SENTINEL)], store: false,
+      });
+      expect(refused).toMatchObject({
+        type: "error", status: 400,
+        error: { type: "invalid_request_error", code: "previous_response_not_found" },
+      });
+      expect(upstreamRequests).toHaveLength(0);
+
+      const recovered = await sendSocketTurn(socket, {
+        model: "routed-test/test-model",
+        input: [inputMessage(HISTORICAL_USER_SENTINEL), inputMessage(CURRENT_USER_SENTINEL)],
+        store: false,
+      });
+      expect(recovered.type).toBe("response.completed");
+      expect(upstreamRequests).toHaveLength(1);
+      expect(upstreamRequests[0]!.previous_response_id).toBeUndefined();
+    } finally {
+      socket?.close();
+      await server?.stop(true);
+      await upstream.stop(true);
+    }
+  });
+
   test("forward mode still sends an ordinary request without previous_response_id", async () => {
     const scenario = await runForwardScenario("ordinary");
 
@@ -630,6 +936,77 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.upstreamRequests[0]!.path).toBe("/responses");
     expect(scenario.upstreamRequests[0]!.body.previous_response_id).toBeUndefined();
     expect(JSON.stringify(scenario.upstreamRequests[0]!.body)).toContain(HISTORICAL_USER_SENTINEL);
+  });
+
+  test("a destination that owns continuations still gets an unknown id, but never a foreign one", async () => {
+    // An id this process cannot resolve is the destination's business, and forwarding it is the
+    // behavior the case below pins. An id this process CAN resolve, to another task's state, is
+    // not: forwarding it would continue that task's conversation for a different caller. The
+    // refusal therefore comes before the native exception, not after it.
+    const upstreamRequests: Record<string, unknown>[] = [];
+    let upstream: ReturnType<typeof Bun.serve> | null = null;
+    let server: ReturnType<typeof startServer> | null = null;
+    try {
+      upstream = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          upstreamRequests.push(await request.json() as Record<string, unknown>);
+          return new Response(completedSse("resp_native_forwarded", "forwarded"), {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+      saveConfig({
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "test-openai",
+        providers: {
+          "test-openai": {
+            adapter: "openai-responses",
+            baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+            allowPrivateNetwork: true,
+            apiKey: "provider-key",
+            defaultModel: "gpt-5.5",
+            statelessResponses: false,
+          },
+        },
+      } as OcxConfig);
+      server = startServer(0);
+      rememberResponseState(
+        { input: [inputMessage(HISTORICAL_USER_SENTINEL)], store: false },
+        { id: FIRST_RESPONSE_ID, status: "completed", output: [] },
+        undefined,
+        { force: true, clientThreadId: "task-a" },
+      );
+      const send = (previousResponseId: string, threadId: string) => originalFetch(
+        new URL("/v1/responses", server!.url),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-codex-parent-thread-id": threadId },
+          body: JSON.stringify({
+            model: "test-openai/gpt-5.5",
+            previous_response_id: previousResponseId,
+            input: [inputMessage(CURRENT_USER_SENTINEL)],
+            stream: true,
+            store: false,
+          }),
+        },
+      );
+
+      const foreign = await send(FIRST_RESPONSE_ID, "task-b");
+      expect(foreign.status).toBe(400);
+      expect(await foreign.json()).toMatchObject({ error: { code: "previous_response_not_found" } });
+      expect(upstreamRequests).toHaveLength(0);
+
+      const unknown = await send("resp_never_seen_here", "task-b");
+      expect(unknown.status).toBe(200);
+      await unknown.text();
+      expect(upstreamRequests).toHaveLength(1);
+      expect(upstreamRequests[0]!.previous_response_id).toBe("resp_never_seen_here");
+    } finally {
+      await server?.stop(true);
+      await upstream?.stop(true);
+    }
   });
 
   test.each(["message", "function", "custom"] as const)("API-key Responses providers can still forward native %s continuation state", async kind => {

@@ -246,6 +246,22 @@ final provider. Custom destinations and historic rows omit the field; consumers 
 infer subscription usage from the current configuration, model name, or inbound API key.
 The log reports usage, not subscription invoice amounts.
 
+API-key attempts also record `accountLogLabel` as `k` followed by 32 lowercase hex digits.
+The label is the first 128 bits of SHA-256 over
+`JSON.stringify(["ocx-key-account-v1", providerName, entryId ?? null, reference])`.
+The reference is the configured key value captured for the physical request, before environment
+or keychain resolution. Raw keys, references, and pool IDs are not written to the label field.
+A consumer can derive the same label from its local configuration without resolving secrets.
+Changing a literal key or reference changes the label; replacing the secret behind an unchanged
+reference keeps the same logical account. Older unlabeled records cannot be attributed reliably.
+
+Key selection is recorded after queued requests have been rebuilt for the current selection.
+When a retry changes keys, `attempts` retains a separate record for the preceding key, including
+reported usage from failed responses. Missing usage remains unreported. Routed adapter terminals
+are observed before image/search loops or continuation guards combine their usage. Consumers
+sum the flat attempts by provider/account and do not add the parent combo total again. These
+records identify usage; provider quota percentages remain separate upstream observations.
+
 `GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
 snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
 than every normalized request row. Later refreshes validate the previous line boundary and fold only
@@ -437,7 +453,7 @@ whether to star the repository.
 | `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection | Returns 202; repeated calls report the existing drain |
 | `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict; 409 `respawnable_service` when a Windows Task Scheduler wrapper could respawn the proxy and the caller is not `ocx stop` (nothing is changed); 409 `self_unload_service` when this proxy is running as the installed launchd/systemd service, because stopping the manager from inside it would end the process before native Codex is restored — run `ocx stop` instead (nothing is changed); 409 when the installed manager refuses to stop; 409 `service_state_unknown` when the Task Scheduler state cannot be read (nothing is changed; repair the query and retry) |
 | `GET /api/system/codex-app-server` | Report whether running Codex app-servers predate the current model catalog | — |
-| `POST /api/system/codex-restart` | Refresh the catalog, then ask stale Codex app-servers to exit so the model picker reloads | Returns 200 with `code: partially_stopped` when a target survives |
+| `POST /api/system/codex-restart` | Refresh the catalog, then restart stale Codex app-servers and fully quit and relaunch the Codex desktop app so the model picker reloads. When the proxy itself is running inside the Codex app, the desktop restart is refused rather than handed off. | Returns 200 with `code: partially_stopped` when a target survives |
 
 ### Codex authentication delegation
 

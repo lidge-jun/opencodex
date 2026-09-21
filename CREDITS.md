@@ -243,6 +243,42 @@ unnecessary.
 If you find a landing that belongs on this page, open an issue. Being missed is
 the defect this file documents, not a claim you have to argue for.
 
+### 2026-09-13: independent work that overtook an open proposal
+
+The gate fires on what a pull request *says*. It cannot fire on a landing that
+never mentions the proposal it overtakes, which is how this one happened.
+
+[#4077](https://github.com/lidge-jun/opencodex/pull/4077) by
+[@laerad777](https://github.com/laerad777) proposed opening the xAI Grok OAuth
+lane to `service_tier: "priority"` and correcting the Fast-tier catalog copy.
+The registry half landed independently through #4431 at `7ca00ffe7`, derived
+from its own live probe, with no reference to #4077 and no trailer. The landed
+scope is narrower on evidence — `grok-4.20-multi-agent-0309` stays excluded
+because the gateway answers `service_tier: "default"` when sent `priority` —
+so this is genuinely independent work rather than a silent carry.
+
+The copy correction was still unlanded, and it was the part #4077 identified
+first. It landed through #4474 with a `Co-authored-by` trailer naming the
+author. The registry half is recorded here as an acknowledgement rather than as
+carried code, because that is what the evidence supports.
+
+The generalizable point: "independent" and "first" are different claims, and
+only the second one is visible from the open queue.
+
+### 2026-09-13: the gate also fires on prose about carrying
+
+The matcher reads the description, so a pull request that merely *describes* a
+carry train trips `missing_coauthor_credit` even when it has no source author.
+[#4499](https://github.com/lidge-jun/opencodex/pull/4499) was an ordinary
+implementation with no source branch; the phrases "contributor-carry train" and
+"Head commit carries `[skip ci]`" were enough to fail the gate. Rewording
+cleared it.
+
+That is a false positive rather than a defect worth loosening the matcher for.
+A gate that occasionally asks an author to justify wording is cheaper than one
+that misses a real uncredited carry, which is the failure this whole page
+documents. Write around it.
+
 ### A gap the gate does not close
 
 The gate checks that a trailer is **present**. It cannot check that the trailer

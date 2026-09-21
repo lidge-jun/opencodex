@@ -117,7 +117,7 @@ async function transcribeAdmitted(
       form.append("response_format", "json");
     }
     const upstream = await fetch(url, { method: "POST", headers, body: form, signal: signal.signal, redirect: "manual" });
-    outcome = upstream.ok ? 502 : upstream.status;
+    outcome = upstream.status;
     const detach = cancelBodyOnAbort(upstream.body, signal.signal);
     let body: ArrayBuffer | Response;
     try {
@@ -137,7 +137,6 @@ async function transcribeAdmitted(
     if (!payload || typeof payload !== "object" || !("text" in payload) || typeof payload.text !== "string") {
       return formatErrorResponse(502, "upstream_error", "Audio upstream response is missing text");
     }
-    outcome = upstream.status;
     return input.format === "text"
       ? new Response(payload.text, { headers: { "content-type": "text/plain; charset=utf-8" } })
       : Response.json({ text: payload.text });

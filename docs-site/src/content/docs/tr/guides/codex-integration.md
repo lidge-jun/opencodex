@@ -379,10 +379,11 @@ sırayla kontrol edin:
 6. **Çalışan Codex `app-server`** — uzun ömürlü bir Codex `app-server` (Desktop
    / CLI arka plan ana bilgisayarı) önceki listeyi bellekte tuttuğu sürece
    diskteki kataloğu yeniden yazmak yeterli değildir. `ocx sync` ve `ocx
-   sync-cache` bu süreçler algılandığında uyarır. Bunları `ocx sync
-   --restart-codex` ile yeniden başlatın (veya eşleşen `app-server` süreçlerini
-   kendiniz durdurun), ardından yeni listenin görünmesi için Codex'in bunları
-   yeniden oluşturmasına izin verin.
+   sync-cache` bu süreçler algılandığında uyarır. `ocx sync --restart-codex` bu
+   süreçleri yeniden başlatır ve seçicinin kataloğu yeniden okuması için Codex
+   masaüstü uygulamasını macOS, Linux ve Windows'ta tamamen kapatıp yeniden
+   başlatır. Masaüstü uygulamasını çalışır bırakmak için `--restart-app-server-only`
+   iletin veya eşleşen `app-server` süreçlerini kendiniz durdurun.
 
 :::caution[Diğer yerel yazıcılar]
 Katalog yazmaları (`opencodex-catalog.json`, `config.toml`) opencodex **içinde**
@@ -469,6 +470,12 @@ service stop` yerel Codex'i geri yükler.
 
 ## Sayfalanmış geçmiş için güvenlik reddi
 
-Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. OpenCodex, Codex dışında sıra numarası atamak yerine yapılandırmayı, profili, kataloğu, geçmişi ve geri yükleme kanıtlarını korur. Harici sağlayıcıyı korumak gibi değişim yapmayan yollar kullanılabilir.
+Etkilenen geçmiş deposu sayfalamayı destekliyorsa sağlayıcı değişimi `history_paginated_requires_native_writer` döndürebilir; legacy satırlar da buna dahildir. Bu neden artık Codex yapılandırmasını, başvuru profilini veya model kataloğunu reddetmez. `ocx sync` ve `ocx start` bu dosyaları yazmaya ve `model_catalog_json` yolunu ayarlamaya devam eder; böylece Codex model seçicisi OpenCodex üzerinden yönlendirilen her modeli göstermeyi sürdürür. Konuşma geçmişinin yeniden etiketlenmesini durduran yalnızca bu nedendir, çünkü sayfalanmış geçmiş sıra numaralarını Codex’in kendi yerel yazıcısı atar ve yeniden denemek bunu değiştirmez. Okunamayan bir durum veritabanı, kimliği değişmiş bir geçmiş veya çalıştırılamayan bir ön kontrol gibi diğer geçmiş ön kontrol nedenleri, daha sonra başarılı olabilecekleri için hâlâ tüm değişimi reddeder ve geri alır. Bu durumda OpenCodex sayfalanmış geçmiş dosyalarını veya iş parçacığı satırlarını değiştirmez. Mevcut konuşmalar zaten etiketlendikleri sağlayıcıda kalır ve taşınmaz; yeni konuşmalar proxy üzerinden normal şekilde yönlendirilir. Yeniden etiketleme durduğunda, ev dizininde zaten bulunan bir `[model_providers.opencodex]` tablosu kaldırılmaz, kök-override (loopback) biçimde bile tutulur; böylece satırları `opencodex` olarak etiketlenmiş konuşmalar hâlâ var olan bir sağlayıcı kimliğini korur. CLI şunu yazdırır: `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`. `ocx restore` ve Codex yapılandırmasının kaldırılması `history_paginated_requires_native_writer` nedeniyle hâlâ reddedilir. İş parçacığı satırları hâlâ ona başvuruyken `[model_providers.opencodex]` tanımını kaldırmak o konuşmaları çözülemez yapar ve geri yükleme yolu uyumluluk sağlayıcı tablosunu tutamaz. Zaten sayfalanmış bir ev dizini şu anda ürün üzerinden kaldırılamaz; bu amaçlanan davranış değil, bilinen açık iştir.
 
-Konuşmanın kullandığı sağlayıcı tanımını silmeyin, `ocx sync` veya legacy kurtarmayı tekrarlamayın ve etkin geçmişi yeniden yazmayın. Dosyaları koruyun, kurtarmadan önce konuşmayı kapatın ve özel geçmişi yayımlamadan tam hatayı ve sürümleri bildirin. Yerel yazıcıyla koordineli, doğrulanmış bir düzeltme gerekir. Yedek veya başarılı betik görüntünün düzeldiğini kanıtlamaz; Codex’i yeniden açıp konuşmayı kontrol edin.
+Kök URL geçersiz kılma biçimine dönülürken OpenCodex, geçmiş ön kontrolü başarılı olsa bile yapılandırmayı kaydetmeden önce mevcut `[model_providers.opencodex]` tanımını korur. Böylece Codex, kayıttan sonra veya arka plan geçmiş işlemi başlarken geçmiş biçimini değiştirirse eski `opencodex` konuşmaları sağlayıcılarını bulmaya devam eder. Yeni konuşmalar seçili kök sağlayıcıyı kullanır; açıkça istenen geri yükleme, mevcut ayrı kaldırma kontrollerini korur.
+
+Konuşmaları kendiniz taşımak için etkin sayfalanmış geçmişi veya iş parçacığı satırını yeniden yazmayın. Kurtarmadan önce konuşmayı kapatın ve özel geçmişi yayımlamadan tam hatayı ve sürümleri bildirin. Yedek veya başarılı betik görüntünün düzeldiğini kanıtlamaz; Codex’i yeniden açıp konuşmayı kontrol edin.
+
+## Ana hesabın yeniden kimlik doğrulamasını iptal etme
+
+Ana hesabın cihaz koduyla yeniden kimlik doğrulaması iptal edilirken geçici bir DELETE hatası, ağ hatası ya da bilinmeyen veya sonlanmamış bir durum içeren yanıt alınırsa etkin akış ve iptal hatası göstergesi korunur; böylece iptal yeniden denenebilir. Tamamlanan bir girişin algılanabilmesi için durum sorgulaması normalde devam eder. Akış `pending` veya `committing` durumundayken yeniden denenebilir bir iptal hatası ile GET durum sorgusunun 2xx dışı HTTP yanıtı çakışırsa yanıtların geliş sırasından bağımsız olarak aynı akışın iptali yeniden denenebilir; sunucudan alınan son cihaz kodu, doğrulama URL’si ve aşama korunur veya geri yüklenir. GET HTTP hatası durum sorgulamasını yine durdurur, ancak ikinci bir giriş POST isteği başlatılmadan iptal yeniden denenebilir. Son durum olan `failed` yanıtı akışı serbest bırakır ve normalleştirilmiş hata nedenini gösterir; başarılı girişi yalnızca `succeeded` bildirir. Onaylanmış `cancelled` yanıtı akışı serbest bırakarak cihaz koduyla yeni bir giriş başlatılmasını sağlar. `unknown_flow` koduyla gelen kesin bir HTTP 404 yanıtı da süresi dolmuş akış kimliğini serbest bırakarak cihaz koduyla yeni bir giriş başlatılmasını sağlar, ancak girişin başarılı olduğunu veya iptalin onaylandığını bildirmez. Önceki bir akıştan geç gelen POST, GET veya DELETE yanıtları yeni akışı değiştiremez veya yeni akış için başarılı giriş bildiremez.

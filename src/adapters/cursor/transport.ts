@@ -55,6 +55,25 @@ export interface CursorTransportFactoryInput {
    * client thread. Distinct from the per-transport native-exec/shell owner.
    */
   sessionId?: string;
+  /**
+   * Test-only clock for the T04 inbound stream-health watchdog. Production omits it and the
+   * transport uses the global timers; injecting here must not change scheduling semantics.
+   *
+   * It exists because the watchdog's contract — a meaningful frame re-arms both deadlines — can
+   * only be asserted against real timers by keeping a synthetic server delivering frames faster
+   * than the silence budget for several multiples of it. That is an assertion about how busy the
+   * machine is, and it failed in the unsharded macOS lane for exactly that reason while the
+   * watchdog was working correctly. With the clock injected, virtual time advances only where
+   * the test says it does, so no amount of runner contention can expire a deadline.
+   */
+  streamHealthClock?: CursorStreamHealthClock;
+}
+
+/** The three time primitives the T04 watchdog uses. Production binds all three to the globals. */
+export interface CursorStreamHealthClock {
+  now(): number;
+  setTimeout(callback: () => void, ms: number): ReturnType<typeof setTimeout>;
+  clearTimeout(timer: ReturnType<typeof setTimeout>): void;
 }
 
 export type CursorTransportFactory = (input: CursorTransportFactoryInput) => CursorTransport;

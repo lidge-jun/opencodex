@@ -5,6 +5,37 @@ import { NATIVE_RESERVE_MODEL } from "./catalog/native-models";
 export const CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE =
   "Luna Reserve compatibility is only available as a conversation model, not a vision helper. Choose another vision model.";
 
+export const CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE =
+  "Luna Reserve (gpt-reserve) is not forwarded without the local Desktop authless opt-in."
+  + " OpenCodex holds no Reserve entitlement to send for this request, so the upstream would answer with a"
+  + " usage-limit error that names neither the cause nor the fix."
+  + " Enable the opt-in with 'ocx system settings --desktop-authless on' (or set codexDesktopAuthless to true"
+  + " in config.json), then retry. Choose another model to keep working without it.";
+
+/**
+ * Strict complement of {@link isCodexReserveRequestEligible} for the FLAG reason ONLY (#4940).
+ *
+ * Read the two together. This answers a narrower question: Reserve was asked for, every ingress
+ * condition eligibility requires already holds, and the single missing piece is the operator
+ * opt-in. Flipping `codexDesktopAuthless` to true therefore always turns a true here into a true
+ * from {@link isCodexReserveRequestEligible}, which is what makes it honest for the refusal to
+ * name that one setting. The other two ineligibility reasons are deliberately not covered: a
+ * client role and a non-loopback admission source are different situations, and the correct
+ * answer for both is still to forward exactly as before.
+ *
+ * Callers classify the concrete destination as canonical forward before using this predicate, the
+ * same obligation {@link isCodexReserveHelperUnsupported} carries. An operator who has aliased or
+ * routed `gpt-reserve` onto some other provider owns a path that works, and it must keep working.
+ */
+export function isCodexReserveOptInMissing(
+  config: Pick<OcxConfig, "codexDesktopAuthless" | "runtimeRole">,
+  modelId: string,
+  admission: Pick<DataPlaneAdmission, "source"> | undefined,
+): boolean {
+  return modelId === NATIVE_RESERVE_MODEL && config.codexDesktopAuthless !== true
+    && config.runtimeRole !== "client" && admission?.source === "loopback";
+}
+
 /** Callers classify the concrete destination as canonical forward before using this predicate. */
 export function isCodexReserveHelperUnsupported(
   config: Pick<OcxConfig, "codexDesktopAuthless" | "runtimeRole">,
@@ -94,6 +125,15 @@ export function isEffectiveCodexDesktopAuthless(
   config: Pick<OcxConfig, "runtimeRole" | "hostname" | "unauthenticatedLoopbackListener" | "codexDesktopAuthless"> | undefined,
 ): boolean {
   return config?.codexDesktopAuthless === true
+    && config.runtimeRole !== "client"
+    && !shouldInjectApiAuthHeader(config);
+}
+
+/** Keep reporting aligned with the admission-token gate used by standalone injection. */
+export function isEffectiveCodexClientCompaction(
+  config: Pick<OcxConfig, "runtimeRole" | "hostname" | "unauthenticatedLoopbackListener" | "codexClientCompaction"> | undefined,
+): boolean {
+  return config?.codexClientCompaction === true
     && config.runtimeRole !== "client"
     && !shouldInjectApiAuthHeader(config);
 }

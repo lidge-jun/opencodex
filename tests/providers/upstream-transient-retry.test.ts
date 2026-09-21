@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   fetchWithTransientRetry,
   isNonReplayableResponse,
@@ -7,7 +7,9 @@ import {
   markResponseNonReplayable,
 } from "../../src/lib/upstream-retry";
 import { transientRetryPolicyFor } from "../../src/providers/key-failover";
-import type { OcxProviderConfig } from "../../src/types";
+import { handleChatCompletions } from "../../src/server/chat-completions";
+import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 function bodyResponse(status: number, headers?: Record<string, string>): Response {
   // ReadableStream body so cancel() is observable.
@@ -39,15 +41,30 @@ describe("transientRetryPolicyFor", () => {
     expect(transientRetryPolicyFor({ ...base, transientRetryOn5xx: { attempts: 5 } })).toEqual({ enabled: true, attempts: 5 });
   });
 
-  test("only key-auth openai-chat qualifies", () => {
+  test("only key-auth openai-chat and openai-responses qualify", () => {
+    // The Responses passthrough lane reads this policy now, so a key-auth provider on that
+    // adapter can tune its own ladder. Before #4893 it was rejected here AND ignored there,
+    // so the option was inert in both directions while the same provider on `openai-chat`
+    // honoured it.
+    expect(transientRetryPolicyFor({
+      ...base,
+      adapter: "openai-responses",
+      transientRetryOn5xx: { attempts: 1 },
+    } as unknown as OcxProviderConfig)).toEqual({ enabled: true, attempts: 1 });
     // The adapter gate is the accepted scope, not an incidental detail: without it any
     // generic key-auth provider would inherit the policy.
-    for (const adapter of ["openai-responses", "anthropic", "google"]) {
+    for (const adapter of ["anthropic", "google"]) {
       expect(transientRetryPolicyFor({ ...base, adapter, transientRetryOn5xx: {} } as unknown as OcxProviderConfig)).toBeNull();
     }
-    // Fail closed on credential shape: OAuth/forward/local are never replayed here.
-    for (const authMode of ["oauth", "forward", "local"]) {
-      expect(transientRetryPolicyFor({ ...base, authMode, transientRetryOn5xx: {} } as unknown as OcxProviderConfig)).toBeNull();
+    // Fail closed on credential shape: OAuth/forward/local are never replayed here. Asserted for
+    // both admitted adapters, because this is what keeps the ChatGPT forward pool on the default
+    // ladder now that the Responses lane consults the policy at all.
+    for (const adapter of ["openai-chat", "openai-responses"]) {
+      for (const authMode of ["oauth", "forward", "local"]) {
+        expect(transientRetryPolicyFor({
+          ...base, adapter, authMode, transientRetryOn5xx: {},
+        } as unknown as OcxProviderConfig)).toBeNull();
+      }
     }
     // An omitted authMode is the documented key-auth default for custom providers.
     expect(transientRetryPolicyFor({ adapter: "openai-chat", transientRetryOn5xx: {} } as unknown as OcxProviderConfig))
@@ -83,9 +100,10 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(504);
   });
 
-  test("the structured codes name exactly the two post-send verdicts", () => {
+  test("the structured codes name the post-send verdicts and the proxy's own refusal", () => {
     expect(isNonReplayableUpstreamCode("upstream_no_response")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_closed_before_response")).toBe(true);
+    expect(isNonReplayableUpstreamCode("upstream_reset_replay_refused")).toBe(true);
     expect(isNonReplayableUpstreamCode("upstream_error")).toBe(false);
     expect(isNonReplayableUpstreamCode(undefined)).toBe(false);
   });
@@ -149,7 +167,7 @@ describe("fetchWithTransientRetry", () => {
       const err = new Error("socket hang up") as Error & { code?: string };
       err.code = "ECONNRESET";
       throw err;
-    }, { attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
+    }, { replaySafe: true, attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
     expect(reported.length).toBe(1);
     expect(reported[0]!).toBeGreaterThan(0);
   });
@@ -166,7 +184,7 @@ describe("fetchWithTransientRetry", () => {
         throw err;
       }
       return bodyResponse(sends === 3 ? 200 : 503);
-    }, { attempts: 3, slowAttemptMs: 60_000 });
+    }, { replaySafe: true, attempts: 3, slowAttemptMs: 60_000 });
 
     expect(sends).toBe(3);
     expect(res.status).toBe(200);
@@ -240,5 +258,64 @@ describe("fetchWithTransientRetry", () => {
     }, { slowAttemptMs: 10 });
     expect(calls).toBe(1);
     expect(res.status).toBe(502);
+  });
+});
+
+/**
+ * The native Chat surface answers from its own classifier rather than the bridge formatter, so
+ * the refusal reaches the client only if that classifier preserves it. It did not: 429 maps to
+ * `rate_limit_error`, which already carries a code, and the only branch that copied an upstream
+ * code required the classified one to be empty. The client was therefore told the provider
+ * throttled the turn and handed a two-second Retry-After for a rate limit that never happened.
+ */
+describe("native Chat completions and the replay refusal", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test("keeps the refusal code and attaches no Retry-After", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const config = {
+      port: 0,
+      defaultProvider: "replay-refusal-fixture",
+      providers: {
+        "replay-refusal-fixture": {
+          adapter: "openai-chat",
+          baseUrl: "https://replay-refusal.example.test/v1",
+          authMode: "key",
+          apiKey: "sk-replay-refusal",
+        },
+      },
+    } as unknown as OcxConfig;
+
+    // Taken after the inherited test home is in effect so native Chat can record its send.
+    const releaseSpendHome = acquireOwnedSpendHome();
+    try {
+      const response = await handleChatCompletions(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "replay-refusal-fixture/model",
+            messages: [{ role: "user", content: "ping" }],
+          }),
+        }),
+        config,
+        { model: "", provider: "" },
+      );
+
+      expect(sends).toBe(1);
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBeNull();
+      expect(await response.json()).toMatchObject({
+        error: { code: "upstream_reset_replay_refused" },
+      });
+    } finally {
+      // Released after the response body is consumed so no stream retains the ledger owner.
+      releaseSpendHome();
+    }
   });
 });

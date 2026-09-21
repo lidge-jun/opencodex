@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` vous accompagne dans les étapes suivantes :
 
-1. **Choix d’un fournisseur** — sélectionnez l’un des 79 préréglages intégrés au registre, ou `custom` pour saisir une
+1. **Choix d’un fournisseur** — sélectionnez l’un des 94 préréglages intégrés au registre, ou `custom` pour saisir une
    URL de base et un adaptateur.
 2. **Clé API** — collez une clé ou référencez une variable d’environnement telle que `${ANTHROPIC_API_KEY}`.
 3. **Modèle par défaut** — pour les fournisseurs clés, locaux et personnalisés, acceptez le préréglage ou saisissez un identifiant de modèle.
@@ -46,8 +46,10 @@ Au démarrage, opencodex :
   le catalogue de modèles de Codex**,
 - écoute sur `http://localhost:<port>/v1`.
 
-Si le port demandé est occupé, `ocx start` sélectionne un port libre, l'enregistre dans `runtime-port.json`,
-et met à jour Codex pour utiliser l'écouteur en direct.
+Si le port demandé est occupé, `ocx start` s’arrête et indique ce qui l’occupe : exécutez d’abord
+`ocx stop` si un processus opencodex y répond, ou démarrez sur un port libre avec
+`ocx start --port <port>`. La commande ne change jamais de port d’elle-même : auparavant, ce
+comportement laissait deux proxys en cours d’exécution et redirigeait Codex vers le plus récent.
 
 Vérifiez-le :
 

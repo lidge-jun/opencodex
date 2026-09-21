@@ -450,7 +450,11 @@ describe("day-level estimated cost", () => {
 
     const provider = sum.providers.find(row => row.provider === "openai");
     expect(provider?.cacheReadInputTokens).toBe(cacheRead);
-    expect(provider?.cacheHitRate).toBeCloseTo(cacheRead / (total + 99));
+    // Only the tail row reported cache detail at all, so only its 100 input tokens are a
+    // denominator. The other 256 rows never measured cache and are not miss evidence: dividing
+    // by their tokens too reported a rate for traffic nothing observed (#4546).
+    expect(provider?.cacheObservedInputTokens).toBe(100);
+    expect(provider?.cacheHitRate).toBe(expected);
     expect(provider).not.toHaveProperty("cacheObserved");
   });
 });

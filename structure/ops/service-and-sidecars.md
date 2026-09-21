@@ -1,12 +1,19 @@
 # Background Service And Sidecars
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+
+Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+Service endpoints are unchanged by the Responses
+[core module ownership](../transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
 Service startup and restore use the [catalog retirement policy](../catalog.md#shared-catalog);
 retirement does not itself change service registration or user-selected model configuration.
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
 ## Background service command selection
 
@@ -57,7 +64,7 @@ Gemini and Exa remain inert until their executors ship. Selection differs per si
 | Sidecar | Backend selection | Default model | Activation |
 | --- | --- | --- | --- |
 | `web-search/` | Explicit configuration only: unset always resolves to the OpenAI forward path. No backend — Anthropic or otherwise — is auto-selected from credential availability (doing so once sent OpenAI model ids to the Anthropic API). Explicit xAI requires usable stored Grok OAuth and may add hosted `x_search`; explicit Gemini/Exa remain fail-closed until their executors land. | `gpt-5.6-luna` (OpenAI), `claude-sonnet-5` (Anthropic), `grok-4.6` (xAI) | Hosted `web_search` requested by a non-passthrough routed model. |
-| `vision/` | Explicit configuration wins for both backends. Only an unset backend auto-selects: Anthropic when a usable Anthropic OAuth provider exists, otherwise the OpenAI forward authority. An explicitly selected backend whose authority is unavailable produces no plan rather than falling back. | `claude-sonnet-5` (Anthropic), `gpt-5.6-luna` (OpenAI) | Input contains images for a model listed in `noVisionModels`. |
+| `vision/` | Explicit configuration wins for both backends. Only an unset backend auto-selects: Anthropic when a usable Anthropic OAuth provider exists, otherwise the OpenAI forward authority. An explicitly selected backend whose authority is unavailable produces no plan rather than falling back. | `claude-sonnet-5` (Anthropic), `gpt-5.6-luna` (OpenAI) | Request carries images and the routed target is not positively proven image-capable (`requiresVisionPreprocessing`). |
 
 The asymmetry is in the unset case only: vision may describe an image with whichever model can see
 it, while a hosted search tool is tied to a provider-specific tool contract, so search never infers
@@ -142,7 +149,7 @@ so the flag does not identify the peer responsible for corruption. Existing diag
 not rewritten. Audio devices, WebRTC media negotiation, captions and spoken handoff delivery remain
 client responsibilities.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
 
@@ -179,3 +186,11 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](../catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

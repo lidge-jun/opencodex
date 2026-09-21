@@ -20,8 +20,27 @@ import { registerUser } from "./devin/register-user";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./devin/api-base";
 import { readDevinCliCredentialOutcome } from "./devin/cli-import";
 import { getCredential } from "./store";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES } from "./index";
 
 export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
+
+/**
+ * Credential slots the deprecated-alias map ties to `providerId`, in both
+ * directions: a deprecated id also reads its destination's slot, and a merge
+ * destination also reads every deprecated source slot pointing at it. Derived
+ * from DEPRECATED_OAUTH_PROVIDER_ALIASES rather than a second "devin-cli"
+ * literal so the map stays the single source of truth — a hard-coded pair here
+ * would drift the day another alias is added.
+ */
+function devinAliasCredentialSlots(providerId: string): string[] {
+  const slots: string[] = [];
+  const destination = DEPRECATED_OAUTH_PROVIDER_ALIASES[providerId];
+  if (destination !== undefined) slots.push(destination);
+  for (const [alias, target] of Object.entries(DEPRECATED_OAUTH_PROVIDER_ALIASES)) {
+    if (target === providerId && alias !== providerId) slots.push(alias);
+  }
+  return slots;
+}
 
 /**
  * The api-server host this account must talk to.
@@ -33,18 +52,44 @@ export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
  * network value.
  */
 export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "devin"): string {
-  return (
-    // Provider-scoped, keyed by the configured provider id verbatim. `devin-cli`
-    // is a deprecated alias for `devin`, but an unmigrated config row still owns
-    // its old credential slot until the startup migration rekeys the row and the
-    // slot together — normalizing the id here would read the wrong slot for that
-    // window. An EU or FedStart tenant is recorded on the credential rather than
-    // in the registry, so a fixed "devin" slot would send the key to the wrong
-    // host either way.
-    validateDevinApiBaseUrl(getCredential(providerId)?.apiBaseUrl) ??
-    validateDevinApiBaseUrl(configuredBaseUrl) ??
-    DEVIN_DEFAULT_API_SERVER
-  );
+  // Provider-scoped, keyed by the configured provider id verbatim and consulted
+  // FIRST. `devin-cli` is a deprecated alias for `devin`, but an unmigrated
+  // config row still owns its old credential slot until the startup migration
+  // rekeys the row and the slot together — normalizing the id here would read
+  // the wrong slot for that window. An EU or FedStart tenant is recorded on the
+  // credential rather than in the registry, so a fixed "devin" slot would send
+  // the key to the wrong host either way.
+  const literalCredential = getCredential(providerId);
+  const literal = validateDevinApiBaseUrl(literalCredential?.apiBaseUrl);
+  if (literal !== undefined) return literal;
+
+  // The startup merge saves providers["devin"] synchronously but fires the
+  // credential rekey detached — runDevinProviderMergeStartupMigration cannot
+  // await inside the synchronous startServer window — so the row can already
+  // say "devin" while the credential still sits in the "devin-cli" slot, and it
+  // stays that way for the whole process when the rekey fails or refuses on an
+  // occupied destination slot. Reading the alias-linked slots in both
+  // directions closes that window: "devin" finds the not-yet-rekeyed
+  // "devin-cli" credential, and a lingering "devin-cli" row finds a credential
+  // already rekeyed to "devin". Every candidate passes the same allowlist — an
+  // alias slot is not trusted more than the literal one.
+  // Only when this id owns no credential at all. A present credential whose
+  // apiBaseUrl is missing or off-allowlist is a different situation: the rekey
+  // refuses an occupied destination slot, so both ids can hold credentials that
+  // belong to two different accounts. Borrowing a tenant across that pair would
+  // send this account's key to the other account's EU or FedStart host, which
+  // is the exact misdirection the provider-scoped lookup exists to prevent. An
+  // unusable host on a credential that does exist falls through to the
+  // configured base URL and then the default, as it did before this window was
+  // closed.
+  if (literalCredential === null || literalCredential === undefined) {
+    for (const slot of devinAliasCredentialSlots(providerId)) {
+      const host = validateDevinApiBaseUrl(getCredential(slot)?.apiBaseUrl);
+      if (host !== undefined) return host;
+    }
+  }
+
+  return validateDevinApiBaseUrl(configuredBaseUrl) ?? DEVIN_DEFAULT_API_SERVER;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {

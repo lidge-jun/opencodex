@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { clearAccountNeedsReauth, isAccountNeedsReauth } from "../../src/codex/auth-api";
+import { codexPoolAffinityKey } from "../../src/codex/auth-context";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
@@ -32,6 +33,7 @@ import {
   encryptedInput,
   recoverySse,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -50,6 +52,7 @@ const originalFetch = globalThis.fetch;
 let home = "";
 let previousOcxHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 function config(options: { secondAccount?: boolean } = {}): OcxConfig {
   return {
@@ -305,6 +308,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearAccountNeedsReauth(ACCOUNT_ID);
   clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
@@ -315,6 +320,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearCompactHandoffRoutesForTests();
   clearAccountNeedsReauth(ACCOUNT_ID);
@@ -605,7 +613,13 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     // reported as expired, which is the behavior the missing handoff produces.
     // The binding lives under the model's quota scope, so resolution must be asked in that
     // same scope; a scopeless read looks in the legacy bucket and finds nothing.
-    expect(resolveCodexAccountForThreadDetailed(THREAD_ID, cfg, Date.now(), "shared")).toEqual({
+    // Since #4546 a thread keys as ITSELF through an opaque HMAC, and the parent header is a
+    // first-placement hint rather than the key. A parent-only turn therefore binds under the
+    // derived key, not under the raw parent id this suite used to read back.
+    const affinedKey = codexPoolAffinityKey(
+      new Headers({ "x-codex-parent-thread-id": THREAD_ID }),
+    )!;
+    expect(resolveCodexAccountForThreadDetailed(affinedKey, cfg, Date.now(), "shared")).toMatchObject({
       status: "selected",
       accountId: ACCOUNT_ID,
     });

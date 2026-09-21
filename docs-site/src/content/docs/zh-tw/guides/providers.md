@@ -117,6 +117,20 @@ ocx logout <provider>
 
 Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
 
+### Google 工具結構描述損失診斷
+
+Google 工具宣告會依所選端點類別進行編譯。透過 `ocx debug provider on`、儀表板 Logs 開關或
+`OCX_DEBUG=1` 啟用供應商偵錯後，在省略政策或使用 `compatible` 的路徑上，相容性轉換中的結構描述損失會輸出一筆
+`[ocx:google:google-tool-schema-loss]` 記錄（可用 `ocx debug provider logs -f` 持續查看），
+其中只包含報告版本、端點類別、`lossy` 指標、有上限的不確定比較計數、帶有上限計數的固定損失類別與截斷旗標，
+絕不包含工具名稱、屬性名稱、路徑、值或結構描述文字。省略政策或使用 `compatible` 時只觀察
+轉換。在 `reject-lossy` 下，若初始編譯有損或有界比較結果不確定，會在傳送前拒絕；被拒絕的
+請求不會另外輸出損失記錄。在 `reject-lossy` 下，會移除限制的
+Vertex 或 Cloud Code Assist 修復會輸出同樣不含內容的 `google-tool-schema-repair` 記錄，並在不傳送
+修改請求的情況下回傳原始 400；省略政策或使用 `compatible` 時，會像以前一樣重播修復後的請求。
+直接 AI Studio 不執行此修復。原生輸出結構描述不屬於這兩條政策路徑。請參閱
+[偵錯命令參考](/zh-tw/reference/cli/agents/)。
+
 
 終端 Nous refresh 失敗後，執行 `ocx login nous` 重新認證。
 
@@ -225,7 +239,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 79 個 preset：67 個 key-based、8 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 94 個 preset：78 個 key-based、12 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -266,6 +280,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -367,6 +382,11 @@ endpoint 取得。Chat request 使用設定的 Bearer key。可在
 
 **Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
 
+OrcaRouter 瀏覽器登入（`ocx login orcarouter-oauth`）的金鑰交換成功回應本文必須是不超過
+64 KiB 的有效 UTF-8 JSON。此交換請求原有的 30 秒時限涵蓋回應標頭與完整本文的接收；過大或
+格式錯誤的本文會在儲存金鑰前被拒絕。這些限制只適用於登入時的金鑰交換，不是推論請求酬載的
+限制。`scope` 驗證規則維持不變：允許省略，明確無效的值仍會被拒絕。
+
 **SambaNova Cloud 探索。** preset 從固定 API host 讀取 SambaNova Cloud 公開的 `/v1/models` 列表，保留
 provider-native id，並把 discovery 限制在 128 KiB／128 個 raw row。因 catalog 不需要認證，CLI login
 流程會把 key 回報為 unverifiable，而不會把公開 response 當成有效 key 的證明。Chat request 仍使用
@@ -377,6 +397,16 @@ endpoint 不在範圍內。可在 [SambaNova Cloud](https://cloud.sambanova.ai/a
 text 的 row，排除 embedding 與 image-generation model。它保留含 `/` 的原生 id，以及回報的 context／
 input-modality metadata，並把 discovery 限制在 512 KiB／512 個 raw row。Dedicated deployment host 不在
 範圍內。可在 [Nebius Token Factory](https://tokenfactory.nebius.com) 建立 key。
+
+**Crusoe 探索。** key-based preset 使用 `openai-chat` adapter，只把 Bearer key 傳到 Crusoe 固定的
+Serverless Inference host。`/v1/models` 會以 401 拒絕未驗證的請求，因此成功列出 model 即視為 key 驗證通過。
+discovery 會依 Crusoe 回傳的形式完整保留 `zai-org/GLM-5.3`、`moonshotai/Kimi-K2.6` 這類含 `/` 的原生 id，
+並限制在 256 KiB／256 個 raw row。只保留 `is_public: true` 且 `architecture.modality` 為 text 或 multimodal 的 row，因此帳戶私有部署以及 embedding、媒體類 row 會被排除。reasoning model 會透過 Chat Completions 的 `reasoning` 欄位回傳思考內容，
+adapter 會讀取該欄位。只有 `openai/gpt-oss-120b` 接受 `reasoning_effort` 等級（`low`、`medium`、`high`），
+其他 reasoning model 把該欄位當作開關，因此 preset 不宣告 provider-wide effort 等級，也不宣告
+provider-wide parallel tool call。rate limit 以 project 與 model 為單位（超過時回傳 429，共用 deployment
+擴容時回傳 503），新帳戶可獲得 $5 免費額度。可在 [Crusoe Cloud console](https://console.crusoecloud.com)
+的 Intelligence Foundry > Inference 建立 key。
 
 **DigitalOcean 探索。** preset 以 model access key 存取固定的 shared Serverless Inference host，並把經
 認證的 `/v1/models` response 與 DigitalOcean 文件支持的 Chat Completions allowlist 取交集。未知、

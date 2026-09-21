@@ -123,10 +123,19 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
+some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
+An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
+if the caller sends none, OpenCodex does not invent one. No other caller header is widened by this
+exception.
+
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
-WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
-HTTP proxy rules and does not inherit the WSS-specific `ALL_PROXY` fallback.
+WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses the
+[configured outbound fetch](/reference/configuration/server/#server-fields): a server SOCKS5 proxy from
+`config.proxy` or a SOCKS5 `ALL_PROXY` uses the built-in tunnel when `NO_PROXY` does not exempt
+the target. Scheme-specific HTTP(S) proxy variables retain their separate native handling;
+non-SOCKS `ALL_PROXY` is not a native HTTP fetch route.
 
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are
@@ -364,13 +373,13 @@ important than cosmetic de-duplication. Tool-free requests retain normal text co
 
 ### Reasoning effort
 
-`gpt-5.6-sol` and `claude-opus-5` have verified native effort support, and each model family names
-the request field differently. A selected `low`, `medium`, `high`, `xhigh`, or `max` value is sent
-as `additionalModelRequestFields.reasoning.effort` for `gpt-5.6-sol` and as
-`additionalModelRequestFields.output_config.effort` for `claude-opus-5`. Other Kiro models currently
-use emulated reasoning: opencodex converts the selected level into bounded thinking instructions in
-the user content because their native effort field has not been verified. Do not interpret an
-advertised effort control on those models as proof of upstream-native reasoning support.
+The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
+uses `additionalModelRequestFields.output_config.effort`. For `gpt-5.6-luna` and
+`gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the verified native path.
+Their `xhigh` selection retains the previous bounded thinking instructions in user content
+because that native rung has not been verified. `gpt-5.6-sol` and `claude-opus-5` keep
+their existing native `low`, `medium`, `high`, `xhigh`, and `max` behavior. Other Kiro
+models use emulated reasoning; an advertised effort control is not proof of native support.
 
 ## `cursor`
 
@@ -414,6 +423,16 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+- The denial reply is a silent redirect whose wording follows the request catalog. A catalog that
+  carries `shell_command`/`exec_command` or a unified `exec` keeps the bridge wording; a catalog
+  that carries neither — an orchestrator client exposing only its own Responses tools, for example —
+  is redirected to the request's actual wire names, so the model is pointed at a tool that exists
+  rather than at an alias it cannot see.
+- A recognized Cursor data-policy gate is reported with its title, the action it requires, and the
+  Cursor Dashboard review URL instead of a bare `failed_precondition: Error`. Recognition is limited
+  to the known structured detail: unknown or malformed details keep the generic Connect error, no
+  upstream text, button, URL, or consent action is forwarded or executed, and the failure stays
+  non-retryable. Reviewing and accepting a data policy remains a user action in Cursor itself.
 
 Codex-compatible shell schemas retain sandbox permissions, justification, reusable
 prefix rules and login mode. Freeform tools expose one required string `input`

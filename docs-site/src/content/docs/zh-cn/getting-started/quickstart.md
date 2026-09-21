@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` 会引导你完成：
 
-1. **选择 provider** — 从内置 registry 的 79 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
+1. **选择 provider** — 从内置 registry 的 94 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
 3. **默认模型** — 对于 key、本地和 custom provider，接受预设值或输入模型 id。
 4. **代理端口** — 默认为 `10100`。
@@ -39,7 +39,7 @@ ocx start --port 8080
 - 在 provider 支持时发现实时模型，并**把原生与已路由条目同步进 Codex 的模型目录**；
 - 监听 `http://localhost:<port>/v1`。
 
-如果请求的端口已被占用，`ocx start` 会选择一个空闲端口，将其记录到 `runtime-port.json`，并更新 Codex 以使用这个实际监听地址。
+如果请求的端口已被占用，`ocx start` 会停止并告知你是什么占用了该端口：如果那里响应的是 opencodex，请先运行 `ocx stop`；也可以使用 `ocx start --port <port>` 在空闲端口上启动。它不会自行切换到其他端口；旧行为会让两个代理同时运行，并将 Codex 重新指向后启动的代理。
 
 检查它：
 

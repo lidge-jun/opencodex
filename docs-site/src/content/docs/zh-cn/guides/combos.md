@@ -150,7 +150,8 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | HTTP 401、403、404、408、429，或任何 5xx | 使该目标进入冷却，并跳转到下一个合格目标。 |
 | HTTP 410，并明确表明模型已到生命周期终点、retired、deprecated、sunset、decommissioned 或不再可用 | 仅冷却该目标并继续跳转。无关的 410 仍然是终止错误。 |
 | 被分类为认证、订阅、配额、速率限制、过载或上游服务器错误 | 即使仅凭状态码不足以判断，也会使该目标进入冷却并跳转。 |
-| 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
+| 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
+| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
 未设置 `cooldownMs` 时，发生跳转的目标使用上游回退值：对于上游代码为 `1302` 或 `1305` 的请求速率限制 429，等待 5 秒；其他情况等待 60 秒。设置后，只要不存在可用的上游 `Retry-After` 或 Codex 重置信号，就会应用 `cooldownMs`，包括这些请求速率限制 429。接受数字形式的 `Retry-After` 秒数和 HTTP-date 值，每次冷却最多封顶 10 分钟。优先级从强到弱依次为：显式 `Retry-After` → Codex 重置标头（`x-codex-primary-reset-at`、`x-codex-secondary-reset-at` 或 `x-codex-tertiary-reset-at`）→ combo 的 `cooldownMs`（已设置时）→ 上游速率限制代码 `1302`/`1305` 的 5 秒请求速率限制回退值 → 60 秒默认值。有效的即时指令 `Retry-After: 0` 会保留为上游即时指令，不会被配置的冷却替换。
@@ -290,3 +291,9 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 ### 为什么故障切换在第一次错误后就停止了？
 
 该错误是终止性的，而不是针对目标的。修复无效输入、缩小过大的上下文、处理策略拒绝，或者纠正被拒绝的请求来源。对于这些情况，combo 不会继续跳转。
+
+## 可选参数兼容性
+
+一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
+
+[Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

@@ -509,7 +509,27 @@ export async function collectStatus(): Promise<CliStatusView> {
     desiredEnabled: claudeDesktopIntegrationEnabled(config),
     policy: claudeDesktopPolicyHealth(probeClaudeDesktopPolicy()),
   };
-  const clientConnection = collectClientConnectionStatus();
+  const resolvedRuntime = (() => {
+    try {
+      return resolveCodexRuntime();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
+      return {
+        runtime: { command: "codex", version: null, source: "fallback" as const },
+        failures: [{
+          command: "codex",
+          source: "fallback" as const,
+          reason: `resolve threw: ${redacted}`,
+        }],
+        replacedConfigured: undefined,
+        newerAvailable: undefined,
+      };
+    }
+  })();
+  const clientConnection = collectClientConnectionStatus(Date.now(), undefined, {
+    selectedCodexCommand: resolvedRuntime.runtime.command,
+  });
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it
   // does not fail `ocx status`.
@@ -567,24 +587,6 @@ export async function collectStatus(): Promise<CliStatusView> {
     routingKind: getCodexRoutingKind(),
   });
   const codexPlugins = diagnoseCodexBundledPlugins();
-  const resolvedRuntime = (() => {
-    try {
-      return resolveCodexRuntime();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
-      return {
-        runtime: { command: "codex", version: null, source: "fallback" as const },
-        failures: [{
-          command: "codex",
-          source: "fallback" as const,
-          reason: `resolve threw: ${redacted}`,
-        }],
-        replacedConfigured: undefined,
-        newerAvailable: undefined,
-      };
-    }
-  })();
   const lastClamp = loadLastEffortClamp();
   const clampActive = effortClampAppliesToRuntime(lastClamp, resolvedRuntime.runtime);
   const codexHome = collectOrcaCodexHomeDiagnostic();

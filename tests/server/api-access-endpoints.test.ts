@@ -103,6 +103,15 @@ describe("buildApiAccessEndpoints", () => {
     })).toBe("http://100.76.170.81:10100/v1");
   });
 
+  test("a DNS bind name fails closed to loopback for the credential-bearing base URL", () => {
+    // A literal bind keeps its exact address, but a name can be re-resolved to a different
+    // peer after startup; the generated API base URL must not send credentials through it.
+    expect(resolveApiAccessBaseUrl({
+      hostname: "mutable-bind.example",
+      port: 10100,
+    })).toBe("http://127.0.0.1:10100/v1");
+  });
+
   test("reflects disabled Claude inbound in API access metadata", () => {
     expect(buildApiAccessEndpoints({ claudeCode: { enabled: false } }).claudeCodeEnabled).toBe(false);
   });

@@ -461,7 +461,11 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
       if (scenario === "default-sidecars") delete config.visionSidecar;
       if (scenario === "disabled-vision") config.visionSidecar.enabled = false;
       if (scenario === "routed-vision") {
-        config.providers.gateway = { ...mixedConfig().providers.gateway!, models: ["vision-model"] };
+        config.providers.gateway = {
+          ...mixedConfig().providers.gateway!,
+          models: ["vision-model"],
+          modelInputModalities: { "vision-model": ["text", "image"] },
+        };
         config.visionSidecar = { enabled: true, backend: "routed", model: "gateway/vision-model" };
       }
       if (scenario === "anthropic-vision") config.visionSidecar.backend = "anthropic";

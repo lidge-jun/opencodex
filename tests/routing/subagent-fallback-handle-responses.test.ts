@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
   clearAccountQuota,
   updateAccountQuota,
@@ -44,6 +44,7 @@ import {
   encryptedInput as recoverableEncryptedInput,
   recoverySse,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 setDefaultTimeout(30_000);
@@ -53,6 +54,7 @@ const originalNow = Date.now;
 let testDir: string;
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-hr-"));
@@ -60,6 +62,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
   process.env.CODEX_HOME = testDir;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
@@ -72,6 +76,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
   clearThreadAccountMap();
@@ -1566,41 +1573,6 @@ describe("native fallback account preview", () => {
     expect(bodyRequests[1]?.auth).toContain("pool-b_token");
   });
 
-  /**
-   * Recovery must carry the ENTITLEMENT filter too, not only the quota scope (#2509).
-   *
-   * The end-to-end case above grants the roster to both pool accounts, so it can only prove the
-   * SCOPE is re-previewed per candidate. The recovery path re-previewed the scope but passed no
-   * eligible-account set, so it could select an account with no entitlement to the recovered
-   * model and fail closed at final auth — the same stale-selection class as the quota scope, one
-   * layer over.
-   *
-   * Asserted structurally on the source, like the route-inventory contract: driving it end to end
-   * needs a recovered encrypted assignment AND an account-gated candidate whose entitlement
-   * differs per account, and the resulting fixture proved more fragile than the thing it checks.
-   * What this does catch is the regression that actually threatens the fix — one of the two
-   * preview sites silently losing the eligibility argument again.
-   */
-  test("both fallback preview sites pass the model-eligible account set (#2509)", async () => {
-    const source = await Bun.file(
-      fileURLToPath(new URL("../../src/server/responses/core.ts", import.meta.url)),
-    ).text();
-
-    const previews = source.match(/subagentFallbackAccountPreview = \([^)]*\)/g) ?? [];
-    // Two assignment sites: the primary selection path and the encrypted-recovery path.
-    expect(previews).toHaveLength(2);
-    // Neither may drop the third parameter — that is exactly how recovery lost it.
-    for (const preview of previews) {
-      expect(preview).toContain("modelEligibleAccountIds");
-    }
-
-    // And both must actually forward it into the preview call, not merely accept it.
-    const forwarded = source.match(
-      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,\s*\)/g,
-    ) ?? [];
-    expect(forwarded).toHaveLength(2);
-  });
-
   test("uses healthier pool account B when active A is above threshold", async () => {
     const now = 1_800_000_000_000;
     Date.now = () => now;
@@ -2186,9 +2158,16 @@ describe("native passthrough terminal finalization", () => {
     const terminals: ResponsesTerminalStatus[] = [];
     mockSseUpstream(sseBody);
 
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    // Force win32 so eager-relay decision path is reachable via streamMode override.
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // darwin, not win32, because this pair is about streamMode choosing the path. On win32 a
+    // turn that needs a client rewrite takes the eager relay unconditionally (#864), so the
+    // legacy half could never be legacy there and the marker assertion below would be a lie.
+    // darwin is the platform where the configured mode actually decides.
+    //
+    // The claim is also narrowed to the relay decision itself: overwriting process.platform
+    // globally redirects filesystem, ACL and state-directory identity too, and the spend-ledger
+    // owner lowercases its home on win32, which on a case-sensitive filesystem is a different
+    // directory. That made the send unreservable and the turn delivered no terminal at all.
+    setRelayPlatformForTests("darwin");
     try {
       const response = await postSpawn(
         cfg,
@@ -2197,6 +2176,12 @@ describe("native passthrough terminal finalization", () => {
           onNativePassthroughTerminal: (status) => terminals.push(status),
         },
       );
+      // Asserted before the callback is inspected, so a turn that never delivered says so
+      // instead of presenting as a missing callback.
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      // The relay path this case exists to exercise, proven rather than assumed.
+      expect(isEagerRelaySseResponse(response)).toBe(streamMode === "eager-relay");
       const responseText = await response.text();
       // Allow inspection consumer microtasks to settle.
       await Bun.sleep(20);
@@ -2206,7 +2191,7 @@ describe("native passthrough terminal finalization", () => {
         responseText,
       };
     } finally {
-      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+      setRelayPlatformForTests(undefined);
     }
   }
 

@@ -1,5 +1,19 @@
 # Subagents And Multi-Agent Surface
 
+Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+Explicit Codex CLI installation observation does not attest the runtime used by a subagent or change agent selection. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
+
+Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
+
+Encrypted-task and fallback request handling follow the Responses
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+
+Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
+
+Concurrent refreshes triggered by independent agent work share the [credential refresh-lock contract](catalog.md#accounts-namespaces-and-pool-rotation); unknown lock identity remains available for stale recovery rather than immediate removal, and a failed path probe cannot mask the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
+
+CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
+
 ## Plaintext V2 agent messages
 
 `src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
@@ -25,7 +39,11 @@ Codex treats qualified names literally and defaults absent namespaces to functio
 declarations inherit their restored namespace container; the compiler never invents an empty
 encryption marker when the upstream omitted it or returned a nonempty marker.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts.
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+
+Pool credentials used by subagent routes can be
+[linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
+resolver enforces source identity and expiry before those credentials reach routing.
 
 ## Multi-agent surface mode (3-state)
 
@@ -33,22 +51,22 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
 
 | Mode | Behavior |
 | --- | --- |
-| `"v1"` | Force ALL entries to `multi_agent_version = "v1"` — overrides upstream pins (sol/terra included). |
-| `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null → codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
-| `"v2"` | Force ALL entries to `multi_agent_version = "v2"` — overrides upstream pins (luna included). |
+| `"v1"` | Force ALL entries to `multi_agent_version = "v1"` ??overrides upstream pins (sol/terra included). |
+| `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null ??codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
+| `"v2"` | Force ALL entries to `multi_agent_version = "v2"` ??overrides upstream pins (luna included). |
 
 The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
 `mergeCatalogEntriesForSync` (on-disk sync), AFTER all normalization and visibility processing. This
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
 
-`getDefaultConfig()` (`src/config.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
+`getDefaultConfig()` (`src/config/proxy-env.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
 constant from `src/config/multi-agent-surface.ts`, so v1 is the install default while a v2
 native-to-routed child task is undeliverable ciphertext. The repair and salvage merges in
-`src/config.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
+`src/config/diagnostics.ts` pin `multiAgentMode` and `multiAgentSurfaceAdvisoryVersion` to the stored
 document, because spreading the defaults underneath would repair an unrelated missing field
 into a surface change its operator never made.
-An absent key still means `"default"`, because selecting base deletes the key — absence cannot be
+An absent key still means `"default"`, because selecting base deletes the key ??absence cannot be
 read as "never configured". An install that predates that change is therefore not rewritten; it is
 asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mode is not v1 and
 the stored `multiAgentSurfaceAdvisoryVersion` is below `MULTI_AGENT_SURFACE_ADVISORY_VERSION`, and
@@ -68,7 +86,7 @@ v2. An explicit attempt to enable the global flag while the hybrid pin is active
 
 ### What the five-model `spawn_agent` window is, and how V1 differs from V2
 
-`MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/sync.ts`) is **not** a
+`MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/subagent-roster.ts`) is **not** a
 subagent concurrency limit and **not** an eligibility limit. Upstream uses it in exactly two
 places: the model list rendered into the `spawn_agent` tool description
 (`multi_agents_spec.rs:789`) and the "Available models:" suggestions in an unknown-model error
@@ -83,23 +101,23 @@ Three different numbers, often conflated:
 | --- | --- | --- |
 | Models **advertised** as overrides | `min(5, picker-visible eligible rows)` | `multi_agents_spec.rs:785-790` |
 | Models **eligible** as targets | no numeric cap (only `"disabled"` is excluded, and only on V2) | `multi_agents_common.rs:36-42` |
-| **Concurrent** subagents | V1 6 children (root excluded); V2 total 4 including root → 3 children | `config/mod.rs:211-212`, `:1497-1506` |
+| **Concurrent** subagents | V1 6 children (root excluded); V2 total 4 including root ??3 children | `config/mod.rs:211-212`, `:1497-1506` |
 
 **The cap is the same 5 on both surfaces, but the window's contents are not.** The eligibility
 filter runs *before* `.take(5)`, and it behaves differently per surface: on a V1 call
 `model_supports_multi_agent_backend` short-circuits true for every row (including `disabled`
-ones), while a V2 call drops `Some(Disabled)` first — which lets a later row move into the five.
+ones), while a V2 call drops `Some(Disabled)` first ??which lets a later row move into the five.
 Same catalog, different advertised list:
 
 | # | Model | pin | V1 advertises | V2 advertises |
 | ---: | --- | --- | :---: | :---: |
-| 1 | `v2-a` | `v2` | ✅ | ✅ |
-| 2 | `disabled-a` | `disabled` | ✅ | — |
-| 3 | `v1-a` | `v1` | ✅ | ✅ |
-| 4 | `null-a` | absent | ✅ | ✅ |
-| 5 | `v2-b` | `v2` | ✅ | ✅ |
-| 6 | `disabled-b` | `disabled` | — | — |
-| 7 | `null-b` | absent | — | ✅ |
+| 1 | `v2-a` | `v2` | ??| ??|
+| 2 | `disabled-a` | `disabled` | ??| ??|
+| 3 | `v1-a` | `v1` | ??| ??|
+| 4 | `null-a` | absent | ??| ??|
+| 5 | `v2-b` | `v2` | ??| ??|
+| 6 | `disabled-b` | `disabled` | ??| ??|
+| 7 | `null-b` | absent | ??| ??|
 
 opencodex already matches this: `effectiveSubagentRoster` filters with
 `surface !== "v2" || isEligibleV2SubagentEntry(entry)`, so the V1 path skips the eligibility
@@ -131,6 +149,7 @@ featured or picker rank. Canonical `opencode-go` rows retain their configured re
 and provider-scoped context metadata both when generated and when merged from retained catalog
 state; `deepseek-v4.1-flash` therefore keeps its 1,048,576-token window, while synthetic max/ultra
 choices are not added to that provider's declared ladder.
+`meta-muse` declares `max` for both seeded models under the [Muse provider contract](providers-and-adapters.md), so routed-client catalogs can expose it without extending OpenCode Go's ladder.
 The first-party DeepSeek `deepseek-flash` row declares native `text` and `image` input and therefore
 does not require the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
@@ -151,6 +170,66 @@ is model-transcribed plaintext, not cryptographic fidelity proof, and no interna
 unreadable split-token shapes. The sanitizer preserves just those fragment objects and continues
 normalizing independent plaintext slots. Detection never authorizes reconstruction or recovery;
 other fragment layouts and mixed readable content retain their documented residual boundaries.
+
+## Routed agent-message ciphertext egress
+
+Two questions about an `agent_message` were asked in two places, and the gap between them was
+open. `hasUnreadableEncryptedAgentTask` asks whether the CURRENT worker task can be read and
+inspects only the tail item; `normalizeRoutedAgentMessages` asks whether EVERY part can be lowered
+onto a public message and forwards the private item verbatim when one cannot. An item mixing
+`input_text` with `encrypted_content` is readable by the first measure and unlowerable by the
+second, so it passed the guard, kept its private type through the raw Responses passthrough, and
+left the process as backend ciphertext plus an item type only the Codex backend declares. The
+destination answered `422 unknown item type "agent_message"` after the bytes were already sent.
+Position was incidental: a replayed child result sits mid-history, where a tail-only scan cannot
+see it, and the tail is exposed the same way once it is mixed.
+
+The repair already existed reactively. `prepareOpaqueBlobRecovery` replaces an undecryptable part
+with `[encrypted content omitted]`, which leaves the item lowerable, and it ran after an upstream
+rejection. A destination that cannot accept the private item under any circumstances was never
+going to answer that request, so the round trip only served to send the ciphertext.
+`stripAgentMessageCiphertextInPlace` in `src/server/responses/encrypted-payload.ts` applies the
+same repair before dispatch, and `src/server/responses/core.ts` runs it against the final route,
+after `expandPreviousResponseInput`, after the sanitizer has rewritten plaintext parked in
+encrypted slots, and after encrypted-task recovery has had its chance to produce real plaintext
+instead of a marker.
+
+The two kinds of slot are judged differently, because they carry different guarantees. An
+`encrypted_content` slot holds ciphertext by definition, so it is stripped whatever it holds:
+demanding a well-formed token there would reopen the same defect one payload later, since a
+truncated token, a standard-base64 blob carrying `+` or `/`, an unexpected version byte, or a run
+past the recovery size limits would each keep the item and forward the bytes. A text part carries
+no such guarantee, so it is matched strictly -- embedded runs that validate as Fernet, or a whole
+slot with the Fernet wire shape, which is the version prefix, the base64url alphabet and a
+canonical length of at least 100 divisible by four. Adjacent text fragments are joined before that
+test, so a token split across slots is still caught. `looksLikeBackendCiphertext` is deliberately
+NOT used on text: it is length >= 64 over a character class that a SHA-256 digest matches exactly
+at 64 characters, and replacing a digest a child deliberately printed would delete readable content
+to protect bytes that were never secret. Other item types are untouched: reasoning and
+function-output blobs keep the reactive opaque-blob recovery, which still rescues a destination
+that merely failed to decrypt something it was entitled to read, and which stays reachable for the
+canonical backend and for explicitly trusted routes.
+
+The repair resolves the same wire override the adapter is built from rather than restating routing
+policy, and runs for `openai-responses` whenever the destination is not the canonical Codex
+backend. `authMode: "forward"` is deliberately not that test: it describes how this proxy treats
+credentials, not who answers, and a forward-configured gateway at another origin receives the
+ciphertext like any third party. Only `isCanonicalOpenAiForwardProvider` is exempt, because it
+alone minted these bytes and can read them. The wire override matters for the reported destination,
+where the provider row names the Chat wire and a registry model default moves the model onto
+Responses. Translated wires are untouched because `inputContentParts` drops an encrypted part
+instead of forwarding it, and `canPassThroughEncryptedV2AgentTask` keeps an explicitly trusted
+route exempt. Combo children run the repair themselves: `concreteComboRequestBody` gives each
+target its own `structuredClone` and its own concrete route, so a sibling's repair is invisible to
+them and a target resolving to a routed Responses wire would otherwise send what the parent's own
+dispatch no longer does.
+
+Nothing here decrypts, and the tail NEW_TASK envelope keeps `unreadable_encrypted_agent_task` and
+its opt-in recovery unchanged: an unreadable current task still fails closed rather than reaching a
+child with a marker where its assignment should be. An `agent_message` carrying unknown parts but
+no ciphertext still reaches the wire unchanged and still draws the destination's own 422, which is
+a compatibility gap rather than an egress one. Covered by
+`tests/server/v2-agent-message-failfast.test.ts`.
 
 ## Subagents
 
@@ -202,6 +281,8 @@ cause delegation. The TOML edit owns only marker-tagged values, preserves existi
 user-owned `[agents]` defaults rather than overwriting them, and rejects ambiguous table shapes
 without changing the file.
 
+An explicit desktop restart to load those defaults follows the [runtime membership checks](runtime.md#codex-desktop-process-membership); selecting a delegation model does not authorize additional restart targets.
+
 V2 proxy guidance uses `<opencodex_subagent_guidance>` for both built-in metadata and
 custom `injectionPrompt` bodies. The built-in text reports the resolved preferred model,
 effort, roster and fallback chain without prescribing delegation, spawn overrides or
@@ -213,7 +294,7 @@ authority, task-scope and collaboration-tool rules remain applicable. This is gu
 not an enforcement mechanism or a change to native settings or tool access.
 
 Replay deduplication compares the latest exact generated developer text separately for
-each tag family, preserving built-in → custom → built-in transitions without duplicating
+each tag family, preserving built-in ??custom ??built-in transitions without duplicating
 unchanged proxy metadata after a native policy change. Native and legacy-tagged history
 remain intact: tags do not establish historical authorship or revoke old instructions,
 and mixed-version transition detection is not guaranteed.
@@ -255,10 +336,10 @@ It orders routed output groups after alias deduplication, preserving the collisi
 base/1M/Fast siblings. Native groups and explicit Desktop profile ownership are unchanged.
 Native Codex advertisements still follow display priority; private guidance ranks do not freeze them.
 
-Codex display-cache expiry, retained main-policy evidence, and reset history follow the
+Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
 
@@ -281,11 +362,9 @@ its defaults and exclusions are owned by [Responses transport](transports/respon
 
 Final-route summary visibility is recomputed after fallback from the original Responses preference; an earlier provider opt-in does not carry into a later provider. See [reasoning presentation](providers/chat-compat.md).
 
-## Paginated history writer boundary
+Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-`src/codex/history-provider.ts` refuses external writes to paginated or migration-capable history. `src/codex/inject.ts` checks affected rows and manifest-owned restore targets before and after config/profile/journal changes, including successful journal and fallback restores, and compensates detected migration. Failed config restore stops later catalog/history work and rolls back a coordinated remove transition. See the [history writer contract](codex-home.md#paginated-history-writer-boundary) for guarantees and concurrent-writer limits.
-
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
@@ -308,6 +387,26 @@ The [explicit model-capability contract](config.md#explicit-per-model-capability
 
 Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
 
+That shared rule includes the Crusoe registry entry's five explicit text-and-image model ids;
+subagent eligibility consumes the same derived metadata as the main catalog and does not infer
+vision support from a provider-wide multimodal label.
+
+[Anthropic seed image metadata](runtime.md#capability-aware-image-admission) supplies missing capability evidence; subagent selection and eligibility rules remain unchanged.
+
+Opper's fallback pool seeds carry provider-scoped text/image declarations from
+`src/providers/registry/model-seeds.ts`. They feed the same capability-aware image admission and
+do not change subagent selection, roster order, or eligibility.
+
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
 Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
+
+Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
+
+Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
+
+Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
+
+Startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](runtime.md).
+
+Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).

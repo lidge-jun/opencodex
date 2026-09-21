@@ -9,6 +9,12 @@ import {
 } from "../../src/providers/model-rename-migration";
 import { runModelRenameStartupMigration } from "../../src/providers/model-rename-startup";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { providerConfigSeed } from "../../src/providers/derive";
+import { reconcileOAuthProviders } from "../../src/oauth";
+import {
+  ANTIGRAVITY_MODELS,
+  ANTIGRAVITY_MODEL_CONTEXT_WINDOWS,
+} from "../../src/providers/antigravity-models";
 import { getConfigPath, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -274,5 +280,139 @@ describe("model rename startup persistence", () => {
     // adoptConfig copies key by key, so a reference a caller still holds to an unchanged
     // branch survives; a clear-and-reassign would silently detach it.
     expect(live.providers.untouched).toBe(liveUntouched);
+  });
+});
+
+// ── Issue #5066: the migration has to converge, not re-announce itself on every boot ──
+//
+// The reporter saw the same nine `[model-rename-migration]` lines at every `ocx start`. Nothing
+// in the projection, the persistence or the in-memory fallback was broken; the migration was
+// losing to the second half of its own boot. `startServer` runs it and then
+// `reconcileOAuthProviders`, and the Antigravity OAuth preset carries
+// `ANTIGRAVITY_MODEL_CONTEXT_WINDOWS`, which derives a window for every compatibility alias —
+// all nine retired Flash ids among them. `applyOAuthPresetCatalog` copies that record over the
+// saved one whenever the two differ, so reconciliation restored precisely the keys the rename
+// had removed, and the next boot found them and said so again.
+//
+// It also explains the count: nine messages for a user who never chose nine models, because the
+// ids came from the registry rather than from anything they had selected.
+describe("registry-seeded metadata does not re-arm the rename (#5066)", () => {
+  const homes: string[] = [];
+  const originalHome = process.env.OPENCODEX_HOME;
+
+  function isolate(prefix: string): void {
+    const home = mkdtempSync(join(tmpdir(), prefix));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+  }
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = originalHome;
+    for (const home of homes.splice(0)) removeTreeWithRetry(home);
+  });
+
+  /**
+   * A saved Antigravity row carrying one genuinely stale user selection.
+   *
+   * `modelContextWindows` is deliberately absent. The point of the fixture is to watch
+   * reconciliation introduce it between the two boots rather than to assume it is there.
+   */
+  function antigravityRow(): Record<string, unknown> {
+    return {
+      adapter: "google",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+      liveModels: true,
+      defaultModel: "gemini-3.8-flash",
+      models: [...ANTIGRAVITY_MODELS],
+      // Reconciliation does not carry `selectedModels`, so this one is the migration’s to fix
+      // — once.
+      selectedModels: ["gemini-3.6-flash-high"],
+    };
+  }
+
+  function antigravityConfig(): OcxConfig {
+    return {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: { "google-antigravity": antigravityRow() },
+    } as unknown as OcxConfig;
+  }
+
+  /** The rename lines a boot prints, in order. */
+  function renameLines(boot: () => void): string[] {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      boot();
+      return warn.mock.calls
+        .map(([first]) => (typeof first === "string" ? first : ""))
+        .filter(line => line.startsWith("[model-rename-migration] renamed "));
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
+  // RED on dev, at the last assertion: the second boot reprints nine lines, and so does the
+  // third, and every one after it.
+  test("the second boot after reconciliation renames nothing and prints nothing", () => {
+    isolate("ocx-antigravity-rename-loop-");
+    saveConfig(antigravityConfig());
+
+    // Boot one, in startServer’s order: migrate, then reconcile the OAuth presets.
+    const first = renameLines(() => {
+      reconcileOAuthProviders(runModelRenameStartupMigration(loadConfig()));
+    });
+    expect(first).toHaveLength(1);
+    expect(first.join("\n")).toContain("google-antigravity/gemini-3.6-flash-high");
+
+    const afterFirstBoot = loadConfig().providers["google-antigravity"]!;
+    // The writer between the two boots, caught in the act: reconciliation put the registry’s
+    // own record on disk, retired keys and all. The next boot must not read that as a repair
+    // the user is still owed.
+    expect(Object.keys(afterFirstBoot.modelContextWindows ?? {})).toContain("gemini-3.6-flash");
+    // What the migration did own stayed fixed.
+    expect(afterFirstBoot.selectedModels).toEqual(["gemini-3.7-flash"]);
+
+    const second = renameLines(() => { runModelRenameStartupMigration(loadConfig()); });
+    expect(second).toEqual([]);
+  });
+
+  test("a registry-published id survives in metadata while a user selection is still repaired", () => {
+    const reconciled = {
+      ...antigravityRow(),
+      modelContextWindows: { ...ANTIGRAVITY_MODEL_CONTEXT_WINDOWS },
+    };
+    const config = { providers: { "google-antigravity": reconciled } } as unknown as OcxConfig;
+
+    const { config: out, changed, warnings } = projectModelRenames(config);
+    const prov = out.providers["google-antigravity"]!;
+
+    expect(changed).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(prov.selectedModels).toEqual(["gemini-3.7-flash"]);
+    // Left alone on purpose: a request that still names the retired id routes to 3.7 and needs
+    // a window under the id it asked for, and reconciliation would rewrite this record anyway.
+    expect(prov.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
+  });
+
+  // The general form of the defect, applied to every rename this file ships: a provider row the
+  // registry itself produced must never be something the migration wants to rewrite. When it is,
+  // the two halves of the boot disagree forever and the user pays for it in log noise.
+  const seedCases: [string, ModelRename][] = MODEL_RENAMES.map(
+    rename => [`${rename.provider}/${rename.from}`, rename],
+  );
+  test.each(seedCases)("the registry seed for %s is not something the migration rewrites", (_label, rename) => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === rename.provider);
+    expect(entry, `registry entry missing for ${rename.provider}`).toBeDefined();
+    const seeded = {
+      providers: { [rename.provider]: providerConfigSeed(entry!) },
+    } as unknown as OcxConfig;
+
+    const { changed, warnings } = projectModelRenames(seeded, [rename]);
+
+    expect(warnings).toEqual([]);
+    expect(changed).toBe(false);
   });
 });

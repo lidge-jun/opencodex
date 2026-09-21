@@ -21,7 +21,8 @@ src/
 ├── vision/             # service auxiliaire de vision (description et planification)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
-├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON
+├── bridge.ts           # facade over bridge/
+├── bridge/             # AdapterEvent stream → Responses SSE (sse.ts) / JSON (response-json.ts)
 ├── reasoning-effort.ts # reasoning-effort translation, clamping, and catalog levels
 ├── responses/
 │   ├── parser.ts       # Responses request → OcxParsedRequest
@@ -32,19 +33,19 @@ src/
 └── index.ts            # public entry
 ```
 
-Trois anciens points d’entrée volumineux préservent désormais la compatibilité sous forme de façades : `codex/catalog.ts` exporte les sept modules spécialisés `codex/catalog/*.ts`, `server/management-api.ts` répartit les requêtes entre les neuf modules `server/management/*.ts`, et `server/responses.ts` exporte les cinq modules `server/responses/*.ts`.
+Les anciens points d’entrée volumineux préservent désormais la compatibilité sous forme de façades : `codex/catalog.ts` exporte les modules `codex/catalog/*.ts`, `server/management-api.ts` répartit les requêtes entre les modules `server/management/*.ts`, `server/responses.ts` exporte les modules `server/responses/*.ts`, et `bridge.ts` réexporte les modules `bridge/*.ts`. Une façade est le chemin d’import stable, pas l’implémentation : chaque étape ci-dessous nomme le module qui détient le code, et `structure/transports/responses.md` contient l’inventaire complet des propriétaires de la surface Responses.
 
 ## Flux d’une requête
 
-`server/index.ts` gère la frontière HTTP et délègue le plan de données Responses à la façade `server/responses.ts` et à ses modules `server/responses/*.ts` :
+`server/index/serve-options.ts` gère la frontière HTTP et délègue le plan de données Responses à la façade `server/responses.ts` et à ses modules `server/responses/*.ts` :
 
-1. `server/index.ts` applique CORS et l’authentification d’API, refuse les nouvelles tâches pendant le drainage et enregistre les métadonnées du cycle de vie de la requête. Il sert `GET /v1/models`, `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits` (relayés vers une famille OpenAI en amont par `server/images.ts` pour l’outil `image_gen` intégré à Codex), `POST /v1/live` / `POST /v1/realtime/calls` (création des appels vocaux ChatGPT / Codex App et OpenAI Realtime, relayée par `server/live.ts`), les connexions WebSocket sideband sur `/v1/live/{callId}` (et `/v1/realtime?call_id=`), ainsi que la mise à niveau WebSocket facultative sur `/v1/responses`.
-2. `server/responses/core.ts` décompresse et analyse le JSON, développe les entrées de mémoire locale `previous_response_id` lorsqu’elles sont disponibles, puis appelle `responses/parser.ts`.
+1. `server/index/serve-options.ts` applique CORS et l’authentification d’API, refuse les nouvelles tâches pendant le drainage et enregistre les métadonnées du cycle de vie de la requête. Il sert `GET /v1/models`, `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/images/generations` / `POST /v1/images/edits` (relayés vers une famille OpenAI en amont par `server/images.ts` pour l’outil `image_gen` intégré à Codex), `POST /v1/live` / `POST /v1/realtime/calls` (création des appels vocaux ChatGPT / Codex App et OpenAI Realtime, relayée par `server/live.ts`), les connexions WebSocket sideband sur `/v1/live/{callId}` (et `/v1/realtime?call_id=`), ainsi que la mise à niveau WebSocket facultative sur `/v1/responses`.
+2. `server/responses/request-prepare.ts` décompresse et analyse le JSON, développe les entrées de mémoire locale `previous_response_id` lorsqu’elles sont disponibles, puis appelle `responses/parser.ts`.
 3. `router.ts` résout un identifiant simple ou `provider/model`. Le serveur détermine ensuite l’affinité du compte Codex, actualise l’authentification OAuth du fournisseur si nécessaire et applique à la route les identifiants sélectionnés.
 4. Avant l’appel principal, `vision/` décrit les images pour les modèles figurant dans `noVisionModels`. En l’absence de service auxiliaire sûr, les images sont supprimées plutôt qu’envoyées à un service en amont purement textuel.
 5. `server/adapter-resolve.ts` applique toute substitution de protocole propre au modèle et construit l’un des adaptateurs enregistrés. L’adaptateur Responses relaie le corps natif, Cursor exécute son transport bidirectionnel `runTurn`, et les adaptateurs traduits construisent, envoient et analysent une requête en amont.
 6. Pour les modèles routés avec un outil hébergé `web_search`, `web-search/` expose une fonction synthétique, exécute la recherche réelle avec le backend configuré — le service auxiliaire OpenAI/ChatGPT ou le backend Anthropic —, renvoie les résultats au modèle routé et recommence dans la limite de boucle configurée. Cette boucle ne prend en charge que le chemin HTTP classique ; les adaptateurs qui implémentent `runTurn`, comme Cursor, la contournent et poursuivent leur propre transport.
-7. `bridge.ts` produit un flux SSE Responses ou une réponse JSON. `server/request-log.ts` et `usage/` recueillent de manière bornée l’état, la latence, les libellés de fournisseur/modèle et l’utilisation estimée des jetons, sans modifier la réponse.
+7. `bridge/sse.ts` / `bridge/response-json.ts` produit un flux SSE Responses ou une réponse JSON. `server/request-log.ts` et `usage/` recueillent de manière bornée l’état, la latence, les libellés de fournisseur/modèle et l’utilisation estimée des jetons, sans modifier la réponse.
 
 ## Analyseur
 
@@ -57,7 +58,7 @@ Trois anciens points d’entrée volumineux préservent désormais la compatibil
 
 ## Pont
 
-`bridge.ts` transforme le flux interne `AdapterEvent` de l’adaptateur en événements SSE Responses compris par Codex :
+`bridge/sse.ts` transforme le flux interne `AdapterEvent` de l’adaptateur en événements SSE Responses compris par Codex :
 
 | AdapterEvent | Événements SSE Responses émis |
 | --- | --- |
@@ -85,7 +86,7 @@ Les implémentations OAuth se trouvent dans `oauth/`. Les jetons d’accès sont
 
 ## Transport et compactage
 
-Par défaut, `server/index.ts` sert HTTP/SSE sur `/v1/responses`. Si Codex tente une mise à niveau WebSocket de Responses alors que `websockets` vaut `false`, opencodex renvoie `426 upgrade_required` ; Codex revient alors à HTTP pour cette session. Lorsque `"websockets": true` est défini, le même point de terminaison accepte la mise à niveau et utilise le pont WebSocket.
+Par défaut, `server/index/serve-options.ts` sert HTTP/SSE sur `/v1/responses`. Si Codex tente une mise à niveau WebSocket de Responses alors que `websockets` vaut `false`, opencodex renvoie `426 upgrade_required` ; Codex revient alors à HTTP pour cette session. Lorsque `"websockets": true` est défini, le même point de terminaison accepte la mise à niveau et utilise le pont WebSocket.
 
 Indépendamment de ce réglage côté client, les requêtes canoniques transmises à ChatGPT avec `stream: true` à la racine peuvent utiliser le transport WebSocket en amont de Codex avec une version stable de Bun 1.4.0 ou ultérieure. La version intégrée Bun 1.3.14, les préversions et les identités de runtime impossibles à vérifier utilisent HTTP/SSE. Les réponses WS en amont qui réussissent conservent le contrat SSE en aval et contournent `tee()` au moyen d’un relais borné à lecteur unique et avide (4 MiB par trame brute/enveloppée et une file de production de 8 MiB). Le dépassement de la file ferme la connexion en amont et émet en aval un événement terminal `response.failed`, suivi de `[DONE]`.
 
@@ -98,7 +99,7 @@ l’ancien socket ; les requêtes admissibles suivantes ayant la même identité
 le nouveau socket. Les autres modèles et passerelles conservent leur politique Lite.
 Des métadonnées natives mal formées entraînent toujours un repli HTTP, sans modifier le corps.
 
-Le compactage du contexte Codex fonctionne avec les modèles routés. `server/responses/compact.ts` traite `POST /v1/responses/compact` en exécutant un tour interne de synthèse routé et en renvoyant un historique compacté, tandis que `responses/parser.ts` et `bridge.ts` traitent les tours de compactage distant v2 `compaction_trigger` en émettant exactement un élément de sortie synthétique `compaction`.
+Le compactage du contexte Codex fonctionne avec les modèles routés. `server/responses/compact.ts` traite `POST /v1/responses/compact` en exécutant un tour interne de synthèse routé et en renvoyant un historique compacté, tandis que `responses/parser.ts` et `bridge/sse.ts` traitent les tours de compactage distant v2 `compaction_trigger` en émettant exactement un élément de sortie synthétique `compaction`.
 
 ## Mise en cache et catalogue
 

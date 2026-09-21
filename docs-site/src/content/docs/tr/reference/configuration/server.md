@@ -13,14 +13,14 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy dinleme portu. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bağlama adresi. Geri döngü olmayan bağlamalar `OPENCODEX_API_AUTH_TOKEN` gerektirir. |
-| `proxy?` | `string` | — | Giden HTTP(S) proxy URL'si veya `${ENV_VAR}`. Yalnızca bu değişkenler ayarlanmadığında `HTTP_PROXY` / `HTTPS_PROXY`'ye uygulanır; geri döngü `NO_PROXY` içinde kalır. |
+| `proxy?` | `string` | — | Giden HTTP(S) veya SOCKS5 proxy URL'si (`socks5://host:port`) ya da `${ENV_VAR}`. HTTP URL'leri değişkenler boşsa `HTTP_PROXY` / `HTTPS_PROXY`'ye yazılır. SOCKS5 URL'leri yerleşik gerçek SOCKS5 tünelini kullanır ve `ALL_PROXY`'ye de yazılır (`ocx start --socks5`); bu süreçte miras `HTTP(S)_PROXY` temizlenir. Geri döngü `NO_PROXY` içinde kalır. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Metin veya araç çağrısı içermeyen bir Responses tamamlamasını aynı istekle bir kez yeniden denemeyi açıkça etkinleştirir. Yeniden deneme ücretlendirilebilir. `OCX_EMPTY_COMPLETION_RETRY=0`, yapılandırmayı değiştirmeden devre dışı bırakır; combo ve routed-compaction turları hariçtir. |
 | `stallTimeoutSec?` | `number` | `300` | Responses ve yerel Chat için anlamlı üst sunucu ilerlemesi olmadan geçen saniye. En az 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Deneme başına DNS/TCP/TLS/nihai başlık son tarihi; gövde üretiminden önce biter. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Aktif turlar iptal edilmeden önce zarif boşaltma süresi sınırı. |
 | `websockets?` | `boolean` | `false` | Responses WebSocket yolu için `supports_websockets` bildirin. False, HTTP/SSE'yi tutar. |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS tarafından izin verilen ek tam kaynaklar. Geri döngü kaynaklarına her zaman izin verilir. `chrome-extension://<extension-id>` gibi yetki tabanlı tarayıcı uzantısı kaynakları desteklenir; `*` bir joker karakter değildir. Firefox ve Safari uzantı UUID'sini yeniden oluşturur (yükleme başına / tarayıcı başlatma başına), bu nedenle kaynak değiştiğinde girdiyi güncelleyin. |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | Geri döngü olmayan bağlamalarda yönetim ve veri düzlemi kimlik doğrulaması tarafından kabul edilen oluşturulmuş `ocx_…` kimlik bilgileri. Kontrol paneli tarafından yönetilir. |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | Geri döngü olmayan bağlamalarda veri düzlemi kabulü için oluşturulmuş `ocx_…` kimlik bilgileri. Yönetim API'lerini yetkilendirmezler; yönetim erişimi [yönetim API referansında](/tr/reference/management-api/) açıklanan ayrı kimlik bilgisini kullanır. Kontrol paneli tarafından yönetilir. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | devre dışı | İsteğe bağlı arşivlenmiş oturum temizleme politikası. Asla örtük olarak etkinleştirilmez. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Çıkarılabilir uygulamaya ait günlükler, önbellekler, bloblar ve devam yükleri için MiB cinsinden sınır. Aralık 64–4096; bir RSS sınırı değildir. |
 | `codexAutoStart?` | `boolean` | `true` | Codex dolgusunun Codex'i başlatmadan önce `ocx ensure` çalıştırmasına izin verin. False, ensure'ı bir işlem yapmayan (no-op) hale getirir. |

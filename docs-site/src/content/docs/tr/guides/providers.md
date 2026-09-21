@@ -144,6 +144,24 @@ ocx logout <saglayici>
 
 Google Antigravity hesap ve sağlayıcı kota sorguları, model listesine geri dönüş dahil sabit Google uç noktalarını kullanır. Bu hedefler için şeffaf Fake-IP DNS desteklenirken TLS doğrulaması, yönlendirme reddi ve özel adres kontrolleri korunur. Özel base URL yalnızca model isteklerini değiştirir; `NO_PROXY` doğrudan bağlantı politikasını korur.
 
+### Google araç şeması kayıp tanılaması
+
+Google araç bildirimleri seçilen uç nokta sınıfına göre derlenir. Sağlayıcı hata ayıklaması
+`ocx debug provider on`, kontrol panelindeki Logs anahtarı veya `OCX_DEBUG=1` ile açıldığında,
+politika yokken veya `compatible` iken uyumluluk dönüşümü sırasında oluşan şema kaybı bir
+`[ocx:google:google-tool-schema-loss]` kaydı yayınlar
+(`ocx debug provider logs -f` ile takip edin). Kayıt yalnızca rapor sürümünü, uç nokta sınıfını,
+bir `lossy` göstergesini, sınırlı bir belirsiz karşılaştırma sayısını, sınırlı sayımlara sahip sabit kayıp kategorilerini ve kesilme işaretini
+taşır. Araç ve özellik adları, yollar, değerler ve şema metni hiçbir zaman dahil edilmez. Politika
+yoksa veya `compatible` ise dönüşüm reddedilmeden gözlemlenir. `reject-lossy` altında, ilk derleme
+kayıplıysa veya sınırlı karşılaştırmanın sonucu belirsizse gönderimden önce reddedilir; reddedilen
+istek için ayrı bir kayıp kaydı yayınlanmaz.
+`reject-lossy` altında, kısıtları kaldıracak bir Vertex veya Cloud Code Assist onarımı
+aynı şekilde içeriksiz bir `google-tool-schema-repair` kaydı üretir ve değiştirilmiş gönderim yapmadan
+özgün 400 yanıtını döndürür; politika yoksa veya `compatible` ise onarılan istek daha önce olduğu gibi
+yeniden gönderilir. Doğrudan AI Studio bu onarımı yapmaz. Yerel çıktı şemaları iki politika yolunun da
+dışındadır. [Hata ayıklama komutu başvurusuna](/tr/reference/cli/agents/) bakın.
+
 
 Uç bir Nous yenileme hatasından sonra yeniden kimlik doğrulamak için `ocx login
 nous` çalıştırın.
@@ -298,7 +316,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 79 yerleşik önayar ile birlikte gelir: 67 anahtar tabanlı, sekiz
+opencodex 94 yerleşik önayar ile birlikte gelir: 78 anahtar tabanlı, 12
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -347,6 +365,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -466,6 +485,13 @@ anahtarını kullanır. [Command Code Studio](https://commandcode.ai/studio/)
 
 **Command Code kotası.** Pano ve `ocx account refresh`, kanonik `https://api.commandcode.ai` ana bilgisayarında `/alpha/billing/credits` pencerelerini (5 saat ve haftalık) sorgular. OAuth önayarı (`command-code`) kayıtlı hesap bearer'ını kullanır; Provider-API anahtar önayarı (`commandcode`) etkin yapılandırılmış anahtarı kullanır. Kullanıcının değiştirdiği benzer bir temel URL asla sorgulanmaz. Command Code dönem harcamasını da bildirirse kalan monthly / purchased / free credits USD penceresi olarak gösterilir.
 
+OrcaRouter tarayıcı oturum açma akışında (`ocx login orcarouter-oauth`), anahtar değişimi isteğinin
+başarılı yanıt gövdesi en fazla 64 KiB boyutunda geçerli UTF-8 JSON olmalıdır. Bu isteğin mevcut
+30 saniyelik süresi, yanıt başlıkları ile gövdenin tamamının alınmasını kapsar; sınırı aşan veya bozuk
+gövdeler anahtar kaydedilmeden önce reddedilir. Bu sınırlar yalnızca oturum açma sırasındaki anahtar
+değişimine uygulanır, çıkarım isteği yüklerine uygulanmaz. `scope` doğrulaması değişmez: alanın
+bulunmamasına izin verilir, açıkça geçersiz bir değer ise reddedilir.
+
 **SambaNova Cloud keşfi.** Önayar, sabit API ana bilgisayarından SambaNova
 Cloud'un genel `/v1/models` listesini okur, sağlayıcı yerel kimliklerini korur
 ve keşfi 128 KiB ve 128 ham satırla sınırlar. Katalog kimlik doğrulamasız
@@ -483,6 +509,19 @@ kimlikleri artı bildirilen bağlam ve girdi modalitesi meta verilerini korur ve
 keşfi 512 KiB ve 512 ham satırla sınırlar. Özel dağıtım ana bilgisayarları
 kapsam dışıdır. [Nebius Token Factory](https://tokenfactory.nebius.com) içinde
 anahtarlar oluşturun.
+
+**Crusoe keşfi.** Anahtar tabanlı önayar `openai-chat` adaptörünü kullanır ve Bearer anahtarını
+yalnızca Crusoe'nun sabit Serverless Inference ana bilgisayarına gönderir. `/v1/models` kimliği
+doğrulanmamış istekleri 401 ile reddeder, bu nedenle başarılı bir liste yanıtı anahtar doğrulaması
+sayılır. Keşif, `zai-org/GLM-5.3` ve `moonshotai/Kimi-K2.6` gibi eğik çizgili yerel kimlikleri Crusoe'nun
+döndürdüğü gibi korur ve 256 KiB ile 256 ham satırla sınırlandırılır. Yalnızca `is_public: true` ve text veya multimodal bir `architecture.modality` bildiren satırlar tutulur; hesaba özel dağıtımlar ile embedding veya medya satırları dışlanır. Akıl yürütme modelleri
+düşüncelerini Chat Completions `reasoning` alanında döndürür ve adaptör bu alanı okur.
+`reasoning_effort` kademelerini (`low`, `medium`, `high`) yalnızca `openai/gpt-oss-120b` kabul eder;
+diğer akıl yürütme modelleri bu alanı açma/kapama anahtarı olarak ele alır, bu yüzden önayar sağlayıcı
+genelinde effort kademesi veya paralel araç çağrısı tanıtmaz. Hız sınırları proje ve model başına
+uygulanır (aşımda 429, paylaşılan dağıtım ölçeklenirken 503) ve yeni hesaplar 5 $ ücretsiz kredi ile
+başlar. [Crusoe Cloud konsolunda](https://console.crusoecloud.com) Intelligence Foundry > Inference
+altında bir anahtar oluşturun.
 
 **DigitalOcean keşfi.** Önayar, sabit paylaşılan Sunucusuz Çıkarım ana
 bilgisayarına karşı bir model erişim anahtarı kullanır ve kimlik doğrulamalı

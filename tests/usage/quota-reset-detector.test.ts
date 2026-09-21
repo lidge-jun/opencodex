@@ -117,7 +117,7 @@ describe("quota reset detection", () => {
   });
 
   test("sentinel reset clocks are ignored rather than read as 1970", () => {
-    // src/providers/quota.ts:279 and src/codex/quota.ts:192 disagree on whether 0 survives,
+    // src/providers/quota/account-cache.ts and src/codex/quota.ts disagree on whether 0 survives,
     // so the detector re-checks: a 0 deadline must not read as a long-passed one.
     expect(detect({ percent: 90, resetAt: 0 }, { percent: 88, resetAt: 0 })).toBeNull();
   });

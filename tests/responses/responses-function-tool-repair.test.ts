@@ -1,6 +1,6 @@
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   collectFunctionCallRepairSchemas,
   repairFunctionCalls,
@@ -10,6 +10,18 @@ import { createResponsesFunctionToolRepairBlockRewrite } from "../../src/server/
 import { createTranslatorBudget, TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { sseDataPayload } from "../../src/server/sse-payload-rewrite";
 import { currentTurnWireToolCatalogBody } from "../../src/server/responses-undeclared-tool-guard";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+afterEach(() => {
+  // Release first so a failed dispatch cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 const parameters = { type: "object", properties: {
   cell_id: { type: "string" }, yield_time_ms: { type: "integer" },
@@ -391,6 +403,7 @@ test("native Responses JSON/SSE and replay share the original function schema re
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "fixture/grok-probe", stream, input: [{ role: "user", content: "synthetic" }], tools, ...extra }),
       });
+      takeSpendHome();
       const response = await handleResponses(request(), config, { model: "", provider: "" });
       expect(response.status).toBe(200);
       const raw = await response.text();

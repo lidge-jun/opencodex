@@ -11,6 +11,7 @@ import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types
 import { clearRequestLogsForTests, type RequestLogContext } from "../../src/server/request-log";
 import { readUsageEntries } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const MODEL = "policy/daily";
 const EXPECTED_RICH_EVIDENCE = {
@@ -125,8 +126,15 @@ mock.module("../../src/server/adapter-resolve", () => ({
 const { handleResponses, handleResponsesCompact } = await import("../../src/server/responses");
 const { handleChatCompletions } = await import("../../src/server/chat-completions");
 const { handleClaudeMessages } = await import("../../src/server/claude-messages");
+let releaseSpendHome: (() => void) | undefined;
+
+// Taken only by handler rows whose fixture adapter produces a dispatched response.
+const takeSpendHome = (): void => { releaseSpendHome = acquireOwnedSpendHome(); };
 
 afterEach(() => {
+  // Released first so a failed handler row cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   adapterFactory = undefined;
 });
 
@@ -224,6 +232,7 @@ describe("routing policy request evidence parity (via dev handlers)", () => {
     }
   });
   test("rich evidence (tools + image) produces identical route decision across all three surfaces", async () => {
+    takeSpendHome();
     adapterFactory = minimalSuccessAdapter;
     const config = testConfig();
 
@@ -345,6 +354,7 @@ describe("routing policy request evidence parity (via dev handlers)", () => {
   });
 
   test("plain text with no tools produces no hard requirements on every surface", async () => {
+    takeSpendHome();
     adapterFactory = minimalSuccessAdapter;
     const config = testConfig();
 

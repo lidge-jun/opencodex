@@ -1344,6 +1344,60 @@ describe("citation markers never reach the client (#3150)", () => {
   });
 });
 
+describe("terminal stop classification preserves final answer phases (#4855)", () => {
+  test.each([
+    ["end_turn", { type: "done", stopReason: "end_turn" }, "response.completed", "final_answer", undefined],
+    ["max_output_tokens", { type: "done", stopReason: "max_output_tokens" }, "response.incomplete", undefined, "max_output_tokens"],
+    ["refusal", { type: "done", stopReason: "refusal" }, "response.incomplete", undefined, "content_filter"],
+    ["an absent stopReason", { type: "done" }, "response.completed", "final_answer", undefined],
+  ] as const)("streaming terminal %s classifies the final message phase", async (
+    _label,
+    terminal,
+    terminalEvent,
+    expectedPhase,
+    expectedIncompleteReason,
+  ) => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "answer" },
+      terminal,
+    ]), "routed/model"));
+    const message = frames.find(frame =>
+      frame.event === "response.output_item.done"
+      && (frame.data.item as Record<string, unknown>)?.type === "message"
+    )?.data.item as Record<string, unknown>;
+    const response = frames.find(frame => frame.event === terminalEvent)?.data.response as Record<string, unknown>;
+
+    expect(message.phase).toBe(expectedPhase);
+    expect((response.output as Record<string, unknown>[])[0]?.phase).toBe(expectedPhase);
+    expect((response.incomplete_details as Record<string, unknown> | undefined)?.reason)
+      .toBe(expectedIncompleteReason);
+  });
+
+  test.each([
+    ["end_turn", { type: "done", stopReason: "end_turn" }, "completed", "final_answer", undefined],
+    ["max_output_tokens", { type: "done", stopReason: "max_output_tokens" }, "incomplete", undefined, "max_output_tokens"],
+    ["refusal", { type: "done", stopReason: "refusal" }, "incomplete", undefined, "content_filter"],
+    ["an absent stopReason", { type: "done" }, "completed", "final_answer", undefined],
+  ] as const)("buffered terminal %s classifies the final message phase", (
+    _label,
+    terminal,
+    expectedStatus,
+    expectedPhase,
+    expectedIncompleteReason,
+  ) => {
+    const response = buildResponseJSON([
+      { type: "text_delta", text: "answer" },
+      terminal,
+    ], "routed/model");
+    const message = (response.output as Record<string, unknown>[])[0];
+
+    expect(response.status).toBe(expectedStatus);
+    expect(message?.phase).toBe(expectedPhase);
+    expect((response.incomplete_details as Record<string, unknown> | undefined)?.reason)
+      .toBe(expectedIncompleteReason);
+  });
+});
+
 describe("Responses bridge stopReason threading (issue #246)", () => {
   test("done with stopReason max_tokens emits response.incomplete", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
@@ -1499,5 +1553,382 @@ describe("bridgeToResponsesSSE owned default budget lifecycle", () => {
     } finally {
       setOwnedBudgetAbandonedMsForTests(null);
     }
+  });
+});
+describe("array-backed string accumulation", () => {
+  test("1000 text deltas produce identical output to direct concatenation", async () => {
+    const fragments = Array.from({ length: 1000 }, (_, i) => `chunk-${i} `);
+    const expected = fragments.join("");
+
+    const events: AdapterEvent[] = [
+      ...fragments.map(text => ({ type: "text_delta" as const, text })),
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const budget = createTranslatorBudget();
+    try {
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined, undefined, undefined, undefined, undefined,
+        { translatorBudget: budget },
+      ));
+
+      const doneFrame = frames.find(f => f.event === "response.output_text.done");
+      expect(doneFrame).toBeDefined();
+      expect(doneFrame!.data.text).toBe(expected);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("batch mode: 1000 text deltas produce correct output", () => {
+    const fragments = Array.from({ length: 1000 }, (_, i) => `chunk-${i} `);
+    const expected = fragments.join("");
+
+    const events: AdapterEvent[] = [
+      ...fragments.map(text => ({ type: "text_delta" as const, text })),
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const budget = createTranslatorBudget();
+    try {
+      const result = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      const message = output.find(item => item.type === "message") as Record<string, unknown>;
+      expect(message).toBeDefined();
+      const content = message.content as Record<string, unknown>[];
+      const textContent = content.find(c => c.type === "output_text") as Record<string, unknown>;
+      expect(textContent.text).toBe(expected);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("budget limit rejection releases reservation cleanly without corrupting previous state", async () => {
+    const tightBudget = createTranslatorBudget({ maxTurnBytes: 100 });
+    try {
+      const events: AdapterEvent[] = [
+        { type: "text_delta", text: "short " },
+        { type: "text_delta", text: "x".repeat(500) },
+        { type: "done", stopReason: "end_turn" },
+      ];
+
+      const frames = await collectSse(bridgeToResponsesSSE(
+        replay(events),
+        "routed/model",
+        undefined, undefined, undefined, undefined, undefined,
+        { translatorBudget: tightBudget },
+      ));
+
+      const failedFrame = frames.find(f => f.event === "response.failed");
+      expect(failedFrame).toBeDefined();
+      const errorPayload = typeof failedFrame!.data === "string" ? JSON.parse(failedFrame!.data) : failedFrame!.data;
+      const errorCode = errorPayload.response?.error?.code ?? errorPayload.error?.code;
+      expect(errorCode).toBe("translation_buffer_limit");
+    } finally {
+      tightBudget.dispose();
+    }
+  });
+  test("empty text deltas do not accumulate in StringChunks arrays", async () => {
+    const events: AdapterEvent[] = [
+      { type: "text_delta", text: "hello" },
+      { type: "text_delta", text: "" },
+      { type: "text_delta", text: "" },
+      { type: "text_delta", text: " world" },
+      { type: "done", stopReason: "end_turn" },
+    ];
+
+    const frames = await collectSse(bridgeToResponsesSSE(
+      replay(events),
+      "routed/model",
+    ));
+
+    const doneFrame = frames.find(f => f.event === "response.output_text.done");
+    expect(doneFrame).toBeDefined();
+    expect(doneFrame!.data.text).toBe("hello world");
+
+    // Also verify batch mode
+    const budget = createTranslatorBudget();
+    try {
+      const result = buildResponseJSON(events, "routed/model", { translatorBudget: budget });
+      const output = result.output as Record<string, unknown>[];
+      const message = output.find(item => item.type === "message") as Record<string, unknown>;
+      expect(message).toBeDefined();
+      const content = message.content as Record<string, unknown>[];
+      const textContent = content.find(c => c.type === "output_text") as Record<string, unknown>;
+      expect(textContent.text).toBe("hello world");
+    } finally {
+      budget.dispose();
+    }
+  });
+});
+
+describe("declared tool enforcement is separate from declared tool normalization (#4735)", () => {
+  // The chat and Anthropic wires delegate tool validation to the client's own runner, so this
+  // proxy relays a call it did not see declared instead of ending the turn with a 502. What it
+  // must NOT do is stop normalizing: the declared set is also the catalog that maps a
+  // provider-invented name back to the tool the client actually asked for. Withholding the set
+  // to disable the guard takes normalization with it.
+  const undeclaredCall: AdapterEvent[] = [
+    { type: "tool_call_start", id: "call_1", name: "todo_write" },
+    { type: "tool_call_delta", arguments: "{}" },
+    { type: "tool_call_end" },
+    { type: "done" },
+  ];
+  const inventedNamespaceCall: AdapterEvent[] = [
+    { type: "tool_call_start", id: "call_1", name: "default.lookup" },
+    { type: "tool_call_delta", arguments: "{}" },
+    { type: "tool_call_end" },
+    { type: "done" },
+  ];
+
+  test("buffered: enforcement off relays an undeclared call instead of failing the turn", () => {
+    const json = buildResponseJSON(undeclaredCall, "routed/model", {
+      declaredToolNames: new Set(["lookup"]),
+      enforceDeclaredToolNames: false,
+    });
+    expect(json.status).not.toBe("failed");
+    expect(json.error).toBeUndefined();
+    const output = json.output as Record<string, unknown>[];
+    expect(output.find(item => item.name === "todo_write")).toBeDefined();
+  });
+
+  test("streaming: enforcement off relays an undeclared call instead of failing the turn", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay(undeclaredCall), "routed/model", undefined, undefined, undefined, undefined, undefined, {
+      declaredToolNames: new Set(["lookup"]),
+      enforceDeclaredToolNames: false,
+    }));
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
+    expect(JSON.stringify(frames)).toContain("todo_write");
+  });
+
+  test("enforcement off still normalizes a provider-invented default namespace", () => {
+    // This is what breaks if the guard is disabled by withholding `declaredToolNames`:
+    // `normalizeDeclaredToolName` returns the raw name when the set is undefined, so the client
+    // receives `default.lookup` — a tool it never declared — and errors on its own side.
+    const json = buildResponseJSON(inventedNamespaceCall, "routed/model", {
+      declaredToolNames: new Set(["lookup"]),
+      enforceDeclaredToolNames: false,
+    });
+    const output = json.output as Record<string, unknown>[];
+    expect(output.find(item => item.name === "lookup")).toBeDefined();
+    expect(output.find(item => item.name === "default.lookup")).toBeUndefined();
+  });
+
+  test("enforcement stays on by default, so the Responses wire keeps failing closed (#1700)", () => {
+    const json = buildResponseJSON(undeclaredCall, "routed/model", {
+      declaredToolNames: new Set(["lookup"]),
+    });
+    expect(json.status).toBe("failed");
+    expect((json.error as Record<string, unknown>).message).toContain("undeclared client tool");
+  });
+
+  test("an explicitly empty declared catalog still authorizes nothing", () => {
+    // A request that declares an empty tool list is making a statement, not omitting one. The
+    // passthrough guard already reads it that way (`clientExplicitWireToolCatalog` in
+    // src/server/responses/passthrough-dispatch.ts), and the bridge must agree.
+    const json = buildResponseJSON(undeclaredCall, "routed/model", {
+      declaredToolNames: new Set<string>(),
+    });
+    expect(json.status).toBe("failed");
+    expect((json.error as Record<string, unknown>).message).toContain("undeclared client tool");
+  });
+});
+
+// #5047: #4983 widened what counts as a freeform wrapper at COMPLETION, but partial input
+// streaming still knew only the compact `{"input":"` form. A wrapper such as `{"code":"..."}`
+// therefore streamed as raw JSON deltas and then finished with the unwrapped body, so
+// concatenated deltas no longer equalled the authoritative input and a client that renders
+// tool input mid-stream had to rewind.
+describe("fallback freeform wrappers stream one stable representation (#5047)", () => {
+  const FALLBACK_KEYS = ["code", "script", "js", "javascript", "command", "cmd", "content"];
+
+  async function streamExec(chunks: string[]) {
+    return collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "exec" } as AdapterEvent,
+      ...chunks.map(chunk => ({ type: "tool_call_delta", arguments: chunk }) as AdapterEvent),
+      { type: "tool_call_end" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]), "model", undefined, new Set(["exec"])));
+  }
+
+  function inputView(frames: { event?: string; data: Record<string, unknown> }[]) {
+    const deltas = frames
+      .filter(f => f.event === "response.custom_tool_call_input.delta")
+      .map(f => String(f.data.delta));
+    const done = frames.find(f => f.event === "response.custom_tool_call_input.done")?.data.input;
+    const item = frames.find(f => f.event === "response.output_item.done")?.data.item as Record<string, unknown> | undefined;
+    return { concatenated: deltas.join(""), done, itemInput: item?.input };
+  }
+
+  test("delta concatenation equals the completed input for every accepted fallback key", async () => {
+    for (const key of FALLBACK_KEYS) {
+      const body = "const x = 1;";
+      const view = inputView(await streamExec([JSON.stringify({ [key]: body })]));
+      expect({ key, ...view }).toEqual({ key, concatenated: body, done: body, itemInput: body });
+    }
+  });
+
+  test("a wrapper split at every byte boundary never leaks raw JSON and never rewinds", async () => {
+    const wrapper = JSON.stringify({ code: "a\nb" });
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const view = inputView(await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]));
+      expect({ cut, ...view }).toEqual({ cut, concatenated: "a\nb", done: "a\nb", itemInput: "a\nb" });
+    }
+  });
+
+  test("an ambiguous multi-field object stays unrepaired and byte-exact", async () => {
+    // Two string fallback fields: `unwrapFreeformToolInput` declines to guess and returns the
+    // object unchanged. The stream must reach the same answer, which is the whole point of
+    // holding until the object closes rather than unwrapping the first key that appears.
+    const wrapper = JSON.stringify({ code: "a", script: "b" });
+    expect(inputView(await streamExec([wrapper])))
+      .toEqual({ concatenated: wrapper, done: wrapper, itemInput: wrapper });
+
+    // A non-string value is not a wrapper either, and it never matched `{"code":"`, so it was
+    // never held: this pins that ordinary bodies keep streaming immediately.
+    const numeric = JSON.stringify({ code: 1 });
+    expect(inputView(await streamExec([numeric])))
+      .toEqual({ concatenated: numeric, done: numeric, itemInput: numeric });
+  });
+
+  test("the canonical input wrapper still streams progressively", async () => {
+    // `input` wins by precedence in `unwrapFreeformToolInput` whatever else the object carries,
+    // so it stays decidable from its prefix and must not regress into holding.
+    const frames = await streamExec(['{"input":"line1\\', 'nline2"}']);
+    expect(frames.filter(f => f.event === "response.custom_tool_call_input.delta").length)
+      .toBeGreaterThan(1);
+    expect(inputView(frames))
+      .toEqual({ concatenated: "line1\nline2", done: "line1\nline2", itemInput: "line1\nline2" });
+  });
+
+  // #5047 matched the buffer against the compact literals `{"input":"` and `{"code":"`, so a
+  // wrapper carrying the insignificant whitespace `JSON.parse` accepts matched nothing at all:
+  // it streamed as raw JSON and then completed as the unwrapped body. The completion path reads
+  // the text with `JSON.parse`, which does not care how the object is laid out, so the two
+  // disagreed again through a different spelling of the same wrapper.
+  test("a wrapper written with whitespace streams the same value it completes with", async () => {
+    const spacings = [
+      '{ "code": "const x = 1;" }',
+      '{"code" : "const x = 1;"}',
+      '{\n  "code": "const x = 1;"\n}',
+      '{\t"input":\t"const x = 1;"}',
+      '{ "input" : "const x = 1;" }',
+    ];
+    for (const wrapper of spacings) {
+      const view = inputView(await streamExec([wrapper]));
+      expect({ wrapper, ...view })
+        .toEqual({ wrapper, concatenated: "const x = 1;", done: "const x = 1;", itemInput: "const x = 1;" });
+    }
+  });
+
+  test("a spaced wrapper split at every byte boundary never leaks raw JSON", async () => {
+    const wrapper = '{ "code": "a\\nb" }';
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const view = inputView(await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]));
+      expect({ cut, ...view }).toEqual({ cut, concatenated: "a\nb", done: "a\nb", itemInput: "a\nb" });
+    }
+  });
+
+  // `stripMarkdownCodeFence` removes one complete outer fence at completion for `exec` and
+  // `apply_patch`. Streaming the fence bytes first and then completing with the stripped body is
+  // the same rewind the wrapper holds exist to avoid, so a fenced body streams no preview at
+  // all. A closing fence can still be followed by more text that withdraws it, which is why the
+  // hold lasts the whole call rather than releasing when the fence looks complete.
+  test("a fenced body streams no preview rather than bytes the completed item drops", async () => {
+    const fenced = ["```js", "const x = 1;", "```"].join("\n");
+    for (const chunks of [[fenced], [fenced.slice(0, 4), fenced.slice(4)], Array.from(fenced)]) {
+      const view = inputView(await streamExec(chunks));
+      expect(view.done).toBe("const x = 1;");
+      expect(view.itemInput).toBe("const x = 1;");
+      expect(view.concatenated).toBe("");
+    }
+
+    // The same body inside the canonical wrapper: the value is decidable, the fence is not.
+    const wrapped = inputView(await streamExec([JSON.stringify({ input: fenced })]));
+    expect(wrapped).toEqual({ concatenated: "", done: "const x = 1;", itemInput: "const x = 1;" });
+  });
+
+  test("a body that only starts like a fence resumes streaming as soon as it cannot be one", async () => {
+    // One held character, then the buffer can no longer open a fence and streams normally. This
+    // is what keeps the fence hold from swallowing ordinary template-literal JavaScript.
+    const body = "`hello` + world";
+    const view = inputView(await streamExec(Array.from(body)));
+    expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
+  });
+
+  test("every escape JSON defines decodes to the character JSON.parse produces", async () => {
+    // The decoder used to treat any escape it did not list as its own literal suffix, so a valid
+    // backspace streamed as the letter b while the completed item carried U+0008. The routed
+    // passthrough already pins this shape in responses-custom-tool-repair.test.ts.
+    const body = 'a"b\\c/d\be\ff\ng\rh\ti';
+    const view = inputView(await streamExec([JSON.stringify({ input: body })]));
+    expect(view).toEqual({ concatenated: body, done: body, itemInput: body });
+  });
+
+  test("an escape JSON does not define holds instead of inventing a value", async () => {
+    // A wrapper carrying an undefined escape does not parse, so the completed item is the raw
+    // text. Decoding the escape to its own suffix would stream a value nothing else ever carries.
+    const wrapper = '{"input":"a\\qb"}';
+    const view = inputView(await streamExec([wrapper]));
+    expect(view).toEqual({ concatenated: "", done: wrapper, itemInput: wrapper });
+  });
+
+  test("a wrapper that turns invalid after streaming committed stops rather than continuing", async () => {
+    // The valid prefix has already been published when the undefined escape arrives, and no
+    // mechanism can take a delta back. What is guaranteed is that nothing further is invented:
+    // the preview stops at the last decodable character and the completed item carries the raw
+    // text. Holding the whole wrapper instead would mean never streaming any canonical wrapper
+    // progressively, which the test above this one requires.
+    const view = inputView(await streamExec(['{"input":"a', '\\qb"}']));
+    expect(view.concatenated).toBe("a");
+    expect(view.done).toBe('{"input":"a\\qb"}');
+    expect(view.itemInput).toBe('{"input":"a\\qb"}');
+  });
+
+  test("a surrogate pair split across chunks is emitted whole, never as a lone half", async () => {
+    const emoji = "\u{1F600}";
+    const wrapper = '{"input":"x\\ud83d\\ude00y"}';
+    for (let cut = 1; cut < wrapper.length; cut++) {
+      const deltas = (await streamExec([wrapper.slice(0, cut), wrapper.slice(cut)]))
+        .filter(f => f.event === "response.custom_tool_call_input.delta")
+        .map(f => String(f.data.delta));
+      for (const delta of deltas) {
+        // A delta ending on an unpaired high surrogate is not decodable on its own.
+        const last = delta.charCodeAt(delta.length - 1);
+        expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+      }
+      expect(deltas.join("")).toBe(`x${emoji}y`);
+    }
+  });
+
+  test("a decorated apply_patch envelope streams nothing rather than markers completion rewrites", async () => {
+    // normalizeApplyPatchDelimiters strips the trailing *** from the outer lines of a complete
+    // envelope. Streaming the decorated markers first and completing with the normalized ones is
+    // the same rewind the wrapper and fence holds exist to avoid.
+    const decorated = ["*** Begin Patch ***", "*** Add File: a.txt", "+x", "*** End Patch ***"].join("\n");
+    const normalized = ["*** Begin Patch", "*** Add File: a.txt", "+x", "*** End Patch"].join("\n");
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "apply_patch" } as AdapterEvent,
+      { type: "tool_call_delta", arguments: decorated } as AdapterEvent,
+      { type: "tool_call_end" } as AdapterEvent,
+      { type: "done" } as AdapterEvent,
+    ]), "model", undefined, new Set(["apply_patch"])));
+    expect(inputView(frames)).toEqual({ concatenated: "", done: normalized, itemInput: normalized });
+  });
+
+  test("a stream that dies inside a held wrapper manufactures no tool call", async () => {
+    // The held buffer is suppressed output, never content. An aborted turn must not turn it
+    // into a completed call, and must not release it as raw JSON either.
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "c1", name: "exec" } as AdapterEvent,
+      { type: "tool_call_delta", arguments: '{"code":"const x = 1' } as AdapterEvent,
+    ]), "model", undefined, new Set(["exec"])));
+    expect(frames.filter(f => f.event === "response.custom_tool_call_input.delta")).toEqual([]);
+    const completed = frames
+      .map(f => f.data.item as Record<string, unknown> | undefined)
+      .filter(item => item?.type === "custom_tool_call" && item?.status === "completed");
+    expect(completed).toEqual([]);
   });
 });

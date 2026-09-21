@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
-import { resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
+import { claudeToolSearchEnv, resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
 import { PROXY_MARKER } from "../claude/auth-detect";
 import { isProxyAdmissionSecret } from "./auth-cors";
 import type { OcxConfig } from "../types";
@@ -33,6 +33,7 @@ const MANAGED_SYSTEM_ENV_NAMES = new Set<string>([
   "DISABLE_COMPACT",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+  "ENABLE_TOOL_SEARCH",
 ]);
 
 interface SystemEnvTracking {
@@ -309,6 +310,11 @@ export async function injectSystemEnv(
     if (config.claudeCode?.alwaysEnableEffort === true) {
       injectLever("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "1");
     }
+    // Tool-search deferral (#4838): same opt-in contract as `ocx claude`, so a machine
+    // whose Claude Code is launched from Dock/launchd gets the setting it configured
+    // instead of only terminal sessions. injectLever keeps a user-owned launchd value.
+    const toolSearch = claudeToolSearchEnv(config.claudeCode?.toolSearch);
+    if (toolSearch !== undefined) injectLever("ENABLE_TOOL_SEARCH", toolSearch);
 
     // Shell-hook env file: works for new shells in already-running Terminal.app.
     writeShellEnvFile(port, config, modelEnv, auto, deps);

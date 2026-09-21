@@ -104,6 +104,10 @@ export function classifyTransportError(error: unknown): { classification: Failur
     case "network_blocked": return { classification: "network_failure", secondaryCode: code };
     case "region_blocked": return { classification: "region_blocked", secondaryCode: code };
     case "provider_transient": return { classification: "provider_transient", secondaryCode: code };
+    // A response this transport cannot read is an upstream protocol failure. It is deterministic
+    // rather than transient, and attributing it to the harness would blame the runner for what
+    // the peer sent.
+    case "unreadable_response": return { classification: "protocol_failure", secondaryCode: code };
     case "connect_timeout": case "first_byte_timeout": case "total_timeout":
       return { classification: "timeout", secondaryCode: code };
     case "inactivity_timeout":

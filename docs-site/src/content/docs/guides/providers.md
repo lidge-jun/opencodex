@@ -64,6 +64,18 @@ Shipped v1 configs migrate automatically to marker 2 and one option-aware row. T
 is retained once at `~/.opencodex/config.json.pre-openai-tiers-v2.bak`; restore it with
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`.
 
+## Anthropic image input
+
+The built-in Claude model seeds advertise text and image input for both `anthropic` (OAuth) and
+`anthropic-apikey`, consistent with [Anthropic's model overview](https://platform.claude.com/docs/en/models/overview).
+Explicit per-model input-modality overrides remain authoritative; unknown models are not assumed
+image-capable. This applies across integrations wherever the client's configuration supports image
+capability metadata: OpenClaw exports a declared `input` array, and Kimi Code exports
+`capabilities: ["image_in"]` only for image-capable models. OpenClaw omits `input` when no supported
+modalities are declared; Kimi omits `capabilities` for unknown or text-only models. Clients without
+a supported capability field keep their existing configuration shape. After updating opencodex,
+regenerate or refresh the client configuration managed by opencodex to receive the updated metadata.
+
 ## Auth modes
 
 Provider configs accept three `authMode` values (`key` is the default). The built-in registry also
@@ -196,6 +208,23 @@ ocx logout <provider>
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
+
+### Google tool-schema loss diagnostics
+
+Google tool declarations are compiled against the selected endpoint class. When provider debug is
+on — `ocx debug provider on`, the dashboard Logs toggle, or `OCX_DEBUG=1` — schema loss during compatibility
+conversion on the omitted or `compatible` policy path emits a `[ocx:google:google-tool-schema-loss]`
+record (tail with `ocx debug provider logs -f`)
+carrying only the report version, endpoint class, a `lossy` indicator, a bounded uncertainty count,
+fixed loss categories with bounded counts, and a truncation flag. Tool and property names, paths, values, and schema text are
+never included. With an omitted or `compatible` policy, this diagnostic observes the existing
+conversion without rejecting it. Under `reject-lossy`, an initially lossy or comparison-indeterminate
+compilation is refused before dispatch; no separate loss record is emitted for the refused request. Under
+`reject-lossy`, a Vertex or Cloud Code Assist repair that would erase constraints emits a similarly
+content-free `google-tool-schema-repair` record and returns the original 400 without a changed send;
+with an omitted or `compatible` policy, the repaired request is replayed as before. Direct AI
+Studio never performs this repair. Native output schemas are outside both policy paths. See the
+[debug command reference](/reference/cli/agents/).
 
 
 After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.
@@ -383,7 +412,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
+opencodex ships 95 built-in presets: 79 key-based, 12 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -416,6 +445,15 @@ token group allows (`gpt-5.5` and `gpt-5.1-codex` are seeded). Register at
 pins the row near the top of the Add provider picker and marks it as a sponsor, and nothing else about
 routing or defaults changes.
 
+**Opper** is the EU-hosted AI gateway from Opper AI (Stockholm): one key (created at
+[platform.opper.ai](https://platform.opper.ai)) and one OpenAI-compatible endpoint in front of 700+
+models from 30+ providers. Bare model ids such as `claude-sonnet-4-6` or `gpt-5.5` are *pools*: Opper
+picks the provider and region per request, so the seeded ids stay valid as routes come and go. A
+`vendor/model` id (`anthropic/claude-sonnet-4-6`, `aws/claude-sonnet-4-6-eu`) pins one route instead.
+The catalogue is discovered live from `/v3/compat/models` with your key; the public list, including
+region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper is also a
+[models.dev](https://models.dev) provider (`opper`), which uses the same bare pool ids.
+
 | Provider | Base URL |
 | --- | --- |
 | **OpenAI (API key)** | `https://api.openai.com/v1` |
@@ -444,6 +482,7 @@ routing or defaults changes.
 | Meta Muse Code (CLI credential) | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -463,6 +502,7 @@ routing or defaults changes.
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
 | Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
+| Opper | `https://api.opper.ai/v3/compat` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
@@ -593,6 +633,13 @@ Both modes route to `https://api.orcarouter.ai/v1` and discover the public live 
 whether Codex offers image attachments. Because the catalog itself is public, manual key setup
 reports validation as unknown instead of accepting that response as proof that the key works.
 
+During OrcaRouter browser sign-in (`ocx login orcarouter-oauth`), a successful key-exchange
+response body must be valid UTF-8 JSON no larger than 64 KiB. The request's existing 30-second
+budget covers both the response headers and the full body; oversized or malformed bodies are
+rejected before the key is saved. These limits apply only to the login key exchange, not inference
+request payloads. Scope validation is unchanged: an omitted `scope` is allowed, while an explicitly
+invalid `scope` is rejected.
+
 For a one-origin self-hosted deployment, set the shared origin before the first PKCE login; the saved
 inference URL is derived from the same origin:
 
@@ -656,6 +703,12 @@ instead, where the same key is visible. A pasted key faces the same format check
 same live validation against the Model API as an imported one. See
 [Platform support](/reference/platform-support/) for the full per-platform picture.
 
+Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
+routed clients, including Grok's effort picker. Requests use
+`User-Agent: muse-build/1.3.0 (opencodex compatibility)` so Meta accepts the Muse Code
+effort contract. An explicit provider User-Agent overrides this default and may cause
+`max` to be rejected. The `meta-model` and OpenCode Go effort ladders remain unchanged.
+
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
@@ -694,6 +747,19 @@ keeps only rows whose architecture produces text, excluding embedding and image-
 It preserves slash-containing native ids plus reported context and input-modality metadata, and caps
 discovery at 512 KiB and 512 raw rows. Dedicated deployment hosts are out of scope. Create keys in
 [Nebius Token Factory](https://tokenfactory.nebius.com).
+
+**Crusoe discovery.** The key-based preset uses the `openai-chat` adapter and sends its Bearer key
+only to Crusoe's fixed Serverless Inference host. `/v1/models` rejects unauthenticated requests with
+401, so a successful list response counts as key validation. Discovery preserves slash-delimited
+native ids such as `zai-org/GLM-5.3` and `moonshotai/Kimi-K2.6` exactly as Crusoe returns them and is
+capped at 256 KiB and 256 raw rows. Rows are kept only when they report `is_public: true` and a text or multimodal `architecture.modality`, which excludes account-private deployments and any embedding or media rows. Reasoning models return their thinking in the Chat Completions
+`reasoning` field, which the adapter reads. Only `openai/gpt-oss-120b` accepts a `reasoning_effort`
+ladder (`low`, `medium`, `high`); the other reasoning models treat the field as an on/off toggle, so
+the preset declares no provider-wide effort ladder and no provider-wide parallel tool calls. Rate
+limits apply per project and per model (429 when exceeded, 503 while a shared deployment scales), and
+new accounts start with $5 of free credits. Create a key in the
+[Crusoe Cloud console](https://console.crusoecloud.com) under Intelligence Foundry, Inference.
+
 **DigitalOcean discovery.** The preset uses a model access key against the fixed shared Serverless
 Inference host and intersects the authenticated `/v1/models` response with DigitalOcean's
 docs-backed Chat Completions allowlist. Unknown, Responses-only, embedding, and media-generation
@@ -759,7 +825,7 @@ OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code C
   - Global: [CodeBuddy Global API Keys](https://www.codebuddy.ai/profile/keys)
   - CN: [CodeBuddy CN API Keys](https://copilot.tencent.com/profile/keys)
 - **Region Isolation:** `codebuddy` and `codebuddy-cn` use separate canonical endpoints (`https://www.codebuddy.ai` and `https://www.codebuddy.cn`) and isolated child environments (`CODEBUDDY_INTERNET_ENVIRONMENT=public` vs `internal`). Credentials are strictly region-scoped and never exchanged across environments. Overriding the canonical base URL fails closed.
-- **Tool Ownership:** In v1, the CLI is spawned with `--tools ""` and `--strict-mcp-config`, ensuring Codex maintains exclusive tool ownership. The provider operates in text and reasoning mode; client tool execution is not delegated to the vendor CLI.
+- **Tool Ownership:** In v1, the CLI is spawned with `--tools ""` and `--strict-mcp-config`, ensuring Codex maintains exclusive tool ownership. The provider operates in text and reasoning mode; client tool execution is not delegated to the vendor CLI. If the CLI writes an unquoted DSML `calls` control line followed by a `functions.*` invoke control line into text or reasoning, OpenCodex refuses the turn instead of forwarding the scaffold or interpreting it as an executable call. DSML discussed or quoted in prose, inline code, fenced code, or source examples remains ordinary answer text.
 - **Entitlements and Billing:** The provider uses the same vendor-documented CodeBuddy account/CLI authentication surface. Availability and billing of free, promotional, trial, or subscription credits remain determined by the user's CodeBuddy account entitlement.
 
 ### Official Qoder CLI (Global & CN)
@@ -928,8 +994,11 @@ is not supported directly.
 
 Provider configuration selects the adapter; upstream transport selection is separate. Eligible
 Responses traffic can use WSS with [explicit proxy routing](/reference/proxy-formats/#json-and-sse-output).
-Invalid or unsupported WebSocket proxy settings fall back to HTTP/SSE, which uses Bun's HTTP
-proxy rules rather than the WSS-specific `ALL_PROXY` fallback.
+Invalid or unsupported WebSocket proxy settings fall back to HTTP/SSE, which uses the
+[server's configured outbound fetch](/reference/configuration/server/). A server SOCKS5 proxy from
+`config.proxy` or an inherited SOCKS5 `ALL_PROXY` uses the built-in tunnel when `NO_PROXY` does
+not exempt the target. Scheme-specific HTTP(S) proxy variables retain their separate native handling; non-SOCKS
+`ALL_PROXY` is not a native HTTP fetch route.
 
 **GitHub Copilot** is an OAuth provider (`ocx login github-copilot`) that exchanges a GitHub
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains

@@ -7,6 +7,7 @@ import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyB
 import { codexHistoryBackupId, legacyCodexHistoryBackupId, sameCodexHistoryPath } from "../../src/codex/history-manifest";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "../helpers/codex-history-manifest-fixtures";
 import { preflightCodexHistoryInjection, setHistoryAppendHooksForTests } from "../../src/codex/history-provider";
+import { setStateDbPreflightOpenFailureForTests } from "../../src/codex/history-state-open";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
 // bun's 5s default per-test timeout by itself. Fail fast into withHistoryRetry instead.
@@ -18,6 +19,7 @@ setDefaultTimeout(30_000);
 const noopSnapshotArtifacts = new Set<string>();
 afterEach(() => {
   setHistoryAppendHooksForTests(undefined);
+  setStateDbPreflightOpenFailureForTests(undefined);
   setBeforeHistoryBackupConsumeForTests(undefined);
   setBeforeStrictHistoryRolloutAppendForTests(undefined);
   setAfterStrictHistoryRolloutAppendForTests(undefined);
@@ -182,7 +184,7 @@ describe("Codex history provider sync", () => {
     expect(readFileSync(fixture.rollout,"utf8")).toBe(before);
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
-  test("injection preflight preserves provider definitions needed by paginated threads", () => {
+  test("injection preflight reports the paginated refusal for every target set that reaches a paginated row", () => {
     const fixture = makeFixture({ includeLegacy: true });
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     const db = new Database(fixture.dbPath);
@@ -192,6 +194,19 @@ describe("Codex history provider sync", () => {
     expect(preflightCodexHistoryInjection(false, false, fixture.dbPath)).toBe("history_paginated_requires_native_writer");
     expect(preflightCodexHistoryInjection(true, true, fixture.dbPath)).toBe("history_paginated_requires_native_writer");
     expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+  test("injection preflight refuses a paginated openai row that scans after a paginated opencodex row", () => {
+    const fixture = makeFixture({ includeLegacy: true });
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    // The provider-table target set has no ORDER BY: the paginated opencodex row scans
+    // first and must not stand the check down before the paginated openai row is seen.
+    db.run("UPDATE threads SET model_provider='opencodex', history_mode='paginated' WHERE id='thread-1'");
+    db.run("UPDATE threads SET model_provider='openai', history_mode='paginated' WHERE id='thread-3'");
+    db.close();
+    expect(preflightCodexHistoryInjection(true, true, fixture.dbPath)).toBe("history_paginated_openai_requires_native_writer");
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
 
@@ -214,12 +229,61 @@ describe("Codex history provider sync", () => {
     });
   }
 
+  for (const marker of ["ordinal", "history_mode"] as const) {
+    test(`refuses a later paginated ${marker} when the first line is still legacy`, () => {
+      const fixture = makeFixture();
+      noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+      const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const first = records[0];
+      // Keep line 1 legacy. A later native migration writes the paginated marker
+      // onto a new session_meta (and, for ordinals, the following event) so the
+      // first-line-only guard would miss it and clone ordinal 0 (#4311).
+      const laterMeta = marker === "ordinal"
+        ? { ordinal: 0, type: "session_meta", payload: { ...first.payload } }
+        : { type: "session_meta", payload: { ...first.payload, history_mode: "paginated" } };
+      const laterEvent = marker === "ordinal"
+        ? { ordinal: 1, type: "event_msg", timestamp: "2026-01-01T00:00:00.000Z", payload: { message: "x" } }
+        : { type: "event_msg", timestamp: "2026-01-01T00:00:00.000Z", payload: { message: "x" } };
+      const before = [first, laterMeta, laterEvent].map(record => JSON.stringify(record)).join("\n") + "\n";
+      writeFileSync(fixture.rollout, before);
+      const result = syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+      expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+      expect(existsSync(fixture.backupPath)).toBe(false);
+      const db = new Database(fixture.dbPath, { readonly: true });
+      expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "openai" });
+      db.close();
+    });
+  }
+
   test("preserves a routed paginated rollout and its restore manifest", () => {
     const fixture = makeFixture();
     noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
     expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
     const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
     records.forEach((record, ordinal) => { record.ordinal = ordinal; });
+    const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
+    writeFileSync(fixture.rollout, before);
+    const manifest = readFileSync(fixture.backupPath, "utf8");
+    for (const result of [syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath), restoreLegacyOpenaiHistory(fixture.dbPath)]) {
+      expect(result).toMatchObject({ rows: 0, files: 0, failed: true, integrityCode: "history_paginated_requires_native_writer" });
+    }
+    expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+    expect(readFileSync(fixture.backupPath, "utf8")).toBe(manifest);
+    const db = new Database(fixture.dbPath, { readonly: true });
+    expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "opencodex" });
+    db.close();
+  });
+
+  test("preserves a routed rollout that later becomes paginated past line 1", () => {
+    const fixture = makeFixture();
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath).failed).toBeUndefined();
+    const records = readFileSync(fixture.rollout, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    // First line stays legacy. Native conversion appends paginated records after
+    // routing, which is the #4311 projector-stop shape if we cloned ordinal 0.
+    records.push({ ordinal: 0, type: "session_meta", payload: { id: "thread-1", model_provider: "opencodex", history_mode: "paginated" } });
+    records.push({ ordinal: 1, type: "event_msg", timestamp: "2026-01-01T00:00:01.000Z", payload: { message: "x" } });
     const before = records.map(record => JSON.stringify(record)).join("\n") + "\n";
     writeFileSync(fixture.rollout, before);
     const manifest = readFileSync(fixture.backupPath, "utf8");
@@ -1595,5 +1659,96 @@ describe("Windows history path identity (#4442)", () => {
     // Neither exists: a new manifest is written under the canonical name.
     present.clear();
     expect(resolveExistingHistoryBackupPath(stateDb, exists)).toBe(canonical);
+  });
+});
+
+describe("Codex history injection preflight on a WAL store with no live writer", () => {
+  /**
+   * The store the issue describes: `journal_mode=wal` recorded in the database header, and
+   * no `-wal`/`-shm` on disk because the last writer closed cleanly.
+   *
+   * The sidecars are removed explicitly rather than left to close semantics. Whether a clean
+   * close unlinks them or truncates them to zero bytes varies by platform, and this fixture
+   * has to mean "no sidecar is present" on every runner for the assertions below to be about
+   * the preflight rather than about the host.
+   */
+  function checkpointedWalFixture(options?: { includeLegacy?: boolean }) {
+    const fixture = makeFixture(options);
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const db = new Database(fixture.dbPath);
+    db.exec("PRAGMA journal_mode = wal");
+    db.close();
+    rmSync(`${fixture.dbPath}-wal`, { force: true });
+    rmSync(`${fixture.dbPath}-shm`, { force: true });
+    return fixture;
+  }
+
+  /** What SQLite answers when it needs the `-shm` and may not create one. */
+  const missingSharedMemory = () => Object.assign(new Error("unable to open database file"), { code: "SQLITE_CANTOPEN" });
+
+  test("reaches a verdict on a cleanly-closed WAL store rather than the catch-all refusal", () => {
+    const fixture = checkpointedWalFixture();
+    // No forced failure here: whichever way this runner's SQLite build answers a bare
+    // read-only open of a checkpointed WAL store, the operator must get a real answer.
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+  });
+
+  test("admits the immutable read when no sidecar is on disk", () => {
+    const fixture = checkpointedWalFixture();
+    setStateDbPreflightOpenFailureForTests(missingSharedMemory);
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+  });
+
+  test("the fallback still produces the paginated refusal it exists to produce", () => {
+    // The narrowing must not cost the preflight its evidence: the same store that refuses
+    // through a normal open has to refuse through the fallback, or the fix would trade a
+    // spurious refusal for a config transition over history Codex owns.
+    const fixture = checkpointedWalFixture({ includeLegacy: true });
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    db.run("UPDATE threads SET history_mode='paginated' WHERE id='thread-3'");
+    db.close();
+    rmSync(`${fixture.dbPath}-wal`, { force: true });
+    rmSync(`${fixture.dbPath}-shm`, { force: true });
+    setStateDbPreflightOpenFailureForTests(missingSharedMemory);
+    expect(preflightCodexHistoryInjection(false, false, fixture.dbPath)).toBe("history_paginated_requires_native_writer");
+  });
+
+  test.each(["-wal", "-shm"])("STILL refuses when a %s sidecar is present", (suffix) => {
+    const fixture = checkpointedWalFixture();
+    // A `-wal` holds committed content an immutable connection would not read, and a `-shm`
+    // means a writer is attached. Either one makes the snapshot potentially stale, so the
+    // refusal has to stand even though the open failure looks identical.
+    writeFileSync(`${fixture.dbPath}${suffix}`, "");
+    setStateDbPreflightOpenFailureForTests(missingSharedMemory);
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBe("history_injection_preflight_unavailable");
+  });
+
+  test("STILL refuses when the open failed for some other reason", () => {
+    const fixture = checkpointedWalFixture();
+    // Absent sidecars do not make every open failure recoverable. A permission error is not
+    // the missing-shared-memory condition, and reading around it with an immutable snapshot
+    // would be guessing at a store this process cannot open.
+    setStateDbPreflightOpenFailureForTests(() => Object.assign(new Error("access to the database file is denied"), { code: "SQLITE_PERM" }));
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBe("history_injection_preflight_unavailable");
+  });
+
+  test("covers the first read, which is where macOS raises the missing shared memory", () => {
+    // `sqlite3_open_v2` never reads page 1, so a WAL header is not inspected until the first
+    // prepare. On macOS that is where the absent `-shm` is discovered; the guarded attempt
+    // had already returned, the failure landed in the caller, and a healthy store got the
+    // catch-all refusal #4943 was supposed to remove. Linux cannot show this: its SQLite
+    // materializes both sidecars on that same read and never fails.
+    const fixture = checkpointedWalFixture();
+    const phases: string[] = [];
+    setStateDbPreflightOpenFailureForTests((_path, phase) => {
+      phases.push(String(phase));
+      return phase === "first-read" ? missingSharedMemory() : undefined;
+    });
+    // A failure raised at the first read has to reach the same verdict as one raised at open,
+    expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
+    // and the attempt has to actually offer that phase: before this fix only "open" existed,
+    // which is exactly why the platform that fails later was not covered.
+    expect(phases).toEqual(["open", "first-read"]);
   });
 });

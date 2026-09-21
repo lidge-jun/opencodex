@@ -1,9 +1,10 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { configuredReasoningEfforts } from "../../src/reasoning-effort";
 import { isModelTextOnly } from "../../src/vision";
@@ -53,6 +54,12 @@ function freshConfig(extra?: Record<string, unknown>) {
 }
 
 describe("ocx models", () => {
+  // src/cli/index.ts has roughly fifty top-level imports, so every ocx subcommand pays the same
+  // static graph. This file's first spawned child is the one that loads it.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "cli-index/models", entry: cliPath });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
   test("models lists all provider models", () => {
     const { dir } = freshConfig();
     try {

@@ -19,6 +19,21 @@ export function dottedAliasIsUnambiguous(namespace: string, name: string): boole
   return !namespace.includes("__") && !name.includes("__");
 }
 
+/**
+ * Charset the Responses API enforces on a tool-call `name`.
+ *
+ * A name outside it is not merely rejected for the turn that carries it: Codex stores the item in
+ * the conversation, and every later request that replays that history is refused before it runs
+ * (`Invalid 'input[N].name': string does not match pattern '^[a-zA-Z0-9_-]+$'`). One relayed item
+ * therefore ends the conversation permanently, which is why the emit boundary treats an invalid
+ * name as a defect to repair rather than as a name to forward. See #5095.
+ */
+const RESPONSES_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+export function isSchemaValidResponsesToolName(name: string): boolean {
+  return RESPONSES_TOOL_NAME_PATTERN.test(name);
+}
+
 export function wireToolInnerName(tool: unknown): string | undefined {
   if (!isPlainObject(tool)) return undefined;
   const nestedFunction = tool.type === "function" && isPlainObject(tool.function)
@@ -76,4 +91,3 @@ export function collectAmbiguousDottedAliases(specGroups: readonly unknown[]): S
   for (const [alias, owner] of owners) if (owner === null) ambiguous.add(alias);
   return ambiguous;
 }
-

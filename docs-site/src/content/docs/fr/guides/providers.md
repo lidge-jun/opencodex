@@ -131,6 +131,25 @@ ocx logout <provider>
 
 Les vérifications de quota Google Antigravity utilisent des points de terminaison Google fixes, y compris le repli vers la liste des modèles. Elles prennent en charge le DNS Fake-IP transparent pour ces destinations en conservant la vérification TLS, le refus des redirections et les contrôles des adresses privées. Une URL de base personnalisée ne modifie que les requêtes de modèles ; `NO_PROXY` conserve la politique de connexion directe.
 
+### Diagnostic de perte du schéma d’outil Google
+
+Les déclarations d’outils Google sont compilées selon la classe du point de terminaison sélectionné.
+Lorsque le débogage du fournisseur est activé — avec `ocx debug provider on`, le bouton Logs du
+tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion de compatibilité sur le
+chemin où la politique est absente ou vaut `compatible` émet un enregistrement
+`[ocx:google:google-tool-schema-loss]` (à suivre avec `ocx debug provider logs -f`) ne contenant que
+la version du rapport, la classe du point de terminaison, un indicateur `lossy`, un compteur borné de
+comparaisons indéterminées, des catégories de perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
+propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
+absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. Sous `reject-lossy`,
+une compilation initialement avec perte ou dont la comparaison bornée est indéterminée est refusée
+avant l’envoi ; aucun enregistrement de perte distinct n’est émis pour la requête refusée. Sous `reject-lossy`, une
+réparation Vertex ou Cloud Code Assist qui supprimerait des contraintes émet un enregistrement
+`google-tool-schema-repair` également sans contenu et renvoie le 400 d’origine sans nouvel envoi ;
+avec une politique absente ou `compatible`, la requête réparée est rejouée comme auparavant. AI Studio direct ne tente jamais cette réparation. Les schémas
+de sortie natifs restent hors de ces deux chemins. Consultez la
+[référence des commandes de débogage](/fr/reference/cli/agents/).
+
 
 Après un échec définitif d'actualisation de Nous, exécutez `ocx login nous` pour vous réauthentifier.
 
@@ -264,7 +283,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 79 préréglages intégrés : 67 à clé, huit OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 94 préréglages intégrés : 78 à clé, 12 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -307,6 +326,7 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | Command Code | `https://api.commandcode.ai/provider/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| Crusoe | `https://api.inference.crusoecloud.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
@@ -434,6 +454,13 @@ URL de base modifiée ressemblant à l'original n'est jamais sondée. Les crédi
 gratuits restants sont affichés sous forme de fenêtre en USD lorsque Command Code signale également les
 dépenses de la période.
 
+Lors de la connexion à OrcaRouter par navigateur (`ocx login orcarouter-oauth`), le corps d’une
+réponse réussie à l’échange de clé doit être un JSON UTF-8 valide d’au plus 64 KiB. Le délai existant
+de 30 secondes pour cette requête couvre les en-têtes et la réception complète du corps ; tout corps
+trop volumineux ou mal formé est rejeté avant l’enregistrement de la clé. Ces limites concernent
+uniquement l’échange de clé à la connexion, pas les données des requêtes d’inférence. La validation
+de `scope` reste inchangée : son absence est autorisée, mais une valeur explicitement invalide est rejetée.
+
 **Découverte SambaNova Cloud.** Le préréglage lit la liste publique `/v1/models` de SambaNova Cloud depuis
 l'hôte API fixe, préserve les identifiants natifs du fournisseur et limite la découverte à 128 KiB et 128
 lignes brutes. Le catalogue n'étant pas authentifié, le parcours de connexion de la CLI signale que la clé ne
@@ -448,6 +475,19 @@ génération d'images. Il préserve les identifiants natifs contenant des barres
 de contexte et de modalités d'entrée signalées, et limite la découverte à 512 KiB et 512 lignes brutes. Les
 hôtes de déploiement dédiés sont hors périmètre. Créez des clés dans
 [Nebius Token Factory](https://tokenfactory.nebius.com).
+
+**Découverte Crusoe.** Le préréglage à clé utilise l'adaptateur `openai-chat` et n'envoie sa clé Bearer
+qu'à l'hôte fixe Serverless Inference de Crusoe. `/v1/models` rejette les requêtes non authentifiées
+avec un 401, de sorte qu'une liste réussie vaut validation de la clé. La découverte conserve les
+identifiants natifs à barre oblique tels que `zai-org/GLM-5.3` et `moonshotai/Kimi-K2.6` exactement comme
+Crusoe les renvoie, et est limitée à 256 KiB et 256 lignes brutes. Seules les lignes qui déclarent `is_public: true` et une `architecture.modality` text ou multimodal sont conservées, ce qui exclut les déploiements privés du compte ainsi que les lignes embedding ou média. Les modèles de raisonnement
+renvoient leur réflexion dans le champ `reasoning` de Chat Completions, que l'adaptateur lit. Seul
+`openai/gpt-oss-120b` accepte une échelle `reasoning_effort` (`low`, `medium`, `high`) ; les autres
+modèles de raisonnement traitent ce champ comme un interrupteur, si bien que le préréglage n'annonce
+ni échelle d'effort ni appels d'outils parallèles à l'échelle du fournisseur. Les limites de débit
+s'appliquent par projet et par modèle (429 en cas de dépassement, 503 pendant la montée en charge d'un
+déploiement partagé) et les nouveaux comptes démarrent avec 5 $ de crédits gratuits. Créez une clé dans
+la [console Crusoe Cloud](https://console.crusoecloud.com), sous Intelligence Foundry, Inference.
 
 **Découverte DigitalOcean.** Le préréglage utilise une clé d'accès aux modèles avec l'hôte Serverless Inference
 partagé et fixe, puis croise la réponse `/v1/models` authentifiée avec la liste d'autorisation Chat Completions

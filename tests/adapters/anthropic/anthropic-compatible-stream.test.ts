@@ -201,15 +201,20 @@ describe("Anthropic-compatible reasoning stream termination (#312)", () => {
     expect(events.some(event => event.type === "error")).toBe(false);
   });
 
-  test("compatible provider EOF maps refusal to content_filter locally", async () => {
+  test("compatible provider EOF maps refusal to a non-retryable content_filter incomplete", async () => {
     const events = await collectAdapterEvents(arbitrarilyChunkedResponse(
       'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"refusal"}}',
     ));
 
+    // #4312: this used to be a `done` carrying stopReason "content_filter", which the bridge
+    // turned into a `response.incomplete` with no retryability signal, so Codex read a dropped
+    // stream and retried a refusal five times. The terminal is now explicit and non-retryable.
     expect(events.at(-1)).toEqual({
-      type: "done",
+      type: "incomplete",
+      reason: "content_filter",
+      retryable: false,
+      message: 'upstream ended the turn with stop_reason "refusal"',
       usage: undefined,
-      stopReason: "content_filter",
     });
   });
 

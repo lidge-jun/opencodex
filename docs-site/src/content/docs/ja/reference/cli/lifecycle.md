@@ -13,13 +13,17 @@ description: セットアップ、開始、停止、サービス、診断、同�
 
 ## プロキシのライフサイクル
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-プロキシ サーバー (優先ポート `10100`) を起動します。そのポートが占有されている場合、opencodex は別の使用可能なポートを選択して記録します。 PID/ランタイムポートの状態を書き込み、2 番目のライブインスタンスの起動を拒否します。開始時に、各プロバイダーのモデルを Codex のカタログに同期します。マネージド サービス (`OCX_SERVICE=1`) として起動されていない限り、シャットダウン時にネイティブ Codex が復元されます。
+プロキシ サーバー (優先ポート `10100`) を起動します。PID/ランタイムポートの状態を書き込み、2 番目のライブインスタンスの起動を拒否します。優先ポートが使用中の場合、`start` はそのポートを使用しているプロセスを確認して、どちらの場合も停止します。opencodex が応答していれば起動を拒否し、それ以外は使用しているプロセスを特定できないと報告します。最初のプロキシを実行したまま Codex を 2 番目のプロキシへ向けることになるため、自動でリスナーを別のポートへ移すことはありません。同じ `OPENCODEX_HOME` では別の `--port` を明示しても拒否されます。監視のみの構成も上限を適用する構成も同じ支出ジャーナルへ書き込むためです。独立した sibling には別の `OPENCODEX_HOME` を使用してください。`port: 0` はポートだけを OS に割り当てさせ、状態を分離しません。開始時に、各プロバイダーのモデルを Codex のカタログに同期します。マネージド サービス (`OCX_SERVICE=1`) として起動されていない限り、シャットダウン時にネイティブ Codex が復元されます。
+
+`--socks5`（デフォルト `127.0.0.1:10808`）は SOCKS5 URL を `config.proxy` に保存し、送信 HTTP(S) リクエストを実際の SOCKS5 トンネル経由で送信します。`--socks5-off` は保存された SOCKS5 プロキシだけを削除し、HTTP プロキシは削除しません。値は設定に保存されるため、`ocx update` 後も保持されます。URL にユーザー名とパスワードを含めることはできますが、起動ログでは非表示になります。
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
@@ -148,17 +152,23 @@ ocx status --json
 
 ## カタログの同期
 
-### `ocx sync [--restart-codex]`
+### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 構成されているすべてのプロバイダーからライブ モデル リストを取得し、マージされたカタログを Codex に再挿入します。プロバイダーを追加した後、または利用可能なモデルを更新するために実行します。
 
-存続期間の長い Codex `app-server` プロセスがまだ実行されている場合、`ocx sync` は、`opencodex-catalog.json` / `models_cache.json` が更新されても、以前のメモリ内モデル リストを提供し続ける可能性があることを警告します。現在のユーザーが所有する一致する `codex … app-server` および `codex-code-mode-host` プロセスにのみ `SIGTERM` を送信するには、`--restart-codex` を渡します (アクティブなターンが中断される可能性があります)。広範な `pkill -f codex` 一致は意図的に回避されます。
+存続期間の長い Codex `app-server` プロセスがまだ実行されている場合、`ocx sync` は、`opencodex-catalog.json` / `models_cache.json` が更新されても、以前のメモリ内モデル リストを提供し続ける可能性があることを警告します。`--restart-codex` を渡すと、一致する `codex … app-server` および `codex-code-mode-host` プロセスを再起動し、さらに macOS、Linux、Windows で Codex デスクトップ アプリを完全に終了して再起動します。モデル ピッカーがカタログを読み直すためです。進行中の会話は終了します。広範な `pkill -f codex` 一致は意図的に回避されます。
 
-### `ocx sync-cache [--restart-codex]`
+`--restart-desktop-app` は `--restart-codex` の非推奨エイリアスです。引き続き動作し、非推奨の案内を出力し、Windows 専用ではありません。
 
-Codex のローカル モデル ピッカー キャッシュを無効にし、アクティブな opencodex カタログから再構築されるようにします。 `ocx sync` と同じ、古い `app-server` 警告とオプションの `--restart-codex` 動作が適用されます。
+`--restart-app-server-only` は以前の狭い動作を復元します。現在のユーザーが所有する一致する app-server / code-mode-host プロセスにのみ `SIGTERM` を送り、デスクトップ アプリは起動したままにします (アクティブなターンは中断される可能性があります)。`--restart-codex` または `--restart-desktop-app` と同時に指定した場合は狭い範囲が優先されます。進行中の会話を失うことは取り返しがつかず、古いピッカーはそうではないからです。
 
-### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex]`
+コマンドを Codex アプリ内から実行すると、再起動は切り離されたヘルパーに引き渡され、このセッションはアプリとともに終了します。
+
+### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
+
+Codex のローカル モデル ピッカー キャッシュを無効にし、アクティブな opencodex カタログから再構築されるようにします。 `ocx sync` と同じ、古い `app-server` 警告とオプションの再起動フラグが適用されます。
+
+### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 別の OpenCodex インスタンスの `/v1/catalog` エンドポイントが提供する完全なカタログをインストール
 し、続いて `models_cache.json` を同期します。URL は HTTPS が必須で、HTTP はループバックのみ許可
@@ -166,10 +176,13 @@ Codex のローカル モデル ピッカー キャッシュを無効にし、�
 カタログは、ローカル書き込みの前に拒否されます。認証は任意で、環境変数参照 (`--auth-env`) から
 のみ読み取られ、argv からは読み取られません。
 
+`HTTP_PROXY` または `http_proxy` が適用され、`NO_PROXY` または `no_proxy` に一致する除外設定がない場合、ループバック HTTP リクエストは認証ヘッダーの付与や送信より前に拒否されます。`ALL_PROXY`/`all_proxy`、または `HTTPS_PROXY`/`https_proxy` だけの設定では、この HTTP 制限は適用されず、HTTPS によるカタログ取得は引き続き許可されます。拒否メッセージにプロキシのアドレスや認証トークンは含まれません。 空でない `http_proxy` と `no_proxy` は、それぞれ `HTTP_PROXY` と `NO_PROXY` より優先されます。Bun に対応する除外ルールには、ホスト名、一致する `host:port`、`[::1]` のように角括弧で囲んだ IPv6 アドレス、または `*` を使い、URL、パス、`*.` 接頭辞は使わないでください。
+
 カタログとキャッシュは共有の Codex カタログロックの下で書き込まれ、失敗時は last-known-good の
-ファイルが保持されます。バイトが同一の場合は mtime を保持する no-op です。`--restart-codex` は
-実際の書き込みの後にのみ適用されます。`ETag` 条件付きリクエストと Desktop アプリの再起動は、この
-コマンドには含まれません。`--json` エンベロープと終了コードの詳細は
+ファイルが保持されます。バイトが同一の場合は mtime を保持する no-op です。`--restart-codex`、
+`--restart-app-server-only`、非推奨エイリアス `--restart-desktop-app` は、実際の書き込みの後に
+のみ適用され、`ocx sync` および `ocx sync-cache` と同じ意味です。`ETag` 条件付きリクエストは
+このコマンドには含まれません。`--json` エンベロープと終了コードの詳細は
 [英語版リファレンス](/reference/cli/lifecycle/)を参照してください。
 
 ## バックグラウンドサービス
@@ -186,10 +199,10 @@ Windows タスク スケジューラでインストールするサービスは�
 
 |サブコマンド |アクション |
 | --- | --- |
-|なし |未インストールなら作成して開始し、既存なら更新して再起動します。正常な Windows タスク スケジューラ定義は再利用しますが、古い定義は再登録され、昇格が必要になる場合があります。 |
+|なし |未インストールなら作成して開始し、既存なら `repair` を実行します。正常な Windows タスク スケジューラ定義は再利用しますが、古い定義は再登録され、昇格が必要になる場合があります。 |
 | `install` |サービスを作成して開始します。 |
-| `repair` | 既存のサービスを更新して再起動します。正常な Windows タスク スケジューラ定義は再利用しますが、古い定義は再登録され、昇格が必要になる場合があります。 |
-| `restart` | `repair` の別名です。 |
+| `repair` | インストール済みのサービスをその場で更新します。macOS では変更があった場合のみマネージャーをリロードするため、正常で変更のないジョブはそのまま実行され続け、repair は障害になりません。Linux と Windows ではサービスを再起動します。正常な Windows タスク スケジューラ定義は再利用しますが、古い定義は再登録され、昇格が必要になる場合があります。 |
+| `restart` | 同じ更新を行い、すべてのプラットフォームで必ず再起動します。macOS では変更がなくすでにロードされているジョブはその場で kickstart されます。`repair` の別名ではありません。 |
 | `start` |インストールされているサービスを開始します。 |
 | `stop` |サービスを停止し、ネイティブ Codex を復元します。 |
 | `status` |サービスとプロキシの診断とログ パスをレポートします。 |
@@ -264,7 +277,7 @@ Windows ステータス トレイ アイコンをインストールして制御�
 
 ### `ocx gui`
 
-`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。
+`http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。ハブで管理イングレスが有効な場合は `http://127.0.0.1:<管理ポート>` を開きます。
 
 ## 更新
 

@@ -120,4 +120,29 @@ describe("filterCatalogVisibleModels — slash-bearing ids", () => {
     const visible = filterCatalogVisibleModels(nested, cfg({ p: { selectedModels: ["x-y-z"] } }));
     expect(visible.map(v => v.id)).toEqual(["x/y/z"]);
   });
+
+  test("models belonging to a disabled provider are filtered out", () => {
+    const models = [m("active", "m1"), m("disabled_p", "m2"), m("active", "m3")];
+    const config = cfg({
+      active: { disabled: false },
+      disabled_p: { disabled: true },
+    });
+    const visible = filterCatalogVisibleModels(models, config);
+    expect(visible.map(v => v.id)).toEqual(["m1", "m3"]);
+  });
+
+  test("custom models of a disabled provider are omitted by filterCatalogVisibleModels", () => {
+    const customModel: CatalogModel = {
+      id: "custom-1",
+      provider: "ark",
+      catalogKind: "custom-model-v1",
+    };
+    const activeModel = m("openai", "gpt-5.6-sol");
+    const config = cfg({
+      ark: { disabled: true },
+      openai: { disabled: false },
+    });
+    const visible = filterCatalogVisibleModels([customModel, activeModel], config);
+    expect(visible.map(v => v.id)).toEqual(["gpt-5.6-sol"]);
+  });
 });

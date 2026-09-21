@@ -17,6 +17,7 @@ import {
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
 } from "../../../src/adapters/anthropic-image-guard";
+import { TIER0_COUNT } from "../../../src/adapters/anthropic-image-codec";
 
 /** 1x1 red PNG — the smallest real, fully-decodable fixture. */
 const ONE_PX_PNG =
@@ -630,4 +631,49 @@ test("failed demotion keeps retained bytes in the aggregate budget", async () =>
   expect(dropped).toContain(0);
   expect(secondCalls).toBeGreaterThan(1);
   expect(retained.map(value => value.length)).toEqual([4000, 2000]);
+});
+
+test("#4532: appending a newer image does not re-encode history (position pinned to image identity)", async () => {
+  // Encoder output length equals the position's maxEdge, so a tier crossing is
+  // directly visible in the emitted base64 bytes (2000 at pos 0, 1024 at pos 1).
+  const encode = sizedEncoder(edge => edge);
+  // Exactly TIER0_COUNT images: the OLDEST sits at the last tier-0 slot
+  // (newestFirstIndex 5). One appended image pushes it to index 6 — tier 1.
+  const original = Array.from({ length: TIER0_COUNT }, (_, i) => fakePngBase64(3000 + i, 2000 + i, 1024));
+  const first = [userMsg(original.map(b64 => imageBlock(b64)))];
+  await normalizeAnthropicImages(first, { encode });
+  const oldestFirstRun = contentOf(first)[0].source?.data;
+  expect(oldestFirstRun).toHaveLength(2000);
+  const callsAfterFirst = getNormalizeStatsForTests().encodeCalls;
+
+  const appended = [userMsg([...original, fakePngBase64(3100, 2100, 1024)].map(b64 => imageBlock(b64)))];
+  await normalizeAnthropicImages(appended, { encode });
+  const content = contentOf(appended);
+  // The oldest image kept its recorded tier-0 position: byte-identical output,
+  // so Anthropic's prompt prefix cache still hits on the shared history.
+  expect(content[0].source?.data).toBe(oldestFirstRun);
+  // Only the newly appended image reached the encoder; every carried-over image
+  // was a cache hit at its recorded position.
+  expect(getNormalizeStatsForTests().encodeCalls).toBe(callsAfterFirst + 1);
+  // The new image itself rode tier 0.
+  expect(content[TIER0_COUNT].source?.data).toHaveLength(2000);
+
+  // The pin must not disable the aggregate budget: an over-budget batch still
+  // demotes the oldest image below its recorded position.
+  const capFitting = sizedEncoder(edge => {
+    const spec = TIER_SPECS.find(s => s.maxEdge === edge)!;
+    return Number.isFinite(spec.hardCap) ? spec.hardCap : 100 * 1024;
+  });
+  const emitted: Record<number, string> = {};
+  const targets: NormalizeTarget[] = [fakePngBase64(4000, 3000, 2048), fakePngBase64(4001, 3001, 2048)].map((b64, i) => ({
+    base64: b64,
+    mediaType: "image/png",
+    replace: data => { emitted[i] = data; },
+    drop: () => {},
+  }));
+  // Initial emit: index 0 -> tier 1 (512KiB), index 1 -> tier 0 (2MiB). The budget
+  // below fits that sum minus one byte, forcing exactly one demotion of the oldest.
+  await normalizeImageTargets(targets, { encode: capFitting, budget: 2 * 1024 * 1024 + 400 * 1024 });
+  expect(emitted[0]).toHaveLength(192 * 1024);
+  expect(emitted[1]).toHaveLength(2 * 1024 * 1024);
 });

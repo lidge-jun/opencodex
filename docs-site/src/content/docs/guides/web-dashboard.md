@@ -13,7 +13,8 @@ settings, and request traffic.
 ocx gui
 ```
 
-This opens `http://localhost:<port>` in your browser, auto-starting the proxy first if needed. In
+This opens `http://localhost:<port>` in your browser — or `http://127.0.0.1:<management port>` when hub
+management ingress is enabled — auto-starting the proxy first if needed. In
 development you can run the GUI dev server separately against a running proxy:
 
 ```bash
@@ -90,7 +91,7 @@ badge or the version value to read the full value.
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
-| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
+| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. The page distinguishes a catalog saved on the hub, a catalog fetched by this client, and activation in a running client. A fetch timestamp does not prove it includes the latest hub save, and runtime activation is shown as unverified. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
@@ -143,7 +144,13 @@ For a custom usage interval, the server must confirm the exact requested start a
 If an older running proxy does not support those bounds, the dashboard and CLI reject its report;
 upgrade and restart that proxy before retrying. Resetting a manual model price affects only that
 model, preserving other rates saved independently.
-They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
+The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
+without a matching price or usable usage are counted as excluded beside that amount when the proxy
+reports pricing coverage fields. A row with only excluded requests shows an em dash with that count
+instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
+An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
+coverage stays distinct from an all-excluded row and from a confirmed zero estimate.
+These are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
 
 Provider model rows may include **unresolved requested model usage**: the saved route sent the
@@ -249,9 +256,11 @@ maintainers do not provide policy advice and cannot resolve provider enforcement
   thread that is already bound. The Codex Desktop (main) account is ordered like any other, so it can
   be set to **Last** and kept as the reserve. An order set from `ocx account priority` outside those
   five presets stays visible and selectable on the card.
-- Thread affinity prevents per-request flapping. With quota auto-switch enabled, a long-running
-  thread is periodically re-evaluated and may rebind after its relevant usage reaches the threshold
-  and a strictly lower-usage eligible account exists.
+- Thread affinity prevents per-request flapping. With `pool.cacheAffinity` on (the default), a
+  long-running thread is not rebound merely because usage crossed the threshold; it stays until the
+  account is exhausted or cannot serve, and then only onto an account with genuine quota headroom
+  and strictly lower usage. Set the flag `false` to restore threshold rebinding, still only onto
+  such a destination.
 - New sessions can choose the lowest-usage eligible account. Paid plans score the hottest known 5h,
   weekly, or 30d window; Go/Free plans use the 30d window only.
 - When WHAM supplies `limit_window_seconds`, Codex Auth classifies a primary window of at least 28
@@ -349,3 +358,7 @@ is gated correctly without manual classification.
 Machine enrollment and browser authentication are separate. The pairing panel names the hub and displays an `ocx gui pair --origin` command for the exact origin currently open in your browser. Run that command on the hub, or send it to the hub operator and request a one-time pairing code. Paste that code into the panel; a data API key or admin token is not a pairing code.
 
 While browser authentication is pending, the dashboard does not recommend restarting a healthy connected client. Completing pairing refreshes the dashboard data immediately, including a previously cached authentication failure. Session expiry returns to pairing; permission denial keeps its own access-settings guidance. Other failed refreshes may show the last received data with a stale-data notice and retry action.
+
+### Usage chart keyboard and touch controls
+
+Usage heatmap days have one Tab entry point. Use Up/Down for adjacent days and Left/Right for adjacent weeks. Weekly bars expose the same day details on keyboard focus, pointer hover, or touch. Day labels include the date, request count, and token count; tooltip overlays stay within the viewport.
