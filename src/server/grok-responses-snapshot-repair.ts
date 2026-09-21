@@ -3,7 +3,11 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import { MAX_COMPLETED_OUTPUT_ITEMS, MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES } from "./relay";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 import { isPlainObject, jsonBlock, type RetainedOutputItem } from "./responses-snapshot-codec";
-import { requestToolScope, type RequestToolScope } from "./responses-request-tool-scope";
+import {
+  requestToolScope,
+  type RequestToolScope,
+  type RequestToolScopeCorrespondence,
+} from "./responses-request-tool-scope";
 
 type SparseTerminalOpenItem = {
   type: string;
@@ -240,8 +244,12 @@ function refusedTerminalBlock(
 export function createGrokResponsesSparseTerminalBlockRewrite(
   budget?: TranslatorBudget,
   outboundRequestBody?: unknown,
+  toolIdentityCorrespondence?: RequestToolScopeCorrespondence,
 ): SseBlockRewrite {
-  const toolScope: RequestToolScope | undefined = requestToolScope(outboundRequestBody);
+  const toolScope: RequestToolScope | undefined = requestToolScope(
+    outboundRequestBody,
+    toolIdentityCorrespondence,
+  );
   const openItems = new Map<number, SparseTerminalOpenItem>();
   const completedItems = new Map<number, SparseTerminalCompletedItem>();
   const withheldIndices = new Set<number>();
@@ -425,4 +433,3 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
   rewrite.dispose = reset;
   return rewrite;
 }
-
