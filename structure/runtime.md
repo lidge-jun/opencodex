@@ -515,3 +515,48 @@ Unicode pattern normalization uses [copy-on-write traversal](transports/byte-acc
 
 Codex compaction uses a request-local model override for the configured triggers; the
 [Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.
+
+## Background-service runtime ownership
+
+`src/service/state.ts` records who owns the running proxy in the shared service install
+state, beside the install provenance. The claim carries an `owner` (`cli` or `desktop`), an
+opaque `installId` naming the owning installation rather than the user or the machine, and a
+`consentGeneration`. An absent claim means the CLI install that registered the service owns
+the runtime, which is what every record written before the field existed says.
+
+Every write goes through `swapServiceInstallState`. It holds an `O_EXCL` lock beside the
+anchor record for the whole read-modify-write, re-reads the anchor immediately before
+committing and compares the committed bytes afterwards, and it runs the whole sequence again
+when another writer landed inside that window; `revision` is the compare-and-swap token. The
+lock excludes cooperating writers, and the revision check catches a writer that does not take
+it, such as an older `ocx` on the same machine. `writeServiceInstallState` rebuilds only the
+install provenance and carries the ownership claim across unchanged, which is what keeps an
+install, a repair, an update or a stop from dropping it.
+
+`resolveServiceOwnership` is how a claim is read for a decision. It reads every state path
+and answers `none`, `owned` or `unknown`; absence is the only thing that means no claim, so
+an unreadable path, a corrupt anchor record, or paths naming different owners all refuse
+rather than reading as CLI-owned. `consentGenerationCeiling` survives a release, so granting,
+releasing and granting again cannot reuse a number an app-local record may still hold.
+
+`recordServiceOwner` is idempotent on the same owner and install id, so a relaunch leaves the
+generation alone and a grant moves it exactly once.
+`ownershipGrantedTo(ownership, owner, installId)` is the comparison an installation applies
+to its own locally stored install id: true means this installation already holds consent,
+false against a recorded claim means a different installation owns the runtime and consent
+has to be asked again, and a null claim means the CLI install still owns it.
+
+The verbs that ACTIVATE the npm registration refuse on a foreign or unknown owner:
+`src/service/repair.ts` stops before it asserts, writes, stops or starts anything, and
+`ocx service start` reports the same refusal. `stop` and `uninstall` are not gated, because
+they deactivate. `src/update/runtime-ownership.mjs` vetoes both the pre-update stop and the
+post-update service refresh for all three update lanes — `src/update/index.ts`,
+`bin/ocx.mjs` and the dashboard worker in `src/update/job.ts` — and the two package updaters
+re-read the claim before any direct-start fallback, because an app can take the runtime during
+an install that takes minutes. The registration is never deleted; `ocx service install` is the
+one verb that releases the marker, and it does so only after the registration succeeded.
+
+The veto reads the recorded claim, not the live process. An app removed without releasing
+leaves a stale claim, and proving which runtime is answering needs the identity the bundled
+CLI's resolve contract will carry; until then the refusals name `ocx service install` as the
+way to clear it.

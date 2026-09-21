@@ -9,6 +9,8 @@ import { dirname, join, resolve } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { readPid, readRuntimePort } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
+import type { ServiceOwnership } from "../service/state";
+import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallFromPath } from "./install-detection.mjs";
@@ -318,6 +320,24 @@ export function checkUpdatePackageIntegrity(
 }
 
 /**
+ * The recorded runtime owner, in the shape the shared update rule reads.
+ *
+ * Fails CLOSED. A resolution this process could not obtain is not evidence that nobody owns
+ * the runtime, and treating it as such is how an unreadable record reactivates the npm
+ * launcher over a takeover the user consented to.
+ */
+async function resolvedRuntimeOwnership(): Promise<{ ownership: ServiceOwnership | null; ownershipUnknown: boolean }> {
+  try {
+    const { resolveServiceOwnership } = await import("../service");
+    const resolution = resolveServiceOwnership();
+    if (resolution.kind === "owned") return { ownership: resolution.ownership, ownershipUnknown: false };
+    return { ownership: null, ownershipUnknown: resolution.kind === "unknown" };
+  } catch {
+    return { ownership: null, ownershipUnknown: true };
+  }
+}
+
+/**
  * `ocx update` fallback for source checkouts and Bun global installs. npm and pnpm global installs
  * are updated in the Node bin launcher before Bun starts, so Windows does not replace the running
  * Bun binary.
@@ -382,6 +402,13 @@ export async function runUpdate(): Promise<void> {
     const { isServiceInstalled } = await import("../service");
     serviceWasInstalled = isServiceInstalled();
   } catch { /* best-effort */ }
+  // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
+  // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
+  const runtimePlan = planUpdateRuntimeHandling({
+    ...(await resolvedRuntimeOwnership()),
+    serviceInstalled: serviceWasInstalled,
+  });
+  if (runtimePlan.notice) console.log(runtimePlan.notice);
   let trayWasInstalled = false;
   let trayWasRunning = false;
   if (process.platform === "win32") {
@@ -429,7 +456,7 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
   let stopAttempted = false;
-  if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()) {
+  if (runtimePlan.stopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
     stopAttempted = true;
     console.log("⏹  Stopping the running proxy before updating...");
     const stopStdio = updateChildStdio();
@@ -588,7 +615,7 @@ export async function runUpdate(): Promise<void> {
     // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
-    if (serviceWasInstalled) {
+    if (runtimePlan.refreshService) {
       console.log("🔁 Refreshing the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
       const { reclaimListenPort } = await import("../server/port-reclaim");
@@ -638,6 +665,17 @@ export async function runUpdate(): Promise<void> {
               ? `   Run 'ocx service repair', then 'ocx start --port ${capturedListen.port}'.`
               : `   Run 'ocx service repair' to see the reason, then 'ocx start --port ${capturedListen.port}'.`);
           } else {
+            // Re-read rather than reuse the plan from before the package install: the app can
+            // claim the runtime during an update that takes minutes, and the refusal the
+            // repair above just returned is indistinguishable from any other failure here.
+            const nowOwned = planUpdateRuntimeHandling({
+              ...(await resolvedRuntimeOwnership()),
+              serviceInstalled: true,
+            });
+            if (!nowOwned.stopRuntime) {
+              console.warn(nowOwned.notice ?? "⚠️  The background runtime is owned elsewhere; not starting a second proxy.");
+              return;
+            }
             console.warn(
               serviceRefreshed
                 ? "⚠️  Service refresh left a non-viable manager (stale or missing assets) — starting the proxy directly instead."
@@ -665,14 +703,14 @@ export async function runUpdate(): Promise<void> {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
       }
-    } else {
+    } else if (runtimePlan.stopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
     }
   } else {
     if (stopAttempted && trayWasRunning && postUpdateLauncherUsable) {
       spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true });
     }
-    if (stopAttempted && serviceWasInstalled && postUpdateLauncherUsable) {
+    if (stopAttempted && runtimePlan.refreshService && postUpdateLauncherUsable) {
       const service = spawnSync(process.execPath, [postUpdateLauncher, "service", "repair"], {
         stdio: "inherit",
         windowsHide: true,
