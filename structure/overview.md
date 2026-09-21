@@ -176,15 +176,17 @@ still cover the rule, which is a judgement only review makes.
   tray's Quit, an update's coordinated restart, and a window close on a session with no tray all
   hold the exit, stop the app-owned runtime through the management stop, and treat only an observed
   child exit or a refused connection as proof it stopped. No shell file kills the child, a runtime
-  this app did not start is never stopped, and a runtime started while an exit is in flight is not
-  started at all; see [`desktop-shell.md`](desktop-shell.md).
+  this app did not start is never stopped, and a quit that lands while one is being started is
+  deferred until the child is owned and then drains it rather than being lost;
+  see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-exit-ownership.test.ts`.
 - **INV-DESKTOP-02** — Tray availability is an answer from the session, not the tray backend's
   construction result and not the watcher's mere existence: the shell asks whether
   `org.kde.StatusNotifierWatcher` reports a host registered, and reads an unanswerable probe the
-  same way as an unregistered one. Linux assumes no tray until the probe answers. Where there is
-  none, no icon is claimed, the window is shown on launch whatever the launch origin, and closing it
-  quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
+  same way as an unregistered one. Linux assumes no tray until the probe answers, and the verdict is
+  published only once an icon exists, so a tray that fails to build is a session without one. Where
+  there is none, no icon is claimed, the window is shown on launch whatever the launch origin, and
+  closing it quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-tray-availability.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general

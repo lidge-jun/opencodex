@@ -34,7 +34,10 @@ Registering runs first, before the runtime is touched. A login launch starts hid
 installed only after a successful start would leave a failed start with no window and no icon. The
 login item is registered in that state too, before the tray, so its Start at Login checkbox reads
 the state first run leaves behind. A launch carrying the `--autostart` argument that the login
-item passes back is the only one that starts hidden, and only where there is a tray to hide in.
+item passes back is the only one that starts hidden, and only where there is a tray to hide in: a
+manual launch shows its window before the sequence begins, a login launch after the tray verdict.
+Registering happens once per process, so a retry re-runs only the runtime half and cannot build a
+second tray icon with its own refresh loop.
 
 `desktop/src-tauri/src/exit.rs` owns what ends the process. Where there is a usable tray, closing
 the window and the platform's quit gesture both hide; only the tray's Quit asks to end, and an
@@ -50,17 +53,25 @@ in-flight requests finish. A drain that has not completed within `DRAIN_DEADLINE
 the exit still proceeds, which can leave the runtime running: refusing to quit when the user asked
 is the worse answer, and a standing runtime is recoverable with `ocx stop`. A runtime this app did
 not start is never stopped. A quit that arrives while the sequence is starting one is held: the
-spawn and the record of ownership happen under the same lock the drain takes.
+coordinator reserves the spawn rather than holding its lock across process creation, and the quit is
+deferred until the child is owned and then drains it.
 
 `desktop/src-tauri/src/tray_availability.rs` asks the session bus whether
 `org.kde.StatusNotifierWatcher` reports a host registered; macOS and Windows answer yes without a
 probe. Neither construction success nor the watcher's mere existence is the question — the pinned
 Linux backend creates an AppIndicator and reports success with no host attached, and a watcher with
 no host accepts registrations and draws nothing. Until the probe answers, Linux assumes no tray, so
-a window closed in the first moments quits rather than vanishing. Where the answer is no, no tray
-icon is claimed, the window is shown on launch whatever the launch origin, and closing it quits
-through the same drain. The update controls live in the tray menu, so a session without one checks
-for updates in the background and has no place to install them from.
+a window closed in the first moments quits rather than vanishing, and the verdict is published only
+once an icon actually exists — a tray that fails to build is a session with no tray, not a claimed
+one. Where the answer is no, no tray icon is claimed, the window is shown on launch whatever the
+launch origin, and closing it quits through the same drain. The update controls live in the tray
+menu, so a session without one checks for updates in the background and has no place to install
+them from.
+
+Every tray menu setter dispatches to the main thread and waits for it, and the tray is built on the
+main thread while holding the menu mutex, so the handles are copied out from under that mutex before
+any setter is called. Holding it across a setter is a cycle, and the symptom would be an app that
+stops answering Quit.
 
 `desktop/src-tauri/src/first_run.rs` turns Start at Login on once per installation,
 before the tray is built so its checkbox reads the resulting state. A menu bar app
