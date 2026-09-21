@@ -10,6 +10,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod menu;
 mod ownership;
+mod popup;
 mod proxy;
 mod resolve;
 mod runtime_stop;
@@ -119,6 +120,7 @@ impl Default for AppState {
 
 #[tauri::command]
 fn show_dashboard(app: tauri::AppHandle) {
+    popup::hide(&app);
     if let Some(window) = app.get_webview_window("main") {
         window::show(&window);
     }
@@ -160,6 +162,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
+                popup::hide(app);
                 window::show(&window);
             }
         }))

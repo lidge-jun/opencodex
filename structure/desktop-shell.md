@@ -202,3 +202,18 @@ The macOS desktop shell writes the WidgetKit snapshot to
 The schema version is `1`; the Rust writer refreshes it every five minutes after an
 immediate first write. The WidgetKit appex reads this privacy-safe file and performs no
 network access.
+
+## The tray icon opens a usage popup
+
+A left click on the tray icon opens a small always-on-top window anchored to the icon, not the
+dashboard. Reading the current numbers is the reason to look at a tray icon at all, and the
+dashboard is still one menu item away. The popup reuses the dashboard session and the same
+management endpoints; it is given no additional IPC capability and no admin token.
+
+Two platform facts shape it. A Linux tray host may deliver no usable click to the application,
+so the same surface is reachable from a menu item there. And before the startup sequence has
+resolved a runtime there is nothing to report, so a click with no proxy falls back to showing
+the main window rather than opening an empty popup.
+
+The tray title keeps its existing period. The popup answers the detailed question, so the title
+does not change meaning as a side effect of adding it.

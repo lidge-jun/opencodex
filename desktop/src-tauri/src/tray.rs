@@ -1,6 +1,6 @@
 use crate::{
     exit::{self, ExitReason},
-    formatting,
+    formatting, popup,
     proxy::ProxyClient,
     updater, widget, window,
 };
@@ -68,10 +68,16 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let install_update =
         MenuItem::with_id(app, "install-update", "Install update", false, None::<&str>)?;
+    // Linux tray hosts differ in whether a left click reaches the application at all, so the
+    // same surface is reachable from the menu there rather than only from the icon.
+    #[cfg(target_os = "linux")]
+    let show_usage = MenuItem::with_id(app, "show-usage", "Show Usage", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
+            #[cfg(target_os = "linux")]
+            &show_usage,
             &open,
             &browser,
             &PredefinedMenuItem::separator(app)?,
@@ -100,15 +106,43 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                position,
                 ..
             } = event
             {
-                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                    window::show(&window);
+                // The icon opens the usage popup rather than the dashboard. Reading the
+                // current numbers is the reason to look at a tray icon at all, and the
+                // dashboard remains one menu item away. With no runtime resolved there is
+                // nothing to report, so the window stays the answer.
+                let app = tray.app_handle();
+                match app
+                    .state::<crate::AppState>()
+                    .proxy()
+                    .map(|proxy| proxy.endpoint())
+                {
+                    Some(endpoint) => {
+                        let _ = popup::toggle(app, endpoint, position);
+                    }
+                    None => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            window::show(&window);
+                        }
+                    }
                 }
             }
         })
         .on_menu_event(move |app, event| match event.id().as_ref() {
+            #[cfg(target_os = "linux")]
+            "show-usage" => {
+                let Some(endpoint) = app
+                    .state::<crate::AppState>()
+                    .proxy()
+                    .map(|proxy| proxy.endpoint())
+                else {
+                    return;
+                };
+                let _ = popup::show(app, endpoint, tauri::PhysicalPosition::new(0.0, 0.0));
+            }
             "open-dashboard" => {
                 if let Some(window) = app.get_webview_window("main") {
                     window::show(&window);
