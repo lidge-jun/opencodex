@@ -157,95 +157,191 @@ describe("package tree integrity", () => {
     const base: PackageTreeObservation = {
       device: 1n, inode: 10n, contentTimeNs: 100n, size: 500n,
     };
+    const createScheduler = () => {
+      const pending: Array<() => void> = [];
+      return {
+        pending,
+        schedule: (callback: () => void) => { pending.push(callback); },
+        runNext: () => {
+          const callback = pending.shift();
+          if (!callback) throw new Error("expected a scheduled callback");
+          callback();
+        },
+      };
+    };
 
-    test("fires once after the replacement persists past the delay", () => {
+    test("fires once from its timer without waiting for another request", () => {
       let observation: PackageTreeObservation | null = base;
       let clock = 0;
       let calls = 0;
+      const scheduler = createScheduler();
       const guard = createPackageTreeIntegrityGuard(
         () => observation,
         () => clock,
-        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 5_000 },
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+        },
       );
 
       expect(guard.status()).toEqual({ ok: true });
       observation = { ...base, inode: 11n, contentTimeNs: 200n };
-
       clock += 2_000;
       expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
-      expect(calls).toBe(0); // inside the debounce window
+      expect(calls).toBe(0);
 
-      clock += 5_000;
-      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      scheduler.runNext();
       expect(calls).toBe(1);
+      expect(scheduler.pending).toHaveLength(0);
 
-      // Idempotent: further refusals never re-arm the restart.
       clock += 10_000;
       guard.status();
       expect(calls).toBe(1);
     });
 
-    test("a zero delay fires on first detection", () => {
+    test("retries when restart acceptance throws", () => {
       let observation: PackageTreeObservation | null = base;
       let clock = 0;
-      let calls = 0;
+      let attempts = 0;
+      const scheduler = createScheduler();
       const guard = createPackageTreeIntegrityGuard(
         () => observation,
         () => clock,
-        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 0 },
+        {
+          onReplaced: () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error("restart unavailable");
+          },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+        },
       );
 
       expect(guard.status()).toEqual({ ok: true });
-      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      observation = { ...base, inode: 11n };
       clock += 2_000;
       expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      scheduler.runNext();
+      expect(attempts).toBe(1);
+      expect(scheduler.pending).toHaveLength(1);
+      scheduler.runNext();
+      expect(attempts).toBe(2);
+      expect(scheduler.pending).toHaveLength(0);
+    });
+
+    test("baseline recovery cancels the old timer and starts a fresh debounce", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const scheduler = createScheduler();
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+        },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+
+      observation = base;
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: true });
+      scheduler.runNext(); // stale generation from the first replacement
+      expect(calls).toBe(0);
+
+      observation = { ...base, inode: 12n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      expect(calls).toBe(0);
+      scheduler.runNext();
       expect(calls).toBe(1);
     });
 
-    test("recovery or an unreadable manifest resets the debounce", () => {
+    test("an unreadable manifest must become readable before a fresh debounce", () => {
       let observation: PackageTreeObservation | null = base;
       let clock = 0;
       let calls = 0;
+      const scheduler = createScheduler();
       const guard = createPackageTreeIntegrityGuard(
         () => observation,
         () => clock,
-        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 5_000 },
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+        },
       );
 
       expect(guard.status()).toEqual({ ok: true });
-      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      observation = { ...base, inode: 11n };
       clock += 2_000;
       expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
-
-      // Mid-install the manifest briefly disappears: the timer must restart,
-      // not fire on a partially written tree.
       observation = null;
-      clock += 4_000;
-      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_unreadable" });
-      observation = { ...base, inode: 11n, contentTimeNs: 200n };
-      clock += 4_000;
-      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      scheduler.runNext();
       expect(calls).toBe(0);
-      clock += 5_000;
-      guard.status();
+      expect(scheduler.pending).toHaveLength(1);
+
+      observation = { ...base, inode: 11n };
+      scheduler.runNext(); // readability poll; arms a fresh full debounce
+      expect(calls).toBe(0);
+      expect(scheduler.pending).toHaveLength(1);
+      scheduler.runNext();
+      expect(calls).toBe(1);
+    });
+
+    test("a second replacement identity receives its own full debounce", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const scheduler = createScheduler();
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+        },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      observation = { ...base, inode: 12n, contentTimeNs: 300n };
+      scheduler.runNext();
+      expect(calls).toBe(0);
+      expect(scheduler.pending).toHaveLength(1);
+      scheduler.runNext();
       expect(calls).toBe(1);
     });
 
     test("source checkouts never auto-restart", () => {
       let observation: PackageTreeObservation | null = base;
-      let clock = 0;
       let calls = 0;
+      const scheduler = createScheduler();
       const guard = createRuntimePackageTreeIntegrityGuard(
         "source",
         () => observation,
-        () => clock,
-        { onReplaced: () => { calls += 1; }, replacedRestartDelayMs: 0 },
+        Date.now,
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 0,
+          schedule: scheduler.schedule,
+        },
       );
 
       observation = { ...base, inode: 11n };
-      clock += 60_000;
       expect(guard.status()).toEqual({ ok: true });
       expect(calls).toBe(0);
+      expect(scheduler.pending).toHaveLength(0);
     });
   });
 
@@ -364,6 +460,47 @@ describe("package tree integrity", () => {
           message: expect.stringContaining("restart"),
         },
       });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the default server guard accepts a restart after a sustained replacement", async () => {
+    saveConfig(config());
+    const base: PackageTreeObservation = {
+      device: 1n, inode: 10n, contentTimeNs: 100n, size: 500n,
+    };
+    let observation: PackageTreeObservation = base;
+    const pending: Array<() => void> = [];
+    let restartAcceptances = 0;
+    const server = startServer(0, {
+      packageTreeInstaller: "npm",
+      observePackageTree: () => observation,
+      packageTreeIntegrityOptions: {
+        replacedRestartDelayMs: 5_000,
+        schedule: callback => { pending.push(callback); },
+      },
+      acceptSystemRestart: () => {
+        restartAcceptances += 1;
+        return {
+          accepted: true,
+          alreadyDraining: false,
+          activeTurnCount: 0,
+          drainTimeoutMs: 60_000,
+        };
+      },
+    });
+    try {
+      expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      await Bun.sleep(1_100); // expire the guard's successful-observation cache
+      expect((await fetch(new URL("/healthz", server.url))).status).toBe(503);
+      expect(restartAcceptances).toBe(0);
+      expect(pending).toHaveLength(1);
+
+      pending.shift()?.();
+      expect(restartAcceptances).toBe(1);
+      expect(pending).toHaveLength(0);
     } finally {
       await server.stop(true);
     }

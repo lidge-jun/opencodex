@@ -538,20 +538,23 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // passes it in, and transitions it after the post-startup sync settles. When
   // no gate is supplied (tests, ad-hoc starts) a fresh pending gate is created.
   const readinessGate = deps.readinessGate ?? createReadinessGate();
+  const acceptPackageTreeRestart = deps.acceptSystemRestart ?? acceptSystemRestart;
   const packageTreeIntegrity = deps.packageTreeIntegrity
-    ?? createRuntimePackageTreeIntegrityGuard(detectInstall(), undefined, undefined, {
-      onReplaced: () => {
-        // An out-of-band install replaced the package under this live process. Serve
-        // the 503 for the triggering request, then let the standard drain-and-restart
-        // path bring the new tree up instead of refusing traffic until a manual
-        // restart. acceptSystemRestart is idempotent and supervisored-aware.
-        try {
-          acceptSystemRestart();
-        } catch (error) {
-          console.warn("Package tree changed; automatic drain-and-restart failed:", error instanceof Error ? error.message : error);
-        }
+    ?? createRuntimePackageTreeIntegrityGuard(
+      deps.packageTreeInstaller ?? detectInstall(),
+      deps.observePackageTree,
+      undefined,
+      {
+        ...deps.packageTreeIntegrityOptions,
+        onReplaced: () => {
+          // An out-of-band install replaced the package under this live process. Serve
+          // the 503 for the triggering request, then let the standard drain-and-restart
+          // path bring the new tree up instead of refusing traffic until a manual
+          // restart. acceptSystemRestart is idempotent and supervisor-aware.
+          acceptPackageTreeRestart();
+        },
       },
-    });
+    );
   // Actual bound port, filled in after Bun.serve binds so /readyz reports the
   // real ephemeral port for startServer(0). /healthz keeps its existing port
   // field (the requested listenPort) byte-for-byte.

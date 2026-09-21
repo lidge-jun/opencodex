@@ -186,6 +186,15 @@ until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
 
+Installed npm, bun, and pnpm packages bind each server process to the package manifest identity
+observed at startup. Replacing that manifest under a live process fences `/healthz`, `/readyz`, and
+`/v1/*` with `package_tree_changed`. The first observed replacement starts an unref'd five-second
+stability timer; if the same new manifest identity remains readable and distinct, the timer enters the existing
+drain-and-restart handoff without waiting for another request. A temporarily unreadable manifest
+is polled until readable and then receives a fresh full stability interval, while a return to the
+startup identity cancels the pending restart. Failed restart admission retries after the same
+bounded delay. Source checkouts and standalone binaries remain outside this integrity fence.
+
 A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
 about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
 — are identity probes with a retry budget, because a start that answers "nobody is there" on one

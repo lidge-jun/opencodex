@@ -28,10 +28,12 @@ export interface PackageTreeIntegrityOptions {
   onReplaced?: () => void;
   /** Sustained-replacement delay before `onReplaced` fires. 0 fires on first detection. */
   replacedRestartDelayMs?: number;
+  /** Test seam; production uses an unref'd timer. */
+  schedule?: (callback: () => void, delayMs: number) => void;
 }
 
-type ObservePackageTree = () => PackageTreeObservation | null;
-type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
+export type ObservePackageTree = () => PackageTreeObservation | null;
+export type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
 
 const packageManifestUrl = new URL("../../package.json", import.meta.url);
 
@@ -88,30 +90,96 @@ export function createPackageTreeIntegrityGuard(
 ): PackageTreeIntegrityGuard {
   const boot = observe();
   let lastOkAt: number | null = null;
-  let replacedSinceMs: number | null = null;
   let notified = false;
+  let timerGeneration = 0;
+  let timerScheduled = false;
+  let waitingForReadableTree = false;
+  let replacementCandidate: PackageTreeObservation | null = null;
   const restartDelayMs = options.replacedRestartDelayMs ?? 5_000;
+  const schedule = options.schedule ?? ((callback, delayMs) => {
+    const timer = setTimeout(callback, delayMs);
+    timer.unref?.();
+  });
+
+  const resetRestartTimer = (): void => {
+    timerGeneration += 1;
+    timerScheduled = false;
+  };
+
+  const armRestartTimer = (delayMs = restartDelayMs): void => {
+    if (!options.onReplaced || notified || timerScheduled) return;
+    timerScheduled = true;
+    const generation = timerGeneration;
+    const verifyAndNotify = () => {
+      if (generation !== timerGeneration || notified) return;
+      timerScheduled = false;
+      const current = observe();
+      if (boot === null || current === null) {
+        // A package manager may replace package.json before the rest of the tree.
+        // Wait for a readable tree, then require a fresh full debounce interval.
+        resetRestartTimer();
+        waitingForReadableTree = true;
+        armRestartTimer(PACKAGE_TREE_RECHECK_MS);
+        return;
+      }
+      if (sameObservation(boot, current)) {
+        resetRestartTimer();
+        waitingForReadableTree = false;
+        replacementCandidate = null;
+        return;
+      }
+      if (waitingForReadableTree) {
+        waitingForReadableTree = false;
+        replacementCandidate = current;
+        resetRestartTimer();
+        armRestartTimer();
+        return;
+      }
+      if (replacementCandidate === null || !sameObservation(replacementCandidate, current)) {
+        replacementCandidate = current;
+        resetRestartTimer();
+        armRestartTimer();
+        return;
+      }
+      try {
+        options.onReplaced?.();
+        notified = true;
+      } catch {
+        // A failed restart admission must not leave the proxy fenced forever.
+        // Re-observe after the normal debounce and try again if replacement persists.
+        armRestartTimer(Math.max(PACKAGE_TREE_RECHECK_MS, restartDelayMs));
+      }
+    };
+    if (delayMs === 0) verifyAndNotify();
+    else schedule(verifyAndNotify, delayMs);
+  };
+
   return {
     status(): PackageTreeIntegrityStatus {
       const at = now();
       if (lastOkAt !== null && at - lastOkAt < PACKAGE_TREE_RECHECK_MS) return { ok: true };
       const current = observe();
       if (boot === null || current === null) {
-        replacedSinceMs = null;
+        const wasWatchingReplacement = timerScheduled;
+        resetRestartTimer();
+        if (wasWatchingReplacement && boot !== null) {
+          waitingForReadableTree = true;
+          armRestartTimer(PACKAGE_TREE_RECHECK_MS);
+        }
         return { ok: false, reason: "package_tree_unreadable" };
       }
       if (!sameObservation(boot, current)) {
-        if (options.onReplaced && !notified) {
-          if (replacedSinceMs === null) replacedSinceMs = at;
-          if (at - replacedSinceMs >= restartDelayMs) {
-            notified = true;
-            options.onReplaced();
-          }
+        if (replacementCandidate === null || !sameObservation(replacementCandidate, current)) {
+          replacementCandidate = current;
+          resetRestartTimer();
         }
+        armRestartTimer();
         return { ok: false, reason: "package_tree_replaced" };
       }
       lastOkAt = at;
-      replacedSinceMs = null;
+      resetRestartTimer();
+      waitingForReadableTree = false;
+      replacementCandidate = null;
       return { ok: true };
     },
   };
