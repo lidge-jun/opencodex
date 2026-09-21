@@ -524,39 +524,49 @@ opaque `installId` naming the owning installation rather than the user or the ma
 `consentGeneration`. An absent claim means the CLI install that registered the service owns
 the runtime, which is what every record written before the field existed says.
 
-Every write goes through `swapServiceInstallState`. It holds an `O_EXCL` lock beside the
-anchor record for the whole read-modify-write, re-reads the anchor immediately before
-committing and compares the committed bytes afterwards, and it runs the whole sequence again
-when another writer landed inside that window; `revision` is the compare-and-swap token. The
-lock excludes cooperating writers, and the revision check catches a writer that does not take
-it, such as an older `ocx` on the same machine. `writeServiceInstallState` rebuilds only the
-install provenance and carries the ownership claim across unchanged, which is what keeps an
-install, a repair, an update or a stop from dropping it.
+Every write goes through `swapServiceInstallState`. With a custom home, the default-home
+record is the authority every writer can derive and the active-home record is a compatibility
+mirror; with one path, that path is authoritative. `src/service/state-lock.ts` holds
+token/PID/process-instance locks for every path in canonical order. A live holder is never
+evicted because of age, and release deletes only its token-named owner. The authoritative
+file is fsynced and atomically renamed through `src/config/atomic-write.ts`; that rename is
+the commit point. Mirrors receive the exact committed bytes afterwards. A mirror failure is
+diagnostic rather than rollback, and the next writer repairs it. An absent authority imports
+one valid legacy mirror once; same-or-newer mirror disagreement and unreadable authority are
+`unknown`, never ownership votes. Uninstall removes mirrors before the authority, so a
+partial deletion cannot turn a revoked mirror claim back into migration input.
 
-`resolveServiceOwnership` is how a claim is read for a decision. It reads every state path
-and answers `none`, `owned` or `unknown`; absence is the only thing that means no claim, so
-an unreadable path, a corrupt anchor record, or paths naming different owners all refuse
-rather than reading as CLI-owned. `consentGenerationCeiling` survives a release, so granting,
-releasing and granting again cannot reuse a number an app-local record may still hold.
+`resolveServiceOwnership` answers `none`, `owned` or `unknown` from that authoritative
+generation. `consentGenerationCeiling` survives a release, so granting, releasing and
+granting again cannot reuse a number an app-local record may still hold.
+`recordServiceOwner` requires the exact `owner`/`installId`/`consentGeneration`/`revision`
+subject shown on the consent surface. The comparison runs again inside the same lock and on
+every internal retry; a mismatch or unknown subject writes nothing and requires fresh user
+approval. `ownershipGrantedTo` remains the narrower relaunch test for an already-owned app.
 
-`recordServiceOwner` is idempotent on the same owner and install id, so a relaunch leaves the
-generation alone and a grant moves it exactly once.
-`ownershipGrantedTo(ownership, owner, installId)` is the comparison an installation applies
-to its own locally stored install id: true means this installation already holds consent,
-false against a recorded claim means a different installation owns the runtime and consent
-has to be asked again, and a null claim means the CLI install still owns it.
+Permanent takeover also requires `assessServiceTakeoverCompatibility` to approve both the
+preserved service launcher and the selected PATH launcher. Every observed manager must be
+OpenCodex 2.61.0 or later, and a preserved registration must carry ownership protocol 1.
+Missing, old, malformed or unknown manager evidence blocks takeover and leaves registration
+and autostart untouched. The supported verdict carries an opaque token over the approved
+subject and both manager identities; `recordServiceOwner` re-observes and compares it inside
+the lock, so a mutable shim or downgrade cannot inherit earlier consent. An upgrade is a
+separate user-authorized action; declining or failing it leaves the app a guest.
 
-The verbs that ACTIVATE the npm registration refuse on a foreign or unknown owner:
+The verbs that activate the npm registration refuse on a foreign or unknown owner:
 `src/service/repair.ts` stops before it asserts, writes, stops or starts anything, and
 `ocx service start` reports the same refusal. `stop` and `uninstall` are not gated, because
 they deactivate. `src/update/runtime-ownership.mjs` vetoes both the pre-update stop and the
 post-update service refresh for all three update lanes — `src/update/index.ts`,
-`bin/ocx.mjs` and the dashboard worker in `src/update/job.ts` — and the two package updaters
-re-read the claim before any direct-start fallback, because an app can take the runtime during
-an install that takes minutes. The registration is never deleted; `ocx service install` is the
-one verb that releases the marker, and it does so only after the registration succeeded.
-
-The veto reads the recorded claim, not the live process. An app removed without releasing
-leaves a stale claim, and proving which runtime is answering needs the identity the bundled
-CLI's resolve contract will carry; until then the refusals name `ocx service install` as the
-way to clear it.
+`bin/ocx.mjs` and the dashboard worker in `src/update/job.ts`. The shared update decision has
+three independent authorities: package replacement, runtime stop and service restoration.
+Unknown and desktop ownership deny all three because a claim alone does not prove that the live
+process is detached from the npm package; CLI ownership permits the ordinary stop-first
+flow. Both package updaters use `src/service/state-record.mjs` for the same path list, full-record
+validation and authority selection. A shared mutation lease covers the final subject/liveness
+recheck through package replacement, and service install/start plus every state mutation take
+the same lease, so the stop decision cannot go stale under a cooperating manager. Dashboard
+restart keeps that lease through port reclaim and delegates its token to the repair child;
+direct start takes it again for the final liveness check through successful bind.
+The registration is never deleted; `ocx service install` releases the marker only after the
+registration succeeds.
