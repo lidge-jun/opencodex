@@ -3,6 +3,7 @@ import { formatUptime } from "../formatUptime";
 import { IconActivity } from "../icons";
 import { useI18n, type Locale, type TFn } from "../i18n/shared";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
+import { confirmAction } from "../action-dialogs";
 import { startVisibilityPoll } from "../visibility-poll";
 
 /**
@@ -355,27 +356,26 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
     };
   }, [apiBase, restartPhase, restartFromPid, t]);
 
-  const confirmRestart = () => {
+  const confirmRestart = async () => {
     const count = data?.activeTurnCount ?? 0;
     const lines = [
       t("dash.mem.restartConfirm", { count, seconds: DRAIN_TIMEOUT_S }),
     ];
     if (noSupervisor) lines.push(t("dash.mem.restartNoSupervisor"));
-    if (!window.confirm(lines.join("\n\n"))) return;
-    void (async () => {
-      setRestartError(null);
-      setRestartFromPid(typeof data?.pid === "number" ? data.pid : null);
-      setRestartPhase("draining");
-      try {
-        const res = await fetch(`${apiBase}/api/system/restart`, { method: "POST" });
-        if (!res.ok) throw new Error("restart_failed");
-        // Proxy will drain then exit; memory poll will trip reconnecting or pid change.
-      } catch {
-        setRestartPhase("error");
-        setRestartFromPid(null);
-        setRestartError(t("dash.mem.restartFailed"));
-      }
-    })();
+    // Blank lines still separate the paragraphs; the dialog renders each as its own <p>.
+    if (!(await confirmAction({ message: lines.join("\n\n"), tone: "danger" }))) return;
+    setRestartError(null);
+    setRestartFromPid(typeof data?.pid === "number" ? data.pid : null);
+    setRestartPhase("draining");
+    try {
+      const res = await fetch(`${apiBase}/api/system/restart`, { method: "POST" });
+      if (!res.ok) throw new Error("restart_failed");
+      // Proxy will drain then exit; memory poll will trip reconnecting or pid change.
+    } catch {
+      setRestartPhase("error");
+      setRestartFromPid(null);
+      setRestartError(t("dash.mem.restartFailed"));
+    }
   };
 
   if (unavailable && !data && restartPhase === "idle") {
@@ -432,7 +432,7 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
               type="button"
               className="btn btn-ghost btn-sm"
               disabled={busy}
-              onClick={confirmRestart}
+              onClick={() => { void confirmRestart(); }}
             >
               {t("dash.mem.restart")}
             </button>

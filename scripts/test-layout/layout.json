@@ -1644,7 +1644,8 @@
     "ambiguous-resend-composition.test.ts": "lib",
     "chat-inbound-developer-position.test.ts": "responses",
     "release-pipeline-contract.test.ts": "ci-workflows",
-    "desktop-proxy-direct-transport.test.ts": "clients"
+    "desktop-proxy-direct-transport.test.ts": "clients",
+    "platform-dialog-guard.test.ts": "gui"
   },
   "migrated": [
     "adapters",
