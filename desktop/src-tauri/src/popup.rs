@@ -1,4 +1,4 @@
-use crate::{discovery::ProxyEndpoint, window};
+use crate::{endpoint::ProxyEndpoint, window};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
