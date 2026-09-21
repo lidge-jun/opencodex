@@ -318,6 +318,8 @@ export const vi: Record<TKey, string> = {
   "dash.stop": "Dừng Proxy",
   "dash.stopConfirm": "Dừng proxy và khôi phục native Codex?",
   "dash.stopFailed": "Không thể dừng proxy (HTTP {status}).",
+  "dash.stopStillRunning": "Proxy vẫn đang phản hồi nên chưa dừng.",
+  "dash.stopUnknown": "Chưa xác nhận được việc dừng. Hãy kiểm tra proxy còn chạy không trước khi thử lại.",
   "dash.maSwitchFailed": "Chuyển đổi chế độ thất bại (HTTP {status}).",
   "dash.maNetworkError": "Lỗi mạng — có phải proxy đang chạy không?",
   "dash.stopping": "Đang dừng…",

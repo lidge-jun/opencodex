@@ -282,14 +282,22 @@ export default function App() {
     setStopping(true);
     const outcome = await requestProxyStop(machineBase, {
       formatFailure: status => t("dash.stopFailed", { status: String(status) }),
+      formatStillRunning: () => t("dash.stopStillRunning"),
+      formatUnknown: () => t("dash.stopUnknown"),
       mode: targets.connected ? "client" : "standalone",
     });
-    // Refusals and restore failures return normally instead of dropping the connection.
-    // In both cases the proxy did not reach a clean-stop result, so re-enable the control
-    // and surface the server's remediation instead of leaving "stopping…" stuck forever.
-    if (!outcome.accepted) {
+    /*
+     * Only an accepted stop leaves the control pending, because the page is about to go
+     * away with the server. A refusal and an unknown both mean the user is still here and
+     * still looking at a running dashboard, so the control comes back either way.
+     *
+     * They are not reported the same, though. A refusal is the server's own answer and
+     * reads as a failure; an unknown is the absence of an answer, and claiming either
+     * success or failure there is the thing this lane exists to stop.
+     */
+    if (outcome.status !== "accepted") {
       setStopping(false);
-      report(outcome.message, "err");
+      report(outcome.message, outcome.status === "rejected" ? "err" : "warn");
     }
   };
 

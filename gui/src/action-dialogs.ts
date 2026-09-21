@@ -31,6 +31,12 @@ export interface ConfirmActionOptions {
   confirmLabel?: string;
   /** `danger` marks an action that destroys, interrupts or disconnects something. */
   tone?: "default" | "danger";
+  /**
+   * Withdraws the question. A consent names a subject, and a dialog that outlives its
+   * subject — the surface unmounted, the backend target changed — is no longer asking about
+   * the thing the user would be approving. Aborting resolves it as a refusal.
+   */
+  signal?: AbortSignal;
   /** Overrides the active locale; these dialogs open outside the React provider. */
   locale?: Locale;
 }
@@ -49,6 +55,8 @@ export interface RequestTextValueOptions {
    * null to accept. A rejected value keeps the dialog open and issues no request.
    */
   validate?: (value: string) => string | null;
+  /** Withdraws the question; see `ConfirmActionOptions.signal`. */
+  signal?: AbortSignal;
   locale?: Locale;
 }
 
@@ -72,7 +80,12 @@ interface ModalShell<T> {
  * the Cancel button — because a surface that cannot say how it was closed is precisely how
  * the undrawn `confirm()` became indistinguishable from a deliberate refusal.
  */
-function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => void): ModalShell<T> {
+function openModal<T>(
+  locale: Locale,
+  cancelValue: T,
+  resolve: (value: T) => void,
+  signal?: AbortSignal,
+): ModalShell<T> {
   const messages = DICTS[locale];
   const id = `opencodex-action-dialog-${++dialogSequence}`;
   /*
@@ -105,6 +118,7 @@ function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => voi
     window.removeEventListener("hashchange", dismissOnNavigation);
     window.removeEventListener("popstate", dismissOnNavigation);
     document.removeEventListener("keydown", dismissOnEscape);
+    signal?.removeEventListener("abort", dismissOnNavigation);
     // The caller is answered whatever the teardown does. A dialog left connected is a
     // cosmetic fault; a promise that never settles hangs the handler that awaited it.
     try {
@@ -146,6 +160,7 @@ function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => voi
   });
   window.addEventListener("hashchange", dismissOnNavigation);
   window.addEventListener("popstate", dismissOnNavigation);
+  signal?.addEventListener("abort", dismissOnNavigation);
 
   dialog.append(backdrop, form);
   document.body.append(dialog);
@@ -192,7 +207,9 @@ export function confirmAction(options: ConfirmActionOptions): Promise<boolean> {
   const danger = options.tone === "danger";
 
   return new Promise<boolean>((resolve) => {
-    const { form, bodyId, finish } = openModal<boolean>(locale, false, resolve);
+    // Already withdrawn: answer without ever drawing the question.
+    if (options.signal?.aborted) { resolve(false); return; }
+    const { form, bodyId, finish } = openModal<boolean>(locale, false, resolve, options.signal);
     appendMessage(form, bodyId, options.message);
 
     const actions = document.createElement("div");
@@ -232,7 +249,8 @@ export function requestTextValue(options: RequestTextValueOptions): Promise<stri
   const messages = DICTS[locale];
 
   return new Promise<string | null>((resolve) => {
-    const { form, bodyId, finish } = openModal<string | null>(locale, null, resolve);
+    if (options.signal?.aborted) { resolve(null); return; }
+    const { form, bodyId, finish } = openModal<string | null>(locale, null, resolve, options.signal);
     const input = document.createElement("input");
     const inputId = `${bodyId}-input`;
     // A real <label for> rather than aria-describedby: the message IS the field's name, and

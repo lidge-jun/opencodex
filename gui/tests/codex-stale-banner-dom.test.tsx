@@ -307,6 +307,32 @@ test("a timeout is localized, not left as the transport's English default", asyn
   expect(reports[0].tone).toBe("err");
 });
 
+test("unmounting while the consent is open withdraws it and sends nothing", async () => {
+  /*
+   * The consent is asynchronous now, so the surface can disappear while the question is on
+   * screen. Answering it afterwards would send a stop against the closure's captured base —
+   * a target the user is no longer looking at.
+   */
+  let fetches = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => { fetches += 1; return new Response("{}", { status: 200 }); },
+  });
+
+  render(<Harness initialState="stale" onReload={() => {}} />);
+  const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
+  await act(async () => { head.click(); });
+  expect(actionDialogOpen(dialogDocument())).toBe(true);
+
+  act(() => root!.unmount());
+  root = null;
+  await act(async () => { await Promise.resolve(); });
+
+  expect(actionDialogOpen(dialogDocument())).toBe(false);
+  expect(fetches).toBe(0);
+  expect(reports).toEqual([]);
+});
+
 test("a settled restart does not call back after unmount", async () => {
   // The callback usually starts a refresh fetch; firing it from a page the user
   // already left is work nobody reads.

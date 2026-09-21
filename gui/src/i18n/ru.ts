@@ -331,6 +331,8 @@ export const ru: Record<TKey, string> = {
   "dash.stop": "Остановить прокси",
   "dash.stopConfirm": "Остановить прокси и восстановить нативный Codex?",
   "dash.stopFailed": "Не удалось остановить прокси (HTTP {status}).",
+  "dash.stopStillRunning": "Прокси всё ещё отвечает — он не остановлен.",
+  "dash.stopUnknown": "Остановка не подтверждена. Прежде чем повторять, проверьте, работает ли прокси.",
   "dash.maSwitchFailed": "Не удалось переключить режим (HTTP {status}).",
   "dash.maNetworkError": "Ошибка сети — прокси запущен?",
   "dash.stopping": "Остановка…",

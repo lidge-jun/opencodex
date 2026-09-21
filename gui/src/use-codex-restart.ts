@@ -66,6 +66,15 @@ export function useCodexRestart(
   const mounted = useRef(true);
   const onSettled = useRef(options.onSettled);
   const report = useRef(options.report);
+  /*
+   * The subject the consent is about. A restart names one backend, and the dialog is
+   * asynchronous now, so the target can change or the surface can go away while the question
+   * is still on screen. Holding the current base in a ref lets the confirmed path check that
+   * what the user approved is still what would be stopped.
+   */
+  const currentApiBase = useRef(apiBase);
+  /** The consent currently on screen, so a changed subject can withdraw it. */
+  const pendingConsent = useRef<AbortController | null>(null);
 
   useEffect(() => {
     // Written in an effect, not during render: a ref assignment in the render
@@ -75,17 +84,41 @@ export function useCodexRestart(
   }, [options.onSettled, options.report]);
 
   useEffect(() => {
+    // A new base is a new subject: a consent granted for the old one no longer describes
+    // what would happen, so it is withdrawn rather than silently re-pointed.
+    currentApiBase.current = apiBase;
+    return () => {
+      pendingConsent.current?.abort();
+      pendingConsent.current = null;
+    };
+  }, [apiBase]);
+
+  useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      pendingConsent.current?.abort();
+      pendingConsent.current = null;
+    };
   }, []);
 
   const restart = useCallback(async (): Promise<CodexRestartCode | null> => {
+    const consent = new AbortController();
+    pendingConsent.current?.abort();
+    pendingConsent.current = consent;
     const consented = await confirmAction({
       message: t("dash.codexRestartConfirm"),
       confirmLabel: t("dash.codexRestart"),
       tone: "danger",
+      signal: consent.signal,
     });
-    if (!consented) return null;
+    if (pendingConsent.current === consent) pendingConsent.current = null;
+    /*
+     * Confirmed for THIS base, while this surface was still mounted. Either could have
+     * changed while the dialog was open, and sending anyway would apply the user's approval
+     * to a subject they were never shown.
+     */
+    if (!consented || !mounted.current || currentApiBase.current !== apiBase) return null;
     setRestarting(true);
     const outcome = await requestCodexRestart(apiBase, {
       formatFailure: status => t("dash.codexRestartFailed", { status: String(status) }),

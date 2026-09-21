@@ -332,6 +332,8 @@ export const tr: Record<TKey, string> = {
   "dash.stop": "Proxy'yi Durdur",
   "dash.stopConfirm": "Proxy durdurulsun ve yerel Codex geri yüklensin mi?",
   "dash.stopFailed": "Proxy durdurulamadı (HTTP {status}).",
+  "dash.stopStillRunning": "Proxy hâlâ yanıt veriyor, yani durmadı.",
+  "dash.stopUnknown": "Durdurma doğrulanamadı. Yeniden denemeden önce proxy’nin çalışıp çalışmadığını kontrol edin.",
   "dash.maSwitchFailed": "Mod değiştirme başarısız oldu (HTTP {status}).",
   "dash.maNetworkError": "Ağ hatası — proxy çalışıyor mu?",
   "dash.stopping": "Durduruluyor…",

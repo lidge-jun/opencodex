@@ -331,6 +331,8 @@ export const ja: Record<TKey, string> = {
   "dash.stop": "プロキシを停止",
   "dash.stopConfirm": "プロキシを停止してネイティブの Codex に戻しますか?",
   "dash.stopFailed": "プロキシを停止できませんでした (HTTP {status})。",
+  "dash.stopStillRunning": "プロキシはまだ応答しています。停止していません。",
+  "dash.stopUnknown": "停止できたか確認できませんでした。再試行する前にプロキシが動作中か確認してください。",
   "dash.maSwitchFailed": "モードの切り替えに失敗しました (HTTP {status})。",
   "dash.maNetworkError": "ネットワークエラー — プロキシは起動していますか?",
   "dash.stopping": "停止中…",

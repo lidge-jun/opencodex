@@ -221,6 +221,8 @@ export const zhTW: Record<TKey, string> = {
   "dash.stop": "停止代理",
   "dash.stopConfirm": "停止代理並恢復原生 Codex 配置？",
   "dash.stopFailed": "無法停止代理 (HTTP {status})。",
+  "dash.stopStillRunning": "代理仍在回應，未能停止。",
+  "dash.stopUnknown": "無法確認是否已停止。請先檢查代理是否仍在執行，再重試。",
   "dash.maSwitchFailed": "模式切換失敗 (HTTP {status})。",
   "dash.maNetworkError": "網路錯誤 — 代理是否正在執行？",
   "dash.stopping": "正在停止…",

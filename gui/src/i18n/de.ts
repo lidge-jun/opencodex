@@ -322,6 +322,8 @@ export const de: Record<TKey, string> = {
   "dash.stop": "Proxy stoppen",
   "dash.stopConfirm": "Proxy stoppen und natives Codex wiederherstellen?",
   "dash.stopFailed": "Proxy konnte nicht gestoppt werden (HTTP {status}).",
+  "dash.stopStillRunning": "Der Proxy antwortet weiterhin und wurde nicht gestoppt.",
+  "dash.stopUnknown": "Der Stopp wurde nicht bestätigt. Prüfen Sie vor einem erneuten Versuch, ob der Proxy noch läuft.",
   "dash.maSwitchFailed": "Moduswechsel fehlgeschlagen (HTTP {status}).",
   "dash.maNetworkError": "Netzwerkfehler — läuft der Proxy?",
   "dash.stopping": "Wird gestoppt…",

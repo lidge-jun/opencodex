@@ -326,6 +326,8 @@ export const ko: Record<TKey, string> = {
   "dash.stop": "프록시 중지",
   "dash.stopConfirm": "프록시를 중지하고 Codex 원본 설정을 복원할까요?",
   "dash.stopFailed": "프록시를 중지하지 못했습니다 (HTTP {status}).",
+  "dash.stopStillRunning": "프록시가 아직 응답하고 있습니다. 중지되지 않았습니다.",
+  "dash.stopUnknown": "중지 여부를 확인하지 못했습니다. 다시 시도하기 전에 프록시가 실행 중인지 확인하세요.",
   "dash.maSwitchFailed": "모드 전환에 실패했습니다 (HTTP {status}).",
   "dash.maNetworkError": "네트워크 오류 — 프록시가 실행 중인지 확인하세요.",
   "dash.stopping": "중지 중…",

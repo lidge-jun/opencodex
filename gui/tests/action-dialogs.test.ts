@@ -263,3 +263,31 @@ test("a settled dialog stops listening for navigation", async () => {
   );
   expect(win.document.querySelector("dialog")).toBeNull();
 });
+
+test("a withdrawn consent resolves as a refusal", async () => {
+  /*
+   * A consent names a subject. Once the dialog is asynchronous the subject can change or go
+   * away while the question is still on screen, and answering it then would apply the user's
+   * approval to something they were never shown. Withdrawing resolves it as a refusal.
+   */
+  const withdrawal = new AbortController();
+  const answer = confirmAction({ message: "Restart Codex?", signal: withdrawal.signal });
+  await settled();
+  expect(win.document.querySelector("dialog")).not.toBeNull();
+
+  withdrawal.abort();
+  expect(await answer).toBe(false);
+  expect(win.document.querySelector("dialog")).toBeNull();
+});
+
+test("a consent withdrawn before it opens is never drawn", async () => {
+  const withdrawal = new AbortController();
+  withdrawal.abort();
+  const answer = confirmAction({ message: "Restart Codex?", signal: withdrawal.signal });
+  expect(await answer).toBe(false);
+  expect(win.document.querySelector("dialog")).toBeNull();
+
+  const entry = requestTextValue({ message: "Display name", signal: withdrawal.signal });
+  expect(await entry).toBeNull();
+  expect(win.document.querySelector("dialog")).toBeNull();
+});

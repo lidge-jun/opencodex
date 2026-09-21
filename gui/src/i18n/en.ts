@@ -334,6 +334,8 @@ export const en = {
   "dash.stop": "Stop Proxy",
   "dash.stopConfirm": "Stop the proxy and restore native Codex?",
   "dash.stopFailed": "Failed to stop proxy (HTTP {status}).",
+  "dash.stopStillRunning": "The proxy is still answering, so it did not stop.",
+  "dash.stopUnknown": "The proxy did not confirm the stop. Check whether it is still running before trying again.",
   "dash.maSwitchFailed": "Mode switch failed (HTTP {status}).",
   "dash.maNetworkError": "Network error — is the proxy running?",
   "dash.stopping": "Stopping…",

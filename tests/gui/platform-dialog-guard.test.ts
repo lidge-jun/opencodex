@@ -78,6 +78,22 @@ describe("dashboard platform-dialog guard", () => {
     expect(findPlatformDialogCalls("const url = `/api/${id}`; alert(done);").map(c => c.form)).toEqual(["alert("]);
   });
 
+  /*
+   * A template literal is two different things at once, and the difference decides whether a
+   * dialog can come back. Its TEXT is prose — the dashboard ships an executable sample that
+   * spells out a prompt call on purpose — while a hole is executable code. Skipping backtick
+   * strings wholesale would make the second invisible.
+   */
+  test("a template hole is code even when the call names a global receiver", () => {
+    const reported = (source: string) => findPlatformDialogCalls(source).map(call => call.form);
+
+    expect(reported('const message = `${window.confirm("continue?")}`;')).toEqual(["window.confirm("]);
+    expect(reported("const n = `${globalThis.alert(message)}`;")).toEqual(["globalThis.alert("]);
+    // The surrounding text of the same literal stays prose.
+    expect(reported('const doc = `Call window.confirm("continue?") in a browser.`;')).toEqual([]);
+    expect(reported("const sample = `const key = prompt(label);`;")).toEqual([]);
+  });
+
   test("a regular expression holding a quote does not mask the rest of the file", () => {
     // An unmasked /['"]/ reads as the start of a string literal and hides everything after
     // it, which would turn this guard green by blinding it.
