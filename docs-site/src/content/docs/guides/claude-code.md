@@ -388,7 +388,7 @@ Both families decode forever — a model saved in `settings.json` under either f
 Each entry carries an honest display name such as `gemini-3-pro (gemini)`, plus full model
 capabilities (reasoning-effort ladder, thinking types) in the official ModelInfo shape so Claude
 Desktop's third-party gateway mode can offer its effort selector. Real Anthropic models keep their
-canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A saved `claude-ocx-` id still routes, but Claude Code keeps its 200k accounting for that id. Pick the new `ocx-claude-` id once so the real context window and compact both apply.
+canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A saved legacy id still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the real context window and compact both apply.
 
 If Claude Desktop's footer picker does not change the model for an already-running 3P
 conversation, you can try `/model <id>`, but this workaround may also fail on affected Desktop
