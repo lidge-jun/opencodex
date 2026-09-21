@@ -23,12 +23,7 @@ pub fn configure(window: &WebviewWindow) {
     window.on_window_event(move |event| {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
-            let app = window_for_close.app_handle();
-            if exit::hides_to_tray(app) {
-                hide(&window_for_close);
-            } else {
-                exit::request(app, exit::ExitReason::UserQuit);
-            }
+            exit::gesture(window_for_close.app_handle());
         }
     });
 }

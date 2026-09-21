@@ -224,6 +224,8 @@ struct Live {
 pub struct Startup {
     live: Mutex<Live>,
     running: AtomicBool,
+    /// The outcome of the one-time registration, once it has happened.
+    registered: Mutex<Option<StartAtLogin>>,
 }
 
 impl Startup {
@@ -234,11 +236,26 @@ impl Startup {
                 reported: Vec::new(),
             }),
             running: AtomicBool::new(false),
+            registered: Mutex::new(None),
         }
     }
 
     fn live(&self) -> MutexGuard<'_, Live> {
         self.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn registration(&self) -> Option<StartAtLogin> {
+        *self
+            .registered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn remember_registration(&self, login: StartAtLogin) {
+        *self
+            .registered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(login);
     }
 
     /// The whole state of the run so far, which is what the page asks for when it loads.
@@ -306,7 +323,7 @@ async fn run(app: &AppHandle) {
         return;
     };
     report(app, started, Phase::Registering, None);
-    let login = register(app).await;
+    let login = register(app, deadline).await;
     report(
         app,
         started,
@@ -437,63 +454,116 @@ async fn run(app: &AppHandle) {
 }
 
 /// Establish the app's own surface: the tray verdict, the tray, and the login item.
-async fn register(app: &AppHandle) -> StartAtLogin {
-    // The probe blocks on a session-bus round trip, so it does not belong on an async worker.
-    let tray = tauri::async_runtime::spawn_blocking(tray_availability::detect)
-        .await
-        .unwrap_or_else(|_| TrayAvailability::assumed());
-    if let Some(coordinator) = app.try_state::<crate::exit::ExitCoordinator>() {
-        coordinator.set_tray(tray);
+///
+/// It happens once per process. A retry re-runs the runtime half of the sequence, and running this
+/// half again would build a second tray icon with its own refresh loop and its own menu handlers —
+/// the failure would look like the app duplicating itself every time the user pressed Retry.
+async fn register(app: &AppHandle, deadline: Instant) -> StartAtLogin {
+    if let Some(done) = app
+        .try_state::<Startup>()
+        .and_then(|startup| startup.registration())
+    {
+        return done;
     }
+
+    // The probe blocks on a session-bus round trip, so it does not belong on an async worker — and
+    // it is bounded by the sequence's own deadline, because a bus that never answers would
+    // otherwise leave the page in this state with a retry that could do nothing about it.
+    let tray = match tokio::time::timeout_at(
+        deadline,
+        tauri::async_runtime::spawn_blocking(tray_availability::detect),
+    )
+    .await
+    {
+        Ok(Ok(tray)) => tray,
+        _ => TrayAvailability::assumed(),
+    };
 
     // Before the tray, so its Start at Login checkbox reads the state this leaves behind rather
     // than the state from before first run.
     let login = first_run::apply_start_at_login_default(app);
     first_run::adopt_launch_origin_argument(app);
 
-    if tray.is_available() {
-        // Tray construction is a GTK call on Linux and must happen on the main thread.
-        let handle = app.clone();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        if app
-            .run_on_main_thread(move || {
-                let _ =
-                    sender.send(crate::tray::install(&handle).map_err(|error| error.to_string()));
-            })
-            .is_ok()
-        {
-            if let Ok(Err(error)) = receiver.await {
-                crate::logging::log_once("the tray could not be installed", &error);
-            }
-        }
+    // The verdict is published only once an icon actually exists. Announcing a tray and then
+    // failing to install it would hide the window into nothing, which is the exact stranding D6
+    // exists to prevent.
+    let verdict = if tray.is_available() && install_tray(app, deadline).await {
+        TrayAvailability::Available
+    } else {
+        TrayAvailability::Unavailable
+    };
+    if let Some(coordinator) = app.try_state::<crate::exit::ExitCoordinator>() {
+        coordinator.set_tray(verdict);
     }
 
     if let Some(window) = app.get_webview_window("main") {
-        if shows_window(LaunchOrigin::detect(), tray) {
+        if shows_window(LaunchOrigin::detect(), verdict) {
             crate::window::show(&window);
         }
+    }
+    if let Some(startup) = app.try_state::<Startup>() {
+        startup.remember_registration(login);
     }
     login
 }
 
+/// Build the tray on the main thread, which is where GTK requires it on Linux.
+async fn install_tray(app: &AppHandle, deadline: Instant) -> bool {
+    let handle = app.clone();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    if app
+        .run_on_main_thread(move || {
+            let _ = sender.send(crate::tray::install(&handle).map_err(|error| error.to_string()));
+        })
+        .is_err()
+    {
+        return false;
+    }
+    match tokio::time::timeout_at(deadline, receiver).await {
+        Ok(Ok(Ok(()))) => true,
+        Ok(Ok(Err(error))) => {
+            crate::logging::log_once("the tray could not be installed", &error);
+            false
+        }
+        _ => {
+            crate::logging::log_once(
+                "the tray could not be installed",
+                "the main thread did not answer",
+            );
+            false
+        }
+    }
+}
 /// Start the runtime, unless an exit is already in flight.
 ///
-/// The spawn and the record that we own the child happen under the exit coordinator's lock, so a
-/// quit arriving mid-startup cannot observe "we own nothing", drain nothing, and let the process
-/// end moments after this spawned a proxy that nothing will ever stop.
+/// The coordinator reserves the spawn rather than holding its lock across it: holding it would put
+/// process creation in front of the main thread's exit handler, so a wedged spawn would be a Quit
+/// that never answers. A quit arriving in between is deferred until the child is ours and then
+/// drains it, so it cannot observe "we own nothing" and leave a proxy running that nothing stops.
 fn spawn_runtime(
     app: &AppHandle,
     endpoint: ProxyEndpoint,
     watch: &SidecarWatch,
 ) -> Option<Result<(), String>> {
     let coordinator = app.try_state::<crate::exit::ExitCoordinator>()?;
-    coordinator.spawn_unless_ending(|| {
-        let child = sidecar::start(app, endpoint, watch)?;
-        if let Some(state) = app.try_state::<AppState>() {
-            state.adopt(child);
+    if !coordinator.begin_spawn() {
+        return None;
+    }
+    let outcome = match sidecar::start(app, endpoint, watch) {
+        Ok(child) => {
+            if let Some(state) = app.try_state::<AppState>() {
+                state.adopt(child);
+            }
+            Ok(())
         }
-        Ok(())
-    })
+        Err(error) => Err(error),
+    };
+    if let Some(reason) = coordinator.finish_spawn() {
+        // A quit landed while the child was being created. It is ours now, so it gets drained.
+        crate::exit::drain_now(app, reason);
+        return None;
+    }
+    Some(outcome)
 }
 
 async fn healthy_by(proxy: &ProxyClient, deadline: Instant) -> bool {
@@ -614,8 +684,11 @@ fn elapsed(started: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{shows_window, LaunchOrigin, Phase, AUTOSTART_FLAG, DEADLINE, PHASES};
+    use super::{
+        shows_window, LaunchOrigin, Phase, ATTACH_BUDGET, AUTOSTART_FLAG, DEADLINE, PHASES,
+    };
     use crate::tray_availability::TrayAvailability;
+    use tokio::time::Duration;
 
     #[test]
     fn only_the_autostart_argument_marks_a_login_launch() {
@@ -680,6 +753,10 @@ mod tests {
 
     #[test]
     fn the_whole_sequence_is_bounded_well_under_the_minute_it_used_to_take() {
-        assert!(DEADLINE.as_secs() <= 45);
+        let budgets = [DEADLINE, ATTACH_BUDGET];
+        assert!(budgets
+            .iter()
+            .all(|budget| *budget <= Duration::from_secs(45)));
+        assert!(ATTACH_BUDGET < DEADLINE);
     }
 }

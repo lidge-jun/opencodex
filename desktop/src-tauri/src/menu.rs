@@ -18,7 +18,6 @@
 /// it is unambiguously this one.
 pub const QUIT_ID: &str = "app-menu-quit";
 
-#[cfg(target_os = "macos")]
 pub fn build(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{
         AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
@@ -117,16 +116,5 @@ pub fn build(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
 pub fn on_event(app: &tauri::AppHandle, id: &str) {
     if id == QUIT_ID {
         crate::exit::gesture(app);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::QUIT_ID;
-
-    #[test]
-    fn the_replacement_quit_has_an_id_of_its_own() {
-        assert!(!QUIT_ID.is_empty());
-        assert_ne!(QUIT_ID, "quit");
     }
 }

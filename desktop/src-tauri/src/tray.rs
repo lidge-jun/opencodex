@@ -22,6 +22,7 @@ pub struct TrayState {
     pub installing: AtomicBool,
 }
 
+#[derive(Clone)]
 pub struct TrayMenu {
     check_updates: MenuItem<Wry>,
     install_update: MenuItem<Wry>,
@@ -232,41 +233,41 @@ fn refresh(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>) {
     widget::refresh(&proxy);
 }
 
+/// Take a copy of the menu handles, holding the lock only for the copy.
+///
+/// Every Tauri menu setter dispatches to the main thread and waits for it. The tray is built *on*
+/// the main thread and takes this same mutex while doing so, so calling a setter with the lock held
+/// is a cycle: a background update owns the mutex and waits for the main thread, and the main
+/// thread waits for the mutex. The app would stop answering Quit.
+fn menu_handles(app: &AppHandle) -> Option<TrayMenu> {
+    let state = app.try_state::<TrayState>()?;
+    let handles = state.menu.lock().ok()?;
+    handles.as_ref().cloned()
+}
+
 /// Reflect who owns the runtime in the tray's Stop item.
 pub fn set_owned(app: &AppHandle, owned: bool) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu.stop.set_enabled(owned);
-            }
-        }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu.stop.set_enabled(owned);
     }
 }
 
 pub fn show_update_available(app: &AppHandle, version: &str) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu.install_update.set_text(updater::update_label(version));
-                let _ = menu.install_update.set_enabled(true);
-                let _ = menu.check_updates.set_enabled(true);
-                let _ = menu.check_updates.set_text("Check for Updates…");
-            }
-        }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu.install_update.set_text(updater::update_label(version));
+        let _ = menu.install_update.set_enabled(true);
+        let _ = menu.check_updates.set_enabled(true);
+        let _ = menu.check_updates.set_text("Check for Updates…");
     }
 }
 
 pub fn show_up_to_date(app: &AppHandle) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu
-                    .check_updates
-                    .set_text(format!("Up to date (v{})", env!("CARGO_PKG_VERSION")));
-                let _ = menu.check_updates.set_enabled(true);
-                let _ = menu.install_update.set_enabled(false);
-            }
-        }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu
+            .check_updates
+            .set_text(format!("Up to date (v{})", env!("CARGO_PKG_VERSION")));
+        let _ = menu.check_updates.set_enabled(true);
+        let _ = menu.install_update.set_enabled(false);
     }
 }
 
@@ -278,15 +279,13 @@ pub fn is_installing(app: &AppHandle) -> bool {
 fn set_installing(app: &AppHandle, version: &str) {
     if let Some(state) = app.try_state::<TrayState>() {
         state.installing.store(true, Ordering::Release);
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu
-                    .install_update
-                    .set_text(format!("Installing update v{version}…"));
-                let _ = menu.install_update.set_enabled(false);
-                let _ = menu.check_updates.set_enabled(false);
-            }
-        }
+    }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu
+            .install_update
+            .set_text(format!("Installing update v{version}…"));
+        let _ = menu.install_update.set_enabled(false);
+        let _ = menu.check_updates.set_enabled(false);
     }
 }
 

@@ -38,6 +38,9 @@ pub enum ExitReason {
 pub enum ExitPhase {
     /// Nothing is in flight.
     Idle,
+    /// A runtime is being started. An exit arriving now is held until the child exists and is
+    /// recorded, because the alternative is a process nobody owns and nobody will stop.
+    Spawning,
     /// The drain is running. Further exit requests wait for it rather than starting a second one.
     Draining,
     /// The drain has reported. The next exit request is the real one.
@@ -64,7 +67,7 @@ pub enum ExitDecision {
 /// a quit and takes the same graceful drain rather than leaving a running process unreachable.
 pub fn decide(phase: ExitPhase, reason: Option<ExitReason>, hides_to_tray: bool) -> ExitDecision {
     match phase {
-        ExitPhase::Draining => ExitDecision::Wait,
+        ExitPhase::Spawning | ExitPhase::Draining => ExitDecision::Wait,
         ExitPhase::Drained => ExitDecision::Proceed,
         ExitPhase::Idle => match reason {
             Some(reason) => ExitDecision::Drain(reason),
@@ -78,6 +81,8 @@ struct Inner {
     phase: ExitPhase,
     reason: Option<ExitReason>,
     hides_to_tray: bool,
+    /// An exit that arrived while a runtime was being started, and still has to happen.
+    deferred: bool,
 }
 
 /// The exit sequence's state, managed by the app.
@@ -94,6 +99,7 @@ impl ExitCoordinator {
                 // Until the probe answers, assume only what the platform guarantees. Assuming a
                 // tray that turns out not to exist is the exact failure D6 is about.
                 hides_to_tray: TrayAvailability::assumed().hides_to_tray(),
+                deferred: false,
             }),
         }
     }
@@ -107,13 +113,14 @@ impl ExitCoordinator {
         self.inner().hides_to_tray = tray.hides_to_tray();
     }
 
-    pub fn hides_to_tray(&self) -> bool {
-        self.inner().hides_to_tray
-    }
-
     #[cfg(test)]
     fn phase(&self) -> ExitPhase {
         self.inner().phase
+    }
+
+    #[cfg(test)]
+    fn hides_to_tray(&self) -> bool {
+        self.inner().hides_to_tray
     }
 
     pub fn decision(&self) -> ExitDecision {
@@ -133,32 +140,60 @@ impl ExitCoordinator {
     /// that claimed first could still be overtaken by an update that started the drain, and the app
     /// would restart under a user who asked it to stop. `fallback` is only used when nothing has
     /// claimed a reason yet.
+    ///
+    /// While a runtime is being started the answer is "not yet": the reason is recorded and the
+    /// drain is handed to [`ExitCoordinator::finish_spawn`], which runs once the child is ours.
     pub fn claim_drain(&self, fallback: ExitReason) -> Option<ExitReason> {
         let mut inner = self.inner();
-        if inner.phase != ExitPhase::Idle {
-            return None;
+        match inner.phase {
+            ExitPhase::Idle => {
+                let reason = *inner.reason.get_or_insert(fallback);
+                inner.phase = ExitPhase::Draining;
+                Some(reason)
+            }
+            ExitPhase::Spawning => {
+                inner.reason.get_or_insert(fallback);
+                inner.deferred = true;
+                None
+            }
+            ExitPhase::Draining | ExitPhase::Drained => None,
         }
-        let reason = *inner.reason.get_or_insert(fallback);
-        inner.phase = ExitPhase::Draining;
-        Some(reason)
     }
 
     pub fn finish_drain(&self) {
         self.inner().phase = ExitPhase::Drained;
     }
 
-    /// Start a runtime, but only while no exit is in flight.
+    /// Reserve the right to start a runtime. False once an exit is in flight.
     ///
-    /// The lock is held across the whole closure so that spawning a child and recording that we own
-    /// it cannot be split by a quit. Without that, a Quit arriving mid-startup reads "we own
-    /// nothing", drains nothing, and the process exits moments after the sequence spawned a proxy
-    /// that nothing will ever stop. The closure must not call back into this coordinator.
-    pub fn spawn_unless_ending<T>(&self, spawn: impl FnOnce() -> T) -> Option<T> {
-        let inner = self.inner();
+    /// The reservation exists instead of holding the lock across the spawn. Holding it would make
+    /// the main thread's exit handler wait on process creation, so a wedged spawn would be a Quit
+    /// that never responds. Reserving instead keeps every lock hold short, and an exit arriving in
+    /// between is deferred rather than lost — which is the thing that must not happen, because a
+    /// quit that reads "we own nothing" leaves the child it just missed running forever.
+    pub fn begin_spawn(&self) -> bool {
+        let mut inner = self.inner();
         if inner.phase != ExitPhase::Idle {
+            return false;
+        }
+        inner.phase = ExitPhase::Spawning;
+        true
+    }
+
+    /// Release the reservation. Returns the reason to drain for when an exit arrived meanwhile.
+    pub fn finish_spawn(&self) -> Option<ExitReason> {
+        let mut inner = self.inner();
+        if inner.phase != ExitPhase::Spawning {
             return None;
         }
-        Some(spawn())
+        if inner.deferred {
+            let reason = *inner.reason.get_or_insert(ExitReason::UserQuit);
+            inner.phase = ExitPhase::Draining;
+            inner.deferred = false;
+            return Some(reason);
+        }
+        inner.phase = ExitPhase::Idle;
+        None
     }
 }
 
@@ -168,17 +203,11 @@ impl Default for ExitCoordinator {
     }
 }
 
-/// Whether the current session hides to a tray rather than ending on a close.
-pub fn hides_to_tray(app: &AppHandle) -> bool {
-    app.try_state::<ExitCoordinator>()
-        .map(|coordinator| coordinator.hides_to_tray())
-        .unwrap_or_else(|| TrayAvailability::assumed().hides_to_tray())
-}
-
 /// The platform's quit gesture, and what closing the window means.
 ///
 /// It is not a request to end. D2 makes it mean the same thing on all three platforms: hide where
-/// there is a tray to come back from, and a graceful quit where there is not.
+/// there is a tray to come back from, and a graceful quit where there is not. Closing the window
+/// arrives here too: one decision point, so the two gestures cannot drift apart.
 pub fn gesture(app: &AppHandle) {
     let Some(coordinator) = app.try_state::<ExitCoordinator>() else {
         return;
@@ -256,6 +285,14 @@ pub fn start_drain(app: &AppHandle, reason: ExitReason) {
     let Some(reason) = coordinator.claim_drain(reason) else {
         return;
     };
+    drain_now(app, reason);
+}
+
+/// Run the drain for a reason the coordinator has already been moved to draining for.
+///
+/// The only other caller is the startup sequence, which reaches draining through
+/// [`ExitCoordinator::finish_spawn`] when a quit arrived while it was starting a runtime.
+pub fn drain_now(app: &AppHandle, reason: ExitReason) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let owned = app
@@ -368,9 +405,39 @@ mod tests {
     #[test]
     fn a_runtime_is_not_started_once_an_exit_is_in_flight() {
         let coordinator = ExitCoordinator::new();
-        assert_eq!(coordinator.spawn_unless_ending(|| 7), Some(7));
+        assert!(coordinator.begin_spawn());
+        assert_eq!(coordinator.finish_spawn(), None);
+        assert_eq!(coordinator.phase(), ExitPhase::Idle);
         coordinator.claim_drain(ExitReason::UserQuit);
-        assert_eq!(coordinator.spawn_unless_ending(|| 7), None);
+        assert!(!coordinator.begin_spawn());
+    }
+
+    #[test]
+    fn a_quit_during_a_spawn_is_deferred_rather_than_lost() {
+        let coordinator = ExitCoordinator::new();
+        assert!(coordinator.begin_spawn());
+        // The exit handler holds the exit rather than letting the process end mid-spawn.
+        assert_eq!(coordinator.decision(), ExitDecision::Wait);
+        assert_eq!(coordinator.claim_drain(ExitReason::UserQuit), None);
+        assert_eq!(coordinator.phase(), ExitPhase::Spawning);
+        // The child is ours by now, so the deferred quit becomes the drain.
+        assert_eq!(coordinator.finish_spawn(), Some(ExitReason::UserQuit));
+        assert_eq!(coordinator.phase(), ExitPhase::Draining);
+        assert_eq!(coordinator.finish_spawn(), None);
+    }
+
+    #[test]
+    fn a_deferred_update_restart_keeps_its_own_reason() {
+        let coordinator = ExitCoordinator::new();
+        assert!(coordinator.begin_spawn());
+        assert_eq!(
+            coordinator.claim_drain(ExitReason::CoordinatedRestart),
+            None
+        );
+        assert_eq!(
+            coordinator.finish_spawn(),
+            Some(ExitReason::CoordinatedRestart)
+        );
     }
 
     #[test]
