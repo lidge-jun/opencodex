@@ -163,7 +163,14 @@ export function loadCursorEffortTable(install: CursorInstall | undefined, deps: 
   const bundle = deps.readBundle(bundlePath, cachedMetadata);
   if (!bundle) return null;
   const key = `${bundlePath}|${bundle.mtimeMs}|${bundle.size}`;
-  if (cache?.key === key) return cache.table;
+  if (cache?.key === key) {
+    // The cache key covers bundle identity only; install.version comes from
+    // product.json and can change or resolve without touching the bundle.
+    const cached = cache.table;
+    return cached && cached.version !== install.version
+      ? { ...cached, version: install.version }
+      : cached;
+  }
   const parsed = bundle.text ? parseCursorEffortTable(bundle.text) : null;
   const table = parsed ? { ...parsed, version: install.version, bundlePath } : null;
   cache = { key, path: bundlePath, mtimeMs: bundle.mtimeMs, size: bundle.size, table };

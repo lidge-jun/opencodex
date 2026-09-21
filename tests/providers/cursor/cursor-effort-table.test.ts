@@ -119,6 +119,16 @@ describe("Cursor installed-bundle effort table", () => {
     expect(reads).toBe(2);
   });
 
+  test("refreshes the reported version on a bundle cache hit", () => {
+    const deps: CursorEffortTableDeps = {
+      platform: "darwin",
+      readBundle: () => ({ mtimeMs: 1, size: FIXTURE.length, text: FIXTURE }),
+    };
+    expect(loadCursorEffortTable(INSTALL, deps)?.version).toBe("3.18.25");
+    const upgraded = { ...INSTALL, version: "3.19.0" };
+    expect(loadCursorEffortTable(upgraded, deps)?.version).toBe("3.19.0");
+  });
+
   test("rejects symlinks and special files without blocking", () => {
     if (process.platform === "win32") return;
     const root = `${tmpdir()}/ocx-cursor-bundle-${process.pid}-${Date.now()}`;
