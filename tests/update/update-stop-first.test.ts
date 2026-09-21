@@ -604,7 +604,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(launcherSource).toContain('"service", "repair"');
     // The launcher reads the shared active/default state-path set for service-installed
     // detection and the authoritative backend on the genuinely-absent install fallback.
-    expect(launcherSource).toContain("serviceStatePathsForHomes");
+    expect(launcherSource).toContain("serviceStateFilesFor");
     // That marker can be STALE, so the fallback asks for structured state rather than
     // parsing a failure message; bin/ocx.mjs is plain Node and cannot import
     // diagnoseService(), so it reads startup.serviceInstalled from `status --json`.
