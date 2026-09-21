@@ -552,3 +552,5 @@ exclusive `--socks5-off`. The start owner persists only an explicitly requested
 change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
 never echo user-supplied credentials, and status messages redact proxy URLs.
 The parser regression cases live in `tests/cli/start-args.test.ts`.
+The config CLI likewise treats every `proxy` value as credential-bearing and masks it in show,
+get, and mutation output, including provider-level proxy URLs with userinfo.

@@ -31,6 +31,7 @@ function freshConfig() {
         adapter: "openai-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
+        proxy: "http://route_user:route_password@egress.test:3128",
       },
       blsc: {
         adapter: "openai-chat",
@@ -48,6 +49,31 @@ function freshConfig() {
 }
 
 describe("ocx config display redaction", () => {
+  test("provider proxy credentials stay masked in show, get, and set output", () => {
+    const dir = freshConfig();
+    const secret = "route_password";
+    try {
+      const show = runCli(["config", "show", "--json"], { OPENCODEX_HOME: dir });
+      expect(show.status).toBe(0);
+      expect(show.stdout).not.toContain(secret);
+      expect(JSON.parse(show.stdout).providers.openai.proxy).toBe("********");
+
+      const get = runCli(["config", "get", "providers.openai.proxy"], { OPENCODEX_HOME: dir });
+      expect(get.status).toBe(0);
+      expect(get.stdout.trim()).toBe("********");
+
+      const set = runCli([
+        "config", "set", "providers.openai.proxy",
+        "http://next_user:next_password@egress.test:8080", "--json",
+      ], { OPENCODEX_HOME: dir });
+      expect(set.status).toBe(0);
+      expect(set.stdout).not.toContain("next_password");
+      expect(JSON.parse(set.stdout).value).toBe("********");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("config show --json never prints secret-shaped modelCosts keys", () => {
     const dir = freshConfig();
     try {
