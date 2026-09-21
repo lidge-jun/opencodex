@@ -1365,6 +1365,7 @@
     "self-launch-argv.test.ts": "lib",
     "server-403-permission-e2e.test.ts": "server",
     "server-agent-task-recovery-replay.test.ts": "server",
+    "server-auth-scoped-quota.test.ts": "server",
     "server-auth.test.ts": "server",
     "server-background-lifecycle.test.ts": "server",
     "server-clickjacking-headers.test.ts": "server",

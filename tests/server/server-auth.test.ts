@@ -9,7 +9,7 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { clearCodexWebSocketRegistry, getTrackedCodexWebSocketCountForAccount } from "../../src/codex/websocket-registry";
+import { getTrackedCodexWebSocketCountForAccount } from "../../src/codex/websocket-registry";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { clearAccountNeedsReauth, clearAccountQuota, getAccountQuota, isAccountNeedsReauth, markAccountNeedsReauth, updateAccountQuota } from "../../src/codex/auth-api";
 import {
@@ -57,6 +57,15 @@ import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debu
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
+import {
+  POOL_RETRY_MODEL,
+  POOL_RETRY_TEST_DIR,
+  canonicalDirect,
+  redirectCanonicalCodexTo,
+  startPoolRetryHarness,
+  stopPoolRetryHarness,
+  unsupportedModelBody,
+} from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -114,44 +123,10 @@ function managementHeaders(initial?: HeadersInit): Headers {
   return headers;
 }
 
-const canonicalDirect = {
-  adapter: "openai-responses",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
-  authMode: "forward",
-  codexAccountMode: "direct",
-} as const;
-
 function poolProviders(): OcxConfig["providers"] {
   return {
     openai: { ...canonicalDirect, codexAccountMode: "pool" },
   };
-}
-
-function redirectCanonicalCodexTo(baseUrl: string): void {
-  const prefix = "/backend-api/codex";
-  const currentWebSocket = globalThis.WebSocket;
-  // These fixtures serve HTTP/SSE only. Refuse the native upstream upgrade
-  // deterministically so its existing SSE fallback stays on the mocked fetch;
-  // downstream loopback WebSockets and other destinations remain real.
-  globalThis.WebSocket = new Proxy(currentWebSocket, {
-    construct(target, args, newTarget) {
-      const url = new URL(String(args[0]));
-      if (url.protocol === "wss:" && url.hostname === "chatgpt.com"
-        && (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) {
-        throw new Error("HTTP-only Codex fixture rejects native upstream WebSocket");
-      }
-      return Reflect.construct(target, args, newTarget);
-    },
-  });
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const url = new URL(requestUrl);
-    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
-      const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, baseUrl);
-      return originalGlobalFetch(target, init);
-    }
-    return originalGlobalFetch(input, init);
-  }) as typeof fetch;
 }
 
 function stubModelDiscoveryFor(...origins: string[]): void {
@@ -188,193 +163,8 @@ afterEach(() => {
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  if (existsSync(POOL_RETRY_TEST_DIR)) removeTreeWithRetry(POOL_RETRY_TEST_DIR);
 });
-
-const POOL_RETRY_MODEL = "gpt-5.5";
-
-function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
-  return JSON.stringify({
-    detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
-  });
-}
-
-type PoolRetryHarness = {
-  config: OcxConfig;
-  dispatches: string[];
-  request: (init?: {
-    stream?: boolean;
-    signal?: AbortSignal;
-    model?: string;
-    path?: "/v1/responses" | "/v1/responses/compact";
-    callerBearer?: boolean;
-    headers?: Record<string, string>;
-    extraBody?: Record<string, unknown>;
-  }) => Promise<Response>;
-  restoreFetch: () => void;
-  server: ReturnType<typeof startServer>;
-  upstream: ReturnType<typeof Bun.serve>;
-};
-
-async function removeTestDirBestEffort(dir: string): Promise<void> {
-  if (!existsSync(dir)) return;
-  // Windows can keep the prior harness's ACL/icacls handles for a beat after
-  // stop; a single EBUSY must not take down the rest of the file.
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      removeTreeWithRetry(dir);
-      return;
-    } catch (err) {
-      const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
-      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw err;
-      await Bun.sleep(25 * (attempt + 1));
-    }
-  }
-  removeTreeWithRetry(dir);
-}
-
-async function startPoolRetryHarness(
-  reply: (accountId: string, request: Request) => Response | Promise<Response>,
-  options: {
-    secondAccount?: boolean;
-    streamMode?: "legacy-tee" | "eager-relay";
-    accountMode?: "direct" | "pool";
-    activeAccountId?: string;
-    accountNamespaces?: Record<string, string>;
-    noVisionModels?: string[];
-    visionSidecarModel?: string;
-    websockets?: boolean;
-    forwardApiKey?: string;
-    pausedAccountIds?: string[];
-    reauthAccountIds?: string[];
-    omitCredentialAccountIds?: string[];
-    combos?: OcxConfig["combos"];
-    modelRosterByAccount?: Record<string, string[]>;
-  } = {},
-): Promise<PoolRetryHarness> {
-  await removeTestDirBestEffort(TEST_DIR);
-  mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  clearCodexUpstreamHealth();
-  clearThreadAccountMap();
-  clearAccountQuota();
-  resetCodexModelEntitlementCacheForTests();
-  clearRequestLogsForTests();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountNeedsReauth("pool-b");
-  // The registry is process-global and survives a harness teardown. WS-REBIND-01
-  // asserts exact per-account socket counts, so a socket leaked by any earlier test
-  // in this file shifts its snapshots and fails it in milliseconds — which reads as
-  // a flake next to the timeouts, but is ordinary shared state. Reset it with the
-  // rest rather than leaving one of six kinds of state uncleaned.
-  clearCodexWebSocketRegistry();
-
-  const dispatches: string[] = [];
-  const upstream = Bun.serve({
-    port: 0,
-    async fetch(request) {
-      const accountId = request.headers.get("chatgpt-account-id") ?? "missing";
-      if (new URL(request.url).pathname === "/models") {
-        return Response.json({
-          models: (options.modelRosterByAccount?.[accountId] ?? []).map(slug => ({
-            slug,
-            supported_in_api: true,
-            visibility: "list",
-          })),
-        });
-      }
-      dispatches.push(accountId);
-      return reply(accountId, request);
-    },
-  });
-  redirectCanonicalCodexTo(upstream.url.toString());
-  const redirectedFetch = globalThis.fetch;
-
-  const secondAccount = options.secondAccount ?? true;
-  const config = {
-    port: 0,
-    defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
-    providers: {
-      openai: {
-        ...canonicalDirect,
-        codexAccountMode: options.accountMode ?? "pool",
-        ...(options.noVisionModels ? { noVisionModels: options.noVisionModels } : {}),
-        ...(options.forwardApiKey ? { apiKey: options.forwardApiKey } : {}),
-      },
-    },
-    codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
-      ...(secondAccount
-        ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
-        : []),
-    ],
-    activeCodexAccountId: options.activeAccountId ?? "pool-a",
-    ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
-    ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
-    ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
-    ...(options.websockets ? { websockets: true } : {}),
-    ...(options.streamMode ? { streamMode: options.streamMode } : {}),
-    ...(options.combos ? { combos: options.combos } : {}),
-  } as OcxConfig;
-  saveConfig(config);
-  if (!options.omitCredentialAccountIds?.includes("pool-a")) {
-    saveCodexAccountCredential("pool-a", {
-      accessToken: "pool-a-token",
-      refreshToken: "pool-a-refresh",
-      expiresAt: Date.now() + 10 * 60_000,
-      chatgptAccountId: "acct-pool-a",
-    });
-  }
-  updateAccountQuota("pool-a", 10);
-  if (secondAccount) {
-    if (!options.omitCredentialAccountIds?.includes("pool-b")) {
-      saveCodexAccountCredential("pool-b", {
-        accessToken: "pool-b-token",
-        refreshToken: "pool-b-refresh",
-        expiresAt: Date.now() + 10 * 60_000,
-        chatgptAccountId: "acct-pool-b",
-      });
-    }
-    updateAccountQuota("pool-b", 20);
-  }
-  for (const accountId of options.reauthAccountIds ?? []) markAccountNeedsReauth(accountId);
-
-  const server = startServer(0);
-  return {
-    config,
-    dispatches,
-    restoreFetch: () => {
-      if (globalThis.fetch === redirectedFetch) globalThis.fetch = originalGlobalFetch;
-    },
-    server,
-    upstream,
-    request: ({
-      stream = false,
-      signal,
-      model = POOL_RETRY_MODEL,
-      path = "/v1/responses",
-      callerBearer = true,
-      headers = {},
-      extraBody = {},
-    } = {}) => originalGlobalFetch(new URL(path, server.url), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
-        ...headers,
-      },
-      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream, ...extraBody }),
-      signal,
-    }),
-  };
-}
-
-async function stopPoolRetryHarness(harness: PoolRetryHarness): Promise<void> {
-  harness.restoreFetch();
-  await harness.server.stop(true);
-  await harness.upstream.stop(true);
-}
 
 function rejectionResponse(body: BodyInit, headers: Record<string, string> = {}): Response {
   return new Response(body, {
@@ -3290,101 +3080,6 @@ describe("server local API auth", () => {
     { timeout: SERVER_BUDGET_MS },
   );
 
-  test.each([429, 402] as const)(
-    "a same-workspace caller main is bound by its workspace id and never sees a %i scoped refusal",
-    async rejection => {
-      // The alternate resolved here is the request's own main credential: it has no
-      // stored account id, so the scope gate can only bind it by the workspace id the
-      // caller credential would materialize upstream.
-      const model = "gpt-daybreak-blue-latest";
-      const harness = await startPoolRetryHarness(() => new Response(
-        JSON.stringify({
-          error: {
-            code: "organization_spend_limit_exceeded",
-            message: "The usage limit has been reached",
-          },
-        }),
-        { status: rejection, headers: { "content-type": "application/json", "retry-after": "60" } },
-      ), {
-        secondAccount: false,
-        modelRosterByAccount: { "acct-pool-a": [model] },
-      });
-      try {
-        const response = await harness.request({
-          model,
-          headers: { "chatgpt-account-id": "acct-pool-a" },
-        });
-        expect(response.status).toBe(rejection);
-        expect(harness.dispatches).toEqual(["acct-pool-a"]);
-      } finally {
-        await stopPoolRetryHarness(harness);
-      }
-    },
-    { timeout: SERVER_BUDGET_MS },
-  );
-
-  test("a same-workspace caller main is also bound by the bearer token's account claim", async () => {
-    const model = "gpt-daybreak-blue-latest";
-    const harness = await startPoolRetryHarness(() => new Response(
-      JSON.stringify({
-        error: {
-          code: "organization_spend_limit_exceeded",
-          message: "The usage limit has been reached",
-        },
-      }),
-      { status: 429, headers: { "content-type": "application/json", "retry-after": "60" } },
-    ), {
-      secondAccount: false,
-      modelRosterByAccount: { "acct-pool-a": [model] },
-    });
-    try {
-      const response = await harness.request({
-        model,
-        headers: {
-          authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-pool-a" })}`,
-        },
-      });
-      expect(response.status).toBe(429);
-      expect(harness.dispatches).toEqual(["acct-pool-a"]);
-    } finally {
-      await stopPoolRetryHarness(harness);
-    }
-  }, { timeout: SERVER_BUDGET_MS });
-
-  test("a suppressed 5xx-wrapped scoped refusal still records its normalized quota outcome", async () => {
-    // ChatGPT sometimes wraps quota exhaustion in a generic 5xx. Suppressing the
-    // same-workspace alternate must still record the normalized 429 on the refused
-    // account — otherwise it earns only a transient failure and stays selectable.
-    const harness = await startPoolRetryHarness(() => new Response(
-      JSON.stringify({
-        error: {
-          code: "organization_spend_limit_exceeded",
-          message: "The usage limit has been reached",
-        },
-      }),
-      // No Retry-After: the send layer honours it as a real wait, so the cooldown must
-      // come from the normalized quota record's default, not the wire header.
-      { status: 502, headers: { "content-type": "application/json" } },
-    ));
-    try {
-      // pool-b shares pool-a's workspace, so the resolved alternate is suppressed.
-      saveCodexAccountCredential("pool-b", {
-        accessToken: "pool-b-token",
-        refreshToken: "pool-b-refresh",
-        expiresAt: Date.now() + 10 * 60_000,
-        chatgptAccountId: "acct-pool-a",
-      });
-      const response = await harness.request();
-      expect(response.status).toBe(502);
-      expect(harness.dispatches).not.toContain("acct-pool-b");
-      const health = getCodexUpstreamHealth("pool-a");
-      expect(health).toMatchObject({ cooldownSource: "default" });
-      expect(health?.cooldownUntil).toBeGreaterThan(Date.now());
-    } finally {
-      await stopPoolRetryHarness(harness);
-    }
-  }, { timeout: SERVER_BUDGET_MS });
-
   test("#584: Retry-After cools the first account even when its account retry fails", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
       ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {
@@ -3770,7 +3465,7 @@ describe("server local API auth", () => {
 
   test("valid JSON wrong top-level shape never authorizes a pool retry", async () => {
     // One harness, five bodies — same reason as the sibling above. Each
-    // startPoolRetryHarness() wipes and recreates TEST_DIR, binds a server, and
+    // startPoolRetryHarness() wipes and recreates its OPENCODEX_HOME directory, binds a server, and
     // redirects global fetch; five of those did not fit Bun's 5s default on a
     // Windows runner, and the request still in flight when the budget expired
     // raced the next test through that same global fetch.
