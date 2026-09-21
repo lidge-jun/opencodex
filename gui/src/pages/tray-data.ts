@@ -71,7 +71,9 @@ export function quotaWindows(quota: AccountQuota | null) {
     { id: 'quota.fiveHourLimit', key: 'quota.fiveHourLimit' as const, percent: quota.fiveHourPercent ?? quota.shortPercent, reset: quota.fiveHourResetAt ?? quota.shortResetAt },
     { id: 'quota.weeklyLimit', key: 'quota.weeklyLimit' as const, percent: quota.weeklyPercent, reset: quota.weeklyResetAt },
     { id: 'quota.monthlyLimit', key: 'quota.monthlyLimit' as const, percent: quota.monthlyPercent, reset: quota.monthlyResetAt },
-    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: `custom:${w.label}`, label: w.label, percent: w.percent, reset: w.resetAt })) : []),
+    // A provider-named window is identified by its own label; the de-duplication below is what
+    // keeps that unique, including against the fixed keys above.
+    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: w.label, label: w.label, percent: w.percent, reset: w.resetAt })) : []),
   ];
   const kept = windows.filter((w, index) => index === 0 && quota.monthlyPercent === undefined || finite(w.percent) || resetTimestamp(w.reset) !== null);
   // A provider is free to report two custom windows under one label. The row identity has to
