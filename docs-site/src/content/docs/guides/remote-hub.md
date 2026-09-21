@@ -111,6 +111,13 @@ Bind the data listener to the hub's Tailscale address, enable the loopback compa
 own processes reach that same port without a credential, and publish management separately. The
 values below are examples:
 
+:::danger[Use a dedicated single-tenant host]
+The loopback companion is unauthenticated: every process and OS user on this machine can use the
+hub's provider credentials and account quota, and can starve authenticated remote clients. Do not
+enable it on a shared or multi-tenant host. If the host is shared, omit the
+`unauthenticatedLoopbackListener` command and do not run the hub's local integrations.
+:::
+
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10

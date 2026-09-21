@@ -123,6 +123,18 @@ describe("the one-port hub recipe", () => {
     }
   });
 
+  test("both locales warn that the companion requires a dedicated host", async () => {
+    const warnings = [
+      ["en", GUIDE, "every process and OS user", "shared or multi-tenant host"],
+      ["ko", KO_GUIDE, "모든 프로세스와 OS 사용자", "공유 또는 다중 테넌트 호스트에서는 활성화하지 마세요"],
+    ] as const;
+    for (const [locale, file, localAccess, sharedHost] of warnings) {
+      const source = await Bun.file(file).text();
+      expect(source, locale).toContain(localAccess);
+      expect(source, locale).toContain(sharedHost);
+    }
+  });
+
   test("no locale tells the operator to export a data-plane token by hand", async () => {
     for (const [locale, file] of LOCALES) {
       const source = await Bun.file(file).text();
