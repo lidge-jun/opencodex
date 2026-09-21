@@ -167,7 +167,14 @@ export function isConnectionRefused(error: unknown): boolean {
     const record = current as { code?: unknown; cause?: unknown; errors?: unknown };
     if (record.code === "ECONNREFUSED" || record.code === "ConnectionRefused") return true;
     if (typeof record.code === "string" && record.code.endsWith("ECONNREFUSED")) return true;
-    if (Array.isArray(record.errors) && record.errors.some(error => visit(error, depth + 1))) return true;
+    if (Array.isArray(record.errors) && record.errors.length > 0) {
+      // One connect attempt fanned out over several addresses reports a single AggregateError.
+      // Only a unanimous refusal proves the endpoint is free: a bundle that mixes ECONNREFUSED
+      // with a timeout means one address answered nothing at all, and an address whose state is
+      // unreadable is unknown, not absence. Collapsing it to "refused" is how a second runtime
+      // gets started on a port that already has one.
+      return record.errors.every(error => visit(error, depth + 1));
+    }
     return visit(record.cause, depth + 1);
   };
   return visit(error, 0);

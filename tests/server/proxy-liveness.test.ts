@@ -169,6 +169,18 @@ describe("isConnectionRefused", () => {
       Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
     ]))).toBe(false);
   });
+
+  test("a mixed aggregate is not proof of absence", () => {
+    // Happy-eyeballs style fan-out puts every address in one error. If one address refused and
+    // another never answered, the endpoint's state is unknown: the refusal speaks only for the
+    // address that produced it.
+    const refused = Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    const timedOut = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    expect(isConnectionRefused(new AggregateError([refused, timedOut]))).toBe(false);
+    expect(isConnectionRefused(new AggregateError([timedOut, refused]))).toBe(false);
+    expect(isConnectionRefused(new AggregateError([refused, refused]))).toBe(true);
+    expect(isConnectionRefused(new AggregateError([]))).toBe(false);
+  });
 });
 
 describe("proxyIdentityAt", () => {
