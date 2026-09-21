@@ -100,10 +100,18 @@ describe("desktop exit ownership", () => {
     const exit = code(EXIT);
     const claim = exit.indexOf("pub fn claim_drain");
     expect(claim).toBeGreaterThan(-1);
-    const body = exit.slice(claim, exit.indexOf("\n    }", claim));
-    expect(body).toContain("if inner.phase != ExitPhase::Idle");
-    expect(body).toContain("inner.reason.get_or_insert(fallback)");
-    expect(body).toContain("inner.phase = ExitPhase::Draining");
+    const body = exit.slice(claim, exit.indexOf("pub fn finish_drain", claim));
+    expect(body.length).toBeGreaterThan(0);
+    // One match over the phase, so the reason a caller wins and the move out of Idle cannot be
+    // separated by a second caller arriving between them.
+    expect(body).toContain("match inner.phase {");
+    const idle = body.indexOf("ExitPhase::Idle => {");
+    expect(idle).toBeGreaterThan(-1);
+    const arm = body.slice(idle, body.indexOf("ExitPhase::Spawning => {", idle));
+    expect(arm).toContain("inner.reason.get_or_insert(fallback)");
+    expect(arm).toContain("inner.phase = ExitPhase::Draining;");
+    // Nothing else in the file moves the phase to draining.
+    expect(exit.split("inner.phase = ExitPhase::Draining;")).toHaveLength(3);
   });
 
   test("a quit that lands while a runtime is starting is deferred, not lost", () => {
