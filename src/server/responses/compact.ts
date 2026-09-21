@@ -1213,7 +1213,7 @@ export async function handleResponsesCompact(
       if (alternate && req.signal.aborted) {
         releaseCodexAuthContextProbeLease(alternate.authCtx);
         recordCompactPoolOutcome(outcomeCtx, 499);
-        await upstream.body?.cancel().catch(() => undefined);
+        void upstream.body?.cancel(req.signal.reason).catch(() => undefined);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
       // The same scope binding the regular path applies: an organization-scoped
@@ -1236,7 +1236,7 @@ export async function handleResponsesCompact(
       if (alternate && req.signal.aborted) {
         releaseCodexAuthContextProbeLease(alternate.authCtx);
         recordCompactPoolOutcome(outcomeCtx, 499);
-        await upstream.body?.cancel().catch(() => undefined);
+        void upstream.body?.cancel(req.signal.reason).catch(() => undefined);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
       if (alternate && sharedWorkspaceScope) {
