@@ -60,12 +60,34 @@ export interface LivenessIo {
   nowFn?: () => number;
 }
 
+/**
+ * Operator override for the per-probe fetch ceilings below: integer milliseconds > 0.
+ *
+ * For hosts where a security layer (content filter / EDR network extension) adds a
+ * fixed per-connection cost to loopback TCP — measured at ~1s per connect on an
+ * affected macOS machine — the shipped 750ms single-probe default aborts before a
+ * healthy proxy can answer, and every CLI liveness consumer (`ocx health`,
+ * `ocx status`, `ocx account *`, `ocx login codex`, `ocx ready`) then reports the
+ * proxy as unreachable while direct `curl /healthz` succeeds. Setting
+ * OCX_PROBE_TIMEOUT_MS=5000 restores correct verdicts on such hosts without
+ * changing behavior anywhere else. Parsed once at module load; malformed values
+ * are ignored so a typo can only fall back to the defaults, never break startup.
+ */
+export function parseProbeTimeoutOverrideMs(raw: string | undefined): number | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return undefined;
+  const n = Number(trimmed);
+  return n > 0 ? n : undefined;
+}
+
+const probeTimeoutOverrideMs = parseProbeTimeoutOverrideMs(process.env.OCX_PROBE_TIMEOUT_MS);
+
 /** Default per-probe fetch ceiling shared by liveness and readiness probes. */
-export const DEFAULT_PROBE_TIMEOUT_MS = 750;
+export const DEFAULT_PROBE_TIMEOUT_MS = probeTimeoutOverrideMs ?? 750;
 
 /** Default probe options for service stop / orphan cleanup — a just-bound proxy can miss a single 750ms probe. */
 export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: 1500,
+  timeoutMs: probeTimeoutOverrideMs ?? 1500,
   attempts: 3,
 };
 
@@ -81,7 +103,7 @@ export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> =
  * the stop path already uses for the mirror-image decision.
  */
 export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: 1500,
+  timeoutMs: probeTimeoutOverrideMs ?? 1500,
   attempts: 3,
 };
 

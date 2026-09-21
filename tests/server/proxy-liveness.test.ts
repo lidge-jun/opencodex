@@ -8,10 +8,12 @@ import {
   findLiveProxy,
   isOpencodexHealthz,
   loopbackProbeHosts,
+  parseProbeTimeoutOverrideMs,
   probeHostname,
   probePortOwner,
   probeReadiness,
   proxyIdentityAt,
+  SERVICE_STOP_LIVENESS,
   START_OWNERSHIP_LIVENESS,
   validateReadyzBody,
 } from "../../src/server/proxy-liveness";
@@ -1038,5 +1040,36 @@ describe("client-role discrimination (#4662)", () => {
       fetchFn: (async () => healthz(CLIENT)) as typeof fetch,
     });
     expect(live).toEqual({ pid: 4242, port: 10100, hostname: undefined, source: "config", version: "2.6.17", role: "client" });
+  });
+});
+
+describe("parseProbeTimeoutOverrideMs", () => {
+  test("accepts positive integer milliseconds", () => {
+    expect(parseProbeTimeoutOverrideMs("5000")).toBe(5000);
+    expect(parseProbeTimeoutOverrideMs("1")).toBe(1);
+  });
+
+  test("trims surrounding whitespace", () => {
+    expect(parseProbeTimeoutOverrideMs("  4321 ")).toBe(4321);
+  });
+
+  test("ignores absent, empty, and non-integer values", () => {
+    expect(parseProbeTimeoutOverrideMs(undefined)).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("")).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("   ")).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("abc")).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("1.5")).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("-5")).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("+7")).toBeUndefined();
+  });
+
+  test("ignores zero so a typo cannot disable probe timeouts", () => {
+    expect(parseProbeTimeoutOverrideMs("0")).toBeUndefined();
+  });
+
+  test("defaults stay untouched when no override parses", () => {
+    expect(DEFAULT_PROBE_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(SERVICE_STOP_LIVENESS.timeoutMs).toBeGreaterThanOrEqual(DEFAULT_PROBE_TIMEOUT_MS);
+    expect(START_OWNERSHIP_LIVENESS.timeoutMs).toBeGreaterThanOrEqual(DEFAULT_PROBE_TIMEOUT_MS);
   });
 });
