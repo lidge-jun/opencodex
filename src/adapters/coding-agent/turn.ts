@@ -1,12 +1,16 @@
-import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { execFileSync, spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { commandInvocation } from "../../lib/win-exec";
+import { modelRecordValue } from "../../reasoning-effort";
 import type { IncomingMeta } from "../base";
-import { buildConversationInput, CodingAgentProtocolError, mapStreamMessageToEvents, readJsonLines, type StreamParseState } from "./protocol";
+import { buildConversationInput, CodingAgentProtocolError, mapStreamMessageToEvents, projectedHistoryCharLimit, readJsonLines, type StreamParseState } from "./protocol";
 import { resolveCodingAgentBinary, resolveProfileByBaseUrl, type CodingAgentProviderProfile, type WhichFn } from "./profile";
 
 /** Injectable spawn for tests; production uses node:child_process. */
 export type SpawnFn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+
+/** Injectable Windows process-tree terminator; production uses taskkill /T /F. */
+export type KillWindowsProcessTreeFn = (pid: number) => void;
 
 /** Per-turn injectables: spawn/which seams for tests plus wall-clock ceilings for timeout, kill grace, and bounded reap. */
 export interface CodingAgentDeps {
@@ -20,12 +24,22 @@ export interface CodingAgentDeps {
   reapTimeoutMs?: number;
   /** Test seam for Windows command-shim invocation. */
   platform?: NodeJS.Platform;
+  /** Test seam for terminating a Windows CLI and all descendants. */
+  killWindowsProcessTree?: KillWindowsProcessTreeFn;
 }
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_KILL_GRACE_MS = 2_000;
 /** Bound captured stderr so an error message can never carry an unbounded (or secret) payload. */
 const MAX_STDERR_BYTES = 8 * 1024;
+
+function killWindowsProcessTree(pid: number): void {
+  const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+  execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
+    stdio: "pipe",
+    windowsHide: true,
+  });
+}
 
 /** Env keys a CLI needs to run; everything else is dropped so the child env is scoped and deterministic. */
 const INHERITED_ENV_KEYS = [
@@ -93,6 +107,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const killGraceMs = deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
   const reapTimeoutMs = deps.reapTimeoutMs ?? (killGraceMs * 2 + 250);
+  const platform = deps.platform ?? process.platform;
 
   if (incoming.abortSignal?.aborted) {
     emit({ type: "error", message: "Coding-agent turn was aborted before start." });
@@ -140,7 +155,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
 
   const args = buildArgs(profile, parsed, provider);
   const env = buildEnv(profile, apiKey);
-  const invocation = commandInvocation(binary, args, deps.platform ?? process.platform, { env });
+  const invocation = commandInvocation(binary, args, platform, { env });
 
   let child: ChildProcess;
   try {
@@ -197,6 +212,12 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   const kill = (): void => {
     if (killed || child.killed) return;
     killed = true;
+    if (platform === "win32" && child.pid !== undefined) {
+      try {
+        (deps.killWindowsProcessTree ?? killWindowsProcessTree)(child.pid);
+        return;
+      } catch { /* fall back to terminating the direct child */ }
+    }
     try { child.kill("SIGTERM"); } catch { /* already gone */ }
     killTimer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
@@ -244,7 +265,14 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     const stdin = child.stdin;
     if (stdin) {
       stdin.on("error", () => { /* EPIPE if the CLI exits early; surfaced via close/stderr */ });
-      for (const line of buildConversationInput(parsed)) stdin.write(`${line}\n`);
+      // The projected history scales with the model context window on the routed provider row
+      // (catalog and config metadata merged): a 1M-token model keeps 3M characters of replay
+      // where the flat cap cut it near 50k-130k tokens of content. Absent metadata keeps the
+      // flat cap.
+      const historyCharLimit = projectedHistoryCharLimit(
+        modelRecordValue(provider.modelContextWindows, parsed.modelId) ?? provider.contextWindow,
+      );
+      for (const line of buildConversationInput(parsed, { maxHistoryChars: historyCharLimit })) stdin.write(`${line}\n`);
       stdin.end();
     }
     const stdout = child.stdout;

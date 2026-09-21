@@ -126,6 +126,8 @@ export interface OcxParsedRequest {
    * (see src/responses/compaction.ts).
    */
   _compactionRequest?: boolean;
+  /** Manual compaction moved to another provider: summarize portably even on a canonical ChatGPT target. */
+  _portableCompaction?: boolean;
   /**
    * True when the current request newly introduced a stored compaction summary/marker. Historical
    * markers restored by previous_response_id expansion were already acknowledged and do not reset
@@ -208,8 +210,34 @@ export interface OcxVideoContent {
   videoUrl: string;
 }
 
-/** A user/developer message content part: text or native media. */
-export type OcxContentPart = OcxTextContent | OcxImageContent | OcxVideoContent;
+/**
+ * An attached document carried as bytes rather than as a description of itself.
+ *
+ * Both inbound parsers used to reduce an attachment to a title before any adapter ran, so no
+ * adapter could forward one even to a target that has a representation for it, and the caller
+ * could not tell "the model read the document" from "the model was told a document existed"
+ * (#5212).
+ *
+ * `text` is that marker, derived once from what the part knows and kept on the part itself.
+ * Every text-only consumer in the tree reaches a `.text` fallback for a part it does not
+ * recognize, so carrying it here means a wire with no document representation still states the
+ * attachment instead of emitting `undefined` or a mislabelled `[video]`. Only the wires that
+ * have a counterpart read `data`.
+ */
+export interface OcxDocumentContent {
+  type: "document";
+  /** `[document: name]` marker, for every wire with no document representation. */
+  text: string;
+  /** IANA media type of the payload, for example `application/pdf`. */
+  mediaType: string;
+  /** Base64 payload with no `data:` prefix. */
+  data: string;
+  /** The document's own name: an Anthropic document title or a Chat file part's filename. */
+  filename?: string;
+}
+
+/** A user/developer message content part: text, native media, or an attached document. */
+export type OcxContentPart = OcxTextContent | OcxImageContent | OcxVideoContent | OcxDocumentContent;
 
 export interface OcxThinkingContent {
   type: "thinking";

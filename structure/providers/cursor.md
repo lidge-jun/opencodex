@@ -8,7 +8,7 @@ namespace handling retain their provider contract; the bounded native scope live
 [the shared catalog](../catalog.md#shared-catalog).
 
 Cursor's direct adapter does not enter the OpenAI Chat serializer's
-[OpenCode Go instruction ordering](chat-compat.md#opencode-go-chronological-instructions).
+[chronological instruction ordering](chat-compat.md#chronological-in-conversation-instructions).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
@@ -59,6 +59,12 @@ effort variants the roster carries. That is deliberate — Cursor advertises ids
 `Run` returns `not_found`, which is what `CURSOR_KNOWN_UNCALLABLE_MODEL_IDS` and the
 variant-level quarantine exist for — so a new family is admitted by adding its capability row,
 not by relaxing the filter.
+
+Synthetic ultra rows (`<base>-1m` markers such as `kimi-k3-1m`, kept in `configured` by legacy
+pins or retain lists) clear that base-availability check and one more: the live roster must flag
+Max Mode for the base (`GetUsableModels.maxMode`), or the row stays hidden. Base availability
+alone is not enough — an account on a plan without Max Mode would otherwise see a row whose
+ultra request it cannot serve.
 
 A seeded ladder carries only rungs supported by vendor evidence. `muse-spark-1.3` is seeded at
 `minimal` through `xhigh` even though Cursor's roster also advertises `muse-spark-1.3-max`:
@@ -182,7 +188,7 @@ classifies as overflow. Coverage lives in
 
 An incomplete client-tool stream is fail-closed for the current turn: `finalizeTurnEvents` emits the prefix owned by `CURSOR_INCOMPLETE_TOOL_CALL_MESSAGE_PREFIX` and does not retry that send. After the error is streamed, eligible non-isolated turns remint the Cursor conversation id, persist the thread override, and invalidate the inherited checkpoint so the next turn does not resume a conversation left waiting for `mcpResult`. `src/adapters/cursor/thread-continuity.ts` permits three such rotations per retained identity-scoped thread owner in a separate bounded counter; exhaustion keeps reusing the conversation and records an `incomplete-tool-remint-exhausted` diagnostic, while a clean completed turn clears that scope's counter. This allowance never consumes or replenishes the overflow resend budget. Isolated helper and compaction turns neither remint nor change the parent's allowance or checkpoint. Native Composer replay synthesizes `[missing tool_result for this tool_use in history]` for unpaired `toolCallStep` history; external wire models skip native `mcpToolCall` replay, so conversation remint is their recovery path.
 
-Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 ## Mid-stream envelope echo
 

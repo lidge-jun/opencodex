@@ -1040,7 +1040,11 @@ describe("codex-account-store CRUD", () => {
   });
 
   test("a forced refresh rotates a time-valid credential that upstream rejected (#2887)", async () => {
-    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+    const {
+      forceRefreshCodexPoolToken,
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+    } =
       await import("../../src/codex/account-store");
     // Far beyond the refresh skew: getValidCodexToken would return this untouched, which is
     // exactly why a 401 on it was unrecoverable.
@@ -1153,7 +1157,12 @@ describe("codex-account-store CRUD", () => {
    * healthy account marked for reauthentication on behalf of a live request.
    */
   test("cancelling the caller that opened a refresh flight does not cancel a live joiner (#2892)", async () => {
-    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+    const {
+      forceRefreshCodexPoolToken,
+      readCodexAccountRecord,
+      registerCodexRefreshGenerationHandoff,
+      saveCodexAccountCredential,
+    } =
       await import("../../src/codex/account-store");
     saveCodexAccountCredential("cancel-owner", {
       accessToken: "rejected",
@@ -1164,6 +1173,8 @@ describe("codex-account-store CRUD", () => {
     const generation = readCodexAccountRecord("cancel-owner")!.generation;
 
     const originalFetch = globalThis.fetch;
+    const handoffs: Array<[string, number, number]> = [];
+    const unregisterHandoff = registerCodexRefreshGenerationHandoff((...handoff) => handoffs.push(handoff));
     let sawAbort = false;
     let calls = 0;
     let releaseFetch: (() => void) | undefined;
@@ -1203,7 +1214,11 @@ describe("codex-account-store CRUD", () => {
       expect(joined.accessToken).toBe("rotated");
       expect(calls).toBe(1);
       expect(readCodexAccountRecord("cancel-owner")!.credential!.accessToken).toBe("rotated");
+      // Completion is attached to the detached flight, not to either request's wait.
+      // The cancelled owner therefore cannot strand process-local affinities at G.
+      expect(handoffs).toEqual([["cancel-owner", generation, generation + 1]]);
     } finally {
+      unregisterHandoff();
       globalThis.fetch = originalFetch;
     }
   });
@@ -1704,6 +1719,105 @@ describe("codex-account-store CRUD", () => {
       expect(getCodexAccountCredential("foreign-sibling")?.accessToken).toBe("sibling-fresh");
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a propagated alias gets its own generation handoff from the shared flight (#5135 review)", async () => {
+    // Thread-affinity entries are generation-fenced, and a dormant alias commits at its OWN
+    // generation when it adopts the rotated credential. Handing off only the owner leaves the
+    // alias's affinities at alias.generation - 1, where the exact-generation liveness check
+    // fails them on the next request.
+    const {
+      getValidCodexToken,
+      readCodexAccountRecord,
+      registerCodexRefreshGenerationHandoff,
+      saveCodexAccountCredential,
+    } = await import("../../src/codex/account-store");
+    const shared = { accessToken: "aff-old", refreshToken: "aff-grant", expiresAt: 0, chatgptAccountId: "acc" };
+    saveCodexAccountCredential("aff-owner", { ...shared });
+    saveCodexAccountCredential("aff-alias", { ...shared });
+    const ownerGeneration = readCodexAccountRecord("aff-owner")!.generation;
+    const aliasGeneration = readCodexAccountRecord("aff-alias")!.generation;
+
+    const handoffs: Array<[string, number, number]> = [];
+    const unregisterHandoff = registerCodexRefreshGenerationHandoff((...handoff) => handoffs.push(handoff));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "aff-new",
+      refresh_token: "aff-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+
+    try {
+      await getValidCodexToken("aff-owner");
+
+      expect(handoffs).toEqual([
+        ["aff-owner", ownerGeneration, ownerGeneration + 1],
+        ["aff-alias", aliasGeneration, aliasGeneration + 1],
+      ]);
+    } finally {
+      unregisterHandoff();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a throwing handoff cannot fail the flight, starve other handoffs, or skip plan reconciliation (#5135 review)", async () => {
+    // Handoffs run after the rotated credential is already persisted, so a listener failure
+    // surfacing through the shared refreshPromise would report a refresh that never failed to
+    // every surviving waiter — and would skip both the remaining listeners and the plan note.
+    const {
+      getValidCodexToken,
+      readCodexAccountRecord,
+      registerCodexRefreshGenerationHandoff,
+      saveCodexAccountCredential,
+    } = await import("../../src/codex/account-store");
+    const { loadConfig, saveConfig } = await import("../../src/config");
+    const { resetJwtPlanNotesForTests } = await import("../../src/codex/plan-from-token");
+    resetJwtPlanNotesForTests();
+
+    saveConfig({
+      port: 10199,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{ id: "fragile-flight", email: "fragile@example.test", plan: "plus", isMain: false }],
+    });
+    saveCodexAccountCredential("fragile-flight", {
+      accessToken: planJwt("plus"),
+      refreshToken: "fragile-grant",
+      expiresAt: 0,
+      chatgptAccountId: "acct-plan-flight",
+    });
+    const generation = readCodexAccountRecord("fragile-flight")!.generation;
+
+    const handoffs: Array<[string, number, number]> = [];
+    // Registered first so it runs first: the recording listener behind it must still fire.
+    const unregisterThrowing = registerCodexRefreshGenerationHandoff(() => {
+      throw new Error("listener exploded");
+    });
+    const unregisterRecording = registerCodexRefreshGenerationHandoff((...handoff) => handoffs.push(handoff));
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: planJwt("pro"),
+      refresh_token: "fragile-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+
+    try {
+      const result = await getValidCodexToken("fragile-flight");
+
+      expect(result.accessToken).toBe(planJwt("pro"));
+      expect(readCodexAccountRecord("fragile-flight")!.credential?.refreshToken).toBe("fragile-rotated");
+      expect(handoffs).toEqual([["fragile-flight", generation, generation + 1]]);
+      // Plan reconciliation sits behind the handoffs in the same settlement and must still run.
+      expect(loadConfig().codexAccounts?.[0]?.plan).toBe("pro");
+      expect(loadConfig().codexAccounts?.[0]?.planSource).toBe("jwt");
+    } finally {
+      unregisterThrowing();
+      unregisterRecording();
+      warn.mockRestore();
+      globalThis.fetch = originalFetch;
+      resetJwtPlanNotesForTests();
     }
   });
 

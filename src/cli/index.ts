@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import { findGuiDist } from "../server/gui-static";
+import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
 
 // Best-effort recovery for runtime execution and spawned children if launched
 // from an unlinked/deleted working directory (runs after hoisted ESM module imports).
@@ -63,7 +66,7 @@ import {
   pendingTeardownsAreExactly,
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
-import { collectStatus, hubStatusLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
+import { collectStatus, deadProxyRoutingAdviceLines, detectMissingCodexCatalogPath, hubStatusLines, missingCodexCatalogLines, remoteHubBannerLine, remoteHubStatusLines, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 import { parseStartOptions, StartArgsError } from "./start-args";
@@ -86,6 +89,8 @@ import { findLiveProxy, probeHostname, probePortOwner, START_OWNERSHIP_LIVENESS,
 import { createReadinessGate } from "../server/readiness";
 import { isApiAuthRequired } from "../server/auth-cors";
 import { runReady, type ReadyArgs } from "./ready";
+import { runResolve, type ResolveArgs } from "./resolve";
+import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
@@ -597,11 +602,11 @@ async function handleStart(options: { block?: boolean } = {}) {
       try {
         const { fetchAllModels } = await import("../server/management-api");
         const { desktopVisibleNativeSlugs } = await import("../codex/catalog");
-        const { resolveCodexModelEntitlements } = await import("../codex/model-entitlements");
+        const { resolveAdmittedCodexModelEntitlements } = await import("../codex/model-entitlement-admission");
         const { buildDesktopDiscoveryInputs } = await import("../claude/desktop-discovery-inputs");
         const [models, modelEntitlements] = await Promise.all([
           fetchAllModels(config),
-          resolveCodexModelEntitlements(config, { clientVersion: null }),
+          resolveAdmittedCodexModelEntitlements(config, { clientVersion: null }),
         ]);
         const inputs = buildDesktopDiscoveryInputs({
           config, models, modelEntitlements,
@@ -977,6 +982,16 @@ async function handleStop() {
   // service — the exact failure this flag prevents. A plain stop failure is different: we
   // tried, so local teardown still proceeds.
   let ownershipBlocked = false;
+  // Structured twin of the human lines below, for `ocx stop --json`: one document the
+  // desktop shell can read across the process boundary (D4). Every field is assigned
+  // where the corresponding boolean already flips — the summarizer never re-decides.
+  const record: StopRunRecord = {
+    service: "absent",
+    proxy: "unknown",
+    sharedTeardown: "skipped",
+    inheritedTeardownBlocks: false,
+    receiptClearFailed: false,
+  };
   // Deferring shared teardown to this process is an obligation, so record it on disk
   // before asking for it (#3008). A parent that dies mid-stop would otherwise leave the
   // client config routed at a proxy that is already gone, with nothing to find later.
@@ -1054,6 +1069,7 @@ async function handleStop() {
   };
   try {
     const serviceStop = stopServiceIfInstalledDetailed();
+    record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
     schedulerCanRespawn = serviceStop === "stopped-respawnable";
     // No "won't respawn" claim here: a stopped Task Scheduler can still respawn through
@@ -1074,6 +1090,7 @@ async function handleStop() {
       console.error("   Run 'ocx service status' to see the query error, repair Task Scheduler access, then retry.");
     }
   } catch (err) {
+    record.service = "error";
     if (isServiceOwnershipError(err)) {
       ownershipBlocked = true;
       stopFailed = true;
@@ -1097,8 +1114,10 @@ async function handleStop() {
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
       removeRuntimePort(pid);
+      record.proxy = "stopped";
     } catch (err) {
       stopFailed = true;
+      record.proxy = err instanceof ProxyOwnershipRefusedError ? "ownership-refused" : "stop-failed";
       console.error(`❌ Failed to stop proxy (PID ${pid}).`);
       // stopProxy throws with the reason — an ownership refusal (409) carries the
       // remediation ("run the stop from that home"). Swallowing it leaves the operator
@@ -1133,8 +1152,10 @@ async function handleStop() {
           { hostname: live.hostname ?? "127.0.0.1", port: live.port },
         );
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
+        record.proxy = "stopped-orphan";
       } catch (err) {
         stopFailed = true;
+        record.proxy = err instanceof ProxyOwnershipRefusedError ? "ownership-refused" : "stop-failed";
         console.error(`❌ Failed to stop proxy (PID ${live.pid}).`);
         const detail = err instanceof Error ? err.message : String(err);
         if (detail) console.error(`   ${detail}`);
@@ -1152,12 +1173,14 @@ async function handleStop() {
       // under a proxy that is still serving — the exact failure the deferral exists to
       // prevent, arrived at from the other direction.
       stopFailed = true;
+      record.proxy = "unresolvable-pid";
       ownershipBlocked = true;
       console.error(`❌ A proxy is answering on port ${live.port}, but no process id could be resolved for it, so it cannot be stopped from here.`);
       console.error("   Skipping shared teardown: restoring client config while it serves would leave both pointing at each other.");
       console.error("   Stop it from the home that started it, or end the process manually, then rerun 'ocx stop'.");
-    } else if (!stoppedService) {
-      console.log("No running proxy found.");
+    } else {
+      record.proxy = "not-running";
+      if (!stoppedService) console.log("No running proxy found.");
     }
     if (!stopFailed) {
       // `readPid() === null` means the snapshotted pid file was absent, invalid, dead, or
@@ -1180,6 +1203,7 @@ async function handleStop() {
     const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
     if (survivor) {
       stopFailed = true;
+      record.proxy = "respawned";
       console.error(`❌ A proxy is still listening on port ${survivor.port} after the service stop; it is being respawned.`);
       console.error("   Skipping shared teardown: restoring client config while the proxy runs leaves both pointing at each other.");
       ownershipBlocked = true;
@@ -1215,6 +1239,7 @@ async function handleStop() {
         // No file, no nonce: nothing to quarantine and nothing to remove. The home itself
         // may be hiding an obligation, so block and ask for the directory to be fixed.
         inheritedBlocks = true;
+        record.inheritedTeardownBlocks = true;
         stopFailed = true;
         console.error(`❌ ${read.detail}, so this stop cannot tell whether a shared teardown is still owed.`);
         console.error("   Skipping shared teardown. Fix access to the opencodex home, then rerun 'ocx stop'.");
@@ -1223,6 +1248,7 @@ async function handleStop() {
       if (read.state === "invalid") {
         unreadable.push(read);
         inheritedBlocks = true;
+        record.inheritedTeardownBlocks = true;
         stopFailed = true;
         console.error(`❌ A pending-teardown receipt could not be read (${read.detail}).`);
         console.error("   It names no endpoint, so this stop cannot prove the proxy it belonged to is down.");
@@ -1234,6 +1260,7 @@ async function handleStop() {
         // proxy on an explicit --port can be respawned there while this address refuses,
         // so "dead" here proves nothing and must not authorize a restore.
         inheritedBlocks = true;
+        record.inheritedTeardownBlocks = true;
         stopFailed = true;
         console.error("❌ A shared teardown from an earlier stop is outstanding, but that stop could not record the address it was stopping.");
         console.error(`   Only the configured address (${read.receipt.endpoint.hostname}:${read.receipt.endpoint.port}) was recorded, which cannot prove the right proxy is down.`);
@@ -1245,12 +1272,14 @@ async function handleStop() {
         continue;
       }
       inheritedBlocks = true;
+      record.inheritedTeardownBlocks = true;
       stopFailed = true;
       console.error(`❌ A shared teardown from an earlier stop is still outstanding, and the proxy on ${read.receipt.endpoint.hostname}:${read.receipt.endpoint.port} could not be confirmed down.`);
       console.error("   Skipping shared teardown: restoring client config under a proxy that may still be running is what the deferral exists to prevent.");
       console.error("   The obligation is preserved; retry once the proxy is confirmed stopped.");
     }
   }
+  if (nativeRestoreHandledByProxy) record.sharedTeardown = "performed-by-proxy";
   const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy;
   if (!restoreBlocked) {
     if (recoveredNonces.length > 0) {
@@ -1259,6 +1288,7 @@ async function handleStop() {
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
     }
     const restore = await restoreSharedClientStateAfterStop();
+    record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
     if (restore.other) stopFailed = true;
     else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
     else if (restore.historyOnly) historyOnlyFailure = true;
@@ -1284,6 +1314,7 @@ async function handleStop() {
         // removal is surfaced rather than swallowed.
         if (!clearPendingTeardown(nonce)) {
           stopFailed = true;
+          record.receiptClearFailed = true;
           console.error(`❌ The shared teardown finished, but its receipt could not be removed: ${pendingTeardownPathFor(nonce)}`);
           console.error("   Remove it manually; otherwise every later stop and update will try to recover it again.");
         }
@@ -1328,7 +1359,13 @@ async function handleStop() {
       ? STOP_HISTORY_DEFERRED_EXIT_CODE
       : 1;
   }
-  return !stopFailed;
+  const summary = summarizeStopRun(record, {
+    failed: stopFailed,
+    historyOnly: historyOnlyFailure,
+    historyDeferred: historyDeferredNonces !== null,
+    exitCode: Number(process.exitCode ?? 0),
+  });
+  return { ok: !stopFailed, summary };
 }
 
 async function handleUninstall() {
@@ -1586,8 +1623,26 @@ async function handleStatus() {
     console.log(installed
       ? "     Restart with 'ocx start', or refresh the installed service: 'ocx service repair'."
       : "     Restart with 'ocx start', or install the persistent service: 'ocx service install'.");
+    // Restarting is only half the choice. A user who cannot sign in to Codex at all needs the
+    // way out that does not require this proxy to come back (#5261).
+    for (const line of deadProxyRoutingAdviceLines({
+      proxyUp: false,
+      routingKind: status.json.startup.routingKind,
+    })) {
+      console.log(`     ${line}`);
+    }
   }
   console.log(`   Dashboard: ${status.json.dashboard.url}${local}`);
+  // The dashboard is a build artifact, so a checkout that moved without `bun run build:gui` keeps
+  // serving the previous bundle and every feature added since simply does not appear (#5196's
+  // usage panel was invisible this way for five days). Reported next to the dashboard URL, which
+  // is where someone looks when the page is wrong.
+  for (const line of staleGuiBundleLines(inspectGuiBundleFreshness({
+    bundlePath: findGuiDist(),
+    sourcePath: join(import.meta.dir, "..", "..", "gui", "src"),
+  }))) {
+    console.log(`     ${line}`);
+  }
   console.log(`   Config: ${status.json.paths.config}${local}`);
   console.log(`   PID file: ${status.json.paths.pid}${local}`);
   console.log(`   Runtime: ${status.json.paths.runtime}${local}`);
@@ -1606,6 +1661,12 @@ async function handleStatus() {
   console.log(`   Codex autostart: ${status.json.codexAutostart ? "enabled" : "disabled"}${local}`);
   console.log(`   Restart safety: ${startupHealthSummary(status.json.startup)}${local}`);
   console.log(`   ${formatStartupRoutingDetail(status.json.startup)}${local}`);
+  // Independent of whether the proxy is up: a catalog pointer whose file is gone stops Codex
+  // loading its config at all, and presents as the same blank wall as dead routing (#5261).
+  // Tagged `(local)` on its header like every other local-state line, so a connected client
+  // cannot read a finding about its own Codex home as something the hub reported.
+  missingCodexCatalogLines(detectMissingCodexCatalogPath())
+    .forEach((line, index) => console.log(`   ${line}${index === 0 ? local : ""}`));
   if (status.json.startup.routingKind === "native") {
     let retainedProviderTable = false;
     try {
@@ -1734,6 +1795,14 @@ async function handleReady(args: ReadyArgs): Promise<number> {
   return runReady(args);
 }
 
+/**
+ * `ocx resolve` — argument parsing already happened in src/cli/root.ts (before any
+ * preflight side effect), so this handler only runs the runner and returns its exit code.
+ */
+async function handleResolve(args: ResolveArgs): Promise<number> {
+  return runResolve(args);
+}
+
 process.exit(await dispatchCommand(head, {
   args,
   command,
@@ -1754,6 +1823,7 @@ process.exit(await dispatchCommand(head, {
   },
   handleStart,
   handleStop,
+  handleResolve,
   handleEnsure,
   handleTrayProxyStart,
   handleTrayProxyRestart,

@@ -412,7 +412,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 95 built-in presets: 79 key-based, 12 OAuth, three local, and one default
+opencodex ships 96 built-in presets: 80 key-based, 12 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -559,8 +559,14 @@ stays as documentation of the restriction. Upstream terms:
 
 Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
 endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
-Volcengine Agent Plan uses its native Responses endpoint through `openai-responses`.
-The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Responses endpoint and
+Volcengine Coding Plan and Agent Plan use their native Responses endpoints through `openai-responses`.
+During validated Ark Coding Plan tool continuations, replaying the returned Responses `reasoning` item
+answered `400 InvalidParameter`, so the Coding Plan preset drops replayed reasoning items before
+forwarding continuation input; that is lossy, and `dropResponsesReasoningItems: false` turns it off.
+An install that already saved the Coding Plan provider on `openai-chat` keeps that wire — nothing
+rewrites a stored row — so switching is a deliberate edit: set `adapter` to `openai-responses` and
+`responsesPath` to `/responses`, or delete and re-add the preset. Explicit per-model `openai-chat`
+overrides remain available either way. The built-in DeepSeek preset also routes `deepseek-v4-flash` over its native Responses endpoint and
 keeps upstream SSE streaming enabled. If that model finishes every output item but omits the final
 Responses event, opencodex applies a five-second model-scoped grace repair; malformed or partial
 streams close as incomplete rather than being reported as successful.
@@ -686,7 +692,7 @@ voice models on the same host.
 Two things worth knowing before you pick it. **A Muse Code subscription does not apply
 here:** Meta scopes that credential to the Muse Code CLI and bills any other key
 pay-as-you-go. And the Contributor tier is cheap because Meta trains on your prompts —
-roughly 92% off input, 95% off output, and 99% off cached input — so keep confidential
+roughly 92% off input, 96% off output, and 99% off cached input — so keep confidential
 material off it. Muse Spark is also reachable through resellers, with a narrower roster:
 `command-code` carries both tiers, while `opencode-go` serves only
 `muse-spark-1.3-contributor`.

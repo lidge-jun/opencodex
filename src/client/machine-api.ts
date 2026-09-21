@@ -23,7 +23,7 @@ export interface MachineStatusV1 {
 export interface MachineApiDeps {
   sync: typeof syncConnectedClient;
   disconnect: typeof disconnectClient;
-  scheduleStandaloneRecycle: () => void;
+  scheduleStandaloneRecycle: (disconnectedTokenFingerprint: string) => void;
   hubReachability?: () => HubReachability;
   setHubReachability?: (value: HubReachability) => void;
 }
@@ -130,7 +130,7 @@ export async function handleMachineApi(
     }
     try {
       const result = await deps.disconnect(input.keepCatalog === undefined ? {} : { keepCatalog: input.keepCatalog });
-      deps.scheduleStandaloneRecycle();
+      deps.scheduleStandaloneRecycle(state.tokenFingerprint);
       return Response.json({ success: true, ...result }, { status: 202 });
     } catch (error) {
       return Response.json({ success: false, error: error instanceof Error ? error.message : "disconnect failed" }, { status: 409 });

@@ -328,7 +328,8 @@ export interface CodexPoolAccountRetryArgs {
   /** Sanitized caller input, before any selected Pool credential was materialized. */
   callerAuthHeaders: Headers;
   config: OcxConfig;
-  route: { providerName: string; modelId: string; provider: OcxProviderConfig };
+  /** Actual routed result narrowed to the fields this retry consumes. */
+  route: Pick<RouteResult, "providerName" | "modelId" | "provider" | "staticPolicy">;
   parsed: OcxParsedRequest;
   logCtx: RequestLogContext;
   options: {
@@ -681,7 +682,7 @@ export async function retryCodexPoolOnAlternateAccount(
     "pool",
   );
   const retryAdapter = resolveAdapter(
-    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
+    resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire, route.staticPolicy),
     config.cacheRetention,
     route.providerName,
   );
@@ -841,7 +842,11 @@ export async function retryCodexPoolOnAlternateAccount(
         parsed.modelId,
       );
       if (retryModelDenial !== undefined) {
-        recordCodexModelDenialEvidence(retryAuthCtx.accountId, retryModelDenial);
+        recordCodexModelDenialEvidence(
+          retryAuthCtx.accountId,
+          retryModelDenial,
+          retryAuthCtx.kind === "pool" ? retryAuthCtx.generation : undefined,
+        );
       }
       if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
       // Caller-owned main is an alternate-account replay and can never enter the bounded

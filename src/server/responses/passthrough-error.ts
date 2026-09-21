@@ -1,6 +1,11 @@
 import { formatErrorResponse } from "../../bridge";
 import { isCyberPolicyCode, isCyberPolicyMessage } from "../../lib/errors";
-import { isReplayRefusalCode, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import {
+  applyReplayRefusalClientHeaders,
+  isReplayRefusalCode,
+  retainReplayRefusal,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+} from "../../lib/upstream-retry";
 import {
   resolveClientRetryAfter,
   validateClientRetryAfterHeader,
@@ -62,6 +67,10 @@ function isReplayRefusalBody(body: string): boolean {
  * - a replay refusal this proxy wrote gets none and keeps none: the whole point of the
  *   refusal is that the turn may already be running, and the synthetic default for a
  *   retryable 429 is a direct instruction to the client to send it a second time
+ *
+ * A refusal also leaves with the shared no-retry header and the in-process marker, so the
+ * verdict survives this re-wrap as a property of the response rather than as a status a later
+ * reader would have to guess from.
  */
 export function formatPassthroughUpstreamError(
   status: number,
@@ -84,11 +93,10 @@ export function formatPassthroughUpstreamError(
   const upstreamRetryAfter = options?.headers?.get("retry-after")?.trim() || undefined;
   const originalValid = validateClientRetryAfterHeader(upstreamRetryAfter, now);
   const cyberPolicyFailure = isCyberPolicyBody(trimmed);
+  const replayRefusal = options?.replayRefusal === true || isReplayRefusalBody(trimmed);
   // Two different reasons to answer with no wait at all, handled the same way: a hard policy
   // block will not become servable, and a refusal we made was never a rate limit.
-  const suppressRetryAfter = cyberPolicyFailure
-    || options?.replayRefusal === true
-    || isReplayRefusalBody(trimmed);
+  const suppressRetryAfter = cyberPolicyFailure || replayRefusal;
   const resolved = suppressRetryAfter
     ? undefined
     : resolveClientRetryAfter({
@@ -105,7 +113,9 @@ export function formatPassthroughUpstreamError(
         && upstreamRetryAfter !== undefined
         && originalValid === undefined);
 
-    if (!needsSet && !needsDelete) {
+    // A refusal always takes the rewriting path: it has a header to add even when the
+    // upstream named no wait for it to remove.
+    if (!needsSet && !needsDelete && !replayRefusal) {
       return new Response(bodyText, {
         status,
         ...(options?.statusText ? { statusText: options.statusText } : {}),
@@ -118,21 +128,30 @@ export function formatPassthroughUpstreamError(
       : new Headers({ "Content-Type": "application/json" });
     if (needsSet) headers.set("Retry-After", resolved!);
     else headers.delete("Retry-After");
-    return new Response(bodyText, {
+    if (replayRefusal) applyReplayRefusalClientHeaders(headers);
+    const rewritten = new Response(bodyText, {
       status,
       ...(options?.statusText ? { statusText: options.statusText } : {}),
       headers,
     });
+    return replayRefusal ? retainReplayRefusal(rewritten) : rewritten;
   }
 
   const response = formatErrorResponse(
     status,
     "upstream_error",
     `Provider error ${status}: (empty body)`,
-    resolved !== undefined ? { retryAfter: resolved } : undefined,
+    // Provenance is all that is left when the bounded read returned nothing display-safe, and
+    // it is enough: the formatter allowlists this code, restates the refusal status and marks
+    // the response, so an unreadable refusal reaches the client as the same refusal.
+    replayRefusal
+      ? { code: UPSTREAM_RESET_REPLAY_REFUSED_CODE }
+      : resolved !== undefined ? { retryAfter: resolved } : undefined,
   );
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
   if (resolved !== undefined) headers.set("Retry-After", resolved);
-  return new Response(response.body, { status: response.status, headers });
+  if (replayRefusal) applyReplayRefusalClientHeaders(headers);
+  const wrapped = new Response(response.body, { status: response.status, headers });
+  return replayRefusal ? retainReplayRefusal(wrapped) : wrapped;
 }

@@ -473,6 +473,12 @@ export function removeDesktop3pStandardPivot(
   options: Desktop3pConfigLibraryOptions & {
     appliedFingerprint?: string | null; unlink?: (path: string) => void;
     lifecycleLockDeps?: ClientLifecycleLockDeps;
+    /**
+     * The desired-state guard below exists for OFF flows racing a concurrent enable. A
+     * mode switch (gateway → first-party) removes the profile while the integration stays
+     * ON on purpose, so the caller opts out of that guard.
+     */
+    replaceWhileEnabled?: boolean;
   } = {},
 ): Desktop3pRemovalResult {
   const libraryPath = resolveDesktop3pConfigLibraryPath(options);
@@ -488,7 +494,7 @@ export function removeDesktop3pStandardPivot(
       }
       const latest = readConfigDiagnostics();
       if (latest.source === "fallback") return { ok: false, changed: false, kind: "unsafe", libraryPath, reason: "desktop_config_invalid" };
-      if (claudeDesktopIntegrationEnabled(latest.config)) {
+      if (!options.replaceWhileEnabled && claudeDesktopIntegrationEnabled(latest.config)) {
         const observed = inspectDesktop3pConfigLibrary(options);
         if (observed.kind === "not_installed" || observed.kind === "no_owned_state") {
           return { ok: true, changed: false, kind: "noop", libraryPath };

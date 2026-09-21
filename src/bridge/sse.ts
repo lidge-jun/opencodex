@@ -16,6 +16,7 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { attemptDeliveryRecorder, classifyRelayedResponseEvent } from "../usage/attempt-delivery";
 import {
   mayBecomePatchEnvelope,
   repairFreeformToolInput,
@@ -162,6 +163,10 @@ export function bridgeToResponsesSSE(
   // at terminal/cancel below.
   const ownsBudget = !options?.translatorBudget;
   const budget = options?.translatorBudget ?? createTranslatorBudget();
+  // Resolved from the CALLER's budget only. A bridge that owns its budget is not serving a
+  // logged request -- there is no attempt to count against, and a locally created scope would
+  // never have had a recorder bound to it.
+  const delivery = attemptDeliveryRecorder(options?.translatorBudget);
   // Idempotent: safe to call at every stream-death path; disposal must come
   // AFTER the final charges (emitDone), never inside reportTerminal.
   const disposeOwnedBudget = () => { if (ownsBudget) budget.dispose(); };
@@ -278,6 +283,11 @@ export function bridgeToResponsesSSE(
           controller.enqueue(frame);
           budget?.releaseRetained(frameBytes, { kind: "live_transient" });
           emittedFrames++;
+          // After a SUCCESSFUL enqueue, never before it. A frame that threw on the way to the
+          // transport did not reach the caller, and counting it here would make the relayed
+          // total equal the adapter total by construction -- erasing the one discrepancy these
+          // counters exist to expose (#3983).
+          delivery?.noteRelayedEvent(classifyRelayedResponseEvent(name, data));
         } catch (error) {
           if (isTranslatorBudgetExceededError(error)) {
             terminateForTranslatorOverflow?.(error);

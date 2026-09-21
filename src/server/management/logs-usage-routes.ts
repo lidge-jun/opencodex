@@ -22,6 +22,7 @@ import {
   upsertOAuthProvider,
 } from "../../oauth";
 import { removeCredential } from "../../oauth/store";
+import { getFailureProjection } from "../../usage/failure-projection-cache";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -179,6 +180,24 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/usage" && req.method === "GET") {
+    // A sub-resource on the same route rather than a route of its own. It answers a different
+    // question -- which failures keep recurring, rather than what was spent -- and it costs a
+    // ledger scan, so it is opt-in: a dashboard asking for the usage summary must not pay for
+    // a projection it did not ask for.
+    if (url.searchParams.get("failures") === "1") {
+      const projection = await getFailureProjection();
+      return jsonResponse({
+        fingerprintVersion: projection.fingerprintVersion,
+        historyIncomplete: projection.historyIncomplete,
+        unattributedFailures: projection.unattributedFailures,
+        invalidTimestampFailures: projection.invalidTimestampFailures,
+        // Every field here is a closed roster member, a count or a timestamp. The scanner's
+        // checkpoint identity, the configured provider name, the model and the account label
+        // stay internal -- a grouping that promises to carry no content has to keep that
+        // promise at its boundary too.
+        failures: projection.groups,
+      });
+    }
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
     let window: UsageTimeWindow | undefined;

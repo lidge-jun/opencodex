@@ -252,6 +252,36 @@ describe("retained usage aggregate cache", () => {
     }
   });
 
+  test("distinct filtered scans have bounded concurrency while identical callers share a flight", async () => {
+    writeFileSync(join(testDir, "usage.jsonl"), line("one"));
+    const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+    let releaseScans!: () => void;
+    const scansBlocked = new Promise<void>(resolve => { releaseScans = resolve; });
+    const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively")
+      .mockImplementation(async options => {
+        await scansBlocked;
+        return originalScan(options);
+      });
+    try {
+      const flights = Array.from({ length: 4 }, (_, index) =>
+        getFilteredUsageAggregate({ provider: `provider-${index}` }));
+      await Bun.sleep(0);
+      expect(scanSpy).toHaveBeenCalledTimes(4);
+
+      const shared = getFilteredUsageAggregate({ provider: "provider-0" });
+      await expect(getFilteredUsageAggregate({ provider: "provider-4" }))
+        .rejects.toThrow("too many concurrent filtered usage aggregates");
+      expect(scanSpy).toHaveBeenCalledTimes(4);
+
+      releaseScans();
+      const results = await Promise.all([...flights, shared]);
+      expect(results[4]!.accumulator).toBe(results[0]!.accumulator);
+    } finally {
+      releaseScans();
+      scanSpy.mockRestore();
+    }
+  });
+
   test("filtered retention invalidates when pricing inputs change", async () => {
     writeFileSync(join(testDir, "usage.jsonl"), line("one"));
     const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;

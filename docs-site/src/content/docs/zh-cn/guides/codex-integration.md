@@ -20,7 +20,7 @@ Codex 内置的 `openai` provider id，并将该 provider 指向 opencodex：
 ```toml
 # root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # 仅在设置了 fastMode 时写入；未设置则不会创建 [features] 表
@@ -110,7 +110,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # appended at the end of the file
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -356,7 +356,7 @@ ocx restore back # point plain Codex at the running proxy again
 
 ## 分页历史记录安全拒绝
 
-如果受影响的历史存储支持分页，提供商切换可能返回 `history_paginated_requires_native_writer`。该原因不再拒绝写入 Codex 配置、参考配置档和模型目录。`ocx sync` 与 `ocx start` 仍会写入这些文件并设置 `model_catalog_json`，因此 Codex 模型选择器会继续显示所有经 OpenCodex 路由的模型。只有这一条原因会让会话历史的重新标记停手，因为分页历史序号由 Codex 自己的写入器分配，重试也不会改变。无法读取的状态数据库、身份已变的历史文件、未能运行的预检等其他历史预检原因仍会拒绝整个切换并回滚，因为那些情况以后可能成功。在此状态下，OpenCodex 不会修改分页历史文件或线程行。现有会话保留已标记的提供商，不会被迁移；新会话仍正常经代理路由。重新标记停手时，主目录里已有的 `[model_providers.opencodex]` 表会保留而不是撤下，即便是 root-override（loopback）形式也一样，这样行上标记为 `opencodex` 的会话仍能对应到还存在的提供商 id。可迁移存储中的 legacy 记录也适用。CLI 会打印 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore` 和移除 Codex 配置仍会因 `history_paginated_requires_native_writer` 被拒绝。线程行仍在引用时撤掉 `[model_providers.opencodex]` 定义会使这些会话无法解析，而恢复路径没有办法留下兼容提供商表。已经分页的主目录目前无法通过产品卸载；这是已知的未完成工作，而非预期行为。
+如果受影响的历史存储支持分页，提供商切换可能返回 `history_paginated_requires_native_writer`。该原因不再拒绝写入 Codex 配置、参考配置档和模型目录。`ocx sync` 与 `ocx start` 仍会写入这些文件并设置 `model_catalog_json`，因此 Codex 模型选择器会继续显示所有经 OpenCodex 路由的模型。只有这一条原因会让会话历史的重新标记停手，因为分页历史序号由 Codex 自己的写入器分配，重试也不会改变。无法读取的状态数据库、身份已变的历史文件、未能运行的预检等其他历史预检原因仍会拒绝整个切换并回滚，因为那些情况以后可能成功。在此状态下，OpenCodex 不会修改分页历史文件或线程行。现有会话保留已标记的提供商，不会被迁移；新会话仍正常经代理路由。重新标记停手时，主目录里已有的 `[model_providers.opencodex]` 表会保留而不是撤下，即便是 root-override（loopback）形式也一样，这样行上标记为 `opencodex` 的会话仍能对应到还存在的提供商 id。可迁移存储中的 legacy 记录也适用。CLI 会打印 `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)`。`ocx restore`、`ocx stop` 和 `ocx uninstall` 不再因 `history_paginated_requires_native_writer` 被拒绝。它们会移除 OpenCodex 写入的全部根路由键，并把 `[model_providers.opencodex]` 定义保留在磁盘上，因此行上仍指向该提供商的会话依旧可以解析，而裸 `codex` 不再指向代理。结果会报告为部分恢复并列出保留的行；`ocx restore --remove-codex-provider-table` 会连这些行一并删除，之后那些会话将无法打开。另外，在 Codex 已把 `openai` 标记会话迁移为分页历史的主目录上启用提供商表形式的集成，过去会以 `history_paginated_openai_requires_native_writer` 整体拒绝：什么都不写，集成保持关闭。现在 OpenCodex 会保留受管的根 `openai_base_url` 覆盖，与 `[model_providers.opencodex]` 表并存，从而完成这次切换。Codex 会把该覆盖合并到内置 `openai` 提供商上，所以那些会话无需重新标记即可继续到达代理，历史文件与线程行都不会被改动。只有需要 `x-opencodex-api-key` 准入标头的路由形式仍会拒绝，因为 Codex 内置提供商无法携带该标头；此时消息会点名两个可行设置——让 Codex 走回环监听器以便保留该覆盖，或把 `syncResumeHistory` 设为 `false`，接受那些会话转向 Codex 自己的 OpenAI 端点。
 
 返回根 URL 覆盖模式时，即使历史预检通过，OpenCodex 也会在提交配置前保留已有的 `[model_providers.opencodex]` 定义。这样，即使 Codex 在提交后或后台历史任务启动时迁移历史格式，旧的 `opencodex` 对话仍能找到其提供商。新对话继续使用所选的根提供商；显式恢复仍执行原有的独立删除检查。
 

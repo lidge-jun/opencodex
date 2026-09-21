@@ -224,9 +224,10 @@ describe("codex routing", () => {
     },
   );
 
-  test.each(["quota", "fill-first", "round-robin"] as const)(
-    "%s zero account threshold allows a model-only detour without spending the pin or ordinary affinity",
-    (strategy) => {
+  test.each((["quota", "fill-first", "round-robin"] as const)
+    .flatMap(strategy => [99, 100].map(usage => [strategy, usage] as const)))(
+    "%s zero account threshold preserves model-detour state unless cache affinity is exhausted at %s",
+    (strategy, usage) => {
       const now = Date.now();
       const threadId = `zero-threshold-model-detour-${strategy}`;
       const modelId = "gpt-daybreak-blue-latest";
@@ -237,7 +238,7 @@ describe("codex routing", () => {
         autoSwitchThreshold: 50,
         codexAccountAutoSwitchThresholds: { a: 0 },
       });
-      updateAccountQuota("a", 100);
+      updateAccountQuota("a", usage);
       updateAccountQuota("b", 1);
       resetCodexRoutingForManualSelection("a");
       expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("a");
@@ -246,14 +247,17 @@ describe("codex routing", () => {
       expect(previewCodexAccountForRequest(
         threadId, config, now + 1, "shared", selectionOptions, modelId,
       )).toBe("b");
+      const preserve = strategy !== "quota" || usage < 100;
+      const expectedShared = preserve ? "a" : "b";
       expect(resolveCodexAccountForThreadDetailed(
         threadId, config, now + 1, "shared", selectionOptions, modelId,
-      )).toEqual({ status: "selected", accountId: "b", affinity: { move: "new_bind", reason: "healthy" } });
-      expect(config.activeCodexAccountId).toBe("a");
-      expect(config.activeCodexAccountPinned).toBe("a");
-      expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
-      expect(resolveCodexAccountForThread(threadId, config, now + 2, "shared")).toBe("a");
-      expect(resolveCodexAccountForThread(null, config, now + 2, "shared")).toBe("a");
+      )).toEqual({ status: "selected", accountId: "b", affinity: preserve
+        ? { move: "new_bind", reason: "healthy" } : { move: "rebound", reason: "unusable" } });
+      expect(config.activeCodexAccountId).toBe(expectedShared);
+      expect(config.activeCodexAccountPinned).toBe(preserve ? "a" : undefined);
+      expect(getEffectiveActiveCodexAccountId(config)).toBe(expectedShared);
+      expect(resolveCodexAccountForThread(threadId, config, now + 2, "shared")).toBe(expectedShared);
+      expect(resolveCodexAccountForThread(null, config, now + 2, "shared")).toBe(expectedShared);
     },
   );
 

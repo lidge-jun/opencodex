@@ -148,7 +148,7 @@ function config(): OcxConfig {
 }
 
 describe("Codex account thresholds preserve auth fences", () => {
-  test("a zero account threshold permits a model detour but never bypasses exact entitlement rejection", async () => {
+  test.each([99, 100])("a zero account threshold preserves entitlement and exhaustion policy at %s usage", async usage => {
     const cfg = config();
     cfg.autoSwitchThreshold = 50;
     cfg.codexAccountAutoSwitchThresholds = { "pool-a": 0 };
@@ -162,7 +162,7 @@ describe("Codex account thresholds preserve auth fences", () => {
         chatgptAccountId: `${id}-account`,
       });
     }
-    setAccountQuotaFromParsed("pool-a", { weeklyPercent: 100 });
+    setAccountQuotaFromParsed("pool-a", { weeklyPercent: usage });
     setAccountQuotaFromParsed("pool-b", { weeklyPercent: 1 });
     resetCodexRoutingForManualSelection("pool-a");
     const headers = new Headers({ "x-codex-parent-thread-id": "zero-threshold-auth-detour" });
@@ -189,10 +189,11 @@ describe("Codex account thresholds preserve auth fences", () => {
     })).rejects.toThrow("Selected Codex account does not support this model");
     await expect(resolveCodexAuthContext(headers, cfg, "pool", gatedOptions))
       .resolves.toMatchObject({ kind: "pool", accountId: "pool-b", accessToken: "pool-b-token" });
-    expect(cfg.activeCodexAccountId).toBe("pool-a");
-    expect(cfg.activeCodexAccountPinned).toBe("pool-a");
+    const expectedShared = usage < 100 ? "pool-a" : "pool-b";
+    expect(cfg.activeCodexAccountId).toBe(expectedShared);
+    expect(cfg.activeCodexAccountPinned).toBe(usage < 100 ? "pool-a" : undefined);
     await expect(resolveCodexAuthContext(headers, cfg, "pool", ordinaryOptions))
-      .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
+      .resolves.toMatchObject({ kind: "pool", accountId: expectedShared });
   });
 
   test("a zero account threshold rejects a gated model when no stored account is entitled", async () => {
@@ -535,17 +536,17 @@ describe("Codex account thresholds preserve auth fences", () => {
     expect(cfg.activeCodexAccountPinned).toBeUndefined();
   });
 
-  test("a zero main-account threshold still detours an unentitled caller without clearing the main pin", async () => {
+  test.each([99, 100])("a zero main-account threshold respects model-detour exhaustion policy at %s usage", async usage => {
     const { cfg, context, directEntitlementChecks } = await resolveRequestOwnedMainPinCase({
-      mainWeeklyPercent: 100,
+      mainWeeklyPercent: usage,
       poolWeeklyPercent: 16,
       callerEntitled: false,
       mainThresholdOverride: 0,
     });
     expect(context).toMatchObject({ kind: "pool", accountId: "pool-a", accessToken: "pool-token" });
     expect(directEntitlementChecks).toBe(1);
-    expect(cfg.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
-    expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
+    expect(cfg.activeCodexAccountId).toBe(usage < 100 ? MAIN_CODEX_ACCOUNT_ID : "pool-a");
+    expect(cfg.activeCodexAccountPinned).toBe(usage < 100 ? MAIN_CODEX_ACCOUNT_ID : undefined);
   });
 
   test("a zero main-account threshold rejects an unentitled caller when no Pool detour supports the model", async () => {

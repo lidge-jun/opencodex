@@ -22,6 +22,7 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  compactionRoutingSchema,
   modelPreferHostedToolsConfigError,
   providerModelCostsConfigError,
   providerRelativeSendPathConfigError,
@@ -46,6 +47,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "../../codex/account-namespace-match";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../../codex/upstream-host-health";
+import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
 import { COMBO_NAMESPACE, comboConfigIssues } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
@@ -74,12 +76,22 @@ export const configSchema = z.object({
   // A malformed privacy block must never be read as "unmask": .catch(undefined) drops it and
   // emailMaskingEnabled then falls back to masked, which is also what an absent block means.
   privacy: z.object({ maskEmails: z.boolean().optional() }).strict().optional().catch(undefined),
+  // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
+  metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024).describe(
     "Deprecated compatibility limit for bounded legacy usage readers; GET /api/usage always aggregates the complete ledger",
   ),
+  // Opt-in ledger ceiling. A hand edit below the floor, or a non-safe integer, disables only
+  // this limit rather than failing the config: refusing to start because history retention was
+  // mistyped would be a worse outcome than not trimming history.
+  usageLedgerMaxBytes: z.number().int()
+    .min(MIN_USAGE_LEDGER_MAX_BYTES)
+    .max(Number.MAX_SAFE_INTEGER)
+    .optional()
+    .catch(undefined),
   // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.
   upstreamHostCircuitThreshold: z.number().int()
     .min(0)
@@ -126,6 +138,7 @@ export const configSchema = z.object({
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
+  compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
@@ -260,7 +273,24 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };
+    if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
+    }
+    if (claude.intercept !== undefined) {
+      const intercept = claude.intercept;
+      if (!intercept || typeof intercept !== "object" || Array.isArray(intercept)) {
+        ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept"], message: "intercept must be an object" });
+      } else {
+        const { enabled, port } = intercept as { enabled?: unknown; port?: unknown };
+        if (enabled !== undefined && typeof enabled !== "boolean") {
+          ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "enabled"], message: "intercept.enabled must be a boolean" });
+        }
+        if (port !== undefined && (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)) {
+          ctx.addIssue({ code: "custom", path: ["claudeCode", "intercept", "port"], message: "intercept.port must be an integer between 1 and 65535" });
+        }
+      }
+    }
     if (claude.desktopProfile !== undefined) {
       try {
         parseDesktopProfile(claude.desktopProfile);

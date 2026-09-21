@@ -495,10 +495,12 @@ describe("GitHub Actions hardening", () => {
       "Dockerfile",
       "LICENSE",
       "README.md",
+      "app/**",
       "assets/**",
       "bin/**",
       "bun.lock",
       "compose.yaml",
+      "desktop/**",
       "docker/**",
       "gui/**",
       "package.json",
@@ -826,7 +828,7 @@ describe("GitHub Actions hardening", () => {
         };
         publish?: {
           "runs-on"?: string;
-          needs?: string;
+          needs?: string[];
           permissions?: Record<string, string>;
         };
       };
@@ -841,7 +843,9 @@ describe("GitHub Actions hardening", () => {
       contents: "read",
     });
     
-    expect(release.jobs?.publish?.needs).toBe("validate-dispatch");
+    // Publication is the irreversible public act, so it waits for both packaging jobs;
+    // the full ordering contract is in tests/ci-workflows/release-pipeline-contract.test.ts.
+    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "package-standalone", "package-desktop"]);
     expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
@@ -916,9 +920,15 @@ describe("GitHub Actions hardening", () => {
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).
+    // The split alone does not bound a block: the last step of a job runs on into the next
+    // job's header, so a job-level `if: ${{ inputs.dry-run != true }}` — which is a condition,
+    // not shell — read as an injection in the step above it. Each block is cut at the first
+    // line that dedents to job level, which is where the step's script actually ends.
     const runBlocks = workflow.split(/\n {6,}- name: /).filter(block => block.includes("run: |"));
     for (const block of runBlocks) {
-      const runSource = block.slice(block.indexOf("run: |"));
+      const afterRun = block.slice(block.indexOf("run: |"));
+      const jobBoundary = afterRun.search(/\n {2}\S/);
+      const runSource = jobBoundary === -1 ? afterRun : afterRun.slice(0, jobBoundary);
       expect(runSource).not.toContain("${{ inputs.");
     }
 

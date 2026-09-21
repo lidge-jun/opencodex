@@ -16,8 +16,9 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 Runtime adapter construction has one authority: `src/adapters/registry.ts`.
 
-The OpenCode Go [chronological instruction exception](../providers/chat-compat.md#opencode-go-chronological-instructions)
-uses the provider registry's destination identity inside the Chat adapter; it adds no adapter factory.
+[Chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
+is now uniform across destinations, so the Chat adapter no longer consults the provider registry's
+destination identity for it; it adds no adapter factory.
 
 `src/server/adapter-resolve.ts` may resolve a provider/model onto an adapter id, but it does not maintain a second adapter factory inventory. The selected persisted/configured adapter id remains an untrusted string until the registry lookup succeeds. Unknown ids fail with the existing `Unknown adapter: <id>` error instead of widening configuration types around a closed compile-time union.
 
@@ -52,6 +53,19 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   adapter accepts them on return. One tool's canonical identity can be another tool's advertised
   local name, and resolving that name to either owner would dispatch the call to a tool the caller
   may not have named, so it is treated as ambiguous and fails before dispatch too.
+  Assistant reasoning replay likewise follows the Cognition wire shape. One history prompt carries
+  a single thinking/signature pair, so every block with text is replayed at #11 and #12 is attached
+  only when the text being replayed is the text that signature attests — the single-block case.
+  Several independently signed blocks send the joined chain unsigned rather than pairing one
+  block's attestation with another block's words, and rather than dropping reasoning the turn
+  produced to keep a pair. A signature-only block carries encrypted thinking that is not replayed,
+  so it contributes neither the text nor the signature. The signature is replayed only when the
+  source envelope actually carried one: the serialized reasoning item the Responses parser parks
+  on unsigned thinking parts is provider state, not an attestation, and
+  `isProviderIssuedThinkingSignature` in `src/responses/reasoning-envelope.ts` denies that one
+  shape beside the code that writes it. It is a deny-list rather than a guess at what an opaque
+  token looks like; the stricter base64 allow-list in `src/adapters/anthropic.ts` is a fact about
+  Anthropic's wire and is not assumed of Cognition's.
 
   There is no second Devin transport. An Agent Client Protocol adapter that spawned a local
   `devin acp` child once existed under the `devin-cli` adapter id and was removed: the CLI's
@@ -160,11 +174,11 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary. Translated and native Chat builders share explicit gateway-object and tool-bearing effort-omission policy after provider resolution; native Chat otherwise preserves caller controls and removes effort for an explicit empty declaration or no-reasoning model.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
-Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -183,8 +197,18 @@ variant; unrelated model families retain their existing suffix precedence.
 
 `src/responses/input-media.ts` inspects actual content blocks and typed tool-output arrays
 without parsing text or function arguments, copying attachment payloads, resolving file IDs,
-or fetching URLs. Audio, files/documents and file-ID-only images have no lossless normalized
-carrier. The scanner returns only an input-kind name, never client content.
+or fetching URLs. Audio and file-ID-only images have no lossless normalized carrier, and
+neither does a file or document reference that carries no bytes. The scanner returns only an
+input-kind name, never client content.
+
+A document that carries its own base64 bytes is the one exception, and only in user or
+developer message content: `src/responses/inline-document.ts` decodes it into the
+`OcxDocumentContent` part, which the Anthropic, OpenAI Chat and Gemini wires emit as a native
+document, file part and `inline_data` respectively. Every other position — tool output, system
+and assistant content — is still refused, because those converters reduce their content to text
+and exempting them would restore the silent drop the scanner exists to prevent. The scanner and
+the decoder share one predicate so a request cannot be exempted here and reduced to a marker
+there.
 
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
 wire selection. A translated `buildRequest` refuses these inputs through the existing 400
@@ -218,3 +242,5 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 ## Devin image boundary
 
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
+
+A [compaction routing override](../transports/responses.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.

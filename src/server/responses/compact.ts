@@ -1,4 +1,10 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  assertRouteAllowedByScope,
+  resolveAdmissionModelScope,
+} from "../admission-model-scope";
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import {
@@ -125,7 +131,12 @@ import { slugsEquivalent } from "../../providers/slug-codec";
 import { decideTier, tierValueAfterDecision } from "../../providers/fastwire";
 import { fastPolicyForModel } from "../../providers/service-tier";
 import { parseFastOnlyRowId } from "../fast-row";
-import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
+import { captureOpenAiVirtualWirePolicy, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
+import {
+  applyCompactionRoutingOverride,
+  compactionRoutingKeepsProviderIdentity,
+  type CompactionRoutingOverride,
+} from "./compaction-routing";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import {
   readJsonRequestBody,
@@ -272,6 +283,7 @@ function compactHandoffRoute(
 }
 
 export interface HandleResponsesCompactOptions {
+  compactionRoutingOverride?: CompactionRoutingOverride | null;
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   /** Release the listener's idle guard only after the complete request body is accepted. */
   onRequestBodyRead?: () => void;
@@ -604,6 +616,9 @@ export async function handleResponsesCompact(
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
+  if (!options.compactionRoutingOverride) {
+    options = { ...options, compactionRoutingOverride: applyCompactionRoutingOverride(body, req.headers, config, { endpoint: "compact" }) };
+  }
   const raw = body as { model?: unknown; input?: unknown };
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
@@ -618,11 +633,12 @@ export async function handleResponsesCompact(
   // The client's own selector, kept for the request log: `raw.model` is rewritten to the
   // base id above, and logCtx.requestedModel is assigned from it further down, so without
   // this the log would lose which id the client actually asked for.
-  const compactRequestedModel = compactFastRow ? compactFastRow.baseId + "--fast" : raw.model;
+  const compactRequestedModel = options.compactionRoutingOverride?.sourceModel
+    ?? (compactFastRow ? compactFastRow.baseId + "--fast" : raw.model);
 
   // Recall the last completed client-visible bare model after a combo switch (#3891).
   // Configured selectors take precedence over this implicit session hint.
-  if (typeof compactModel === "string" && !compactModel.includes("/") && !compactFastRow
+  if (!options.compactionRoutingOverride && typeof compactModel === "string" && !compactModel.includes("/") && !compactFastRow
     && !resolveComboId(config, compactModel)) {
     const recalledComboId = recallComboForLane(config, sessionLaneIdFromRequest(req.headers), compactModel);
     if (recalledComboId) {
@@ -645,7 +661,12 @@ export async function handleResponsesCompact(
     // routes ordinary turns elsewhere (#2901); the compaction-scoped router
     // may land that on the configured default provider instead of 404.
     route = routeCompactionModel(config, compactModel, evidenceFromBody(raw));
+    // A compaction override picks the model, not the caller, so the key's scope
+    // is applied to what the override resolved to rather than to the selector
+    // the client sent.
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), compactRequestedModel, route);
   } catch (err) {
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so a failed compact policy request stays
@@ -685,6 +706,7 @@ export async function handleResponsesCompact(
   const virtual = resolveOpenAiCompactModel(route.providerName, selectedModelId);
   if (virtual) {
     route.modelId = virtual.wireModelId;
+    captureOpenAiVirtualWirePolicy(route, virtual);
     logCtx.model = virtual.selectedModelId;
     logCtx.resolvedModel = virtual.wireModelId;
   } else {
@@ -748,7 +770,12 @@ export async function handleResponsesCompact(
   // no budget at all, so `handleResponsesInner` minted a fresh four after the native attempt
   // had already spent some of the first one.
   const sendBudget: RequestExecutionBudget = options.sendBudget ?? createRequestExecutionBudget();
-  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel && !route.combo) {
+  // A manual override onto another backend must not mint ciphertext the conversation model cannot replay.
+  const manualOverrideCrossesProvider = options.compactionRoutingOverride
+    ? !compactionRoutingKeepsProviderIdentity(config, options.compactionRoutingOverride, route)
+    : false;
+  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel && !route.combo
+    && !manualOverrideCrossesProvider) {
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
@@ -1309,9 +1336,9 @@ export async function handleResponsesCompact(
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
       inspectResponseLogJson(logCtx, await buffered.clone().text());
-      forgetCompactHandoffRoute(req, admission);
+      if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
-    } else if (quotaFailure && !storedPool401ReplayAttempted) {
+    } else if (!options.compactionRoutingOverride && quotaFailure && !storedPool401ReplayAttempted) {
       const fallbackModel = compactHandoffRoute(req, admission, raw.model);
       if (fallbackModel && !req.signal.aborted) {
         const fallbackReq = new Request(req.url, {
@@ -1374,7 +1401,7 @@ export async function handleResponsesCompact(
   // The routed compaction turn is a handoff inside the same logical request, so it draws the
   // REMAINDER. Minting here is what let a native attempt spend three sends and the routed
   // fallback spend four more.
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, ...(admission ? { admission } : {}) });
+  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease, sendBudget, compactionRoutingOverride: options.compactionRoutingOverride, ...(admission ? { admission } : {}) });
   if (!response.ok) return response;
   let json: { output?: unknown[]; status?: unknown; error?: unknown };
   if (response.headers.get("content-type")?.includes("text/event-stream")) {
@@ -1444,7 +1471,7 @@ export async function handleResponsesCompact(
     const result = new Response(JSON.stringify({ output: compactionItems }), {
       headers: { "Content-Type": "application/json" },
     });
-    rememberCompactHandoffRoute(req, admission, raw.model);
+    if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
     return result;
   }
   const encrypted = compactionItems[0]!.encrypted_content;
@@ -1455,6 +1482,6 @@ export async function handleResponsesCompact(
   }
   const summary = decoded;
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
-  rememberCompactHandoffRoute(req, admission, raw.model);
+  if (!options.compactionRoutingOverride) rememberCompactHandoffRoute(req, admission, raw.model);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }

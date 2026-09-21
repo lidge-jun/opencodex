@@ -24,6 +24,7 @@ import {
 } from "./startup-warnings";
 
 import { remoteWorkspaceEnabled } from "../../remote-control/workspace-activation";
+import { isClaudeInterceptedPath } from "../../claude/intercept/listener";
 import { markActivity } from "../../lib/sidecar-tracker";
 import { knownModelIdsForProvider } from "../../router";
 import {
@@ -37,6 +38,7 @@ import {
   type WsData,
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
+import { metricsExportEnabled } from "../../config/feature-flags";
 import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -48,8 +50,8 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
-  resolveCodexModelEntitlements,
 } from "../../codex/model-entitlements";
+import { resolveAdmittedCodexModelEntitlements } from "../../codex/model-entitlement-admission";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import {
   registerCodexWebSocket,
@@ -84,6 +86,7 @@ import {
 } from "../request-log";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { responseWithDeferredRequestLog } from "../relay";
+import { createRequestMetricsOwner } from "../request-metrics";
 import {
   corsHeaders,
   managementCorsHeaders,
@@ -98,6 +101,7 @@ import {
   withCors,
   withManagementCors,
 } from "../auth-cors";
+import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import {
   disableResponsesRequestTimeout,
   handleResponses,
@@ -194,7 +198,16 @@ import { readyProtocolMetadata } from "../../remote/protocol";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management";
+export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept";
+
+/**
+ * Routes the Claude intercept TLS listener may reach. Everything else on that socket is relayed
+ * to the real upstream by the listener itself, so a request that lands here with another path
+ * is a bug, not a client — refuse it.
+ */
+export function claudeInterceptRouteAllowed(url: URL, req: Request): boolean {
+  return isClaudeInterceptedPath(url.pathname, req.method);
+}
 
 export interface ServeOptionsContext {
   readonly server: Server<WsData>;
@@ -266,6 +279,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     port,
   } = ctx;
   void port;
+  const requestMetrics = metricsExportEnabled(config) ? createRequestMetricsOwner() : undefined;
+  const requestMetricsLogContext = requestMetrics ? { requestMetricsRecorder: requestMetrics } : {};
+  const requestManagementApiDeps: ManagementApiDeps = requestMetrics
+    ? { ...managementApiDeps, requestMetrics: { snapshot: () => requestMetrics.snapshot() } }
+    : managementApiDeps;
   const serveOptions = {
       idleTimeout: 255,
       // Bun rejects an oversized body before `fetch` runs, so the listener has to be raised
@@ -293,12 +311,24 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           config,
         );
       }
+      if (ingress === "claude-intercept" && !claudeInterceptRouteAllowed(codexCompatibleUrl(req.url), req)) {
+        return withCors(
+          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          req,
+          loopbackPolicy(),
+        );
+      }
       // Auth and CORS decisions below read `policy`, not `config`. For the public listener the
       // two are the same object, so its behaviour is unchanged; for the loopback listener the
       // view substitutes 127.0.0.1 as the bind address, which is what routes it through the
       // same code path a plain loopback bind has always taken — Host-header check included.
       // Routing, provider selection and response bodies keep using `config`.
-      const policy: RequestPolicyView = ingress === "unauthenticated-loopback" ? loopbackPolicy() : config;
+      // The Claude intercept listener is loopback by construction (the CONNECT proxy binds
+      // 127.0.0.1 and the request was rewritten onto a loopback origin), and its callers carry
+      // Anthropic credentials, not opencodex admission tokens — so it takes the loopback view too.
+      const policy: RequestPolicyView = ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
+        ? loopbackPolicy()
+        : config;
       const url = codexCompatibleUrl(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 
@@ -616,7 +646,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }), req, config);
           }
         }
-        const mgmtResponse = await handleManagementAPI(req, url, config, managementApiDeps, principal, managementSessionControl);
+        const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl);
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
@@ -812,7 +842,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).
-            resolveCodexModelEntitlements(config, { clientVersion: url.searchParams.get("client_version") }),
+            // The request signal fences the credential phase too: a client that has already
+            // gone away must not keep a native-main token refresh alive, and its late result
+            // must not commit on behalf of a request that no longer exists.
+            resolveAdmittedCodexModelEntitlements(config, {
+              clientVersion: url.searchParams.get("client_version"),
+              signal: req.signal,
+            }),
           ]);
         } catch (error) {
           if (error instanceof CatalogGatherBusyError) {
@@ -1094,6 +1130,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             return disabledModels.has(id) ? [] : [{ id, metadataId }];
           })
         );
+        // What a scoped key may see, filtered by the same predicate that refuses
+        // it on the data plane, so the catalog and the send path cannot disagree.
+        // This is a convenience, never the boundary: hiding a row only stops a
+        // client that reads the catalog first, which is why the refusal lives on
+        // the request path and this filter reuses it rather than replacing it.
+        // Filtering happens where the resolved provider and model are still in
+        // hand -- a published id is a selector, and re-resolving one here would
+        // re-run combo selection just to render a list.
+        const listScope = resolveAdmissionModelScope(config, admission);
+        const listAllows = (providerName: string, modelId: string): boolean =>
+          routeAllowedByScope(listScope, { providerName, modelId });
         // The projection is opt-in. Keep the default path free of Cursor install detection,
         // and resolve the bundle table once for the whole list rather than once per row.
         const effortRowsEnabled = config.cursorEffortRows === true;
@@ -1126,7 +1173,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             effortRowKnownIds,
           ));
         };
-        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
+        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
+          .filter(m => listAllows(m.provider, m.id))
+          .map(async m => {
           // Same rule as the anthropic branch: with the global fast switch on, a client
           // that has no Fast toggle is offered the fast identity directly. An operator
           // alias is an explicit decision and still wins.
@@ -1173,8 +1222,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           ));
         }));
         const data = [
-          ...visibleNatives.flatMap(id => expandedNativeModelRow(id)),
-          ...visibleAccountNatives.flatMap(({ id, metadataId }) => expandedNativeModelRow(id, metadataId)),
+          ...visibleNatives
+            .filter(id => listAllows(OPENAI_CODEX_PROVIDER_ID, id))
+            .flatMap(id => expandedNativeModelRow(id)),
+          ...visibleAccountNatives
+            .filter(({ metadataId }) => listAllows(OPENAI_CODEX_PROVIDER_ID, metadataId))
+            .flatMap(({ id, metadataId }) => expandedNativeModelRow(id, metadataId)),
           ...routedRows.flat(),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);
@@ -1197,6 +1250,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
@@ -1233,11 +1287,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "image_gen",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease);
+          const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);
         }, { requestId, start, logCtx });
@@ -1290,6 +1345,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "context_history",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1316,6 +1372,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "web_search",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
@@ -1340,6 +1397,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
@@ -1347,29 +1405,41 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         let logged = false;
         const finalizeNativePassthroughLog = (
           status: number,
-          meta: { terminalStatus?: ResponsesTerminalStatus; closeReason: "terminal" | "client_cancel" },
+          meta: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
         ) => {
           if (logged) return;
           logged = true;
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
-          const response = await handleResponses(req, config, logCtx, {
-            turnAdmissionLease,
-            admission,
-            onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
-            abortSignal: req.signal,
-            onFirstOutput: () => recordFirstOutput(logCtx, start),
-            onNativePassthroughTerminal: status => {
-              finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
-                terminalStatus: status,
-                closeReason: "terminal",
-              });
-            },
-            onNativePassthroughCancel: () => {
-              finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
-            },
-          });
+          let response: Response;
+          try {
+            response = await handleResponses(req, config, logCtx, {
+              turnAdmissionLease,
+              admission,
+              onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
+              abortSignal: req.signal,
+              onFirstOutput: () => recordFirstOutput(logCtx, start),
+              onNativePassthroughTerminal: status => {
+                finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
+                  terminalStatus: status,
+                  closeReason: "terminal",
+                });
+              },
+              onNativePassthroughCancel: () => {
+                finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
+              },
+            });
+          } catch (error) {
+            // A bounded upstream body can fail before handleResponses returns a client response.
+            // Finalize before rethrow so accounting observes the physical send while the caller
+            // retains the existing reset/rejection instead of receiving a synthesized response.
+            finalizeNativePassthroughLog(
+              req.signal.aborted ? 499 : 502,
+              { closeReason: req.signal.aborted ? "client_cancel" : "non_stream" },
+            );
+            throw error;
+          }
           return withRequestLogId(
             withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy),
             requestId,
@@ -1414,6 +1484,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "messages",
         };
@@ -1443,6 +1514,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "unknown",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
           inboundProtocol: "chat",
         };
@@ -1466,7 +1538,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx: RequestLogContext = { model: TRANSCRIPTION_MODEL, provider: "unknown", ...admissionFields(admission) };
+        const logCtx: RequestLogContext = {
+          model: TRANSCRIPTION_MODEL,
+          provider: "unknown",
+          ...requestMetricsLogContext,
+          ...admissionFields(admission),
+        };
         return runAdmittedHttpTurn(req, policy, async lease => {
           const response = await handleAudioTranscriptions(req, config, logCtx, admission, lease);
           addFinalRequestLog(requestId, start, logCtx, response.status);
@@ -1497,12 +1574,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "gpt-live",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = audioClient
             ? await handleExternalLive(req, config, logCtx, { client: audioClient, lease: turnAdmissionLease, bindings: liveCallBindings })
-            : await handleLive(req, config, logCtx, turnAdmissionLease);
+            : await handleLive(req, config, logCtx, turnAdmissionLease, admission);
           addFinalRequestLog(
             requestId,
             start,
@@ -1544,10 +1622,23 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const logCtx: RequestLogContext = {
           model: "gpt-live",
           provider: "unknown",
+          ...requestMetricsLogContext,
           ...admissionFields(admission),
         };
+        let liveRequestFinalized = false;
+        const finalizeLiveRequest = (
+          status: number,
+          meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
+        ): void => {
+          if (liveRequestFinalized) return;
+          liveRequestFinalized = true;
+          addFinalRequestLog(requestId, start, logCtx, status, meta);
+        };
         const turnAdmissionLease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers));
-        if (!turnAdmissionLease) return serverBusyResponse(req, "active turns", policy);
+        if (!turnAdmissionLease) {
+          finalizeLiveRequest(503);
+          return serverBusyResponse(req, "active turns", policy);
+        }
         const audioController = audioClient ? new AbortController() : undefined;
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
@@ -1564,21 +1655,29 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             : liveSidebandTarget && audioClient
               ? await resolveExternalLiveSocket(audioClient, config, logCtx, liveSidebandTarget, { lease: turnAdmissionLease, bindings: liveCallBindings, signal: acquisition?.signal })
               : liveSidebandTarget
-                ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease)
+                ? await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease, admission)
                 : formatErrorResponse(401, "authentication_error", "opencodex API key required");
         } catch (error) {
-          releaseAcquisition();
+          try { releaseAcquisition(); }
+          finally {
+            finalizeLiveRequest(req.signal.aborted ? 499 : 500,
+              req.signal.aborted ? { closeReason: "client_cancel" } : undefined);
+          }
           throw error;
         }
         if (acquisition?.signal.aborted) {
+          const status = req.signal.aborted ? 499 : acquisition.didExpire() ? 504 : 503;
           try { if (!(resolved instanceof Response) && "finish" in resolved) resolved.finish(); }
-          finally { releaseAcquisition(); }
-          return withCors(formatErrorResponse(req.signal.aborted ? 499 : acquisition.didExpire() ? 504 : 503,
+          finally {
+            try { releaseAcquisition(); }
+            finally { finalizeLiveRequest(status, status === 499 ? { closeReason: "client_cancel" } : undefined); }
+          }
+          return withCors(formatErrorResponse(status,
             "upstream_error", acquisition.didExpire() ? "Audio connection timed out" : "Audio connection canceled"), req, policy);
         }
         if (resolved instanceof Response) {
           releaseAcquisition();
-          addFinalRequestLog(requestId, start, logCtx, resolved.status);
+          finalizeLiveRequest(resolved.status);
           return withCors(resolved, req, policy);
         }
         const audio = "finish" in resolved ? resolved : undefined;
@@ -1591,7 +1690,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           else releaseAcquisition();
         };
         if (req.signal.aborted) {
-          discardUpgrade();
+          try { discardUpgrade(); }
+          finally { finalizeLiveRequest(499, { closeReason: "client_cancel" }); }
           return withCors(formatErrorResponse(499, "client_closed_request", "Audio connection canceled"), req, policy);
         }
         const upstreamHandshake = await openLiveSidebandUpstream(
@@ -1609,7 +1709,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           } else {
             discardUpgrade();
           }
-          addFinalRequestLog(requestId, start, logCtx, upstreamHandshake.status);
+          finalizeLiveRequest(upstreamHandshake.status,
+            upstreamHandshake.status === 499 ? { closeReason: "client_cancel" } : undefined);
           console.error("[live] sideband upstream handshake failed: " + upstreamHandshake.message);
           return withCors(
             formatErrorResponse(upstreamHandshake.status, upstreamHandshake.code, upstreamHandshake.message),
@@ -1625,7 +1726,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             code: "upstream_error",
             message: "voice upstream closed before client upgrade",
           };
-          addFinalRequestLog(requestId, start, logCtx, failure.status);
+          finalizeLiveRequest(failure.status);
           return withCors(formatErrorResponse(failure.status, failure.code, failure.message), req, policy);
         }
         let upgraded = false;
@@ -1657,11 +1758,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             /* ignore */
           }
           closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => discardUpgrade());
+          finalizeLiveRequest(502);
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
           acquisition?.clear();
-          addFinalRequestLog(requestId, start, logCtx, 101);
+          finalizeLiveRequest(101);
           return undefined as unknown as Response;
         }
         try {
@@ -1670,6 +1772,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           /* ignore */
         }
         closeLiveSidebandBeforeUpgrade(upstreamHandshake.socket, () => discardUpgrade());
+        finalizeLiveRequest(426);
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
@@ -1760,7 +1863,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
 
       return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
     },
-    websocket: createWebsocketHandler(ctx),
+    websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
   return serveOptions;
 }

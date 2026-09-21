@@ -1085,6 +1085,11 @@ describe("web-search sidecar native web_search_call emission", () => {
 
     // First adapter always 429s via fetchResponse; the rotated adapter answers.
     const reasoningLogs: unknown[] = [];
+    const accountAConversationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const outerParsed = parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] });
+    outerParsed._kiroAuthContext = { apiRegion: "eu-west-1", profileArn: "account-a" };
+    outerParsed._providerContinuation = { kiro: { conversationId: accountAConversationId } };
+    let retryState: Pick<OcxParsedRequest, "_kiroAuthContext" | "_providerContinuation"> | undefined;
     const firstAdapter: ProviderAdapter = {
       name: "mock-429",
       buildRequest: () => ({
@@ -1104,17 +1109,20 @@ describe("web-search sidecar native web_search_call emission", () => {
     };
     const rotatedAdapter: ProviderAdapter = {
       name: "mock-rotated",
-      buildRequest: () => ({
-        url: "https://routed.test/v1",
-        method: "POST",
-        headers: {},
-        body: "{}",
-        reasoningLog: {
-          effectiveEffort: "high",
-          wireField: "reasoning_effort",
-          wireValue: "high",
-        },
-      }),
+      buildRequest: retryParsed => {
+        retryState = retryParsed;
+        return {
+          url: "https://routed.test/v1",
+          method: "POST",
+          headers: {},
+          body: "{}",
+          reasoningLog: {
+            effectiveEffort: "high",
+            wireField: "reasoning_effort",
+            wireValue: "high",
+          },
+        };
+      },
       fetchResponse: async () => new Response("{}", { status: 200 }),
       async *parseStream() {
         yield { type: "text_delta", text: "answer from rotated key" };
@@ -1125,7 +1133,7 @@ describe("web-search sidecar native web_search_call emission", () => {
     let rotations = 0;
 
     const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      parsed: outerParsed,
       adapter: firstAdapter,
       forwardProvider,
       hostedTool: { type: "web_search" },
@@ -1133,10 +1141,13 @@ describe("web-search sidecar native web_search_call emission", () => {
       settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
       onRequestBuilt: request => reasoningLogs.push(request.reasoningLog),
-      on429: async retryAfter => {
+      on429: async (retryAfter, _responseHeaders, retryParsed) => {
         rotations++;
         expect(retryAfter).toBe("30");
         await Promise.resolve();
+        if (!retryParsed) throw new Error("the loop must pass the iteration request to on429");
+        retryParsed._kiroAuthContext = { apiRegion: "ap-southeast-2", profileArn: "account-b" };
+        delete retryParsed._providerContinuation;
         return rotatedAdapter;
       },
     });
@@ -1146,6 +1157,8 @@ describe("web-search sidecar native web_search_call emission", () => {
     const output = completed.output as { type: string; content?: { text?: string }[] }[];
     expect(output.find(o => o.type === "message")?.content?.[0]?.text).toBe("answer from rotated key");
     expect(rotations).toBe(1);
+    expect(retryState?._kiroAuthContext).toEqual({ apiRegion: "ap-southeast-2", profileArn: "account-b" });
+    expect(retryState?._providerContinuation).toBeUndefined();
     expect(reasoningLogs).toEqual([
       {
         effectiveEffort: "low",

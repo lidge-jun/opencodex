@@ -4,7 +4,7 @@ import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityC
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
 import QuotaBars from "./QuotaBars";
 import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
-import type { CodexAccountEntry } from "./codex-account-pool-types";
+import type { CodexAccountEntry, CodexAccountLoadState } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { MainDeviceReauthState } from "./use-main-device-reauth";
@@ -376,11 +376,13 @@ export function CodexAccountPoolActions(props: {
 export function CodexAccountPoolLoadStates({
   t,
   loadState,
+  refreshFailed,
   accountsCount,
   onRetry,
 }: {
   t: TFn;
-  loadState: "loading" | "ready" | "error";
+  loadState: CodexAccountLoadState;
+  refreshFailed: boolean;
   accountsCount: number;
   onRetry: () => void;
 }): ReactNode {
@@ -432,6 +434,17 @@ export function CodexAccountPoolLoadStates({
     return (
       <div className="pwi-auth-state pwi-auth-state--error" role="alert">
         <span>{t("codexAuth.loadFailed")}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
+      </div>
+    );
+  }
+  // Rows survived a failed refresh, so they are still worth showing — but they are the ones from
+  // before it, and an account added since is simply not among them. A status rather than an alert:
+  // nothing on screen is wrong, it is just older than it looks.
+  if (refreshFailed && accountsCount > 0) {
+    return (
+      <div className="pwi-auth-state pwi-auth-state--stale" role="status">
+        <span>{t("codexAuth.accountsRefreshFailed")}</span>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
       </div>
     );

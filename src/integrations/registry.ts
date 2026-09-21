@@ -43,6 +43,11 @@ import {
   raycastConfigPath,
   zcodeConfigPath,
   zcodeHomeDir,
+  zcodeProviderStorePath,
+  buildZcodeStoreContribution,
+  zcodeStoreSchemaEstablished,
+  type BuildContribution,
+  type ConfigFormat,
   type ExportClientId,
 } from "../clients/config-export";
 
@@ -58,6 +63,28 @@ export interface IntegrationClientSpec {
   configPath: (env?: NodeJS.ProcessEnv, home?: string) => string;
   /** Directory whose existence is the cheap "is it installed?" signal. */
   detectDir: (env?: NodeJS.ProcessEnv, home?: string) => string;
+  /**
+   * The provider store this client reads INSTEAD of `configPath`.
+   *
+   * A client that moves its store between releases usually keeps a one-shot
+   * import from the old location, and that import is exactly what makes the old
+   * write look like it still works: it runs once, on an install that has never
+   * created the new file, and never again. Everything after it lands in a file
+   * the client does not open.
+   *
+   * A declaration carries everything needed to write the store, not only its
+   * location: the text format, the contribution shape its reader understands,
+   * and the predicate that says whether a document on disk is a version whose
+   * shape has been observed. The last one is what keeps this honest — a store
+   * we cannot establish is reported as the reason the write cannot reach the
+   * client, never merged into on a guess.
+   */
+  currentStore?: {
+    path: (env?: NodeJS.ProcessEnv, home?: string) => string;
+    format: ConfigFormat;
+    establishes: (parsed: unknown) => boolean;
+    buildContribution: BuildContribution;
+  };
   /** Patch only this block-map YAML leaf; never re-render the shared file. */
   sourcePreservingYaml?: { path: readonly string[] };
   /** Coordinate the complete mutation through a sibling config lock. */
@@ -231,6 +258,17 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "zcode",
     configPath: (env = process.env, home = homedir()) => zcodeConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => zcodeHomeDir(env, home),
+    /*
+     * ZCode 3.14 reads its providers from `v2/provider_config.json` and reaches
+     * `v2/config.json` only through the import that seeded it. Where the new
+     * file exists the import is spent, so our write is read by nobody (#5348).
+     */
+    currentStore: {
+      path: (env = process.env, home = homedir()) => zcodeProviderStorePath(env, home),
+      format: "json",
+      establishes: zcodeStoreSchemaEstablished,
+      buildContribution: buildZcodeStoreContribution,
+    },
   },
   prime: {
     id: "prime",

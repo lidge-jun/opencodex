@@ -231,7 +231,9 @@ describe("client machine listener", () => {
           disconnected = true;
           return { restored: true, tokenRemoved: true, catalogRemoved: true, apiKeyId: "client-key-a" };
         },
-        scheduleStandaloneRecycle: () => { recycled = disconnected; },
+        scheduleStandaloneRecycle: tokenFingerprint => {
+          recycled = disconnected && tokenFingerprint === connection().tokenFingerprint;
+        },
       },
     });
     servers.push(server);

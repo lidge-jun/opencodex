@@ -404,6 +404,12 @@ async function resolveMainAccountToken(
             : "transient" as const;
           throw new MainAccountTokenRefreshError(reason, { cause });
         }
+        // The refresh may resolve after the caller went away (an implementation that does
+        // not observe the signal, or an abort landing in the window between resolution and
+        // commit). A cancelled request's late refresh must not rewrite auth.json on behalf
+        // of a request that no longer exists -- the same fence the reauth twin applies
+        // before its own commit above.
+        if (dependencies.signal?.aborted) throw dependencies.signal.reason;
         const result = persistRefreshedMainAuthJson(locked, refreshed);
         if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
         return result;

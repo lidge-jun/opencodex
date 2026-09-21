@@ -8,9 +8,8 @@ import { prependPath, withInstalledShim } from "../helpers/codex-shim-install-fi
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC, SHIM_MARKER, UNIX_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
 
-const SHIM_MARKER = "opencodex codex autostart shim";
-const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
 
 /**
  * A child environment with the shim's recursion-guard state stripped.
@@ -1321,7 +1320,10 @@ printf '%s\\n' child-codex
             const driverPath = join(dir, "driver.ps1");
             const realPath = join(dir, "codex-real.ps1");
             writeFileSync(join(dir, "service-api-token"), "file-token\n");
-            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 19\n");
+            // The Codex phase must isolate a Codex failure, so its ensure has to SUCCEED. It used
+            // to exit 19, which the wrapper now correctly reports as a failed autostart (#5261),
+            // making both phases indistinguishable.
+            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 0\n");
             writeFileSync(realPath, "throw 'fixture Codex failure'\n");
             writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realPath, ensurePath, "unused.ts", "process")}`);
             const emptyToken = callerToken === "" ? "$env:OPENCODEX_API_AUTH_TOKEN = ''\n" : "";
@@ -1333,9 +1335,14 @@ printf '%s\\n' child-codex
             });
             expect(result.error).toBeUndefined();
             expect(result.status, result.stderr).toBe(0);
+            // An ensure failure no longer stops Codex from launching (#5261). The wrapper
+            // reports it on stderr and hands over to the real launcher, so the error that
+            // reaches the caller is always Codex's own, in both phases.
+            const surfaced = "fixture Codex failure";
             expect(result.stdout.trim().split(/\r?\n/)).toEqual([
-              `error:fixture ${failurePhase} failure`, `after:${callerToken ?? ""}`, "presence-preserved:True",
+              `error:${surfaced}`, `after:${callerToken ?? ""}`, "presence-preserved:True",
             ]);
+            expect(result.stderr.includes(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)).toBe(failurePhase === "ensure");
 
             // A failed process must complete, rather than satisfy the check through a timeout.
             writeFileSync(driverPath, `\uFEFF$ErrorActionPreference = 'Stop'\n& '${wrapperPath.replace(/'/g, "''")}' exec\n`);
@@ -1346,7 +1353,8 @@ printf '%s\\n' child-codex
             expect(uncaught.signal).toBeNull();
             expect(typeof uncaught.status, uncaught.stderr).toBe("number");
             expect(uncaught.status, uncaught.stderr).not.toBe(0);
-            expect(uncaught.stderr).toContain(`fixture ${failurePhase} failure`);
+            expect(uncaught.stderr).toContain(surfaced);
+            expect(uncaught.stderr.includes(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)).toBe(failurePhase === "ensure");
           } finally {
             if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
             else process.env.OPENCODEX_HOME = oldHome;

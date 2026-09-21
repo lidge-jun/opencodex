@@ -1,4 +1,5 @@
 import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
+import { registerComboToolRoutingCases } from "../helpers/combo-tool-routing-cases";
 import { comboProviderFactory } from "../helpers/combo-provider";
 import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
 import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
@@ -4110,47 +4111,7 @@ describe("optional-control rejection failover regression", () => {
     });
   }
 
-  for (const stream of [false, true]) {
-    test(`Responses tool-routing mismatch advances to a healthy target, stream=${stream}`, async () => {
-      const hits: string[] = [];
-      const toolResult = { type: "function_call_output", call_id: "call_exec", output: "tool result" };
-      const incompatible = serve(async request => {
-        hits.push("incompatible");
-        const raw = await request.json() as { input?: unknown[] };
-        expect(raw.input).toEqual([toolResult]);
-        return Response.json({ error: {
-          type: "invalid_request_error", code: null, param: "reasoning_effort",
-          message: "Function tools with reasoning_effort are not supported for gpt-6-astra-2026-09-03 in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
-        } }, { status: 400 });
-      });
-      const backup = serve(async request => {
-        hits.push("backup");
-        const raw = await request.json() as { input?: unknown[] };
-        expect(raw.input).toEqual([toolResult]);
-        const response = responsesSuccess("recovered tool request", "m2");
-        return stream
-          ? new Response([
-            `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "recovered tool request", item_id: "msg_backup", output_index: 0, content_index: 0 })}\n\n`,
-            `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\n`,
-          ].join(""), { headers: { "content-type": "text/event-stream" } })
-          : Response.json(response);
-      });
-      const config = comboConfig({
-        a: provider("openai-responses", baseUrl(incompatible), "key-a"),
-        b: provider("openai-responses", baseUrl(backup), "key-b"),
-      });
-      const response = await post(config, { stream, input: [toolResult], reasoning: { effort: "high" }, tools: [{
-        type: "function", name: "exec", description: "Run a command",
-        parameters: { type: "object", properties: {} },
-      }] });
-      const text = await response.text();
-      expect(response.status).toBe(200);
-      expect(text).toContain("recovered tool request");
-      expect(text).not.toContain("chat/completions");
-      expect(hits).toEqual(["incompatible", "backup"]);
-      expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
-    });
-  }
+  registerComboToolRoutingCases({ serve, baseUrl, provider, comboConfig, post });
 });
 
 describe("image-capability rejection failover regression", () => {

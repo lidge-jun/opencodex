@@ -3,6 +3,12 @@ export interface OcxTool {
   description: string;
   parameters: Record<string, unknown>;
   strict?: boolean;
+  /**
+   * Anthropic `tools[*].allowed_callers`: which callers may invoke this tool. Carried rather
+   * than diagnosed, because rebuilding the declaration without it hands the model a tool the
+   * caller had restricted and returns a normal response (#5210).
+   */
+  allowedCallers?: string[];
   /** MCP namespace (e.g. "mcp__context7") for tools flattened out of a Responses "namespace" tool. */
   namespace?: string;
   /** Freeform/custom tool (e.g. apply_patch): the model's call must be relayed as a custom_tool_call. */
@@ -29,6 +35,19 @@ export interface OcxTool {
  */
 export function namespacedToolName(namespace: string | undefined, name: string): string {
   return namespace ? `${namespace}__${name}` : name;
+}
+
+/**
+ * Whether a declaration actually narrows who may call the tool.
+ *
+ * `["direct"]` is the state every unrestricted tool is already in, so treating it as a
+ * restriction would refuse ordinary traffic. Mirrors the `caller_mode` predicate in
+ * src/claude/compatibility.ts, which draws the same line.
+ */
+export function toolRestrictsCallers(tool: Pick<OcxTool, "allowedCallers">): boolean {
+  const callers = tool.allowedCallers;
+  if (callers === undefined) return false;
+  return !(callers.length === 1 && callers[0] === "direct");
 }
 
 /**

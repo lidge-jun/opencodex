@@ -29,6 +29,9 @@ import {
   isReplayRefusalCode,
   isReplayRefusalResponse,
   prepareSameTarget429Wait,
+  REPLAY_REFUSAL_CLIENT_HEADERS,
+  REPLAY_REFUSED_STATUS,
+  retainReplayRefusal,
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
@@ -359,6 +362,11 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
                   }, transportRecovery),
+                  // Reselection can replace the provider transport and the wire shape, so the
+                  // egress route is bound to the provider this send actually uses. Omitting it
+                  // here would let a provider transport bypass its configured route entirely,
+                  // because that transport wins over the executor that carries the binding.
+                  { providerName: route.providerName, provider: activeProvider },
                 );
                 if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
                 return dispatched;
@@ -492,10 +500,13 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
           : response.status >= 500 ? "server_error" : "invalid_request_error"),
       clientMessage,
     );
+    // The verdict is read once, from the response that carries it and from the code a
+    // re-wrapped body kept -- never from the status, which a real rate limit shares.
+    const replayRefusal = isReplayRefusalResponse(response) || isReplayRefusalCode(upstreamCode);
     if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(upstreamType);
-    } else if (isReplayRefusalResponse(response) || isReplayRefusalCode(upstreamCode)) {
+    } else if (replayRefusal) {
       // 429 classifies as a rate limit and a rate limit already carries a code, so the branch
       // below -- which only fills an EMPTY code -- could never restore this one. Without it the
       // client is told the provider throttled the turn, when what happened is that this proxy
@@ -507,11 +518,13 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
-    const status = isCyberPolicyCode(classified.code) ? 400 : response.status;
+    const status = isCyberPolicyCode(classified.code) ? 400
+      : replayRefusal ? REPLAY_REFUSED_STATUS
+      : response.status;
     // A refusal this proxy made has no wait to report. Synthesizing one here would hand the
     // client the default two-second retry for a rate limit that never happened, which is the
     // duplicate send the refusal exists to prevent.
-    const retryAfter = isCyberPolicyCode(classified.code) || isReplayRefusalCode(classified.code)
+    const retryAfter = isCyberPolicyCode(classified.code) || replayRefusal
       ? undefined
       : resolveClientRetryAfter({
         status: response.status,
@@ -519,13 +532,15 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
         upstreamRetryAfter: response.headers.get("retry-after"),
       });
     finishLog(status, classified.message);
-    return new Response(JSON.stringify(chatCompletionsErrorBody(status, classified.message, classified.type, classified.code)), {
+    const rewritten = new Response(JSON.stringify(chatCompletionsErrorBody(status, classified.message, classified.type, classified.code)), {
       status,
       headers: {
         "Content-Type": "application/json",
         ...(retryAfter ? { "Retry-After": retryAfter } : {}),
+        ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
       },
     });
+    return replayRefusal ? retainReplayRefusal(rewritten) : rewritten;
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";

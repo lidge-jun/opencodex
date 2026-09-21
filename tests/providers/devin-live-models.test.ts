@@ -185,4 +185,23 @@ describe("devin advertised catalog input modalities", () => {
     expect(models.map((model) => model.id)).toEqual(["plain-model"]);
     expect(models[0]?.inputModalities).toEqual(["text"]);
   });
+
+  test("a credential change cannot reuse the previous account's live roster", async () => {
+    // The live catalog is entitlement-specific: an observation made under one
+    // credential must not be served to the next. Before the roster cache was
+    // bound to the credential fingerprint, account B read account A's fresh
+    // entry and never resolved its own token.
+    let token = "acct-a-key";
+    authSpy?.mockImplementation(async () => token);
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-a-model")), "acct-a-key", HOST));
+    const accountA = await fetchProviderModels("devin-test", devinProvider(), 60_000);
+
+    token = "acct-b-key";
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-b-model")), "acct-b-key", HOST));
+    const accountB = await fetchProviderModels("devin-test", devinProvider(), 60_000);
+
+    expect(accountA.map((model) => model.id)).toEqual(["acct-a-model"]);
+    expect(accountB.map((model) => model.id)).toEqual(["acct-b-model"]);
+    expect(authSpy?.mock.calls.length).toBe(2);
+  });
 });

@@ -262,6 +262,12 @@ function contentToNative(
       text += part.text;
       continue;
     }
+    // No Ollama document carrier: keep the marker rather than falling through to the image
+    // branch below, which would read a nonexistent imageUrl.
+    if (part.type === "document") {
+      text += part.text;
+      continue;
+    }
     // Ollama's native /api/chat message shape carries `images: string[]` and has no video
     // counterpart, so a video part is refused rather than silently dropped or mis-sent as an image.
     if (part.type === "video") throw new Error(`ollama-native cannot send video content in ${label}`);

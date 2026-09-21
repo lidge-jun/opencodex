@@ -1,5 +1,8 @@
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { InboundWire } from "../../providers/registry";
+import { getProviderRegistryEntry } from "../../providers/registry";
+import { providerMatchesRegistryTransportWithStaticGuards } from "../../providers/static-model-discovery";
+import { resolveModelPolicy } from "../../providers/resolved-model-policy";
 import { subjectIdForSubject } from "../../lab/digest";
 import { buildRouteSubjectV1 } from "../../lab/subject/route-subject";
 import { buildProtocolSubjectV1 } from "../../lab/subject/protocol-subject";
@@ -65,7 +68,19 @@ export function resolveCompatibilitySubjectsForInboundWire(
   inboundWire: InboundWire,
   configDir?: string,
 ): ResolvedPolicyCompatibilitySubjects {
-  const effective = resolveWireProtocolOverride(providerName, modelId, routed, inboundWire);
+  const registryEntry = getProviderRegistryEntry(providerName);
+  const staticPolicy = resolveModelPolicy({
+    providerName,
+    modelId,
+    provider: routed,
+    registryEntry,
+    transportMatchedRegistry: !!registryEntry
+      && providerMatchesRegistryTransportWithStaticGuards(providerName, routed),
+    inboundWire,
+    modelCapabilities: routed.modelCapabilities?.[modelId],
+    ...(routed.authMode ? { effectiveAuth: { authMode: routed.authMode } } : {}),
+  });
+  const effective = resolveWireProtocolOverride(providerName, modelId, routed, inboundWire, staticPolicy);
   const baseUrl = typeof effective.baseUrl === "string" ? effective.baseUrl.trim() : "";
   const adapter = effective.adapter ?? "openai-responses";
   const inboundProtocol = inboundProtocolForWire(inboundWire);

@@ -14,6 +14,7 @@ import { formatCodexProviderForLog } from "../codex/routing";
 import type { AdmissionLease } from "../lib/admission";
 import { captureExplicitOpenAiCallerAuth, resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import type { OcxConfig } from "../types";
+import { admissionScopeDenial } from "./admission-model-scope";
 import {
   isProxyAdmissionSecret,
   resolveDataPlaneAdmissionSecret,
@@ -119,6 +120,18 @@ export async function resolveAudioUpstream(
         return formatErrorResponse(401, "authentication_error", "Selected audio account is unavailable");
       }
       validateForwardAdmissionCredential(selected, config);
+      // Every audio surface — file transcription, the dictation socket, voice
+      // call-create and the sideband join — resolves its upstream here, and
+      // `options.model` is the model that upstream will run, not a selector the
+      // caller can rewrite afterwards. One check therefore covers all of them.
+      const forwardDenial = admissionScopeDenial(config, options.admission, options.model, {
+        providerName: candidate.providerName,
+        modelId: options.model,
+      });
+      if (forwardDenial) {
+        releaseCodexAuthContextProbeLease(context);
+        return forwardDenial;
+      }
       log.provider = formatCodexProviderForLog(candidate.providerName, context.accountId, config);
       log.model = options.model;
       return {
@@ -136,6 +149,11 @@ export async function resolveAudioUpstream(
       const selected = new Headers(provider.headers);
       selected.set("authorization", `Bearer ${apiKey}`);
       validateForwardAdmissionCredential(selected, config);
+      const keyedDenial = admissionScopeDenial(config, options.admission, options.model, {
+        providerName,
+        modelId: options.model,
+      });
+      if (keyedDenial) return keyedDenial;
       log.provider = providerName;
       log.model = options.model;
       return {

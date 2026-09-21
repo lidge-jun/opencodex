@@ -18,13 +18,21 @@
  * 011 (Claude Code), 012 (Grok).
  */
 import { join } from "node:path";
-import { loadConfig, saveConfigPreservingClaudeCode } from "../../config";
+import { loadConfig, mutatePersistedConfig, saveConfigPreservingClaudeCode } from "../../config";
 import { readRuntimePort } from "../../config/process-state";
 import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits } from "../../codex/catalog";
 import { getCodexHome } from "../../codex/paths";
 import { providerContextCap } from "../../providers/context-cap";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
+import {
+  applyDesktopFirstParty,
+  inspectDesktopFirstParty,
+  recordClaudeDesktopMode,
+  removeDesktopFirstParty,
+  resolveClaudeDesktopApplyMode,
+  type ClaudeDesktopMode,
+} from "../../claude/desktop-first-party";
 import { projectGrokCatalog } from "../../grok/catalog";
 import { injectGrokConfig, stripGrokConfig } from "../../grok/inject";
 import { inspectGrokConfig } from "../../grok/inspect";
@@ -47,7 +55,9 @@ export type NativeRefusalReason =
   | "write_failed"
   | "metadata_unreadable"
   | "cleanup_incomplete"
-  | "desired_state_changed";
+  | "desired_state_changed"
+  | "foreign_env"
+  | "intercept_disabled";
 
 export interface NativeStatus {
   clientId: NativeIntegrationClientId;
@@ -126,7 +136,7 @@ function desktopStatus(config: ManagementContext["config"]): NativeStatus {
   const seen = inspectDesktop3pConfigLibrary({
     appliedFingerprint: config.claudeCode?.desktopProfile?.appliedFingerprint ?? null,
   });
-  const state: NativeStatus["state"] = seen.kind === "gateway_ours"
+  const gatewayState: NativeStatus["state"] = seen.kind === "gateway_ours"
     ? "current"
     : seen.kind === "unsafe" || seen.kind === "broken" ? "unsafe" : "absent";
   const disableBlocked = seen.kind === "unsafe" || seen.kind === "broken" || seen.kind === "foreign"
@@ -135,6 +145,14 @@ function desktopStatus(config: ManagementContext["config"]): NativeStatus {
         message: "Claude Desktop configuration cannot be changed safely.",
       }
     : null;
+  // First-party mode lives in Claude Code's settings.json, not in Desktop's library. A leftover
+  // gateway profile still counts as current (it is what Desktop is actually running).
+  const firstParty = resolveClaudeDesktopApplyMode(config) === "first-party" && gatewayState === "absent"
+    ? inspectDesktopFirstParty(config)
+    : null;
+  const state: NativeStatus["state"] = firstParty
+    ? firstParty.settings.kind === "unreadable" ? "unsafe" : firstParty.applied ? "current" : "absent"
+    : gatewayState;
   return {
     clientId: "claude-desktop",
     state,
@@ -599,6 +617,28 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
   }
 }
 
+export function firstPartyRefusalMessage(
+  reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env",
+  path: string,
+): string {
+  switch (reason) {
+    case "intercept_disabled":
+      return "First-party mode needs the Claude intercept proxy, which is off in this configuration (claudeCode.intercept.enabled / client role). Use gateway mode instead.";
+    case "ca_unavailable":
+      return `The local intercept certificate could not be created (${path}).`;
+    case "unreadable":
+      return `Claude Code settings could not be parsed (${path}); nothing was written.`;
+    case "foreign_env":
+      return `Claude Code settings already set HTTPS_PROXY or NODE_EXTRA_CA_CERTS to a value opencodex does not own (${path}); remove them first or use gateway mode.`;
+  }
+}
+
+/** Record which Desktop mode is applied; `false` when the config file could not be updated. */
+function persistDesktopModeMarker(desktopMode: ClaudeDesktopMode): boolean {
+  const outcome = mutatePersistedConfig(persisted => recordClaudeDesktopMode(persisted, desktopMode));
+  return outcome.status !== "unavailable";
+}
+
 let claudeDesktopToggleFlight: Promise<Response> | null = null;
 
 async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Response> {
@@ -626,6 +666,11 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
     const fingerprint = current.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
 
     if (!body.enabled) {
+      const firstPartyRemoved = removeDesktopFirstParty();
+      if (!firstPartyRemoved.ok) {
+        return postCommitRefusal(409, "claude-desktop", "write_failed",
+          `Claude Code settings could not be read (${firstPartyRemoved.path}); the first-party proxy env was left in place.`, { desiredEnabled });
+      }
       const removed = (ctx.deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint: fingerprint });
       if (removed.kind === "cleanup_incomplete") {
         return postCommitRefusal(500, "claude-desktop", "cleanup_incomplete",
@@ -636,9 +681,47 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
         return postCommitRefusal(409, "claude-desktop", removed.reason === "metadata_unreadable" ? "metadata_unreadable" : "write_failed",
           "Claude Desktop configuration could not be changed safely.", { desiredEnabled });
       }
+      const changed = removed.changed || firstPartyRemoved.changed;
       return jsonResponse({
-        ok: true, clientId: "claude-desktop", changed: removed.changed, state: "absent", desiredEnabled,
-        message: removed.changed ? "Claude Desktop integration disabled." : "Claude Desktop integration is already off.",
+        ok: true, clientId: "claude-desktop", changed, state: "absent", desiredEnabled,
+        message: changed ? "Claude Desktop integration disabled." : "Claude Desktop integration is already off.",
+      } satisfies NativeToggleEnvelope);
+    }
+
+    if (resolveClaudeDesktopApplyMode(current) === "first-party") {
+      // Same contract as POST /api/claude-desktop/apply: an owned gateway profile left on disk
+      // is pivoted to standard first, so the two modes are never active together.
+      const library = inspectDesktop3pConfigLibrary({ appliedFingerprint: fingerprint });
+      let gatewayRemoved = false;
+      if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
+        const removed = (ctx.deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint: fingerprint, replaceWhileEnabled: true });
+        if (removed.kind === "cleanup_incomplete") {
+          return postCommitRefusal(500, "claude-desktop", "cleanup_incomplete",
+            "Claude Desktop now points at standard mode, but gateway credential cleanup is incomplete; first-party env was not applied.",
+            { desiredEnabled, residualPaths: removed.residualPaths ?? [] });
+        }
+        if (!removed.ok) {
+          return postCommitRefusal(409, "claude-desktop", removed.reason === "metadata_unreadable" ? "metadata_unreadable" : "write_failed",
+            "The gateway profile could not be removed safely, so first-party mode was not applied.", { desiredEnabled });
+        }
+        gatewayRemoved = removed.changed;
+      }
+      const applied = applyDesktopFirstParty(current);
+      if (!applied.ok) {
+        const reason = applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? applied.reason : "write_failed";
+        return postCommitRefusal(applied.reason === "unreadable" || applied.reason === "ca_unavailable" ? 500 : 409, "claude-desktop", reason,
+          firstPartyRefusalMessage(applied.reason, applied.path), { desiredEnabled });
+      }
+      const modeSaved = persistDesktopModeMarker("first-party");
+      const changed = applied.changed || gatewayRemoved;
+      return jsonResponse({
+        ok: true, clientId: "claude-desktop", changed, state: "current", desiredEnabled,
+        message: [
+          changed
+            ? "Claude Desktop integration enabled (first-party). Fully quit and reopen Claude Desktop."
+            : "Claude Desktop integration is already on.",
+          modeSaved ? "" : "The first-party mode marker could not be saved to config; status may report the mode as unsaved.",
+        ].filter(Boolean).join(" "),
       } satisfies NativeToggleEnvelope);
     }
 
@@ -665,9 +748,13 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
         nativeContextLimits(latest),
       );
       if (!result.written) return postCommitRefusal(500, "claude-desktop", "write_failed", "Claude Desktop apply failed.", { desiredEnabled: latestDesiredEnabled });
+      const modeSaved = persistDesktopModeMarker("gateway");
       return jsonResponse({
         ok: true, clientId: "claude-desktop", changed: true, state: "current", desiredEnabled: latestDesiredEnabled,
-        message: "Claude Desktop integration enabled.",
+        message: [
+          "Claude Desktop integration enabled.",
+          modeSaved ? "" : "The gateway mode marker could not be saved to config; status may report the mode as unsaved.",
+        ].filter(Boolean).join(" "),
       } satisfies NativeToggleEnvelope);
     } catch {
       return postCommitRefusal(500, "claude-desktop", "write_failed", "Claude Desktop apply failed.", { desiredEnabled });

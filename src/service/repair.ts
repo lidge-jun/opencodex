@@ -5,7 +5,8 @@ import type { ServiceDiagnostic } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall, assertServiceAuthEnvironment } from "./guards";
 import { installLaunchd, restartLaunchdJob } from "./launchd";
 import type { LaunchdInstallOutcome } from "./launchd";
-import { TASK, writeServiceInstallState, serviceSourceDir } from "./state";
+import { TASK, writeServiceInstallState, serviceSourceDir, resolveServiceOwnership } from "./state";
+import type { ServiceOwnership, ServiceOwnershipResolution } from "./state";
 import { installSystemd } from "./systemd";
 import { writeWindowsSchedulerAssets, reregisterWindowsSchedulerTask, windowsSchedulerRegistrationMatchesSnapshot, restoreWindowsSchedulerTaskIfAbsent, startWindows, stopWindows, statusWindowsXml } from "./windows-ops";
 import { probeWindowsSchedulerTask, SCHEDULER_SETTLE_DELAYS_MS, settleDelay } from "./windows-scheduler";
@@ -35,6 +36,8 @@ export interface RepairServiceDeps {
   repairSystemd?: () => void;
   /** Restarts a launchd job the install path deliberately left alone. `restart` only. */
   restartLaunchd?: () => void;
+  /** Resolves the recorded runtime owner across every state path. */
+  readOwnership?: () => ServiceOwnershipResolution;
   /**
    * Which CLI verb is being served. `repair` must leave a healthy service alone — that no-op
    * IS the #4236 fix — while `restart` promises a new process, so on darwin it kicks the job
@@ -59,6 +62,37 @@ export interface RepairServiceDeps {
   schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+}
+
+/**
+ * Why a repair stops when something other than this CLI owns the runtime.
+ *
+ * The npm service registration is KEPT — the maintainer's decision is that a user's install
+ * is never deleted — so the recorded owner is the only thing standing between a takeover the
+ * user consented to and the next `ocx service repair`, which would re-enable and restart the
+ * npm launcher without mentioning it. Repair runs incidentally: a tray helper, `ocx update`,
+ * a doctor suggestion. `install` is the deliberate act, so `install` is the verb that takes
+ * ownership back.
+ */
+export function foreignServiceOwnerRefusal(ownership: ServiceOwnership, action = "repair"): string {
+  return `Background service ${action} stopped: the desktop app owns the runtime `
+    + `(install ${ownership.installId}, consent generation ${ownership.consentGeneration}).\n`
+    + "The service registration was left exactly as it is — not re-enabled, not rewritten and not restarted.\n"
+    + "Quit the desktop app and run 'ocx service install' to hand the runtime back to this CLI.";
+}
+
+/**
+ * Why an unreadable or contradictory record stops a repair too.
+ *
+ * Collapsing "I could not read the claim" into "there is no claim" is how a consented
+ * takeover gets reactivated by a permissions error. `ocx service install` is deliberately
+ * not gated, so this never leaves an operator without a way forward.
+ */
+export function unknownServiceOwnerRefusal(reason: string, action = "repair"): string {
+  return `Background service ${action} stopped: ${reason}, so the runtime's recorded owner could `
+    + "not be determined.\n"
+    + "The service registration was left exactly as it is — not re-enabled, not rewritten and not restarted.\n"
+    + "Run 'ocx service install' to re-register the service and take the runtime back.";
 }
 
 async function assertSchedulerSnapshotBeforeStart(
@@ -126,6 +160,16 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
   }
   if (!diag.installed) {
     throw new Error("Background service is not installed. Run 'ocx service install' first.");
+  }
+
+  // Before anything is asserted, written, stopped or started. A repair that has already
+  // rewritten the assets has changed the thing it was supposed to leave alone.
+  const ownership = (deps.readOwnership ?? resolveServiceOwnership)();
+  if (ownership.kind === "unknown") throw new Error(unknownServiceOwnerRefusal(ownership.reason));
+  // `!== "cli"` rather than `=== "desktop"`: this is the CLI's own repair path, so any owner
+  // that is not this CLI is one whose runtime it must not touch.
+  if (ownership.kind === "owned" && ownership.ownership.owner !== "cli") {
+    throw new Error(foreignServiceOwnerRefusal(ownership.ownership));
   }
 
   (deps.assertEnv ?? assertServiceEnvironmentMatchesInstall)();

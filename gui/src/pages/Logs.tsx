@@ -28,6 +28,19 @@ import {
   validCachedRouteDecision,
 } from "./log-route-decision";
 import { mergeLogDelta, parseLogPollResponse } from "./log-poll";
+import type {
+  AttemptRecoveryKind,
+  RequestFailureCause,
+  RequestFailureStage,
+  RequestSpendTotals,
+  ResendPermission,
+} from "../../../src/usage/telemetry-contract";
+import {
+  classifyRequestOutcome,
+  requestPhysicalSends,
+  requestUnresolvedSends,
+  type RequestOutcomeClass,
+} from "../../../src/usage/request-outcome";
 
 function logsCacheKey(apiBase: string): string {
   return `ocx.logs.list.v1:${apiBase}`;
@@ -102,21 +115,20 @@ interface LogDisplayMetrics {
 }
 
 /**
- * Recovery kinds recorded on a log attempt; rendered as localized labels in the logs
- * detail dialog instead of raw wire values.
+ * The durable attribution and the verdict the API derives from it.
+ *
+ * `resendPermission` arrives computed rather than stored: the tables that decide it live in the
+ * proxy and a row must not be able to assert a permission the current tables would refuse. The
+ * page renders the answer and derives nothing of its own, which is the same rule that keeps the
+ * outcome class agreeing with the exporter.
  */
-type AttemptRecoveryKind =
-  | "transient-5xx"
-  | "connection-reset"
-  | "oauth-401"
-  | "key-429"
-  | "rate-limit-429"
-  | "anthropic-oauth-429"
-  | "image-413"
-  | "empty-completion"
-  | "console-go-upload-retry";
+interface LogFailureAttribution {
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+  resendPermission?: ResendPermission;
+}
 
-interface LogAttempt {
+interface LogAttempt extends LogFailureAttribution {
   ordinal: number;
   provider: string;
   model: string;
@@ -138,7 +150,7 @@ interface LogAttempt {
   displayMetrics?: LogDisplayMetrics;
 }
 
-export interface LogEntry {
+export interface LogEntry extends LogFailureAttribution {
   requestId?: string;
   timestamp: number;
   model: string;
@@ -172,6 +184,15 @@ export interface LogEntry {
   durationMs: number;
   errorCode?: string;
   upstreamError?: string;
+  /**
+   * Semantic terminal facts. `/api/logs` has always carried these -- `requestLogDto` spreads the
+   * whole durable entry -- but this page declared neither, so it classified every request by its
+   * numeric HTTP status alone and reported an incomplete 200 as a plain success.
+   */
+  terminalStatus?: string;
+  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
+  /** Upstream spend for the whole logical request, aggregated across attempts and combo children. */
+  spend?: RequestSpendTotals;
   usageStatus?: LogUsageStatus;
   usage?: UsageBreakdown;
   totalTokens?: number;
@@ -298,17 +319,27 @@ const ESTIMATE_REASON_KEYS = {
 /**
  * i18n keys for every {@link AttemptRecoveryKind}, so the logs detail dialog renders a
  * localized label instead of the raw wire value (e.g. `rate-limit-429`).
+ *
+ * The union is now the durable roster rather than a copy of it. The copy had drifted to nine of
+ * thirteen members, so `key-401`, `oauth-account-429`, `opaque-blob-rejection` and
+ * `reasoning-effort-downgrade` all reached the operator as "Unknown recovery reason" -- four real
+ * causes rendered as an absence of information. `satisfies Record<AttemptRecoveryKind, string>` is
+ * what now makes the next added kind a typecheck failure here instead of a silent blank.
  */
 const RECOVERY_KIND_KEYS = {
   "transient-5xx": "logs.detail.attempt.recovery.transient5xx",
   "connection-reset": "logs.detail.attempt.recovery.connectionReset",
   "oauth-401": "logs.detail.attempt.recovery.oauth401",
+  "key-401": "logs.detail.attempt.recovery.key401",
   "key-429": "logs.detail.attempt.recovery.key429",
   "rate-limit-429": "logs.detail.attempt.recovery.rateLimit429",
   "anthropic-oauth-429": "logs.detail.attempt.recovery.anthropicOauth429",
+  "oauth-account-429": "logs.detail.attempt.recovery.oauthAccount429",
   "image-413": "logs.detail.attempt.recovery.image413",
   "empty-completion": "logs.detail.attempt.recovery.emptyCompletion",
   "console-go-upload-retry": "logs.detail.attempt.recovery.consoleGoUpload",
+  "opaque-blob-rejection": "logs.detail.attempt.recovery.opaqueBlobRejection",
+  "reasoning-effort-downgrade": "logs.detail.attempt.recovery.reasoningEffortDowngrade",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
 /** Map a metric-unavailable reason to its i18n key. */
@@ -332,6 +363,91 @@ function recoveryKindKey(kind: AttemptRecoveryKind) {
 
 function verificationKey(status: MatchedPriceInfo["status"]): "logs.detail.verification.verified" | "logs.detail.verification.derived" {
   return status === "verified" ? "logs.detail.verification.verified" : "logs.detail.verification.derived";
+}
+
+/** i18n key for each shared outcome class, total by construction. */
+const OUTCOME_KEYS = {
+  completed: "logs.detail.outcome.completed",
+  failed: "logs.detail.outcome.failed",
+  incomplete: "logs.detail.outcome.incomplete",
+  aborted: "logs.detail.outcome.aborted",
+} as const satisfies Record<RequestOutcomeClass, string>;
+
+/**
+ * i18n key for each shared failure cause, total by construction.
+ *
+ * The `satisfies` clause is the point. The recovery-kind catalog on this page drifted to nine of
+ * the durable thirteen and four real causes reached the operator as "Unknown recovery reason" --
+ * an absence of a label rendered as an absence of a cause. A missing member here is a typecheck
+ * failure instead.
+ */
+const FAILURE_CAUSE_KEYS = {
+  "transport-unsent": "logs.detail.cause.transportUnsent",
+  "transport-ambiguous": "logs.detail.cause.transportAmbiguous",
+  "upstream-declined": "logs.detail.cause.upstreamDeclined",
+  "rate-limit": "logs.detail.cause.rateLimit",
+  "quota-exhausted": "logs.detail.cause.quotaExhausted",
+  "credential-rejected": "logs.detail.cause.credentialRejected",
+  "policy-refusal": "logs.detail.cause.policyRefusal",
+  "parameter-rejected": "logs.detail.cause.parameterRejected",
+  "ciphertext-refusal": "logs.detail.cause.ciphertextRefusal",
+  "payload-too-large": "logs.detail.cause.payloadTooLarge",
+  "payload-rejected": "logs.detail.cause.payloadRejected",
+  "upstream-fault": "logs.detail.cause.upstreamFault",
+  "empty-output": "logs.detail.cause.emptyOutput",
+  "client-cancelled": "logs.detail.cause.clientCancelled",
+  "local-refusal": "logs.detail.cause.localRefusal",
+} as const satisfies Record<RequestFailureCause, string>;
+
+/** i18n key for each stage the caller's view of the exchange reached. */
+const FAILURE_STAGE_KEYS = {
+  "pre-header": "logs.detail.stage.preHeader",
+  "headers-only": "logs.detail.stage.headersOnly",
+  "protocol-prelude": "logs.detail.stage.protocolPrelude",
+  "semantic-output": "logs.detail.stage.semanticOutput",
+  "side-effect": "logs.detail.stage.sideEffect",
+  "terminal": "logs.detail.stage.terminal",
+} as const satisfies Record<RequestFailureStage, string>;
+
+/** i18n key for each resend verdict; every refusal names which refusal it is. */
+const RESEND_PERMISSION_KEYS = {
+  "permitted": "logs.detail.resend.permitted",
+  "permitted-after-repair": "logs.detail.resend.permittedAfterRepair",
+  "refused-ambiguous": "logs.detail.resend.refusedAmbiguous",
+  "refused-committed": "logs.detail.resend.refusedCommitted",
+  "refused-futile": "logs.detail.resend.refusedFutile",
+} as const satisfies Record<ResendPermission, string>;
+
+/**
+ * How this request ended, using the same classifier the Prometheus exporter uses.
+ *
+ * Calling the shared function rather than reimplementing the precedence is the point: the numeric
+ * status beside it can be 200 while the answer was never delivered, and reading the status first
+ * is exactly the disagreement this removes.
+ */
+function outcomeKey(entry: Pick<LogEntry, "status" | "terminalStatus" | "closeReason">) {
+  return OUTCOME_KEYS[classifyRequestOutcome(entry)];
+}
+
+/**
+ * Localized cause, stage and resend verdict for a row that carries them.
+ *
+ * A stale or hand-edited row can carry a value outside the roster, so each lookup falls back to
+ * the wire value rather than handing `t()` an undefined key. Showing the raw member is more
+ * useful than showing nothing, which is the mistake the recovery catalog made.
+ */
+function failureAttributionLabels(
+  row: LogFailureAttribution,
+  t: TFn,
+): { cause?: string; stage?: string; resend?: string } {
+  const causeKey = row.failureCause === undefined ? undefined : FAILURE_CAUSE_KEYS[row.failureCause];
+  const stageKey = row.failureStage === undefined ? undefined : FAILURE_STAGE_KEYS[row.failureStage];
+  const resendKey = row.resendPermission === undefined ? undefined : RESEND_PERMISSION_KEYS[row.resendPermission];
+  return {
+    ...(row.failureCause ? { cause: causeKey ? t(causeKey) : row.failureCause } : {}),
+    ...(row.failureStage ? { stage: stageKey ? t(stageKey) : row.failureStage } : {}),
+    ...(row.resendPermission ? { resend: resendKey ? t(resendKey) : row.resendPermission } : {}),
+  };
 }
 
 function statusColor(status: number): string {
@@ -937,6 +1053,7 @@ function LogDetailDialog({
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
   const reasoningWire = reasoningWireLabel(detail);
+  const detailFailure = failureAttributionLabels(detail, t);
 
   const copyRequestId = async () => {
     if (!detail.requestId) return;
@@ -971,6 +1088,33 @@ function LogDetailDialog({
           <h4 id="log-detail-basic" className="log-detail-section-title">{t("logs.detail.section.basic")}</h4>
           <div className="log-detail-grid">
             <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag, serverTimeZone)}</span>
+            <span className="muted">{t("logs.detail.outcome.label")}</span>
+            <span>{t(outcomeKey(detail))}</span>
+            {detailFailure.cause && (
+              <>
+                <span className="muted">{t("logs.detail.cause.label")}</span>
+                <span>
+                  {detailFailure.cause}
+                  {detailFailure.stage && ` (${t("logs.detail.stage.label")}: ${detailFailure.stage})`}
+                </span>
+              </>
+            )}
+            {detailFailure.resend && (
+              <>
+                <span className="muted">{t("logs.detail.resend.label")}</span>
+                <span>{detailFailure.resend}</span>
+              </>
+            )}
+            {detail.spend && (
+              <>
+                <span className="muted">{t("logs.detail.sends.label")}</span>
+                <span className="mono">
+                  {requestPhysicalSends(detail.spend)}
+                  {requestUnresolvedSends(detail.spend) > 0
+                    && ` (${t("logs.detail.sends.unresolved")}: ${requestUnresolvedSends(detail.spend)})`}
+                </span>
+              </>
+            )}
             <span className="muted">{t("logs.col.request")}</span>
             <span className="log-detail-request-row">
               <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>
@@ -1121,7 +1265,13 @@ function LogDetailDialog({
                   const attemptCost = attempt.displayMetrics?.cost;
                   const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
-                  const reason = attempt.errorCode
+                  const attemptFailure = failureAttributionLabels(attempt, t);
+                  // The derived cause leads, because it is the one value in this row that says
+                  // WHY in a vocabulary an operator can act on. `errorCode` stays behind it
+                  // rather than being dropped: it is the exact wire code, which is what a bug
+                  // report needs.
+                  const reason = attemptFailure.cause
+                    ?? attempt.errorCode
                     ?? (attempt.recoveryKinds.length
                       ? attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ")
                       : undefined)

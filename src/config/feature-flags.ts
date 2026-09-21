@@ -12,6 +12,11 @@ export function ultraFastTierEnabled(config: Pick<OcxConfig, "ultraFastTier">): 
   return config.ultraFastTier === true;
 }
 
+/** Default-off aggregate request metrics; activation is fixed for one server process lifetime. */
+export function metricsExportEnabled(config: Pick<OcxConfig, "metricsExport">): boolean {
+  return config.metricsExport?.enabled === true;
+}
+
 /**
  * Default cadence for the opt-in catalog auto-refresh (issue #3630): one converge pass
  * per hour. Each pass spends a live /models call against every enabled provider, and

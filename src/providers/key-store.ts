@@ -1,7 +1,34 @@
-import { createRequire } from "node:module";
 import { resolveEnvValue, saveConfigPreservingClaudeCode } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderRegistryEntry } from "./registry";
+import {
+  KEYCHAIN_REFERENCE_PREFIX,
+  invalidateResolvedProviderKeyCache,
+  isKeychainReference,
+  keychainAccount,
+  keychainReferenceBelongsToProvider,
+  probeProviderKeychain,
+  providerKeychainEntry,
+} from "./api-key-resolve";
+
+// The read-path (reference predicates, the OS entry factory, resolveProviderApiKey, the probe
+// and the kind classification) lives in ./api-key-resolve -- a leaf module that
+// reasoning-metadata can also import without pulling the ../config barrel into its
+// cycle-sensitive graph. Re-exported here so existing key-store consumers keep working.
+export {
+  KEYCHAIN_REFERENCE_PREFIX,
+  PROVIDER_KEYCHAIN_SERVICE,
+  isKeychainReference,
+  probeProviderKeychain,
+  providerKeyStoreKind,
+  resolveProviderApiKey,
+  setProviderKeychainEntryFactoryForTests,
+} from "./api-key-resolve";
+export type {
+  ProviderKeychainEntry,
+  ProviderKeychainEntryFactory,
+  ProviderKeyStoreKind,
+} from "./api-key-resolve";
 
 /** Shared with routing: a key-mode override is effective only while its key resolves. */
 export function providerUsesKeyAuthOverride(
@@ -27,109 +54,8 @@ export function providerUsesKeyAuthOverride(
  * (headless service, locked session) refuses rather than half-migrating.
  */
 
-export const KEYCHAIN_REFERENCE_PREFIX = "keychain:";
-export const PROVIDER_KEYCHAIN_SERVICE = "opencodex.provider-api-key.v1";
-
-export interface ProviderKeychainEntry {
-  getPassword(): string | null;
-  setPassword(password: string): void;
-  deletePassword(): boolean;
-}
-
-export type ProviderKeychainEntryFactory = (service: string, account: string) => ProviderKeychainEntry;
-
-const nodeRequire = createRequire(import.meta.url);
-
-function defaultEntryFactory(service: string, account: string): ProviderKeychainEntry {
-  const { Entry } = nodeRequire("@napi-rs/keyring") as { Entry: new (s: string, a: string) => ProviderKeychainEntry };
-  return new Entry(service, account);
-}
-
-let entryFactory: ProviderKeychainEntryFactory = defaultEntryFactory;
-const resolvedCache = new Map<string, string>();
-const warnedAccounts = new Set<string>();
-
-/** Test seam: swap the OS entry for an in-memory one and drop caches. */
-export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
-  entryFactory = factory ?? defaultEntryFactory;
-  resolvedCache.clear();
-  warnedAccounts.clear();
-}
-
-export function isKeychainReference(value: string | undefined): value is string {
-  return typeof value === "string" && value.startsWith(KEYCHAIN_REFERENCE_PREFIX) && value.length > KEYCHAIN_REFERENCE_PREFIX.length;
-}
-
-function keychainAccount(reference: string): string {
-  return reference.slice(KEYCHAIN_REFERENCE_PREFIX.length);
-}
-
-/**
- * A reference belongs to `name` only when its account is that provider's own active account
- * or one of its pool accounts. `storeProviderKeyInKeychain` writes exactly those two shapes,
- * so anything else in a provider's config names another provider's secret.
- */
-function keychainReferenceBelongsToProvider(reference: string, name: string): boolean {
-  const account = keychainAccount(reference);
-  return account === name || account.startsWith(`${name}/`);
-}
-
-function readKeychain(account: string): string | undefined {
-  const cached = resolvedCache.get(account);
-  if (cached !== undefined) return cached;
-  try {
-    const value = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account).getPassword();
-    if (typeof value === "string" && value.trim()) {
-      resolvedCache.set(account, value);
-      return value;
-    }
-  } catch {
-    // fall through to the single warning below
-  }
-  if (!warnedAccounts.has(account)) {
-    warnedAccounts.add(account);
-    console.warn(`[opencodex] provider key reference keychain:${account} could not be read from the OS keychain; requests for this provider have no credential until the keychain is available (no plaintext fallback)`);
-  }
-  return undefined;
-}
-
-/**
- * Single resolver for provider key material: env references, keychain references, or the
- * literal value. Every request-time read of `apiKey` goes through here.
- */
-export function resolveProviderApiKey(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  if (isKeychainReference(value)) return readKeychain(keychainAccount(value));
-  return resolveEnvValue(value);
-}
-
-export type ProviderKeyStoreKind = "keychain" | "env" | "file" | "none";
-
-export function providerKeyStoreKind(provider: Pick<OcxProviderConfig, "apiKey"> | undefined): ProviderKeyStoreKind {
-  const key = provider?.apiKey;
-  if (!key) return "none";
-  if (isKeychainReference(key)) return "keychain";
-  if (/^\$\{?\w+\}?$/.test(key)) return "env";
-  return "file";
-}
-
-/** Probe the OS keychain with a throwaway account: write, read back, delete. */
-export function probeProviderKeychain(): { available: true } | { available: false; reason: string } {
-  const account = `probe-${process.pid}-${Date.now()}`;
-  try {
-    const entry = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
-    entry.setPassword("ok");
-    const back = entry.getPassword();
-    try { entry.deletePassword(); } catch { /* best effort */ }
-    if (back !== "ok") return { available: false, reason: "keychain read-back did not match" };
-    return { available: true };
-  } catch (error) {
-    return { available: false, reason: error instanceof Error ? error.message : "keychain unavailable" };
-  }
-}
-
 function writeVerified(account: string, secret: string): void {
-  const entry = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account);
+  const entry = providerKeychainEntry(account);
   entry.setPassword(secret);
   if (entry.getPassword() !== secret) throw new Error(`keychain read-back mismatch for ${account}`);
 }
@@ -177,13 +103,12 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
     }
   } catch (error) {
     for (const account of written) {
-      try { entryFactory(PROVIDER_KEYCHAIN_SERVICE, account).deletePassword(); } catch { /* best effort */ }
+      try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
     }
     return { ok: false, error: `OS keychain write failed: ${error instanceof Error ? error.message : "unknown"}`, status: 503 };
   }
   for (const apply of planned) apply();
-  resolvedCache.clear();
-  warnedAccounts.clear();
+  invalidateResolvedProviderKeyCache();
   saveConfigPreservingClaudeCode(config);
   return { ok: true, moved: written.length };
 }
@@ -211,7 +136,7 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
     const account = keychainAccount(ref);
     if (resolved.has(account)) continue;
     let value: string | null = null;
-    try { value = entryFactory(PROVIDER_KEYCHAIN_SERVICE, account).getPassword(); } catch { value = null; }
+    try { value = providerKeychainEntry(account).getPassword(); } catch { value = null; }
     if (!value) return { ok: false, error: `OS keychain has no readable secret for ${ref}; config left unchanged`, status: 503 };
     resolved.set(account, value);
   }
@@ -220,10 +145,9 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
   }
   if (isKeychainReference(provider.apiKey)) provider.apiKey = resolved.get(keychainAccount(provider.apiKey))!;
   for (const account of resolved.keys()) {
-    try { entryFactory(PROVIDER_KEYCHAIN_SERVICE, account).deletePassword(); } catch { /* best effort */ }
+    try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
   }
-  resolvedCache.clear();
-  warnedAccounts.clear();
+  invalidateResolvedProviderKeyCache();
   saveConfigPreservingClaudeCode(config);
   return { ok: true, restored: resolved.size };
 }

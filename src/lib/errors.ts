@@ -74,6 +74,75 @@ export function isCyberPolicyMessage(text: string): boolean {
   return false;
 }
 
+/**
+ * Refusal codes Codex ends a turn on.
+ *
+ * Its Responses parser classifies a `response.failed` terminal by `error.code`
+ * alone (codex-rs/codex-api/src/sse/responses.rs:423-462). These four become a
+ * fatal `ApiError` the client reports instead of reconnecting. A code outside
+ * this set is never read as a refusal: `server_is_overloaded` and `slow_down`
+ * take the overload arm, `rate_limit_exceeded` takes the rate-limit arm, and
+ * everything else falls through to `ApiError::Retryable` and is reconnected up
+ * to `stream_max_retries`.
+ *
+ * Deliberately scoped to content refusals. `insufficient_quota` and
+ * `context_length_exceeded` are terminal for Codex too, but they are separate
+ * failure families this proxy already classifies through its own quota and
+ * context paths, and pulling them in here would change their retry behavior
+ * with no evidence asking for it.
+ */
+const TERMINAL_REFUSAL_CODES = new Set<string>([
+  CYBER_POLICY_ERROR_CODE,
+  "misalignment_policy_violation",
+  "invalid_prompt",
+  "bio_policy",
+]);
+
+/** True when an upstream error code is a refusal the client must not retry. */
+export function isTerminalRefusalCode(code: string | null | undefined): boolean {
+  return typeof code === "string" && TERMINAL_REFUSAL_CODES.has(code);
+}
+
+/** Stand-in copy for a refusal the upstream sent without a message of its own. */
+export const TERMINAL_REFUSAL_FALLBACK_MESSAGE = "The upstream refused this request.";
+
+/** Readable copy for a refusal code, used when the upstream carried no message. */
+export function terminalRefusalFallbackMessage(code: string): string {
+  return code === CYBER_POLICY_ERROR_CODE
+    ? CYBER_POLICY_FALLBACK_MESSAGE
+    : TERMINAL_REFUSAL_FALLBACK_MESSAGE;
+}
+
+/**
+ * Name the refusal code behind upstream safety copy when the structured code
+ * was not carried on the wire.
+ *
+ * Same discipline as {@link isCyberPolicyMessage}: whole distinctive phrases
+ * only. A loose match here is the mirror-image defect — it would end a turn
+ * that a genuine transient failure would have retried successfully — so a
+ * message that merely mentions safety or blocking does not qualify. Callers
+ * must consult this only when the upstream carried no structured code at all,
+ * so that a transport failure quoting a refusal in its diagnostic text cannot
+ * be promoted past the verdict the upstream actually gave.
+ *
+ * Copy provenance: "limited access to this content for safety reasons" is the
+ * prefix Codex itself matches (tui/src/chatwidget/turn_runtime.rs:8-15) and
+ * pairs with `invalid_prompt` in its parser fixture (sse/responses.rs:1358-1366),
+ * which also pairs "flagged for possible biological risk" with `bio_policy`.
+ * "blocked by our safety systems" is the copy reported in #5176; pairing it
+ * with `invalid_prompt` is an inference from the two verified pairings above,
+ * not something the upstream source states.
+ */
+export function safetyRefusalCodeFromMessage(text: string): string | undefined {
+  const lower = String(text ?? "").toLowerCase();
+  if (lower.includes("flagged for possible biological risk")) return "bio_policy";
+  if (
+    lower.includes("blocked by our safety systems")
+    || lower.includes("limited access to this content for safety reasons")
+  ) return "invalid_prompt";
+  return undefined;
+}
+
 function isSubscriptionGateMessage(text: string): boolean {
   return (
     text.includes("requires a subscription") ||
@@ -185,6 +254,16 @@ export function isClientClosedMessage(text: string): boolean {
     lower.includes("request canceled by client") ||
     lower.includes("request cancelled by client")
   );
+}
+
+/**
+ * Ambiguous-reset refusal wording owned by this proxy (src/lib/upstream-retry.ts):
+ * the upstream connection closed before any response arrived, so the request may
+ * already have been processed and automatic replay was stopped. Matched narrowly
+ * so a provider-sent message is never relabeled by it.
+ */
+export function isUpstreamResetReplayRefusedMessage(text: string): boolean {
+  return text.toLowerCase().includes("connection closed before a response was received");
 }
 
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {

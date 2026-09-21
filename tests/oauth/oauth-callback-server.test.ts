@@ -89,6 +89,36 @@ describe("OAuth callback server defaults", () => {
     }
   });
 
+  test("manual-input loop rejects a code#state paste with a foreign suffix and re-prompts", async () => {
+    let prompts = 0;
+    const flow = new ManualFallbackFlow(
+      {
+        onManualCodeInput: async () => {
+          prompts += 1;
+          // First paste carries a state the flow never issued: the loop must
+          // discard it and ask again, not complete with the attacker's code.
+          return prompts === 1 ? "evil-code#WRONG" : `good-code#${flow.generated?.state}`;
+        },
+      },
+      {
+        preferredPort: 0,
+        callbackPath: "/callback",
+        callbackHostname: "127.0.0.1",
+        callbackBindHostname: "127.0.0.1",
+      },
+    );
+
+    const credential = await flow.login();
+
+    expect(prompts).toBe(2);
+    expect(flow.exchanged).toEqual({
+      code: "good-code",
+      state: flow.generated?.state,
+      redirectUri: flow.generated?.redirectUri,
+    });
+    expect(credential.access).toBe("access");
+  });
+
   test("fails closed when an exact redirect port is unavailable without manual input", async () => {
     const blocker = Bun.serve({
       hostname: "127.0.0.1",

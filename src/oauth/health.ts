@@ -202,6 +202,7 @@ export function projectStoredOAuthAccountHealth(
 export function projectCodexAccountHealth(input: {
   accountId: string;
   needsReauth: boolean;
+  reauthReason?: "unauthorized" | "forbidden" | "refresh_failed";
   now?: number;
 }): OAuthAccountHealth {
   // One read serves every verdict below. Each lookup re-reads and re-hardens the whole store
@@ -230,6 +231,16 @@ export function projectCodexAccountHealth(input: {
 
   const needsReauth = input.needsReauth || validationAuthFailed || terminalGrantFailure;
 
+  // A stored verification failure carries its own cause. When the caller did not name a
+  // reason, surface the persisted one instead of flattening every verdict into
+  // `refresh_failed`.
+  const storedVerificationFailed = validationAuthFailed || terminalGrantFailure;
+  const storedFailureReason: "unauthorized" | "forbidden" | undefined = !storedVerificationFailed
+    ? undefined
+    : record?.lastCodexValidationError === "http_status:403" ? "forbidden"
+      : record?.lastCodexValidationError === "http_status:401" ? "unauthorized"
+      : undefined;
+
   // Deferred validation is only worth reporting while the credential itself is still viable. A
   // revoked grant needs a re-login, not a "Refresh quotas" click, so reauth is resolved first.
   if (!needsReauth && record?.codexValidationPending) {
@@ -239,7 +250,7 @@ export function projectCodexAccountHealth(input: {
   const snap = getCodexAccountHealthSnapshot(input.accountId, now);
   return projectOAuthAccountHealth({
     needsReauth,
-    reauthReason: needsReauth ? "refresh_failed" : undefined,
+    reauthReason: needsReauth ? (input.reauthReason ?? storedFailureReason ?? "refresh_failed") : undefined,
     cooldownUntilMs: snap?.cooldownUntil,
     cooldownReason: cooldownReasonFromSource(snap?.cooldownSource),
     now,

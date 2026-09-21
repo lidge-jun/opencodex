@@ -354,6 +354,8 @@ entitlement checks. Pool pin reuse and caller-owned fallback enforce the relevan
 the bearer matches the already-observed main credential, including after an awaited entitlement
 read. This uses memory-only identity evidence; unrelated callers and explicit Direct retain their
 existing policy, and an independent model's cooldown does not block another quota scope.
+Cache-affinity preservation across model detours still retires shared state at genuine 100%
+exhaustion, including with a zero account override; below exhaustion the threshold remains disabled.
 
 Preemption moves unbound requests back up when a higher tier regains headroom, and it holds the
 runtime cursor only. Under an independent quota scope it must never touch the shared active cursor,
@@ -400,8 +402,11 @@ has headroom, auth resolution validates the caller bearer's own gated-model rost
 request-owned credential before stored-Pool selection. The credential never enters Pool persistence,
 affinity, entitlement cache, or health state, and this decision never reads the physical main credential.
 If the caller lacks the requested model, a stored-account model detour may serve the request without
-clearing the healthy shared main pin. A paused or quota-drained main skips this exception and follows the
-ordinary Pool promotion path.
+clearing the healthy shared main pin. With quota-strategy cache affinity, the same detour preserves an
+ordinary added-account binding and shared selection beyond the proactive-switch threshold until genuine
+exhaustion; pause, cooldown, reauthentication, quota refusal, and failover evidence still retire shared
+state normally. A paused or quota-drained main skips the request-owned credential exception and follows
+the ordinary Pool promotion path.
 
 > Decision record: [ADR-0086](../decisions/ADR-0086-public-provider-contract.md)
 

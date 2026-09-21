@@ -21,6 +21,10 @@ test("the controller is the single data owner and exposes the agreed contract", 
     // WP2 (260730_gui_hydration_loading_unify/010): progress is part of the contract, because a
     // forced quota refresh keeps `loadState` at "ready" and would otherwise be invisible.
     "refreshing", "initialLoading",
+    // #5261: for the same reason in the other direction. A warm refresh failure keeps the rows
+    // and keeps `loadState` at "ready", so without this the surface has no way to say that what
+    // it is showing predates a failed read.
+    "refreshFailed",
   ]) {
     expect(hook).toContain(member);
   }

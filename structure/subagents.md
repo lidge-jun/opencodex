@@ -153,7 +153,9 @@ choices are not added to that provider's declared ladder.
 The first-party DeepSeek `deepseek-flash` row declares native `text` and `image` input and therefore
 does not require the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
-remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
+remain sidecar-backed by default. OpenCode Go's `deepseek-v4.1-flash` was reclassified as native
+vision on 2026-09-19 (probed on that gateway); its sibling `deepseek-v4-flash` stays sidecar-backed,
+and the Zen tiers keep their classification because they could not be measured.
 
 Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
 
@@ -410,3 +412,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Startup provider-id migration preserves the account binding between configuration and OAuth credentials; see the [runtime contract](runtime.md).
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+The [compaction routing override](transports/responses.md#compaction-routing-overrides) uses explicit request-kind and trigger metadata, independently of spawned-child markers.

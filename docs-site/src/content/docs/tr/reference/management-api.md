@@ -110,6 +110,49 @@ bakın.
 | `GET /api/client-integrations/journal?client=...` | Geri alma işlemlerini, isteğe bağlı olarak tek bir istemci için listeler. Her satır sunucunun hesapladığı `deletable` alanını içerir. | 400 geçersiz istemci |
 | `DELETE /api/client-integrations/journal?opId=...` | Eski bir geri alma işlemini kullanımdan kaldırır ve mümkünse anlık görüntüsünü siler. Başarılı yanıtta `snapshotRemoved: false`, temizliğin bakım yeniden denemesi için saklandığını belirtir. | 400 eksik `opId`; 404 bulunmayan veya zaten kaldırılmış işlem; 409 istemcinin en yeni işlemi |
 
+## Entegrasyon değişikliğini önizleme
+
+Önizleme, bir değişikliğin ne yapacağını yapmadan gösterir. Bu yollar hiçbir şey yazmaz: anlık
+görüntü, sahiplik kaydı, günlük satırı, kilit, bakım ve kurtarma yoktur.
+
+| Yöntem ve yol | Amaç | Önemli hatalar |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | Tek bir istemci için `apply`, `overwrite` veya `disable` planlar; gövde `{ "clientId": "...", "operation": "..." }` | 400 geçersiz istemci veya işlem; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Bir geri almayı planlar; gövde `{ "opId": "...", "confirmDrift": false }` | 404 işlem bulunamadı; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Tek bir Aside profilinin değişikliğini planlar; `restore` için `opId` gerekir | 400 geçersiz gövde veya profil belirtilmemiş; 404 profil veya işlem bulunamadı; 409 `integration_preview_unavailable` |
+
+Plan; `version`, `clientId`, `operation`, `state`, `foreignEdit`, `kind` ve `path` çiftlerinden
+oluşan bir `changes` listesi, opak bir `fingerprint`, `canApply` ve `willChange` içerir;
+`refusalReason` ile `profileId` isteğe bağlıdır. Yollar ya yönetilen şema yollarıdır ya da sabit
+`$snapshot`, `$ownership` ve `$journal` işaretleridir; çalışma sırasında belirlenen bir konum `*`
+olarak görünür. Hiçbir yapılandırma değeri, dosya konumu veya seçilen öğenin adı döndürülmez.
+
+`canApply` doğru ve `willChange` yanlışsa işlem başarılı olur ama yönetilen istemci belgesinde
+hiçbir şey değişmez; örneğin zaten uygulanmış olanı yeniden uygulamak.
+
+Aside profil değişikliği bu durumda yine de bir şey kaydeder: onay, herhangi bir istemci belgesine
+dokunulmadan önce o profilin eşitleme tercihini yazar. Bu yüzden yönetilen bloğu zaten bulunmayan
+bir profili kapatmak yalnızca tercihi saklar, belgeyi ve geçmişini olduğu gibi bırakır.
+
+`integration_preview_unavailable`, şu anda kullanılabilir bir model listesi tutulmadığını belirtir:
+yeni başlamış bir vekil bunun bir hâlidir, yapılandırma ya da sağlayıcı önbelleği değiştiği için
+bırakılmış bir liste de öyle. `GET /api/client-integrations` okunduğunda keşif başarılı olur ve
+yapılandırma belirlenebilirse liste oluşur; bu her zamanki çözümdür, bir güvence değildir.
+
+## Önizlenen değişikliği onaylama
+
+Değişiklik yolları, olağan gövdenin yanında `operation` ve `planFingerprint` kabul eder. İkisini
+birlikte gönderin ya da hiçbirini: yalnızca birini taşıyan bir istek reddedilir, `operation` değeri
+istenen değişiklikle çelişen bir istek de öyle. Aside bağlaması tek bir profile içindir; çünkü bir
+parmak izi birbirinden bağımsız değişen birden çok dosyayı anlatamaz.
+
+Sunucu yazmadan önce yeniden planlar ve onay artık olacak olanı anlatmıyorsa yeniden hesaplanmış
+bir `plan` ile `409 integration_preview_stale` döndürür. Yeni plana bakarak yeniden karar verin;
+istek kendiliğinden yinelenmez.
+
+Parmak izi iyimser bir denetimdir, yetkilendirme değildir. Bir değişikliğin yapılıp
+yapılamayacağına yönetim API kimlik doğrulaması ve sahiplik kuralları karar verir.
+
 Silme, günlüğü yeniden yazmak yerine bir silme kaydı ekler. Geçerli geri alma noktasını korumak için
 her istemcinin en yeni işlemi sunucu tarafında korunur.
 
@@ -153,6 +196,7 @@ Hedef stratejileri, soğuma süreleri, takma adlar ve yönlendirme hataları iç
 | `GET /api/debug/injection-logs` | Sınırlı rehberlik enjeksiyonu hata ayıklama girdilerini okuyun | — |
 | `GET /api/claude/inbound-debug` | Claude gelen hata ayıklama durumunu ve girdilerini okuyun | — |
 | `GET /api/usage` | Kullanımı aralığa ve istemci yüzeyine göre özetleyin; Codex yanıtları ayrıca kararlı PII olmayan günlük etiketlerine göre anahtarlanan bir `accounts` dökümü içerir | Depolama okunamıyorsa bir `error: "read_failed"` özeti döndürür |
+| `GET /api/metrics` | Mantıksal istekler, fiziksel gönderimler, kurtarma türleri, süre ve TTFT için süreç yerel Prometheus metin metriklerini döndürür. Etiketler kapalı protokol, sonuç ve kurtarma sınıfı kümeleriyle sınırlıdır; istek veya kimlik bilgisi tanımlayıcıları dışa aktarılmaz. | Başlangıçta `metricsExport.enabled` true değilse 404; olağan yönetim kimlik doğrulaması gerekir ve veri düzlemi kimlik bilgileri erişim sağlamaz |
 | `GET /api/storage` | Sepete göre Codex depolama kullanımını tarayın | Tarama hatasında bir `error: "scan_failed"` yükü döndürür |
 | `POST /api/storage/cleanup/preview` | Arşivlenmiş oturum temizliğini önizleyin ve bağlayıcı bir özet döndürün | 400 `invalid_json` veya `invalid_percent` |
 | `POST /api/storage/cleanup` | Önizlenen arşivlenmiş kümeyi karantinaya alın veya kalıcı olarak kaldırın | 400 geçersiz girdi; 409 eski/meşgul/başvurulan durum; 500 dosya sistemi/veritabanı hatası |
