@@ -76,6 +76,8 @@ export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
 export const CURSOR_EXTERNAL_ROOT_BLOB_LIMIT = 192;
 /** Approximate prompt-size guard; tool schemas and protocol framing consume context separately. */
 export const CURSOR_EXTERNAL_ROOT_BYTE_LIMIT = 512 * 1024;
+/** Bound synchronous replay construction before the smaller wire-size limits are applied. */
+export const CURSOR_EXTERNAL_REPLAY_MESSAGE_LIMIT = 4096;
 /** Honest placeholder when native Composer history has a toolCall with no matching toolResult. */
 export const CURSOR_MISSING_TOOL_RESULT = "[missing tool_result for this tool_use in history]";
 /**
@@ -311,6 +313,7 @@ function rootPromptMessages(
   const replayRuns = new Map<RootBlobCandidate["role"], {
     text: string;
     entry: RootBlobCandidate;
+    entryIndex: number;
     length: number;
   }>();
   const toolCallCounts = new Map<string, number>();
@@ -337,17 +340,20 @@ function rootPromptMessages(
         // half, so losing it re-primes the self-reinforcing loop the breaker exists to end.
         { ...opts, text: marked, messageIndex: previous.entry.messageIndex ?? opts.messageIndex },
       );
-      entries[entries.indexOf(previous.entry)] = replacement;
-      replayRuns.set(role, { text: normalized, entry: replacement, length: runLength });
+      entries[previous.entryIndex] = replacement;
+      replayRuns.set(role, { text: normalized, entry: replacement, entryIndex: previous.entryIndex, length: runLength });
       return;
     }
     const entry = rootBlobCandidate(payload, role, opts);
     entries.push(entry);
-    replayRuns.set(role, { text: normalized, entry, length: 1 });
+    replayRuns.set(role, { text: normalized, entry, entryIndex: entries.length - 1, length: 1 });
   };
 
-  for (let i = 0; i < messages.length; i++) {
-    if (i === activeUserIndex) break;
+  const replayEnd = activeUserIndex < 0 ? messages.length : activeUserIndex;
+  const replayStart = externalModel
+    ? Math.max(0, replayEnd - CURSOR_EXTERNAL_REPLAY_MESSAGE_LIMIT)
+    : 0;
+  for (let i = replayStart; i < replayEnd; i++) {
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {

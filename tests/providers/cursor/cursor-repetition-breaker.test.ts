@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { fromBinary } from "@bufbuild/protobuf";
-import { encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import {
+  CURSOR_EXTERNAL_REPLAY_MESSAGE_LIMIT,
+  encodeCursorRunRequest,
+} from "../../../src/adapters/cursor/protobuf-request";
 import { handleCursorNativeKv } from "../../../src/adapters/cursor/native-exec";
 import { create } from "@bufbuild/protobuf";
 import {
@@ -168,5 +171,25 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
     expect(texts.filter(text => text.startsWith("investigation step"))).toHaveLength(3);
     expect(texts.filter(text => text.startsWith("[Tool Result]"))).toHaveLength(3);
     expect(texts.filter(text => text.includes("same tool call repeated 3 times"))).toHaveLength(1);
+  });
+
+  test("bounds replay construction before processing an oversized history", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "old turn", timestamp: 1 },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        role: "assistant" as const,
+        content: REPEAT,
+        timestamp: index + 2,
+      })),
+      ...Array.from({ length: CURSOR_EXTERNAL_REPLAY_MESSAGE_LIMIT }, (_, index) => ({
+        role: "assistant" as const,
+        content: index % 2 === 0 ? "recent A" : "recent B",
+        timestamp: index + 7,
+      })),
+      { role: "user", content: "continue", timestamp: CURSOR_EXTERNAL_REPLAY_MESSAGE_LIMIT + 7 },
+    ] as OcxMessage[];
+
+    const texts = rootTexts(encode(messages));
+    expect(texts.some(text => text.includes("Take a DIFFERENT action now"))).toBe(false);
   });
 });
