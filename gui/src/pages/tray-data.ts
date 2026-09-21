@@ -68,17 +68,27 @@ export function relativeReset(value: unknown, locale: string, now = Date.now()):
 export function quotaWindows(quota: AccountQuota | null) {
   if (!quota) return [];
   const windows = [
-    { key: 'quota.fiveHourLimit' as const, percent: quota.fiveHourPercent ?? quota.shortPercent, reset: quota.fiveHourResetAt ?? quota.shortResetAt },
-    { key: 'quota.weeklyLimit' as const, percent: quota.weeklyPercent, reset: quota.weeklyResetAt },
-    { key: 'quota.monthlyLimit' as const, percent: quota.monthlyPercent, reset: quota.monthlyResetAt },
-    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ label: w.label, percent: w.percent, reset: w.resetAt })) : []),
+    { id: 'quota.fiveHourLimit', key: 'quota.fiveHourLimit' as const, percent: quota.fiveHourPercent ?? quota.shortPercent, reset: quota.fiveHourResetAt ?? quota.shortResetAt },
+    { id: 'quota.weeklyLimit', key: 'quota.weeklyLimit' as const, percent: quota.weeklyPercent, reset: quota.weeklyResetAt },
+    { id: 'quota.monthlyLimit', key: 'quota.monthlyLimit' as const, percent: quota.monthlyPercent, reset: quota.monthlyResetAt },
+    ...(Array.isArray(quota.customWindows) ? quota.customWindows.filter(w => w && typeof w.label === 'string').map(w => ({ id: `custom:${w.label}`, label: w.label, percent: w.percent, reset: w.resetAt })) : []),
   ];
-  return windows.filter((w, index) => index === 0 && quota.monthlyPercent === undefined || finite(w.percent) || resetTimestamp(w.reset) !== null);
+  const kept = windows.filter((w, index) => index === 0 && quota.monthlyPercent === undefined || finite(w.percent) || resetTimestamp(w.reset) !== null);
+  // A provider is free to report two custom windows under one label. The row identity has to
+  // stay unique anyway, or React reconciles two different windows onto the same row.
+  const seen = new Map<string, number>();
+  return kept.map(w => {
+    const taken = seen.get(w.id) ?? 0;
+    seen.set(w.id, taken + 1);
+    return taken === 0 ? w : { ...w, id: `${w.id}#${taken}` };
+  });
 }
 
 export function filterUsage(usage: TrayUsage, settings: CompanionSettings): TrayUsage {
-  const models = usage.models.filter(row => !settings.hiddenProviders.includes(row.provider)
-    && (settings.models === null || settings.models.includes(`${row.provider}/${row.model}`) || settings.models.includes(row.model)));
+  const hiddenProviders = new Set(settings.hiddenProviders);
+  const configuredModels = settings.models === null ? null : new Set(settings.models);
+  const models = usage.models.filter(row => !hiddenProviders.has(row.provider)
+    && (configuredModels === null || configuredModels.has(`${row.provider}/${row.model}`) || configuredModels.has(row.model)));
   if (settings.models === null && settings.hiddenProviders.length === 0) return { ...usage, models };
   const summary: TrayTotals = {};
   for (const key of ['requests', 'totalTokens', 'inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheReadInputTokens', 'estimatedCostUsd', 'measuredRequests', 'pricedRequests'] as const) {

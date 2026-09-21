@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useI18n } from '../i18n';
+import { useI18n } from '../i18n/shared';
 import { formatTokens } from '../format-tokens';
 import { formatProviderDisplayName } from '../provider-icons';
 import { UsageCompanionChart } from './usage-companion-chart';
@@ -7,6 +7,8 @@ import { type CompanionSettings, type CompanionSettingsResponse, type UsageTimel
 import { fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, finite, parseAccounts, providerSources, quotaWindows, relativeReset, type TrayProvider, type TrayTotals, type TrayUsage } from './tray-data';
 
 declare global { interface Window { __OPENCODEX_TRAY_VISIBLE__?: boolean } }
+
+const incomplete = (data: TrayUsage | null | undefined) => data?.usageIncomplete || data?.historyTruncated || data?.entriesTruncated;
 
 export default function Tray() {
   const { t, locale } = useI18n();
@@ -23,6 +25,8 @@ export default function Tray() {
   const [revision, setRevision] = useState(0);
   const retry = () => setRevision(value => value + 1);
 
+  // Every post-await state write checks both effect disposal and the request's AbortSignal.
+  // react-doctor-disable-next-line react-doctor/no-set-state-after-await-in-effect
   useEffect(() => {
     document.documentElement.classList.add('tray-document');
     let controller: AbortController | null = null;
@@ -84,7 +88,9 @@ export default function Tray() {
             if (config.models?.length) query.set('models', config.models.join(','));
             try {
               const data = await json<UsageTimeline>(`/api/usage/timeline?${query}`);
-              const series = data.series.filter(row => !config.hiddenProviders.includes(row.provider) && (config.models === null || config.models.includes(`${row.provider}/${row.model}`) || config.models.includes(row.model)));
+              const hiddenProviders = new Set(config.hiddenProviders);
+              const configuredModels = config.models === null ? null : new Set(config.models);
+              const series = data.series.filter(row => !hiddenProviders.has(row.provider) && (configuredModels === null || configuredModels.has(`${row.provider}/${row.model}`) || configuredModels.has(row.model)));
               if (active()) { setTimeline({ ...data, series }); setChartError(false); }
             } catch { if (active()) { setTimeline(null); setChartError(true); } }
           })();
@@ -120,7 +126,6 @@ export default function Tray() {
     };
   }, [revision]);
 
-  const incomplete = (data: TrayUsage | null | undefined) => data?.usageIncomplete || data?.historyTruncated || data?.entriesTruncated;
   const number = (value: unknown) => finite(value) ? formatTokens(value, locale) : '—';
   const totals = (raw: TrayTotals | undefined) => {
     const data = raw ? measuredTotals(raw) : undefined;
@@ -135,6 +140,7 @@ export default function Tray() {
       {finite(data?.requests) && data.requests > 0 && finite(data.measuredRequests) && data.measuredRequests < data.requests && <div className="tray-coverage" title={t('usage.coverage.note')}><dt>{t('usage.card.coverage')}</dt><dd>{Math.round(data.measuredRequests / data.requests * 100)}%</dd></div>}
     </dl>;
   };
+  const hiddenProviders = new Set(settings?.hiddenProviders ?? []);
   return <main className="tray-page">
     <header><strong>OpenCodex</strong><a href="/?desktop=open#/usage" aria-label={t('sub.settings')} title={t('sub.settings')}>⚙</a></header>
     {settingsError && <p role="alert" className="tray-error">{t('usage.companion.settingsUnavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
@@ -150,18 +156,18 @@ export default function Tray() {
     </section>}
     {(settings?.showAccounts ?? true) && <section className="tray-providers" aria-label={t('usage.section.providers')}>
       {quotaError && <p role="alert" className="tray-error">{t('startup.tray.unavailable')} <button onClick={retry}>{t('common.retry')}</button></p>}
-      {providers.filter(provider => !settings?.hiddenProviders.includes(provider.name)).map(provider => <div className="tray-provider" key={provider.name}>
+      {providers.filter(provider => !hiddenProviders.has(provider.name)).map(provider => <div className="tray-provider" key={provider.name}>
         <h2>{formatProviderDisplayName(provider.name, t)}</h2>
         {!provider.accounts.length && <div className="tray-missing">{t(provider.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</div>}
         {provider.accounts.map(account => <div className="tray-account" key={account.id}>
           <div className="tray-account-name" title={account.label}>{account.label}<span className="tray-account-meta">{account.plan}{account.active && <span title={t('prov.activeBadge')} aria-label={t('prov.activeBadge')}> ●</span>}</span></div>
           {account.email && account.email !== account.label && <div className="tray-account-email">{account.email}</div>}
           {!quotaWindows(account.quota).length && <div className="tray-missing">{t(account.unavailable ? 'startup.tray.unavailable' : 'pws.dashboard.noQuota')}</div>}
-          {quotaWindows(account.quota).map((window, index) => {
+          {quotaWindows(account.quota).map(window => {
             const label = 'key' in window ? t(window.key!) : window.label;
             const reset = relativeReset(window.reset, locale);
             const percent = finite(window.percent) ? Math.min(100, window.percent) : null;
-            return <div className="tray-quota" key={`${label}-${index}`}>
+            return <div className="tray-quota" key={window.id}>
               <span title={label}>{label}</span><span>{percent === null ? '—' : `${Math.round(percent)}%`}</span>
               <span className="tray-bar" role={percent === null ? 'img' : 'meter'} aria-label={percent === null ? `${label}: ${t('pws.dashboard.noQuota')}` : label} aria-valuemin={percent === null ? undefined : 0} aria-valuemax={percent === null ? undefined : 100} aria-valuenow={percent ?? undefined} aria-valuetext={percent === null ? undefined : `${Math.round(percent)}%`}><i style={{ width: percent === null ? '0%' : `${percent}%` }} /></span>
               <time title={reset.exact}>{reset.text}</time>
