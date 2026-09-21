@@ -6,7 +6,7 @@ import { repoPath } from "../helpers/repo-root";
  * The desktop app's half of the runtime-ownership claim.
  *
  * The claim lives in the shared service install state, which core owns across two files: the
- * validation that decides what a record may say is in `src/service/install-state-contract.mjs`,
+ * validation that decides what a record may say is in `src/service/state-record.mjs`,
  * and the types, the three answers a read can give and `ownershipGrantedTo` — the comparison an
  * installation applies to its own locally stored install id — are in `src/service/state.ts`. The
  * shell holds the other half, an id of its own to compare against, and mirrors the rule rather
@@ -21,7 +21,7 @@ const IDENTITY = repoPath(`${SHELL}/identity.rs`);
 const OWNERSHIP = repoPath(`${SHELL}/ownership.rs`);
 const STARTUP = repoPath(`${SHELL}/startup.rs`);
 const STATE = repoPath("src/service/state.ts");
-const CONTRACT = repoPath("src/service/install-state-contract.mjs");
+const CONTRACT = repoPath("src/service/state-record.mjs");
 
 function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
