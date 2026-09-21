@@ -68,15 +68,18 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let install_update =
         MenuItem::with_id(app, "install-update", "Install update", false, None::<&str>)?;
-    // Linux tray hosts differ in whether a left click reaches the application at all, so the
-    // same surface is reachable from the menu there rather than only from the icon.
-    #[cfg(target_os = "linux")]
+    // Every platform needs a menu path to the popup, not only Linux.
+    //
+    // On macOS the icon click cannot be the only way in: `tray-icon` assigns the menu to the
+    // NSStatusItem itself, so AppKit pops that menu on mouse-down before the crate's own click
+    // handler runs, and `show_menu_on_left_click(false)` cannot take it back. Linux tray hosts
+    // differ in whether a click reaches the application at all. That leaves Windows as the only
+    // platform where the icon alone would have worked.
     let show_usage = MenuItem::with_id(app, "show-usage", "Show Usage", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
-            #[cfg(target_os = "linux")]
             &show_usage,
             &open,
             &browser,
@@ -142,7 +145,6 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .on_menu_event(move |app, event| match event.id().as_ref() {
-            #[cfg(target_os = "linux")]
             "show-usage" => {
                 let Some(endpoint) = app
                     .state::<crate::AppState>()
@@ -464,6 +466,44 @@ mod tests {
         assert!(
             source.contains("#[cfg(not(target_os = \"linux\"))]"),
             "Linux delivers no usable click event, so it must keep the menu on left click"
+        );
+    }
+
+    /// macOS pops the attached menu from AppKit before the crate's click handler runs, so the
+    /// icon click cannot be the only way to the popup. The menu item is the path that works
+    /// everywhere, and platform-gating it once already left two platforms with no way in.
+    #[test]
+    fn the_usage_menu_item_is_not_platform_gated() {
+        let source = production_source();
+        let declaration = source
+            .lines()
+            .position(|line| line.contains("let show_usage ="))
+            .expect("the menu no longer declares the usage item");
+        let lines: Vec<&str> = source.lines().collect();
+        // Every line that mentions the item: its declaration, its place in the menu, and the
+        // event arm. None of them may sit under a platform attribute.
+        let mentions = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains("show_usage") || line.contains("\"show-usage\""))
+            .map(|(index, _)| index);
+        for index in mentions {
+            let previous = lines[..index]
+                .iter()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .copied()
+                .unwrap_or_default();
+            assert!(
+                !previous.trim_start().starts_with("#[cfg("),
+                "the usage item is platform-gated at line {}; every platform needs a menu path \
+                 to the popup",
+                index + 1
+            );
+        }
+        assert!(
+            declaration > 0,
+            "the declaration is the first line of the file"
         );
     }
 }
