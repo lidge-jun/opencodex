@@ -246,26 +246,45 @@ fn same_origin(url: &Url, endpoint: ProxyEndpoint) -> bool {
         && url.port_or_known_default() == Some(endpoint.port)
 }
 
+/// Split one of the paths above into the query and fragment a navigation must carry.
+///
+/// The matchers read the constant instead of restating it. A matcher that restated it would
+/// keep answering yes after the page it names moved, and these three decide what the popup is
+/// allowed to navigate to, so a stale yes is the failure that matters.
+fn parts(path: &str) -> (Option<&str>, Option<&str>) {
+    let (before_fragment, fragment) = match path.split_once('#') {
+        Some((before, fragment)) => (before, Some(fragment)),
+        None => (path, None),
+    };
+    (
+        before_fragment.split_once('?').map(|(_, query)| query),
+        fragment,
+    )
+}
+
+fn matches(url: &Url, endpoint: ProxyEndpoint, path: &str) -> bool {
+    let (query, fragment) = parts(path);
+    same_origin(url, endpoint) && url.path() == "/" && url.query() == query && url.fragment() == fragment
+}
+
 fn is_tray_url(url: &Url, endpoint: ProxyEndpoint) -> bool {
-    same_origin(url, endpoint)
-        && url.path() == "/"
-        && url.query().is_none()
-        && url.fragment() == Some("/tray")
+    matches(url, endpoint, TRAY_PATH)
 }
 
 fn is_close_url(url: &Url, endpoint: ProxyEndpoint) -> bool {
-    same_origin(url, endpoint)
-        && url.path() == "/"
-        && url.query() == Some("desktop=popup-close")
-        && url.fragment() == Some("/tray-close")
+    matches(url, endpoint, CLOSE_PATH)
 }
 
 fn is_dashboard_url(url: &Url, endpoint: ProxyEndpoint) -> bool {
+    // The dashboard accepts the usage page and its companion view under the same query.
+    let (query, _) = parts(DASHBOARD_PATH);
     same_origin(url, endpoint)
         && url.path() == "/"
-        && url.query() == Some("desktop=open")
+        && url.query() == query
         && matches!(url.fragment(), Some("/usage") | Some("/usage/companion"))
 }
+
+
 
 fn set_visibility(popup: &WebviewWindow, visible: bool) {
     let script = format!(
