@@ -181,9 +181,9 @@ describe("a configured ladder is bounded by the request budget", () => {
   });
 });
 
-  const goPacked = dense(readResponsesCoreModule("passthrough-dispatch.ts"));
-describe("the Go destination replays ambiguous resets on the initial send", () => {
-  test("replaySafe is destination-scoped to exactly one leg", () => {
-    expect(occurrences(goPacked, "replaySafe:isOpenCodeGoDestination(route.provider)")).toBe(1);
+  const passthroughDispatchPacked = dense(readResponsesCoreModule("passthrough-dispatch.ts"));
+describe("ambiguous resets on inference sends", () => {
+  test("the passthrough dispatcher does not declare an inference leg replay-safe", () => {
+    expect(occurrences(passthroughDispatchPacked, "replaySafe:")).toBe(0);
   });
 });
