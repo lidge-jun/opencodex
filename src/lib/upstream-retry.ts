@@ -569,7 +569,7 @@ export function replayRefusalResponse(): Response {
   const response = new Response(JSON.stringify({ error: {
     type: "upstream_error",
     code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
-    message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+    message: "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
   } }), {
     status: REPLAY_REFUSED_STATUS,
     headers: { "content-type": "application/json", ...REPLAY_REFUSAL_CLIENT_HEADERS },
@@ -594,9 +594,9 @@ export async function fetchWithResetRetry(
   if (attempts === 0) throw new SendBudgetExhaustedError(opts.label);
   let lastError: unknown;
   let sawReset = false;
-  // True once this leg has spent the request's operator allowance. From that point the leg can
-  // only settle as the refusal: a second send of a possibly-executed turn is already out, and
-  // handing the client anything it would retry compounds it.
+  // True once this leg has spent the request's operator allowance. From that point the leg
+  // settles as the refusal or an unambiguous answer: a second send of a possibly-executed turn
+  // is already out, and handing the client anything it would retry compounds it.
   let spentOperatorReplacement = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
