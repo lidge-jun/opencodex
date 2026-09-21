@@ -55,6 +55,7 @@ import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debu
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
+import { serverAuthConfig as config } from "../helpers/server-auth-config";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -70,23 +71,6 @@ const originalGlobalWebSocket = globalThis.WebSocket;
 // isolation convention already used by tests/helpers/isolated-codex-home.ts.
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-server-auth-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
-
-function config(hostname?: string): OcxConfig {
-  return {
-    port: 10100,
-    hostname,
-    defaultProvider: "openai",
-    providers: {
-      openai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.example.test/v1",
-        apiKey: "sk-secret-value",
-        headers: { "X-Custom": "provider-secret" },
-        defaultModel: "gpt-test",
-      },
-    },
-  };
-}
 
 const REMOTE_CATALOG_BYTES = '{"models":[{"slug":"fixture/model","display_name":"Fixture Model","priority":1,"visibility":"list","base_instructions":"Fixture instructions","input_modalities":["text"]}]}';
 const REMOTE_DATA_KEY = "ocx_data_remote_catalog";

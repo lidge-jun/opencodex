@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { atomicWriteFileStreamed } from "../config/atomic-write";
-import { resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
+import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
 import { resolveCodexSqliteHome } from "../codex/paths";
 import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
 import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
@@ -855,6 +855,17 @@ export function currentServiceHomes(deps: CodexHomeDeps = {}): { codexHome: stri
 
 export function serviceHomeMatches(a: string, b: string): boolean {
   return normalizePathForCompare(a) === normalizePathForCompare(b);
+}
+
+/** Accept the Linux default written by service versions predating WSL home discovery. */
+export function serviceCodexHomeMatchesInstall(recordedHome: string, deps: CodexHomeDeps = {}): boolean {
+  const actualHome = currentCodexHome(deps);
+  if (serviceHomeMatches(recordedHome, actualHome)) return true;
+
+  const env = deps.env ?? process.env;
+  if (env.CODEX_HOME?.trim() || !isWslRuntime(deps)) return false;
+  const legacyDefault = join((deps.homedir ?? homedir)(), ".codex");
+  return serviceHomeMatches(recordedHome, legacyDefault);
 }
 
 /** Single accessor for backend-sensitive service code — v1/legacy state maps to scheduler. */
