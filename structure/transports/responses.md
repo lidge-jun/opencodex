@@ -125,6 +125,16 @@ Function-call wrappers around freeform bodies are restored by
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
 
+#### Schema-bound flat shell repair
+
+Completed Responses function calls have one separate schema-bound flat-shell repair. When the
+exact bare `exec_command` declaration requires a string `cmd`, a provider result containing only
+the string member `{ "input": "..." }` is rewritten to `{ "cmd": "..." }`; the call name is not
+changed. Namespaced tools, additional or conflicting members, non-string values, malformed JSON,
+partial streaming previews, and schemas that do not prove this exact contract remain byte-exact.
+
+> Decision record: [ADR-0098](../decisions/ADR-0098-schema-bound-exec-command-input-repair.md)
+
 Progressive preview for those wrappers is decoded by
 `src/responses/progressive-freeform-input.ts` in both the adapter-event bridge and routed
 function-call restoration, over the classification in `src/responses/freeform-wrapper-scan.ts`.
