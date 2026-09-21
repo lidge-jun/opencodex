@@ -11,6 +11,7 @@ import { isDebugEnabled } from "../../lib/debug-settings";
 import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
+import { applyExplicitChatReasoningWirePolicy } from "./reasoning-wire";
 
 const CHAT_PASSTHROUGH_FIELDS = [
   "audio",
@@ -72,9 +73,21 @@ export function buildOpenAIChatPassthroughRequest(
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
-  if (modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0) {
+  const reasoningDisabled = modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0;
+  if (reasoningDisabled) {
     delete body.reasoning_effort;
   }
+  const hasTools = Array.isArray(rawBody.tools) && rawBody.tools.length > 0;
+  const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
+  applyExplicitChatReasoningWirePolicy({
+    provider,
+    modelId,
+    hasTools,
+    requestedEffort,
+    wireEffort: requestedEffort,
+    reasoningDisabled,
+    body,
+  });
 
   const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
   if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
@@ -118,7 +131,7 @@ export function buildOpenAIChatPassthroughRequest(
   if (provider.promptCacheKey && rawBody.prompt_cache_key !== undefined) {
     body.prompt_cache_key = rawBody.prompt_cache_key;
   }
-  if (Array.isArray(rawBody.tools) && rawBody.tools.length > 0) {
+  if (hasTools) {
     // Same three provider states as the translated path, and the same defect in the unset one:
     // a caller's explicit false was dropped here too (#5211). The native route reads the bit off
     // the raw request rather than the parsed options, since nothing projects this body.
