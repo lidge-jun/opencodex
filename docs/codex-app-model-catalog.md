@@ -21,6 +21,11 @@ Codex-native config and catalog files under the resolved `CODEX_HOME`:
 - `$CODEX_HOME/opencodex-catalog.json`
 - `$CODEX_HOME/models_cache.json`
 
+On a fresh Codex install, `config.toml` may not exist yet. In that case opencodex should create the
+file inside the resolved `CODEX_HOME` instead of treating the missing file as a different
+configuration root. When debugging a missing-config report, first confirm the effective `CODEX_HOME`
+and that the directory itself exists.
+
 When Codex App reads the same config/catalog state, routed opencodex models are visible because they
 look like valid Codex catalog entries.
 
