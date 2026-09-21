@@ -71,9 +71,29 @@ describe("fetchProviderQuotaReports", () => {
       providers: { anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com/v1" } },
     } as OcxConfig, true);
 
+    // An unrecognized display_name is dropped entirely: sanitized residue must not
+    // reach the quota line, so the window is omitted rather than relabeled.
+    expect(result.reports[0]?.quota.customWindows ?? []).toEqual([]);
+  });
+
+  test("Anthropic report still publishes recognized model-scoped quota labels", async () => {
+    await saveCredential("anthropic", { access: "claude-access-secret", refresh: "claude-refresh-secret", expires: Date.now() + 3600_000 });
+    globalThis.fetch = (async () => Response.json({
+      limits: [{
+        kind: "weekly_scoped",
+        scope: { model: { display_name: "Claude Opus 4.7" } },
+        percent: 41,
+      }],
+    })) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "anthropic",
+      providers: { anthropic: { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com/v1" } },
+    } as OcxConfig, true);
+
     expect(result.reports[0]?.quota.customWindows).toEqual([{
-      label: "Other]52;c;UFdORUQ= model31m",
-      percent: 33,
+      label: "Opus",
+      percent: 41,
     }]);
   });
 });
