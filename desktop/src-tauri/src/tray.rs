@@ -98,10 +98,20 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         });
     }
 
-    let tray = TrayIconBuilder::with_id("main")
+    let builder = TrayIconBuilder::with_id("main")
         .icon(icon())
         .icon_as_template(true)
-        .menu(&menu)
+        .menu(&menu);
+    // Attaching a menu makes the left click open that menu by default, which swallows the click
+    // before `on_tray_icon_event` can do anything visible. On macOS and Windows that left the
+    // usage popup with no way to open at all: the icon showed the menu, and the menu item that
+    // opens the popup is Linux-only. Left click is the popup, right click is the menu.
+    //
+    // Linux keeps the default. Its StatusNotifier hosts deliver no usable click event, so the
+    // menu is the entire interaction there and turning it off would remove the only way in.
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.show_menu_on_left_click(false);
+    let tray = builder
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -415,4 +425,45 @@ fn format_percent(value: Option<f64>) -> String {
 fn icon() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/tray/icon.png"))
         .expect("valid tray icon")
+}
+
+#[cfg(test)]
+mod tests {
+    /// This file's own source, read at compile time, with the test module cut off.
+    ///
+    /// Slicing at the test attribute matters: the assertions below quote the very call names they
+    /// look for, so scanning the whole file would find the test's own string literals and pass
+    /// after the real calls were deleted.
+    fn production_source() -> &'static str {
+        include_str!("tray.rs")
+            .split("#[cfg(te")
+            .next()
+            .expect("source has a production half")
+    }
+
+    /// A tray with a menu opens that menu on left click unless the builder says otherwise, and
+    /// nothing in the type system connects the two calls. The usage popup was unreachable on
+    /// macOS and Windows for exactly that reason, and the failure is quiet: the icon still
+    /// responds to the click, just with the wrong surface. The menu item that opens the popup is
+    /// Linux-only, so there was no second way in.
+    #[test]
+    fn attaching_a_menu_leaves_the_left_click_for_the_popup() {
+        let source = production_source();
+        assert!(
+            source.contains(".menu(&menu)"),
+            "tray.rs no longer attaches a menu; this pairing may no longer apply"
+        );
+        let attached = source.find(".menu(&menu)").expect("menu is attached");
+        let released = source
+            .find("show_menu_on_left_click(false)")
+            .expect("a tray with a menu must release the left click, or the popup cannot open");
+        assert!(
+            released > attached,
+            "the left click is released before the menu is attached"
+        );
+        assert!(
+            source.contains("#[cfg(not(target_os = \"linux\"))]"),
+            "Linux delivers no usable click event, so it must keep the menu on left click"
+        );
+    }
 }
