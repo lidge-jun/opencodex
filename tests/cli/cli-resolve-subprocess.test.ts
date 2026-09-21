@@ -35,7 +35,7 @@ async function runResolveCli(args: string[], home: string): Promise<ResolveRun> 
 }
 
 describe("ocx resolve real subprocess", () => {
-  test("a home whose configured port is closed resolves with a not-found verdict", async () => {
+  test("a home whose configured port is closed resolves with a proven-absent verdict", async () => {
     // Port 9 is the suite's conventional dead port (see cli-help.test.ts): the liveness
     // fallback probes the configured port when no records exist, and on a developer
     // machine a real proxy can answer the 10100 default — that is findLiveProxy working
@@ -54,7 +54,7 @@ describe("ocx resolve real subprocess", () => {
       expect(parsed.schema).toBe("ocx-resolve/1");
       expect(parsed.configHome).toBe(home);
       expect(parsed.port).toEqual({ effective: 9, configured: 9, source: "config" });
-      expect(parsed.liveness).toEqual({ status: "not-found", pid: null, port: null, source: null });
+      expect(parsed.liveness).toEqual({ status: "absent-proven", pid: null, port: null, source: null });
     } finally {
       removeTreeWithRetry(home);
     }
@@ -104,7 +104,7 @@ describe("ocx resolve real subprocess", () => {
       const run = await runResolveCli(["resolve"], home);
       expect(run.exitCode).toBe(0);
       expect(run.stdout).toContain(`Config home: ${home}`);
-      expect(run.stdout).toContain("No live proxy; effective port 9 (configured).");
+      expect(run.stdout).toContain("No live proxy (absence proven); effective port 9 (configured).");
     } finally {
       removeTreeWithRetry(home);
     }

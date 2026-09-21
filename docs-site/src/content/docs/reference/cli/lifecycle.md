@@ -254,12 +254,15 @@ effective port, and the identity-checked liveness verdict. `--json` emits one ve
 document (`schema: "ocx-resolve/1"`) with `cliVersion`, `configHome`, `port`
 (`effective`, `configured`, and `source`), and `liveness` (`status`, `pid`, `port`,
 `source`, plus `version`, `role`, and `hostname` when the live proxy reports them).
-The port is the live listener's port when an opencodex proxy answers, otherwise the configured
-port (default 10100). Exit 0 carries the verdict even when no proxy is live; exit 1 means the
-CLI could not resolve — including an invalid `config.json`, which is never repaired to defaults
-here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses the
-same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer is
-how duplicate proxies happen.
+Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
+definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
+that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
+authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
+the CLI could not resolve — including an invalid `config.json`, which is never repaired to
+defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
+is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 
 ### `ocx doctor`
 

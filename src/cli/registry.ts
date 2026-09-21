@@ -564,8 +564,9 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "Machine surface for embedding shells: it replaces a second home/port/liveness implementation beside the CLI.",
       "The port is the live listener's port when an opencodex proxy answers, otherwise the configured port (default 10100).",
+      "Liveness is three-valued: live, absent-proven (every recorded and configured endpoint definitively dead), or unknown — unknown exits 1 and never reads as absent.",
       "--json emits one versioned document (schema ocx-resolve/1); the default prints two human lines.",
-      "Exit 0 carries the verdict even when no proxy is live; exit 1 means the CLI could not resolve and callers must refuse to guess.",
+      "Exit 0 carries a trustworthy verdict; exit 1 means the CLI could not resolve (invalid config or undecidable liveness) and callers must refuse to guess.",
       "Any unknown argument exits 64 before preflight side effects.",
     ],
   },

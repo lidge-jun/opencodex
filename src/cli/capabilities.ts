@@ -222,7 +222,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: false,
     json: "envelope",
     details: [
-      "Exit 0 carries the verdict even when no proxy is live; exit 1 means the CLI could not resolve and a caller must refuse to guess.",
+      "Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess — unknown liveness never reads as absent.",
       "Built for embedding shells (desktop app): the liveness budgets stay owned by src/server/proxy-liveness.ts.",
     ],
   },

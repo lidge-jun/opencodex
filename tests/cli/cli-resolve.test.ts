@@ -55,7 +55,7 @@ describe("buildResolveJson", () => {
   test("without a live proxy the configured port is the effective one", () => {
     const json = buildResolveJson({ port: 12345 }, null, "/home/fixture/.opencodex", "1.2.3");
     expect(json.port).toEqual({ effective: 12345, configured: 12345, source: "config" });
-    expect(json.liveness).toEqual({ status: "not-found", pid: null, port: null, source: null });
+    expect(json.liveness).toEqual({ status: "absent-proven", pid: null, port: null, source: null });
   });
 
   test("an absent configured port resolves to the CLI default", () => {
@@ -110,19 +110,62 @@ describe("runResolve", () => {
     });
   });
 
-  test("a not-found verdict is a successful answer, not a failure", async () => {
+  test("a proven-absent verdict is a successful answer, not a failure", async () => {
     const lines: string[] = [];
     const code = await runResolve({ json: true }, {
       configDir: () => "/h",
       readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
       findLive: async () => null,
+      readRuntime: () => null,
+      probeEndpoint: () => "dead",
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
     const parsed = JSON.parse(lines[0]!) as { liveness: { status: string }; port: { effective: number } };
-    expect(parsed.liveness.status).toBe("not-found");
+    expect(parsed.liveness.status).toBe("absent-proven");
     expect(parsed.port.effective).toBe(RESOLVE_DEFAULT_PORT);
+  });
+
+  test("an undecidable probe is unknown, and unknown is never answered as absent", async () => {
+    // The launch decision keys on this verdict: a timed-out probe or a listener that
+    // withholds /healthz must exit 1 rather than let the caller start a second runtime.
+    for (const probeEndpoint of [() => "unknown" as const, () => { throw new Error("spawn unavailable"); }]) {
+      const lines: string[] = [];
+      const errors: string[] = [];
+      const code = await runResolve({ json: true }, {
+        configDir: () => "/h",
+        readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
+        findLive: async () => null,
+        readRuntime: () => null,
+        probeEndpoint,
+        cliVersion: () => "1.2.3",
+        stdout: { log: value => lines.push(value) },
+        stderr: { error: value => errors.push(value) },
+      });
+      expect(code).toBe(1);
+      expect(lines).toEqual([]);
+      expect(errors.join("\n")).toContain("unknown");
+    }
+  });
+
+  test("absence requires every endpoint dead, not just the configured one", async () => {
+    // The runtime record can point at a live port while the configured port refuses;
+    // answering from the configured port alone would shadow-start over the record.
+    const seen: string[] = [];
+    const code = await runResolve({ json: true }, {
+      configDir: () => "/h",
+      readDiagnostics: () => ({ config: { port: 10100 }, source: "file", error: null } as ConfigDiagnostics),
+      findLive: async () => null,
+      readRuntime: () => ({ port: 10110, hostname: "127.0.0.1" }),
+      probeEndpoint: endpoint => { seen.push(String(endpoint.port)); return endpoint.port === 10110 ? "unknown" : "dead"; },
+      cliVersion: () => "1.2.3",
+      stdout: { log: () => {} },
+      stderr: { error: () => {} },
+    });
+    expect(code).toBe(1);
+    expect(seen).toContain("10110");
+    expect(seen).toContain("10100");
   });
 
   test("a config read failure exits 1 with nothing on stdout", async () => {
@@ -186,16 +229,18 @@ describe("runResolve", () => {
     expect(lines.every(line => { try { JSON.parse(line); return false; } catch { return true; } })).toBe(true);
   });
 
-  test("human output for a not-found verdict names the effective port", async () => {
+  test("human output for a proven-absent verdict names the effective port", async () => {
     const lines: string[] = [];
     const code = await runResolve({ json: false }, {
       configDir: () => "/h",
       readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
       findLive: async () => null,
+      readRuntime: () => null,
+      probeEndpoint: () => "dead",
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
-    expect(lines[1]).toBe(`No live proxy; effective port ${RESOLVE_DEFAULT_PORT} (configured).`);
+    expect(lines[1]).toBe(`No live proxy (absence proven); effective port ${RESOLVE_DEFAULT_PORT} (configured).`);
   });
 });

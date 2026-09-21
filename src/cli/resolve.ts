@@ -11,14 +11,20 @@
  * Contract:
  *  - `--json` puts exactly ONE JSON document on stdout, versioned by `schema`; the
  *    default prints two human lines, the same opt-in split as `ocx ready --json`.
- *  - exit 0 whenever resolution succeeded — "no proxy" is a verdict, not a failure,
- *    and a MISSING config.json is defaults, not an error.
+ *  - liveness has three answers, not two: "live", "absent-proven" (every recorded and
+ *    configured endpoint definitively refused or answered non-opencodex), and unknown.
+ *    Unknown NEVER reaches the wire as absent — a probe that timed out, a listener that
+ *    withheld /healthz, or an identity mismatch exits 1 instead. Only "absent-proven"
+ *    may authorise starting a new runtime.
+ *  - exit 0 whenever a trustworthy verdict exists — live, or proven absent. A MISSING
+ *    config.json is defaults, not an error.
  *  - exit 1 when the CLI cannot resolve: an invalid config.json must NOT be answered
  *    with `loadConfig`'s repair-to-defaults behaviour, because that hands the caller
- *    a guessed port. The caller must refuse to guess a home, a port or a liveness
- *    verdict rather than fall back to defaults.
+ *    a guessed port; and unknown liveness must not be answered as absence.
  *  - exit 64 for any argument, pre-parsed in src/cli/root.ts before preflight side
- *    effects, mirroring `ocx ready`.
+ *    effects, mirroring `ocx ready`. The verb is read-only and listed in
+ *    skipsCodexShimAutoRestore, so a lookup made to populate a consent surface never
+ *    triggers a shim repair side effect.
  *
  * Discovery uses the START_OWNERSHIP_LIVENESS budget, not the 750ms single-shot default:
  * the shell's launch decision keys on this verdict, and answering "nobody" for a slow
@@ -29,8 +35,11 @@
  */
 import { readConfigDiagnostics, type ConfigDiagnostics } from "../config";
 import { getConfigDir } from "../config/paths";
+import { readRuntimePort } from "../config/process-state";
 import { packageVersion } from "../lib/package-version";
 import { findLiveProxy, START_OWNERSHIP_LIVENESS, type LiveProxy } from "../server/proxy-liveness";
+import { endpointsToProve, everyEndpointProvenDown, type ProbeEndpoint } from "./uninstall-plan";
+import { probeProxyLiveness } from "../update/proxy-liveness-probe.mjs";
 
 /** Wire version of the resolve document. Bump only on an incompatible shape change. */
 export const RESOLVE_SCHEMA = "ocx-resolve/1";
@@ -39,7 +48,12 @@ export const RESOLVE_SCHEMA = "ocx-resolve/1";
 export const RESOLVE_DEFAULT_PORT = 10100;
 
 export interface ResolveLivenessJson {
-  status: "live" | "not-found";
+  /**
+   * "live" when the identity-checked probe found our proxy; "absent-proven" when every
+   * recorded and configured endpoint is definitively dead. The third state — unknown —
+   * exits 1 before this document is printed, so it never appears on the wire as absence.
+   */
+  status: "live" | "absent-proven";
   pid: number | null;
   port: number | null;
   /** Raw bind hostname that answered; compose probe URLs via probeHostname semantics. */
@@ -87,13 +101,19 @@ export interface ResolveIo {
   configDir?: () => string;
   readDiagnostics?: () => ConfigDiagnostics;
   findLive?: () => Promise<LiveProxy | null>;
+  /** Runtime-port record reader; production default is readRuntimePort. */
+  readRuntime?: () => { port?: number; hostname?: string } | null;
+  /** Tri-state endpoint probe; production default is the updater's probeProxyLiveness. */
+  probeEndpoint?: (endpoint: ProbeEndpoint) => "live" | "dead" | "unknown";
   cliVersion?: () => string;
   stdout?: { log: (s: string) => void };
   stderr?: { error: (s: string) => void };
 }
 
 function livenessJson(live: LiveProxy | null): ResolveLivenessJson {
-  if (!live) return { status: "not-found", pid: null, port: null, source: null };
+  // Reaching here with null means absence was PROVEN by the caller (unknown exits 1
+  // before this document is built).
+  if (!live) return { status: "absent-proven", pid: null, port: null, source: null };
   return {
     status: "live",
     pid: live.pid,
@@ -137,7 +157,7 @@ function reportHuman(json: ResolveJson, stdout: { log: (s: string) => void }): v
     const versionText = live.version ?? "unknown version";
     stdout.log(`Proxy live on port ${json.port.effective} (PID ${pidText}, ${versionText}); effective port ${json.port.effective}.`);
   } else {
-    stdout.log(`No live proxy; effective port ${json.port.effective} (configured).`);
+    stdout.log(`No live proxy (absence proven); effective port ${json.port.effective} (configured).`);
   }
 }
 
@@ -153,6 +173,12 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
   const configDir = io.configDir ?? getConfigDir;
   const readDiagnostics = io.readDiagnostics ?? readConfigDiagnostics;
   const findLive = io.findLive ?? (() => findLiveProxy(START_OWNERSHIP_LIVENESS));
+  const readRuntime = io.readRuntime ?? readRuntimePort;
+  // The updater's tri-state probe takes (port, hostname) and is plain .mjs (untyped);
+  // adapt it to the endpoint-shaped seam here. Its own return vocabulary is the
+  // closed "live" | "dead" | "unknown" set.
+  const probeEndpoint = io.probeEndpoint
+    ?? ((endpoint: ProbeEndpoint) => probeProxyLiveness(endpoint.port, endpoint.hostname) as "live" | "dead" | "unknown");
   const cliVersion = io.cliVersion ?? packageVersion;
   const configHome = configDir();
   let diagnostics: ConfigDiagnostics;
@@ -160,7 +186,7 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
     diagnostics = readDiagnostics();
   } catch (error) {
     // A resolution that could not run must not read as "no proxy": the caller has to
-    // refuse to guess (D5) rather than treat this as a not-found verdict.
+    // refuse to guess (D5) rather than treat this as a proven-absent verdict.
     stderr.error(`resolve failed: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
@@ -177,6 +203,24 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
   } catch (error) {
     stderr.error(`resolve failed: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
+  }
+  if (!live) {
+    // findLiveProxy collapses "definitely nothing" and "could not tell" into the same
+    // null. The launch decision keys on this verdict, so resolve owes the caller the
+    // tri-state answer the updater already enforces: only EVERY candidate definitively
+    // dead is absence. Anything else is unknown, and unknown exits 1 — it must never
+    // authorise starting a second runtime.
+    let provenDown = false;
+    try {
+      provenDown = everyEndpointProvenDown(endpointsToProve(readRuntime(), diagnostics.config), probeEndpoint);
+    } catch {
+      // A probe that cannot run is not evidence of absence.
+      provenDown = false;
+    }
+    if (!provenDown) {
+      stderr.error("resolve: liveness is unknown (a probe timed out or a listener withheld /healthz); refusing to treat unknown as absent.");
+      return 1;
+    }
   }
   const json = buildResolveJson(diagnostics.config, live, configHome, cliVersion());
   if (args.json) stdout.log(JSON.stringify(json));
