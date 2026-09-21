@@ -215,5 +215,17 @@ so the same surface is reachable from a menu item there. And before the startup 
 resolved a runtime there is nothing to report, so a click with no proxy falls back to showing
 the main window rather than opening an empty popup.
 
+The popup uses the native translucent surface on macOS and Windows: macOS applies the active HUD
+window material with a 12-point corner radius, and Windows applies Acrylic. Linux remains opaque
+because its compositor owns blur and Tauri's window-effects path does not support it. The
+`VIBRANT_SURFACE` constant in `desktop/src-tauri/src/popup.rs` is the single platform verdict for
+both the transparent native builder and the page's `data-tray-vibrancy="on"` hook, so the page
+cannot make an opaque Linux window transparent by mistake.
+
+Transparent Tauri windows on macOS require the `macos-private-api` Cargo feature and
+`app.macOSPrivateApi` in `desktop/src-tauri/tauri.conf.json`. Enabling that API forecloses Mac App
+Store submission; this shell ships as a Developer ID DMG, so its release channel accepts that
+tradeoff.
+
 The tray title keeps its existing period. The popup answers the detailed question, so the title
 does not change meaning as a side effect of adding it.

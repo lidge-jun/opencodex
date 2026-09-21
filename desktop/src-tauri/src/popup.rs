@@ -2,6 +2,10 @@ use crate::{endpoint::ProxyEndpoint, window};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
+#[cfg(target_os = "macos")]
+use tauri::window::EffectState;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tauri::window::{Effect, EffectsBuilder};
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Url, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, WindowEvent,
@@ -11,6 +15,11 @@ pub const LABEL: &str = "usage-popup";
 pub const TRAY_PATH: &str = "/#/tray";
 pub const DASHBOARD_PATH: &str = "/?desktop=open#/usage";
 pub const CLOSE_PATH: &str = "/?desktop=popup-close#/tray-close";
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub const VIBRANT_SURFACE: bool = true;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub const VIBRANT_SURFACE: bool = false;
+const TRAY_VIBRANCY_DATASET: &str = "document.documentElement.dataset.trayVibrancy";
 pub const ESCAPE_INITIALIZATION_SCRIPT: &str = r#"
 (() => {
   window.__OPENCODEX_TRAY_VISIBLE__ = false;
@@ -22,6 +31,14 @@ pub const ESCAPE_INITIALIZATION_SCRIPT: &str = r#"
   }, true);
 })();
 "#;
+
+fn initialization_script() -> String {
+    let tray_vibrancy = if VIBRANT_SURFACE { "on" } else { "off" };
+    format!(
+        r#"{TRAY_VIBRANCY_DATASET} = "{tray_vibrancy}";
+{ESCAPE_INITIALIZATION_SCRIPT}"#
+    )
+}
 
 /// How long after being shown the popup ignores losing focus.
 ///
@@ -172,7 +189,7 @@ fn ensure(app: &AppHandle, endpoint: ProxyEndpoint) -> tauri::Result<WebviewWind
     }
 
     let app_handle = app.clone();
-    let popup = WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         app,
         LABEL,
         WebviewUrl::External(proxy_url(endpoint, TRAY_PATH)),
@@ -186,14 +203,31 @@ fn ensure(app: &AppHandle, endpoint: ProxyEndpoint) -> tauri::Result<WebviewWind
     .skip_taskbar(true)
     .visible(false)
     .user_agent(&window::webview_user_agent())
-    .initialization_script(ESCAPE_INITIALIZATION_SCRIPT)
+    .initialization_script(initialization_script())
     .on_navigation(popup_navigation_allowed(endpoint, app_handle.clone()))
     .on_page_load(|popup, payload| {
         if matches!(payload.event(), PageLoadEvent::Finished) {
             set_visibility(&popup, popup.is_visible().unwrap_or(false));
         }
-    })
-    .build()?;
+    });
+    if VIBRANT_SURFACE {
+        builder = builder.transparent(true);
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.effects(
+                EffectsBuilder::new()
+                    .effect(Effect::HudWindow)
+                    .state(EffectState::Active)
+                    .radius(12.0)
+                    .build(),
+            );
+        }
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.effects(EffectsBuilder::new().effect(Effect::Acrylic).build());
+        }
+    }
+    let popup = builder.build()?;
     popup.on_window_event(move |event| match event {
         WindowEvent::Focused(false) => {
             if !within_focus_grace() {
@@ -264,7 +298,10 @@ fn parts(path: &str) -> (Option<&str>, Option<&str>) {
 
 fn matches(url: &Url, endpoint: ProxyEndpoint, path: &str) -> bool {
     let (query, fragment) = parts(path);
-    same_origin(url, endpoint) && url.path() == "/" && url.query() == query && url.fragment() == fragment
+    same_origin(url, endpoint)
+        && url.path() == "/"
+        && url.query() == query
+        && url.fragment() == fragment
 }
 
 fn is_tray_url(url: &Url, endpoint: ProxyEndpoint) -> bool {
@@ -283,8 +320,6 @@ fn is_dashboard_url(url: &Url, endpoint: ProxyEndpoint) -> bool {
         && url.query() == query
         && matches!(url.fragment(), Some("/usage") | Some("/usage/companion"))
 }
-
-
 
 fn set_visibility(popup: &WebviewWindow, visible: bool) {
     let script = format!(
@@ -346,5 +381,12 @@ mod tests {
             &ENDPOINT.url("/#/usage").parse().unwrap(),
             ENDPOINT
         ));
+    }
+
+    #[test]
+    fn initialization_script_matches_native_surface() {
+        let expected_value = if VIBRANT_SURFACE { "on" } else { "off" };
+        let expected = format!(r#"{TRAY_VIBRANCY_DATASET} = "{expected_value}";"#);
+        assert!(initialization_script().contains(&expected));
     }
 }
