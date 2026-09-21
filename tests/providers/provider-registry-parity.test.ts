@@ -950,7 +950,7 @@ describe("provider registry parity", () => {
     // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
     // migration on every boot (#5066); saved rows still naming one are repaired by
     // MODEL_RENAMES instead.
-    const codingModels = ["k3", "k3[1m]", "kimi-for-coding"];
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",

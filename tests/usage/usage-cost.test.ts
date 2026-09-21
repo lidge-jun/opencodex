@@ -328,8 +328,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 126 keys, including canonical Fable 5.1, Opus 5, OpenCode Go and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(126);
+  test("16. shipped overlay membership: 128 keys, including canonical Fable 5.1, Opus 5, OpenCode Go and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(128);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
