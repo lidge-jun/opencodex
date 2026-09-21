@@ -643,8 +643,10 @@ export function createDevinAdapter(
           provider, modelUid, parsed.options.maxOutputTokens,
         );
         // An admitted HTTP turn owns globally shared capacity until this call
-        // emits. Never retain that capacity while waiting out a provider 429;
-        // surface its parsed Retry-After so the client can retry later instead.
+        // emits. Never retain that capacity while waiting out a provider 429:
+        // the stated reset is surfaced as the original error message (the
+        // seconds figure stays inside that text for clients that parse it),
+        // and the shared slot is freed immediately.
         for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
