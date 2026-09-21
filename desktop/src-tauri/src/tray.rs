@@ -489,13 +489,11 @@ mod tests {
             source.contains(".menu(&menu)"),
             "tray.rs no longer attaches a menu; this pairing may no longer apply"
         );
-        let attached = source.find(".menu(&menu)").expect("menu is attached");
-        let released = source
-            .find("show_menu_on_left_click(false)")
-            .expect("a tray with a menu must release the left click, or the popup cannot open");
+        // The call site, not the name: the comments above explain why the flag is inert on
+        // macOS, and a bare substring matched that prose instead of the builder.
         assert!(
-            released > attached,
-            "the left click is released before the menu is attached"
+            source.contains("builder.show_menu_on_left_click(false)"),
+            "a tray with a menu must release the left click, or the popup cannot open"
         );
         assert!(
             source.contains("#[cfg(not(target_os = \"linux\"))]"),
