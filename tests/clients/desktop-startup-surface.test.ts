@@ -216,6 +216,17 @@ describe("the bootstrap page reports only what it was told", () => {
     expect(/#failure\[hidden\][^{]*\{[^}]*display:\s*none/.test(markup)).toBe(true);
   });
 
+  test("the bootstrap script carries the nonce token the shell replaces", () => {
+    // The webview is served a policy the configuration file does not contain. Tauri appends its
+    // own hashes and nonces to script-src, and a hash or nonce in that directive makes
+    // 'unsafe-inline' inert, so nothing loads unless it is named. Its injector only tags
+    // script[src^='http'], and this page loads its script by relative path, so the page has to
+    // carry the token itself; the shell replaces it with a real nonce and adds that nonce to the
+    // directive. Without it the surface renders as static markup on the platforms where the
+    // asset origin does not satisfy 'self' — observed on Linux, where the page never ran a line.
+    expect(markup).toMatch(/<script[^>]+src="\.\/main\.js"[^>]*nonce="__TAURI_SCRIPT_NONCE__"/);
+  });
+
   test("the handshake with the shell is bounded", () => {
     expect(page).toContain("HANDSHAKE_DEADLINE_MS");
     for (const command of ["startup_phases", "startup_snapshot"]) {
