@@ -98,7 +98,7 @@ test("anthropic-version header flips /v1/models to the discovery contract", asyn
     expect(ids).toContain(mockAlias);
     // Every entry must satisfy the picker prefix rule (003 G3).
     for (const entry of json.data) {
-      expect(entry.id.startsWith("claude") || entry.id.startsWith("anthropic")).toBe(true);
+      expect(entry.id.includes("claude") || entry.id.includes("anthropic")).toBe(true);
       expect(typeof entry.display_name).toBe("string");
       // Full ModelInfo contract (devlog 130 B4b): capabilities ride discovery.
       expect(entry.type).toBe("model");
@@ -141,7 +141,7 @@ test("per-surface id style: ?ids= wins, claude-code UA gets readable, unknown UA
   saveConfig(configWithStaticModels());
   const server = await startDiscoveryServer();
   try {
-    const readable = "claude-ocx-mock--test-model";
+    const readable = "ocx-claude-mock--test-model";
     // 1) explicit ?ids=cli -> readable
     let json = await fetch(new URL("/v1/models?flavor=anthropic&ids=cli", server.url)).then(r => r.json()) as { data: { id: string }[] };
     expect(json.data.some(m => m.id === readable)).toBe(true);

@@ -373,12 +373,13 @@ export function buildClaudeEnv(
   // worse than the problem. So this stays opt-in per config rather than
   // unconditional, and setDefault keeps an operator's own export.
   setDefault("ENABLE_TOOL_SEARCH", claudeToolSearchEnv(config.claudeCode?.toolSearch));
-  // Context-window override: the official pair — MAX_CONTEXT_TOKENS alone is ignored
-  // for recognized claude-shaped ids unless DISABLE_COMPACT=1 rides along (devlog 135).
   const maxCtx = config.claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
     setDefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
-    setDefault("DISABLE_COMPACT", "1");
+    // Claude Code 2.1.278 honors this without DISABLE_COMPACT when the model id
+    // does not start with "claude-" (gF). Current ocx-claude aliases qualify.
+    // A persisted claude-ocx id is still claude-shaped, so that one session keeps
+    // the 200k accounting until the picker is moved to the new id.
   }
   // Auto-context (devlog 260712 020): min(believed window, env) inside the CLI means
   // one global env acts as a per-model floor — [1m]-marked models compact here while

@@ -15,7 +15,8 @@ describe("claude context-window map (devlog 260712 B2)", () => {
     const map = buildClaudeContextWindows([], routed);
     expect(map["cursor/gpt-5.6-luna"]).toBe(1_000_000);
     expect(map[desktop3pAlias("cursor", "gpt-5.6-luna")]).toBe(1_000_000);
-    expect(map["claude-ocx-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+    expect(map["ocx-claude-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+    expect(map["claude-ocx-cursor--gpt-5.6-luna"]).toBeUndefined();
     expect(map["mock/small-model"]).toBe(128_000);
     expect(map["mock/no-window"]).toBeUndefined();
   });
@@ -27,7 +28,8 @@ describe("claude context-window map (devlog 260712 B2)", () => {
     // slug passed here does not register.
     expect(map["gpt-5.6-sol"]).toBe(272_000);
     expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(272_000);
-    expect(map["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
+    expect(map["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
+    expect(map["claude-ocx-native--gpt-5.6-sol"]).toBeUndefined();
     expect(map["gpt-5.5"]).toBe(272_000);
     expect(map["gpt-5.3-codex-spark"]).toBeUndefined();
     expect(map["gpt-5.4"]).toBeUndefined();

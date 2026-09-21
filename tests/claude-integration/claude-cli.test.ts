@@ -363,16 +363,16 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
   });
 
-  test("opt-in levers: alwaysEnableEffort=1, maxContextTokens injects the official pair", () => {
+  test("opt-in levers: maxContextTokens sets the window without disabling compact", () => {
     const env = buildClaudeEnv(cfg({
       claudeCode: { alwaysEnableEffort: true, maxContextTokens: 1_000_000 },
     }), 10100, {});
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBe("1");
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1000000");
-    // MAX_CONTEXT_TOKENS alone is ignored for recognized claude-shaped ids; the
-    // official pair requires DISABLE_COMPACT (exact name, no CLAUDE_CODE_ prefix).
-    expect(env.DISABLE_COMPACT).toBe("1");
-    // Legacy override wins rule-1 inside the CLI -> auto-context stays inert.
+    // Current ocx-claude ids do not start with claude-, so Claude Code honors
+    // the window without DISABLE_COMPACT. Do not inject it.
+    expect(env.DISABLE_COMPACT).toBeUndefined();
+    // maxContextTokens still disables the auto-compact window env.
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
