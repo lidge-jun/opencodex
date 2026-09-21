@@ -26,7 +26,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (任意) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
 直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
 
 ### Claude ルーティングが無効なときのネイティブフォールバック
@@ -179,7 +179,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) または `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) または `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3 桁の base36 ハッシュ) | `claude-opus-4-8-ncb` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
@@ -201,9 +201,9 @@ OpenCodex の Claude Desktop プロファイルで希望するデフォルトモ
 **Logs → requestedModel** で確認してください。
 
 **エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。
-`/` も `~` も含まない plain な model ID は v1 接頭辞 `claude-ocx-…` のままです。`/` または `~` を含む
-model ID は v2 接頭辞 `claude-ocx2-…` で発行し、エスケープします(`/` → `~s`、`~` → `~t`)。例:
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+`/` も `~` も含まない plain な model ID は v1 接頭辞 `ocx-claude-…` のままです。`/` または `~` を含む
+model ID は v2 接頭辞 `ocx-claude2-…` で発行し、エスケープします(`/` → `~s`、`~` → `~t`)。例:
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
 v1 エイリアスはリテラルにデコードします(歴史的に model ID に含まれていた 2 文字列 `~s` / `~t` も保持)。
 v2 エイリアスはエスケープを展開します。読みやすい形式で表現できないルートはハッシュエイリアスに
 置き換えます。モデル ID には `--` を含め**られます**(解析時は最初の `--` だけを基準に分割します)。

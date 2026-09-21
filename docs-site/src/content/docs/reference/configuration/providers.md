@@ -600,7 +600,7 @@ and for `claude-opus-5` its regular family is quarantined upstream.
 | Surface | `fastMode: true` |
 |---|---|
 | Codex | rows stay umbrella rows; the app's Fast toggle selects the variant |
-| Claude Code (`?ids=cli`) | lists the fast identity, e.g. `claude-ocx-cursor--claude-opus-5-thinking-fast` |
+| Claude Code (`?ids=cli`) | lists the fast identity, e.g. `ocx-claude-cursor--claude-opus-5-thinking-fast` |
 | OpenAI `/v1/models` | lists `cursor/claude-opus-5-thinking-fast` |
 | Claude Desktop (3P) | unchanged — its aliases are hashed from the model name |
 | Dashboard `/api/models` | row ids unchanged; they are the enable/disable keys |

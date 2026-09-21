@@ -65,7 +65,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (isteğe bağlı) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
 
 Kendi dışa aktardığınız değişkenler her zaman önceliklidir. Ekstra argümanlar
 doğrudan iletilir: `ocx claude -p "hello"`.
@@ -319,7 +319,7 @@ kimlikleri kabul ettiğinden, opencodex yönlendirilen modelleri kararlı, tersi
 
 | Yüzey | Format | Örnek |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (düz) veya `claude-ocx2-…` (kaçışlı) | `claude-ocx-openai--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (düz) veya `ocx-claude2-…` (kaçışlı) | `ocx-claude-openai--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3 karakterli base36 karması) | `claude-opus-4-8-ncb` |
 
 Proxy, istek başına aileyi seçer: `?ids=cli` veya `?ids=desktop` kazanır; aksi
@@ -331,7 +331,7 @@ Desktop'ın üçüncü taraf ağ geçidi modunun çaba seçicisini sunabilmesi i
 ModelInfo biçiminde tam model yeteneklerini (akıl yürütme çabası merdiveni,
 düşünme türleri) taşır. Gerçek Anthropic modelleri kurallı kimliklerini korur.
 Sentetik 2026 tarihi bir çıkış tarihi değil, dahili bir yuvadır. Eski karma
-takma adlar ve eski yapılandırmalardan gelen `claude-ocx-<provider>--<model>`
+takma adlar ve eski yapılandırmalardan gelen `ocx-claude-<provider>--<model>`
 kimlikleri hala çözümlenir.
 
 Claude Desktop'ın altbilgi seçicisi zaten çalışan bir 3P görüşmesi için modeli
@@ -361,10 +361,10 @@ Code dizeleri doğrudan iletir).
 
 **Takma ad dilbilgisi kuralları:** sağlayıcı `/` veya `--` içeremez veya
 `native` değerine eşit olamaz. Düz model kimlikleri (`/` veya `~` içermeyen) v1
-önekini `claude-ocx-…` korur. `/` veya `~` içeren model kimlikleri, kaçışlarla
-(`/` → `~s`, `~` → `~t`) v2 önekini `claude-ocx2-…` basar, örn.
+önekini `ocx-claude-…` korur. `/` veya `~` içeren model kimlikleri, kaçışlarla
+(`/` → `~s`, `~` → `~t`) v2 önekini `ocx-claude2-…` basar, örn.
 `openrouter/anthropic/claude-opus-4-8` →
-`claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`. v1 takma adları harfi
+`ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`. v1 takma adları harfi
 harfine çözülür (böylece `~s` / `~t` iki karakterli dizilerini içeren geçmiş bir
 model kimliği korunur); v2 takma adları kaçışları genişletir. Okunabilir formun
 ifade edemediği rotalar karma takma ada geri döner. Model kimlikleri `--`

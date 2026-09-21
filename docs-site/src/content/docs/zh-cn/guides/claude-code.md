@@ -26,7 +26,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可选） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
 | `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 
 ### Claude 路由关闭时的原生回退
@@ -139,7 +139,7 @@ apply、轮换/恢复或直接 disconnect 均可处理，无需新参数或事�
 每个条目带有诚实的显示名（如 `gemini-3-pro (gemini)`），并以官方 ModelInfo 形态附带模型能力
 信息（推理强度梯度、thinking 类型），使 Claude Desktop 的第三方网关模式能够启用推理强度选择
 UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部槽位，不是发布日期。旧版哈希
-别名和 `claude-ocx-<provider>--<model>` 别名仍可解析。拥有 1M 上下文的模型会多出一行 `…[1m]`：
+别名和 `ocx-claude-<provider>--<model>` 别名仍可解析。拥有 1M 上下文的模型会多出一行 `…[1m]`：
 选中后 Claude Code 会按 1M 计算该模型的上下文（自动压缩保留，代理在路由前去掉该标记）。
 选中后会保存到 Claude Code 的 `settings.json` `model` 字段；入站请求会将别名解析回路由
 模型。旧版 Claude Code 中选择器保持原生 — 通过 `ANTHROPIC_MODEL` 设置槽位，或直接在 `/model`
@@ -151,7 +151,7 @@ opencodex 会将已路由模型公开为稳定且可逆的别名：
 
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>`（plain）或 `claude-ocx2-…`（escaped） | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字符 base36 哈希） | `claude-opus-4-8-ncb` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
@@ -169,9 +169,9 @@ Claude Desktop 1.46388.4 时，无论通过底部选择器还是 `/model` 更改
 而是根据每个请求携带的模型 ID 进行路由。请在 **Logs → requestedModel** 中确认客户端实际发送的内容。
 
 **别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`。
-不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `claude-ocx-…`。包含 `/` 或 `~` 的 model ID
-会使用 v2 前缀 `claude-ocx2-…` 并转义（`/` → `~s`，`~` → `~t`），例如
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `ocx-claude-…`。包含 `/` 或 `~` 的 model ID
+会使用 v2 前缀 `ocx-claude2-…` 并转义（`/` → `~s`，`~` → `~t`），例如
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
 v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` / `~t` 会被保留）；v2 别名会展开转义。
 易读形式无法表达的路由会回退到哈希别名。模型 ID **可以**包含 `--`（解析时只按第一个 `--` 分割）；
 含 `--` 的原生 slug 会回退到哈希形式。

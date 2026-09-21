@@ -303,7 +303,6 @@ export async function injectSystemEnv(
     const maxCtx = config.claudeCode?.maxContextTokens;
     if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
       injectLever("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
-      injectLever("DISABLE_COMPACT", "1");
     }
     // Auto-context (devlog 260712 020): user-wins lever, inert when maxContextTokens set.
     if (auto.enabled) injectLever("CLAUDE_CODE_AUTO_COMPACT_WINDOW", String(auto.compactWindow));

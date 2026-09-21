@@ -52,7 +52,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可選） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
 | `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
 ### Claude 路由關閉時的原生回退
@@ -227,7 +227,7 @@ opencodex 會將已路由模型公開為穩定且可逆的別名：
 
 | 介面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字元 base36 雜湊） | `claude-opus-4-8-ncb` |
 
 代理會按請求選擇別名族：`?ids=cli` 或 `?ids=desktop` 優先；否則，`claude-code/*`
@@ -236,7 +236,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 每個條目帶有誠實的顯示名（如 `gemini-3-pro (gemini)`），並以官方 ModelInfo 形態附帶完整模型
 能力（推理強度階梯、thinking 型別），使 Claude Desktop 的第三方閘道器模式能夠提供其推理強度
 選擇器。真實 Anthropic 模型保留其規範 id。合成的 2026 日期是內部槽位，不是釋出日期。舊版雜湊
-別名與較舊設定中的 `claude-ocx-<provider>--<model>` id 仍可解析。
+別名與較舊設定中的 `ocx-claude-<provider>--<model>` id 仍可解析。
 擁有權威 1M 上下文視窗的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
 計算該模型（自動壓縮仍開啟）——代理在路由前會去掉該標記。
 選中後會儲存到 Claude Code 的 `settings.json` `model` 欄位；入站請求會將別名解析回路由

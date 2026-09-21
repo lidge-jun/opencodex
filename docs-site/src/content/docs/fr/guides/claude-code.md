@@ -57,7 +57,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (facultatif) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
 Les variables que vous exportez vous-même gagnent toujours. Les arguments supplémentaires passent par : `ocx claude -p "hello"`.
 
 Une exception porte sur *l'origine* d'une variable, et non sur sa priorité. L'environnement d'exécution Bun fourni
@@ -305,7 +305,7 @@ par `claude` ou `anthropic`, opencodex expose les modèles routés sous forme d'
 
 | Surface | Format | Exemple |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (simple) ou `claude-ocx2-…` (échappé) | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (simple) ou `ocx-claude2-…` (échappé) | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (hachage base36 de 3 caractères) | `claude-opus-4-8-ncb` |
 
 Le proxy choisit la famille pour chaque requête : `?ids=cli` ou `?ids=desktop` est prioritaire ; à défaut, l'agent utilisateur
@@ -315,7 +315,7 @@ Chaque entrée porte un nom d'affichage explicite, comme `gemini-3-pro (gemini)`
 (échelle d'effort de raisonnement et types de réflexion) dans la structure officielle ModelInfo. Le mode passerelle tierce de Claude
 Desktop peut ainsi proposer son sélecteur d'effort. Les véritables modèles Anthropic conservent leurs
 identifiants canoniques. La date synthétique 2026 désigne un emplacement interne, et non une date de publication. Les
-anciens alias hachés et les identifiants `claude-ocx-<provider>--<model>` des configurations antérieures sont
+anciens alias hachés et les identifiants `ocx-claude-<provider>--<model>` des configurations antérieures sont
 toujours résolus.
 
 Si le sélecteur situé au bas de Claude Desktop ne modifie pas le modèle d'une conversation 3P déjà en cours,
@@ -338,9 +338,9 @@ résolu vers le modèle routé. Avec les anciennes versions de Claude Code, le s
 `ANTHROPIC_MODEL` ou tapez n'importe quel identifiant routé avec `/model` (Claude Code fait passer les chaînes).
 
 **Règles de grammaire des alias :** le fournisseur ne doit contenir ni `/` ni `--`, et ne doit pas être égal à `native`.
-Les identifiants de modèle simples, sans `/` ni `~`, conservent le préfixe v1 `claude-ocx-…`. Ceux qui contiennent `/` ou
-`~` utilisent le préfixe v2 `claude-ocx2-…` avec des échappements (`/` → `~s`, `~` → `~t`), par exemple :
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`.
+Les identifiants de modèle simples, sans `/` ni `~`, conservent le préfixe v1 `ocx-claude-…`. Ceux qui contiennent `/` ou
+`~` utilisent le préfixe v2 `ocx-claude2-…` avec des échappements (`/` → `~s`, `~` → `~t`), par exemple :
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`.
 Les alias v1 décodent littéralement (donc un identifiant de modèle historique qui contenait les séquences de deux caractères
 `~s` / `~t` est conservé) ; les alias v2 développent les échappements. Les routes impossibles à représenter sous une forme lisible
 utilisent l'alias haché. Les identifiants de modèle peuvent contenir `--` (la résolution se sépare uniquement au premier
