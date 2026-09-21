@@ -735,7 +735,17 @@ export function runWindowsElevatedScheduledTaskRegistration(
   const powerShellDirectory = powerShellPath.replace(/[\\/][^\\/]+$/, "");
   const scheduledTasksModule = `${powerShellDirectory}\\Modules\\ScheduledTasks\\ScheduledTasks.psd1`;
   const stageDirectory = xml.path.replace(/[\\/][^\\/]+$/, "");
-  if (stageDirectory === xml.path || (expectedExisting && !expectedExisting.path.startsWith(stageDirectory + "\\"))) {
+  // A prefix match is not containment: a `..` segment passes startsWith while the
+  // resolved path lands outside the pinned directory, so traversal segments are
+  // rejected on either separator before the prefix is compared.
+  const sharesStagingDirectory = (path: string) =>
+    !path.split(/[\\/]+/).includes("..")
+    && (path.startsWith(`${stageDirectory}\\`) || path.startsWith(`${stageDirectory}/`));
+  if (
+    stageDirectory === xml.path
+    || !sharesStagingDirectory(xml.path)
+    || (expectedExisting && !sharesStagingDirectory(expectedExisting.path))
+  ) {
     throw new Error("Elevated Task Scheduler payloads must share one staging directory.");
   }
   const inner = [

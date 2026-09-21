@@ -438,6 +438,29 @@ describe("runWindowsElevated spawn contract", () => {
     )).toThrow("requires a captured existing definition");
   });
 
+  test("refuses a staged payload whose path escapes the pinned directory", () => {
+    const stageDir = "C:\\Temp\\opencodex-service-stage-aaaaaa";
+    const staged = { path: `${stageDir}\\register.xml`, byteLength: 42, sha256: "a".repeat(64) };
+    const digest = "c".repeat(64);
+    // `..` slips past a startsWith prefix check but resolves outside the pinned
+    // directory — on either payload, and with either separator.
+    for (const escaped of [
+      `${stageDir}\\..\\elsewhere\\expected.xml`,
+      `${stageDir}/../elsewhere/expected.xml`,
+    ]) {
+      expect(() => runWindowsElevatedScheduledTaskRegistration(
+        "opencodex-proxy",
+        staged,
+        true,
+        { path: escaped, byteLength: 42, sha256: digest },
+      )).toThrow("must share one staging directory");
+    }
+    expect(() => runWindowsElevatedScheduledTaskRegistration(
+      "opencodex-proxy",
+      { path: `${stageDir}\\sub\\..\\..\\register.xml`, byteLength: 42, sha256: "a".repeat(64) },
+    )).toThrow("must share one staging directory");
+  });
+
   test("maps exit 1223 to cancelled", async () => {
     fakeChild({ code: OCX_ELEVATED_UAC_CANCELLED });
     await expect(runWindowsElevated("schtasks.exe", ["/create"])).rejects.toMatchObject({
