@@ -448,6 +448,50 @@ On Windows, a bare `ocx service` runs the install path only after both Task Sche
 proven absent. If either status query is inconclusive, it refuses to register anything and asks you
 to run `ocx service status`; use explicit `ocx service install` only after confirming absence.
 
+### Runtime ownership
+
+The OpenCodex desktop app can take the background proxy over from a CLI installation. When it does,
+it records the handover in the shared service install state, and that record is what makes the
+takeover survive a restart. Your service registration is **kept, never deleted** — the record
+supersedes it rather than replacing it.
+
+A state file with no ownership record means the CLI installation owns the runtime, which is what
+every installation made before this feature is in. Nothing changes for you until an app takes over.
+
+While something other than this CLI owns the runtime, the subcommands that would **activate** your
+registration refuse instead:
+
+| Subcommand | Behaviour under a foreign owner |
+| --- | --- |
+| `repair`, `restart` | Refuse before changing anything. The registration is not re-enabled, rewritten or restarted. |
+| `start` | Refuses for the same reason, so an automatic tray start cannot put a second proxy beside the app's. |
+| `stop`, `uninstall` | Unchanged. They deactivate, so they are never gated. |
+| `install` | Takes the runtime back. It clears the ownership record after the registration succeeds, and reports whose it was. |
+
+`ocx update` behaves the same way: it neither stops the running proxy nor refreshes the service
+while the app owns the runtime, because the running server is the app's own bundled binary and the
+refresh would re-enable the launcher the takeover superseded. The app updates its own runtime.
+
+The refusal names the owning installation and the consent generation, for example:
+
+```text
+Background service repair stopped: the desktop app owns the runtime (install <id>, consent generation 2).
+The service registration was left exactly as it is — not re-enabled, not rewritten and not restarted.
+Quit the desktop app and run 'ocx service install' to hand the runtime back to this CLI.
+```
+
+A record that cannot be read or does not parse produces the same refusal with a different first
+line, because an unreadable claim is not the same as no claim — treating it as "nobody owns this"
+is how a permissions error would silently reactivate your service.
+
+**Recovery in every case is `ocx service install`.** It is deliberately the one verb that is never
+gated, so removing the app without handing the runtime back, or a corrupted state file, still leaves
+you a way to take the service back:
+
+```bash
+ocx service install
+```
+
 ```bash
 ocx service
 ocx service install

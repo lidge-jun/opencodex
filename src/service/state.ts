@@ -1,4 +1,5 @@
-import { accessSync, chmodSync, closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
@@ -10,6 +11,13 @@ import { hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isProtectedHomeUnderTest, isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { isStandaloneBinary } from "../lib/standalone";
+import {
+  inspectInstallStateBytes,
+  parseInstallStateRecord,
+  parseOwnershipClaim,
+  resolveOwnershipFromEvidence,
+  serviceStateFilesFor,
+} from "./install-state-contract.mjs";
 
 /**
  * Written only by the launchd plist and the systemd unit. `OCX_SERVICE=1` cannot stand in
@@ -135,10 +143,9 @@ function defaultOpenCodexHome(): string {
 }
 
 export function serviceStatePathsForOpenCodexHome(opencodexHome: string): string[] {
-  const paths = [join(opencodexHome, "service-state.json")];
-  const defaultPath = join(defaultOpenCodexHome(), "service-state.json");
-  if (normalizePathForCompare(defaultPath) !== normalizePathForCompare(paths[0])) paths.push(defaultPath);
-  return paths;
+  // Shared with the Node launcher, which has to consult the SAME list: reading only the
+  // anchor is how it missed a claim recorded on the legacy default-home path.
+  return serviceStateFilesFor(opencodexHome, defaultOpenCodexHome());
 }
 
 export function serviceStatePaths(): string[] {
@@ -296,10 +303,6 @@ export interface ServiceOwnership {
   readonly consentGeneration: number;
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
 /**
  * Validate an ownership claim read off disk.
  *
@@ -308,42 +311,17 @@ function isNonNegativeInteger(value: unknown): value is number {
  * which is the same lost-field failure this whole record exists to stop.
  */
 export function parseServiceOwnership(value: unknown): ServiceOwnership | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const ownership = value as Record<string, unknown>;
-  if (ownership.owner !== "cli" && ownership.owner !== "desktop") return null;
-  if (typeof ownership.installId !== "string" || ownership.installId.length === 0) return null;
-  if (!isNonNegativeInteger(ownership.consentGeneration)) return null;
-  return value as ServiceOwnership;
+  return parseOwnershipClaim(value) as ServiceOwnership | null;
 }
 
+/**
+ * The record contract lives in `install-state-contract.mjs` so the Node launcher validates
+ * exactly what this reader validates. It used to keep a weaker copy, and a record that fails
+ * this contract while merely lacking an `ownership` field read there as "nobody owns the
+ * runtime" — which is permission to stop a foreign runtime and reactivate the npm service.
+ */
 export function parseServiceInstallState(value: unknown): ServiceInstallState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const state = value as Record<string, unknown>;
-  if (state.version !== 1 && state.version !== 2) return null;
-  if (typeof state.codexHome !== "string" || state.codexHome.length === 0) return null;
-  if (typeof state.opencodexHome !== "string" || state.opencodexHome.length === 0) return null;
-  for (const key of ["codexSqliteHome", "bunPath", "launcherPath", "winswVersion", "winswSha256"] as const) {
-    if (state[key] !== undefined && (typeof state[key] !== "string" || state[key].length === 0)) return null;
-  }
-  // `cliPath` is the one path that is legitimately null: `cliEntry()` returns null for a
-  // standalone binary, and the writer stores it. Validating it as a non-empty string made
-  // every standalone install write a record its OWN parser rejected — which reads back as
-  // "no install state", and after ownership moved into this record, as "nobody owns the
-  // runtime". Pre-existing; found while making ownership fail closed.
-  if (state.cliPath !== undefined && state.cliPath !== null
-    && (typeof state.cliPath !== "string" || state.cliPath.length === 0)) return null;
-  if (state.revision !== undefined && !isNonNegativeInteger(state.revision)) return null;
-  if (state.consentGenerationCeiling !== undefined && !isNonNegativeInteger(state.consentGenerationCeiling)) return null;
-  // A malformed ownership claim invalidates the whole record instead of being dropped:
-  // silently discarding it is precisely the demotion this field is here to prevent, and a
-  // reader that cannot trust the claim must not be told the runtime is unowned.
-  if (state.ownership !== undefined && parseServiceOwnership(state.ownership) === null) return null;
-  if (state.version === 1) {
-    if (state.backend !== undefined) return null;
-  } else if (state.backend !== "scheduler" && state.backend !== "native") {
-    return null;
-  }
-  return state as unknown as ServiceInstallState;
+  return parseInstallStateRecord(value) as ServiceInstallState | null;
 }
 
 /**
@@ -380,17 +358,21 @@ function installProvenanceRecord(backend: ServiceBackend, launcherPath?: string 
  * the consent durable.
  */
 export function writeServiceInstallState(backend: ServiceBackend = "scheduler", launcherPath?: string | null): void {
-  // Resolved across every state path, so a claim living only on the legacy mirror is carried
-  // onto the anchor rather than lost the first time this home writes.
-  //
-  // This does NOT refuse on an unknown resolution. It runs at the END of a successful install
-  // or repair, where a throw would report a service that is registered and running as a
-  // failure. The fail-closed decision belongs in front of the mutation, where repair and the
-  // updaters make it; here the job is to preserve as much as can be read.
-  const resolution = resolveServiceOwnership();
   swapServiceInstallState(current => ({
     ...installProvenanceRecord(backend, launcherPath),
-    ...preservedConsent(current, resolution),
+    // Resolved INSIDE the swap, which runs while the anchor lock is held, and across every
+    // state path so a claim living only on the legacy mirror is carried onto the anchor.
+    //
+    // Resolving before the lock was a lost-update window of its own: a takeover recorded
+    // between the resolution and the swap's base read lands in `current`, passes the revision
+    // check untouched, and is then overwritten by the older claim this function captured.
+    // The compare-and-swap cannot see that, because the stale value never came from the base.
+    //
+    // This does NOT refuse on an unknown resolution. It runs at the END of a successful
+    // install or repair, where a throw would report a service that is registered and running
+    // as a failure. The fail-closed decision belongs in front of the mutation, where repair
+    // and the updaters make it; here the job is to preserve as much as can be read.
+    ...preservedConsent(current, resolveServiceOwnership()),
   }));
 }
 
@@ -399,7 +381,16 @@ function preservedConsent(
   current: ServiceInstallState | null,
   resolution: ServiceOwnershipResolution,
 ): Pick<ServiceInstallState, "ownership" | "consentGenerationCeiling"> {
-  const ownership = resolution.kind === "owned" ? resolution.ownership : current?.ownership;
+  // Both inputs are read under the lock, and they can still disagree: `current` is the anchor
+  // alone, the resolution spans every path. Never let the older grant win, and on an equal
+  // generation keep `current` — the anchor is the record every reader resolves first, so
+  // preferring it is the fail-safe tie.
+  const resolved = resolution.kind === "owned" ? resolution.ownership : undefined;
+  const ownership = resolved === undefined
+    ? current?.ownership
+    : current?.ownership && current.ownership.consentGeneration >= resolved.consentGeneration
+      ? current.ownership
+      : resolved;
   const ceiling = Math.max(current?.consentGenerationCeiling ?? 0, ownership?.consentGeneration ?? 0);
   return {
     ...(ownership ? { ownership } : {}),
@@ -448,9 +439,25 @@ export interface ServiceStateSwapDeps {
 const SERVICE_STATE_SWAP_ATTEMPTS = 5;
 const SERVICE_STATE_LOCK_WAIT_MS = 2_000;
 const SERVICE_STATE_LOCK_POLL_MS = 20;
-const SERVICE_STATE_LOCK_STALE_MS = 30_000;
-/** Lock paths this process holds, with a depth so a nested swap does not deadlock on itself. */
-const heldStateLocks = new Map<string, number>();
+/**
+ * How old a lock must be before it is treated as abandoned.
+ *
+ * It has to exceed the longest legitimate critical section, not the typical one. On Windows
+ * each committed path runs `hardenSecretPath` synchronously, whose own documentation records
+ * a worst case around ninety seconds for sequential calls under load; a thirty-second
+ * threshold would let a second writer evict a holder that is simply still working, and both
+ * would then compute the same base revision and write over each other.
+ */
+const SERVICE_STATE_LOCK_STALE_MS = 300_000;
+const SERVICE_STATE_REPLACE_ATTEMPTS = 5;
+const SERVICE_STATE_REPLACE_RETRY_MS = 40;
+/** Lock paths this process holds, with the token written into each and a re-entrancy depth. */
+const heldStateLocks = new Map<string, { depth: number; token: string }>();
+
+/** The token inside a lock file, or null when it cannot be read. */
+function readLockToken(lockPath: string): string | null {
+  try { return readFileSync(lockPath, "utf8").trim() || null; } catch { return null; }
+}
 
 function isFileExistsError(error: unknown): boolean {
   return Boolean(error) && typeof error === "object" && "code" in (error as object)
@@ -473,14 +480,15 @@ function isFileExistsError(error: unknown): boolean {
  */
 function withServiceStateLock<T>(anchor: string, run: () => T, waitMs = SERVICE_STATE_LOCK_WAIT_MS): T {
   const lockPath = `${anchor}.lock`;
-  const depth = heldStateLocks.get(lockPath);
-  if (depth !== undefined) {
-    heldStateLocks.set(lockPath, depth + 1);
-    try { return run(); } finally { releaseHeldLock(lockPath, false); }
+  const held = heldStateLocks.get(lockPath);
+  if (held !== undefined) {
+    held.depth += 1;
+    try { return run(); } finally { releaseHeldLock(lockPath); }
   }
   const dir = dirname(lockPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   const deadline = Date.now() + waitMs;
+  const token = randomUUID();
   let fd: number;
   for (;;) {
     try {
@@ -493,10 +501,17 @@ function withServiceStateLock<T>(anchor: string, run: () => T, waitMs = SERVICE_
       if (Date.now() < deadline) { Bun.sleepSync(SERVICE_STATE_LOCK_POLL_MS); continue; }
       // Break a lock whose holder is gone. Age comes from the lock file itself, so a holder
       // that is merely slow keeps refusing us rather than being evicted mid-write.
+      //
+      // The token is re-read and compared before the unlink: without it, a holder that
+      // released and a NEW holder that took the lock in the same instant would be evicted as
+      // if it were the abandoned one, and two writers would proceed from one base revision.
+      const abandoned = readLockToken(lockPath);
       let ageMs: number | null = null;
       try { ageMs = Date.now() - statSync(lockPath).mtimeMs; } catch { ageMs = null; }
       if (ageMs !== null && ageMs > SERVICE_STATE_LOCK_STALE_MS) {
-        try { unlinkSync(lockPath); } catch { /* another process broke it first */ }
+        if (readLockToken(lockPath) === abandoned) {
+          try { unlinkSync(lockPath); } catch { /* another process broke it first */ }
+        }
         continue;
       }
       throw new Error(
@@ -505,20 +520,29 @@ function withServiceStateLock<T>(anchor: string, run: () => T, waitMs = SERVICE_
       );
     }
   }
-  heldStateLocks.set(lockPath, 1);
+  // Identify the holder inside the file so neither eviction nor release can remove a lock
+  // some other process has since taken.
+  try { writeFileSync(fd, `${token}\n`, { encoding: "utf8" }); } catch { /* best-effort */ }
+  heldStateLocks.set(lockPath, { depth: 1, token });
   try {
     return run();
   } finally {
     try { closeSync(fd); } catch { /* best-effort */ }
-    releaseHeldLock(lockPath, true);
+    releaseHeldLock(lockPath);
   }
 }
 
-function releaseHeldLock(lockPath: string, removeFile: boolean): void {
-  const depth = (heldStateLocks.get(lockPath) ?? 1) - 1;
-  if (depth > 0) { heldStateLocks.set(lockPath, depth); return; }
+function releaseHeldLock(lockPath: string): void {
+  const held = heldStateLocks.get(lockPath);
+  if (held === undefined) return;
+  held.depth -= 1;
+  if (held.depth > 0) return;
   heldStateLocks.delete(lockPath);
-  if (removeFile) { try { unlinkSync(lockPath); } catch { /* best-effort */ } }
+  // Remove OUR lock instance only. If the file on disk carries a different token, this
+  // holder was evicted as stale and someone else owns the pathname now; unlinking it would
+  // hand a third writer the lock while the second is still inside its critical section.
+  if (readLockToken(lockPath) !== held.token) return;
+  try { unlinkSync(lockPath); } catch { /* best-effort */ }
 }
 
 /** One state path's record, or null when it is absent or unparseable. Throws if unreadable. */
@@ -536,13 +560,51 @@ function readServiceInstallStateAt(path: string): ServiceInstallState | null {
   return evidence.kind === "valid" ? evidence.state : null;
 }
 
+/**
+ * Publish one state file, replacing it as a unit.
+ *
+ * An in-place write truncates first, so a kill, a power loss or a failed write between the
+ * truncate and the last byte leaves the anchor empty or half-serialized. That used to read
+ * back as "no install state"; since the reader became fail-closed it reads as `unknown`,
+ * which blocks `service start`, repair, restart and every update until the operator runs a
+ * takeover install. Writing a sibling temporary file and renaming it means the previous valid
+ * record survives an interrupted commit.
+ *
+ * The temporary file is hardened BEFORE the rename, not after: between rename and chmod the
+ * record would otherwise be readable at the default mode.
+ *
+ * Windows can refuse the replace while a scanner or another reader holds the destination
+ * open. That is transient, so it is retried briefly and then falls back to the in-place
+ * write — a narrow torn-write window is a better failure than an install that cannot record
+ * what it just registered.
+ */
 function commitServiceStateFile(path: string, serialized: string): void {
   const dir = dirname(path);
   recordOwnedConfigPath(getConfigDir(), path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(path, serialized, { encoding: "utf8", mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* best-effort */ }
-  if (process.platform === "win32") hardenSecretPath(path, { required: true });
+  const staged = `${path}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(staged, serialized, { encoding: "utf8", mode: 0o600 });
+    try { chmodSync(staged, 0o600); } catch { /* best-effort */ }
+    if (process.platform === "win32") hardenSecretPath(staged, { required: true });
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        renameSync(staged, path);
+        return;
+      } catch {
+        if (attempt >= SERVICE_STATE_REPLACE_ATTEMPTS - 1) {
+          writeFileSync(path, serialized, { encoding: "utf8", mode: 0o600 });
+          try { chmodSync(path, 0o600); } catch { /* best-effort */ }
+          if (process.platform === "win32") hardenSecretPath(path, { required: true });
+          return;
+        }
+        Bun.sleepSync(SERVICE_STATE_REPLACE_RETRY_MS);
+      }
+    }
+  } finally {
+    // A rename that succeeded consumed the staged path; anything left is ours to clean up.
+    if (existsSync(staged)) { try { unlinkSync(staged); } catch { /* best-effort */ } }
+  }
 }
 
 /**
@@ -618,31 +680,10 @@ export type ServiceOwnershipResolution =
 export function resolveServiceOwnership(
   evidence: readonly ServiceStateEvidence[] = inspectServiceStateEvidence(),
 ): ServiceOwnershipResolution {
-  for (const entry of evidence) {
-    // Any path. A claim we are not allowed to look at is still a claim.
-    if (entry.kind === "unreadable") {
-      return { kind: "unknown", reason: `a service state path could not be read (${entry.reason})` };
-    }
-  }
-  // Only the ANCHOR's corruption is fatal. The second path is the legacy default-home entry
-  // kept so an install made before OPENCODEX_HOME existed can still be found; unrelated junk
-  // left there by an old version must not be able to block every repair on this machine.
-  if (evidence[0]?.kind === "invalid") {
-    return { kind: "unknown", reason: "the service install record is present but not valid" };
-  }
-  const claims = evidence.flatMap(entry => (
-    entry.kind === "valid" && entry.state.ownership ? [entry.state.ownership] : []
-  ));
-  const first = claims[0];
-  if (first === undefined) return { kind: "none" };
-  if (claims.some(claim => claim.owner !== first.owner || claim.installId !== first.installId)) {
-    return { kind: "unknown", reason: "the service state paths name different owners" };
-  }
-  // Same claim in both places; the higher generation is the later write.
-  return {
-    kind: "owned",
-    ownership: claims.reduce((best, claim) => claim.consentGeneration > best.consentGeneration ? claim : best, first),
-  };
+  // The resolution rule is the shared contract's, for the same reason the record contract is:
+  // the Node launcher decides this question too, and a weaker copy there is an authorization
+  // gap rather than a style problem.
+  return resolveOwnershipFromEvidence(evidence) as unknown as ServiceOwnershipResolution;
 }
 
 /**
@@ -774,28 +815,12 @@ export type ServiceStateEvidence =
 export function inspectServiceStateEvidence(
   paths: readonly string[] = serviceStatePaths(),
 ): readonly ServiceStateEvidence[] {
-  return paths.map((path): ServiceStateEvidence => {
-    let raw: string;
-    try {
-      raw = readFileSync(path, "utf8");
-    } catch (error) {
-      const code = error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
-      // ENOENT is an answer. EACCES, ENOTDIR and the rest are a failure to ask,
-      // and collapsing them into absence is how a locked-down state file would
-      // become permission to write.
-      if (code === "ENOENT") return { path, kind: "absent" };
-      return { path, kind: "unreadable", reason: code || String(error) };
-    }
-    let parsed: ServiceInstallState | null;
-    try {
-      parsed = parseServiceInstallState(JSON.parse(raw));
-    } catch {
-      return { path, kind: "invalid" };
-    }
-    return parsed ? { path, kind: "valid", state: parsed } : { path, kind: "invalid" };
-  });
+  // ENOENT is an answer. EACCES, ENOTDIR and the rest are a failure to ask, and collapsing
+  // them into absence is how a locked-down state file would become permission to write.
+  // The classification is the shared contract's, so the launcher makes the same call.
+  return paths.map(path => (
+    inspectInstallStateBytes(path, at => readFileSync(at, "utf8")) as unknown as ServiceStateEvidence
+  ));
 }
 
 /** The homes this process is actually using, for comparison against a claim. */

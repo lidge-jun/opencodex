@@ -602,9 +602,12 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("serviceReinstallArgs()");
     expect(launcherSource).toContain("aborting the update");
     expect(launcherSource).toContain('"service", "repair"');
-    // The launcher still reads service-state.json for service-installed detection, and
-    // for the backend choice on the genuinely-absent install fallback.
-    expect(launcherSource).toContain('"service-state.json"');
+    // The launcher still reads the install-state record for service-installed detection, and
+    // for the backend choice on the genuinely-absent install fallback. It no longer spells the
+    // file name: the path list moved into the contract both runtimes import, so the launcher
+    // cannot consult a shorter list than the authoritative reader.
+    expect(launcherSource).toContain("serviceStateFilesFor(configDir()");
+    expect(launcherSource).toContain("const serviceWasInstalled = existsSync(serviceStatePath)");
     // That marker can be STALE, so the fallback asks for structured state rather than
     // parsing a failure message; bin/ocx.mjs is plain Node and cannot import
     // diagnoseService(), so it reads startup.serviceInstalled from `status --json`.
