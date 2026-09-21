@@ -181,6 +181,12 @@ export function useMainDeviceReauth(apiBase: string, onCompleted: () => void) {
         const dto = await res.json().catch(() => ({})) as FlowDto;
         if (!isCurrent() || flowRef.current !== flowId) return;
         if (!res.ok) {
+          if (res.status === 404 && dto.code === "unknown_flow") {
+            stopPolling();
+            flowRef.current = null;
+            setState({ phase: "failed", code: "request_failed" });
+            return;
+          }
           // Ownership continues from the Cancel click, including while DELETE
           // is unresolved. Never offer a replacement POST during that window,
           // and keep the existing poll cadence so a later terminal status remains observable.
