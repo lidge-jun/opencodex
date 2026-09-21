@@ -7,11 +7,13 @@ type WorkflowStep = {
   if?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  env?: Record<string, string>;
   run?: string;
   shell?: string;
 };
 
 type WorkflowJob = {
+  if?: string;
   needs?: string[];
   strategy?: { matrix?: { include?: Array<{ os?: string }> } };
   steps?: WorkflowStep[];
@@ -95,37 +97,90 @@ describe("release pipeline contract", () => {
 
     // The bare names above only resolve end to end if the step checksums from the directory
     // the artifact lives in (it leaves the per-target build directory first), if the upload
-    // glob picks the checksum file up, and if the download flattens every artifact beside
-    // the verifier. Locking only the final shasum line would leave those joints unguarded.
-    // YAML block scalars are dedented on parse, so the script's own lines carry no
-    // indentation here.
+    // glob picks the checksum file up, and if the pre-publication verifier downloads every
+    // artifact flattened beside them. Locking only the final line would leave those joints
+    // unguarded. YAML block scalars are dedented on parse, so the script's own lines carry
+    // no indentation here.
     expect(archive!.run).toMatch(/^ *cd \.\.\/\.\.$/m);
     const upload = release.jobs?.["package-standalone"]?.steps
       ?.find(candidate => candidate.uses?.startsWith("actions/upload-artifact@"));
     expect(String(upload?.with?.path)).toContain("dist/ocx-*.sha256");
 
-    const download = release.jobs?.["attach-release"]?.steps
+    const download = release.jobs?.["verify-release"]?.steps
       ?.find(candidate => candidate.uses?.startsWith("actions/download-artifact@")
         && candidate.with?.pattern === "standalone-*");
     expect(download?.with?.["merge-multiple"]).toBe(true);
     expect(download?.with?.path).toBe("dist/release");
-
-    const verify = release.jobs?.["attach-release"]?.steps
-      ?.find(candidate => candidate.run?.includes("shasum"));
-    expect(verify).toBeDefined();
-    expect(verify!.run).toContain("cd dist/release");
-    expect(verify!.run).toContain("shasum -a 256 -c ./*.sha256");
   });
 
-  test("publication waits for both packaging jobs", () => {
+  test("publication consumes the verified packaging result", () => {
+    const verify = release.jobs?.["verify-release"];
+    expect(verify).toBeDefined();
+    expect(needsOf(verify).sort())
+      .toEqual(["package-desktop", "package-standalone", "validate-dispatch"]);
+    // Verification is not a publication-mode step: a dry run must prove the same chain
+    // a real release relies on, so the job carries no dry-run exemption.
+    expect(verify!.if).toBeUndefined();
+    expect(verify!.steps?.some(candidate => candidate.run?.includes("verify-release-assets.ts")))
+      .toBe(true);
+
     const publish = release.jobs?.publish;
     expect(publish).toBeDefined();
-    expect(needsOf(publish).sort())
-      .toEqual(["package-desktop", "package-standalone", "validate-dispatch"]);
+    expect(needsOf(publish).sort()).toEqual(["validate-dispatch", "verify-release"]);
 
     const attach = release.jobs?.["attach-release"];
     expect(attach).toBeDefined();
-    expect(needsOf(attach).sort()).toEqual(["package-desktop", "package-standalone", "publish"]);
+    expect(needsOf(attach).sort()).toEqual(["publish", "verify-release"]);
+  });
+
+  test("attach uploads only the verified bundle, and only after requiring its receipt", () => {
+    const steps = release.jobs?.["attach-release"]?.steps ?? [];
+    // Verification happens exactly once, before publication: attach must not re-verify
+    // checksums or regenerate the manifest from unverified parts.
+    expect(steps.some(candidate => candidate.run?.includes("shasum"))).toBe(false);
+    expect(steps.some(candidate => candidate.run?.includes("updater-manifest.ts"))).toBe(false);
+
+    const bundle = steps.find(candidate => candidate.uses?.startsWith("actions/download-artifact@")
+      && candidate.with?.name === "verified-release");
+    expect(bundle?.with?.path).toBe("dist/release");
+
+    const receiptCheck = steps.findIndex(candidate => candidate.run?.includes("verification/receipt.json"));
+    const upload = steps.findIndex(candidate => candidate.run?.includes("gh release upload"));
+    expect(receiptCheck).toBeGreaterThanOrEqual(0);
+    expect(upload).toBeGreaterThan(receiptCheck);
+  });
+
+  test("a partial publication has a recorded, explicit recovery path", () => {
+    const releaseText = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
+    // The only way npm publish is ever skipped: an explicit recovery input, requiring
+    // the version to already be acknowledged on npm, refusing combination with dry-run.
+    expect(releaseText).toContain("resume-after-npm-publish:");
+
+    const publishSteps = release.jobs?.publish?.steps ?? [];
+    const preflight = publishSteps.find(candidate => candidate.name === "Preflight release metadata");
+    expect(preflight?.run).toContain("no acknowledged publication to resume from");
+    expect(preflight?.run).toContain("cannot combine with dry-run");
+
+    const publication = publishSteps.find(candidate => candidate.id === "publication");
+    // The summary line references RELEASE_VERSION under set -u; the env must carry it.
+    expect(publication?.env?.RELEASE_VERSION).toBe("${{ inputs.version }}");
+    expect(publication?.run).toContain('if [ "$RESUME" = "true" ]');
+    expect(publication?.run).toContain('echo "published=true" >> "$GITHUB_OUTPUT"');
+    // A successful publish records the recovery path at the moment it matters.
+    expect(publication?.run).toContain("never republish this version");
+
+    // The version-line gate must let the resume path past a tag it created itself.
+    const versionLine = publishSteps.find(candidate => candidate.run?.includes("assert-releasable"));
+    expect(versionLine?.env?.RESUME).toBe("${{ inputs.resume-after-npm-publish }}");
+    expect(versionLine?.run).toContain('$RESUME');
+
+    // A run that failed after the release was created must be able to complete the
+    // attachment on resume; outside resume, an existing release stays a hard failure.
+    const create = publishSteps.find(candidate => candidate.name === "Create GitHub release");
+    expect(create?.env?.RESUME).toBe("${{ inputs.resume-after-npm-publish }}");
+    expect(create?.run).toContain('gh release view "$release_tag"');
+    expect(create?.run).toContain("already exists; reusing it for attachment");
+    expect(create?.run).toContain("refusing to reuse it outside the resume path");
   });
 });
 
