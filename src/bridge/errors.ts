@@ -1,9 +1,10 @@
 import {
+  applyReplayRefusalClientHeaders,
   isNonReplayableUpstreamCode,
   isReplayRefusalCode,
-  markReplayRefusalResponse,
   markResponseNonReplayable,
   REPLAY_REFUSED_STATUS,
+  retainReplayRefusal,
 } from "../lib/upstream-retry";
 import {
   adapterFailureFromMessage,
@@ -45,6 +46,11 @@ export function formatErrorResponse(
     && retryAfter.length <= 128) {
     headers.set("Retry-After", retryAfter);
   }
+  // The refusal's client policy, restated here for the same reason its status is: this
+  // formatter is the last thing several adapter and combo paths touch before the client,
+  // and no wait of its own does not stop a client that retries every 429 by default.
+  const refusal = isReplayRefusalCode(error.code) && replayBlocked;
+  if (refusal) applyReplayRefusalClientHeaders(headers);
   const response = new Response(JSON.stringify({ error }), {
     status: finalStatus,
     headers,
@@ -53,6 +59,6 @@ export function formatErrorResponse(
   // Re-wrapping is where the refusal loses its provenance: combo failure consumption parses
   // the JSON and builds a new Response, and the code alone does not tell a later quota
   // recorder that no upstream produced this status. Carry the narrower marker across too.
-  if (replayBlocked && isReplayRefusalCode(error.code)) markReplayRefusalResponse(response);
+  if (refusal) retainReplayRefusal(response);
   return response;
 }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { handleEffortCommand } from "../../src/cli/effort";
 import { dispatchCommand } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
+import { summarizeStopRun } from "../../src/cli/stop-report";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
 
@@ -77,8 +78,17 @@ function fakeDeps(args: string[] = []): {
     startArgv: () => [],
     spawnDetached: () => {},
     handleStart: async () => {},
-    handleStop: async () => true,
+    // The effort runner never reaches stop; the fake only has to satisfy the typed
+    // interface, so reuse the real summarizer rather than restating the shape.
+    handleStop: async () => ({
+      ok: true,
+      summary: summarizeStopRun(
+        { service: "absent", proxy: "not-running", sharedTeardown: "skipped", inheritedTeardownBlocks: false, receiptClearFailed: false },
+        { failed: false, historyOnly: false, historyDeferred: false, exitCode: 0 },
+      ),
+    }),
     handleEnsure: async () => true,
+    handleResolve: async () => 0,
     handleTrayProxyStart: async () => true,
     handleTrayProxyRestart: async () => {},
     handleRestartStartWhenStopped: async () => true,

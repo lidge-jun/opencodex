@@ -17,6 +17,7 @@ import { isCodexAccountPriorityKey } from "../../codex/account-priority";
 import { parseAccountPriority } from "../../codex/pool-rotation";
 import { credentialGroupIssues } from "../../routing/identity-domains";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerEgressConfigError } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -78,6 +79,17 @@ export const retryOn429PolicySchema = z.object({
 const transientRetryOn5xxPolicySchema = z.object({
   enabled: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),
+}).strict();
+
+/**
+ * `retryOnReset` accepts only these keys. `replacements` counts DUPLICATE inferences the
+ * operator is willing to risk for one logical request, so the ceiling is two rather than a
+ * send budget: this is the one send the proxy otherwise refuses outright, and a third of them
+ * says the connection, not the retry policy, is the problem.
+ */
+export const retryOnResetPolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  replacements: z.number().int().min(1).max(2).optional(),
 }).strict();
 
 const requestPacingRuleSchema = z.object({
@@ -222,6 +234,25 @@ const modelCapabilitiesSchema = z.unknown().superRefine((value, ctx) => {
 }).transform(value => mergeModelCapabilities(undefined, value));
 
 /**
+ * Per-provider egress fields, validated by the resolver the transports themselves use.
+ *
+ * Calling `providerEgressConfigError` rather than restating the accepted forms keeps one
+ * definition of a usable value: a proxy the config loader admits is one the transport can
+ * carry, and a value rejected here is rejected at request time for the identical reason.
+ * Each field is checked on its own because neither depends on the other's value to be
+ * well-formed; how they combine is decided per request against the destination.
+ */
+const providerProxySchema = z.unknown().superRefine((value, ctx) => {
+  const error = providerEgressConfigError({ proxy: value as string | null | undefined });
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as string | null | undefined);
+
+const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
+  const error = providerEgressConfigError({ noProxy: value as string | string[] | undefined });
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as string | string[] | undefined);
+
+/**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
  */
@@ -258,6 +289,7 @@ export const providerConfigSchema = z.object({
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
   requiresPairedResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
+  foldDeveloperRoleToSystem: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
@@ -268,6 +300,10 @@ export const providerConfigSchema = z.object({
   decodesNativeCompactionBlobs: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  // Per-provider egress (#2894): absent inherits the global proxy decision, "direct"/null
+  // refuses it, and an http(s) or socks5 URL replaces it for this provider only.
+  proxy: providerProxySchema.optional(),
+  noProxy: providerNoProxySchema.optional(),
   // The management API accepts `null` as "clear this", so a config written before the POST
   // canonicalization below can hold one on disk. Rejecting it here would send the operator
   // through invalid-config recovery for a value the API told them was fine.
@@ -306,6 +342,10 @@ export const providerConfigSchema = z.object({
     .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
+  // Degrades to "absent" like `webSearchBridge`: a malformed hand edit of an opt-in feature
+  // that is off by default must not send the operator through invalid-config recovery. The
+  // management write boundary still rejects it loudly (`retryOnResetPolicyConfigError`).
+  retryOnReset: retryOnResetPolicySchema.optional().catch(undefined),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
@@ -649,6 +689,13 @@ export const apiKeyEntrySchema = z.object({
   createdAt: z.string().catch(""),
   // A damaged overlap record must never discard the still-authoritative key.
   pendingRotation: pendingApiKeyRotationSchema.optional().catch(undefined),
+  // Deliberately NOT `.catch`ed, unlike every field above. Degrading a damaged
+  // scope to `undefined` would silently widen the key to the whole catalog,
+  // which is the one direction a permission field must never fail. Letting the
+  // record fail instead drops the key, so a corrupted scope stops that client
+  // rather than promoting it.
+  allowedProviders: z.array(z.string().trim().min(1).max(256)).optional(),
+  allowedModels: z.array(z.string().trim().min(1).max(256)).optional(),
 }).passthrough();
 
 /**

@@ -14,6 +14,16 @@ async function readDict(locale: string): Promise<Map<string, string>> {
   return out;
 }
 
+/**
+ * A value with no letters once its placeholders are removed has nothing to translate: an em
+ * dash, a currency template, a bare glyph. Matching English there is evidence of nothing, so
+ * it is derived from the value instead of growing the allowlist by one entry every time the
+ * UI gains another symbol.
+ */
+function carriesTranslatableWords(value: string): boolean {
+  return /\p{L}/u.test(value.replace(/\{[a-zA-Z0-9_]+\}/g, " "));
+}
+
 // When the English locale grows, `scripts/sync-locale-keys.mjs` seeds the new key into every
 // locale as an English placeholder so the build does not break. That is fine for de/ko/ja/zh/ru
 // (they each have a human owner who will translate later), but zh-TW is this PR's contribution
@@ -192,6 +202,7 @@ test("zh-TW ships no untranslated English placeholders beyond the intentional al
     const enValue = en.get(key);
     if (enValue === undefined) continue; // key-set parity is the other test's job
     if (!value.trim()) continue; // blank-value is the other test's job
+    if (!carriesTranslatableWords(value)) continue; // a symbol is identical in every locale
     if (value === enValue && !ZH_TW_KEEP_ENGLISH.has(key)) {
       stale.push(key);
     }

@@ -90,14 +90,42 @@ Arka planda çalıştırmak için `ocx service` kullanın.
 **http://localhost:10100** adresini açın ve her şeyi web kontrol panelinden yapılandırın: sağlayıcı
 ekleyin (40'tan fazla hazır sağlayıcı ya da herhangi bir OpenAI uyumlu uç nokta), model seçin, hesap
 yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
-Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla ChatGPT / Codex
-hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota yönlendirmesinde
-yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve fill-first kendi
-politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı kalır, böylece uzun
-SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak kota yeniden
-değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması ya da 401/403 ve
-429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde kullanılmasını istediğiniz
-bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim sırası verin.
+
+<details>
+<summary><b>Masaüstü uygulaması ve macOS widget'ı — beta</b></summary>
+
+Aynı kontrol panelini sarmalayan yerel uygulamaya ek olarak, tarayıcı açmadan proxy durumunu,
+bugünkü kullanımı ve sağlayıcı kotalarını gösteren bir WidgetKit uzantısı sunulur. Proxy'nin çalışma
+şekli değişmez: uygulama çalışan bir proxy bulur ya da paketlenmiş `ocx` sidecar'ını başlatır;
+kontrol paneli yine **http://localhost:10100** adresinde kalır.
+
+Bu bir beta sürümüdür. Derlemeler bütünlük için imzalanır ancak noter tasdikli değildir; bu nedenle
+macOS ilk açılışta sağ tıklayıp **Aç**'ı seçmenizi ister, Windows SmartScreen ise yükleyici için uyarı
+gösterir. Widget için macOS 14 veya üzeri gerekir; görüntülediği anlık görüntü modeli
+[`app/`](../app) dizinindedir (`MenuBarCore`).
+
+Uygulamayı [en güncel sürümden](https://github.com/lidge-jun/opencodex/releases) indirin veya
+`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` komutuyla yerel olarak derleyin.
+
+Kurulum konumları, servis dosyaları ve diske yazılan diğer her şey
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) dosyasında listelenir.
+[Masaüstü uygulaması kılavuzu](https://lidge-jun.github.io/opencodex/guides/desktop-app/) ve
+[macOS menü çubuğu uygulaması kılavuzu](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/),
+platforma göre kurulumu ve Gatekeeper istemini açıklar.
+
+</details>
+
+### ChatGPT hesap havuzu
+
+opencodex, Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla
+ChatGPT / Codex hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota
+yönlendirmesinde yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve
+fill-first kendi politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı
+kalır, böylece uzun SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak
+kota yeniden değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması
+ya da 401/403 ve 429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde
+kullanılmasını istediğiniz bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim
+sırası verin.
 
 ### Sponsorlar
 

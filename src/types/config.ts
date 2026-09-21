@@ -138,6 +138,13 @@ export interface OcxClaudeCodeConfig {
   /** Compact-window tokens for auto-context. Default 829_800 (AUTO_COMPACT_WINDOW_DEFAULT). */
   autoCompactWindow?: number;
   /**
+   * Local CONNECT proxy + TLS listener that intercepts Claude Code's own `api.anthropic.com`
+   * traffic without any `ANTHROPIC_BASE_URL` rewrite (src/claude/intercept). Claude Code reaches
+   * it via `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` in its settings env. Default: enabled on a
+   * hub; the proxy port defaults to the public port + 100.
+   */
+  intercept?: { enabled?: boolean; port?: number };
+  /**
    * Bundled-skill content elision for ROUTED (non-Anthropic) models (devlog 260712
    * 060): Skill-tool results whose skill name matches an entry here are replaced
    * with a short stub in the anthropic->responses translation. Third-party models
@@ -166,6 +173,14 @@ export interface OcxClaudeCodeConfig {
   visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
+  /**
+   * How Claude Desktop reaches opencodex (src/claude/desktop-first-party.ts).
+   * `first-party` (default) leaves the app on its normal claude.ai login and redirects only the
+   * Code tab's Claude Code process through the intercept pair via settings.json env.
+   * `gateway` installs the third-party deployment profile (desktop-3p) for the whole app.
+   * Unset on an install that already applied a gateway profile resolves to `gateway`.
+   */
+  desktopMode?: "first-party" | "gateway";
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
   desktopAutoApply?: boolean;
   /**
@@ -253,6 +268,21 @@ export interface OcxApiKeyEntry {
   key: string;
   createdAt: string;
   pendingRotation?: OcxPendingApiKeyRotation;
+  /**
+   * Resolved provider names this key may reach. Absent or empty means every
+   * provider, which is what every existing key has, so adding the field
+   * changes nothing until an operator sets one.
+   */
+  allowedProviders?: string[];
+  /**
+   * Resolved destinations this key may reach, as a bare model id or a
+   * `provider/model` pair. Absent or empty means every model.
+   *
+   * These name destinations, not the selectors a client sends: they are
+   * checked after alias, combo, fallback and compaction resolution, because
+   * that is the only point at which the model about to be billed is known.
+   */
+  allowedModels?: string[];
 }
 
 export interface OcxPendingApiKeyRotation {
@@ -794,6 +824,13 @@ export interface OcxConfig {
    * See `src/storage/policy.ts`.
    */
   storageCleanupPolicy?: StorageCleanupPolicy;
+  /**
+   * Opt-in ceiling in bytes for `usage.jsonl`. Absent means the ledger grows without limit,
+   * which stays the default: history an operator did not ask to delete is not deleted. Values
+   * below the documented floor are treated as unset rather than enforced, because a ceiling
+   * smaller than a row cannot be met without emptying the file.
+   */
+  usageLedgerMaxBytes?: number;
   /** Generated API keys for external access to the proxy's /v1/responses endpoint. */
   apiKeys?: OcxApiKeyEntry[];
   /** Auto-start/sync the proxy from the Codex shim before launching Codex. Default true. */

@@ -1,0 +1,52 @@
+[package]
+name = "opencodex-desktop"
+version = "2.61.0"
+description = "OpenCodex desktop shell"
+authors = ["OpenCodex contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "opencodex_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+uuid = { version = "=1.18.1", features = ["v4"] }
+tauri = { version = "=2.11.6", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-utils = "=2.9.3"
+tauri-plugin-autostart = "=2.5.0"
+tauri-plugin-opener = "=2.5.3"
+tauri-plugin-process = "=2.3.0"
+tauri-plugin-shell = "=2.2.0"
+tauri-plugin-single-instance = "=2.4.0"
+tauri-plugin-updater = "=2.9.0"
+tokio = { version = "=1.45.1", features = ["sync", "time"] }
+
+# Linux only, and already in this graph: `tao` enables its own `dbus` feature by default, so
+# `libdbus-sys` is compiled for every Linux build of this shell today. Naming it here adds a
+# session-bus probe for the StatusNotifier watcher without adding a package or a system library.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "=0.9.12"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = "symbols"
+
+# Build scripts and proc macros are compiled for the host and loaded by rustc, so
+# they must keep the symbols it resolves them through. `strip = "symbols"` above
+# applies to them as well without this override, and a stripped proc-macro dylib
+# fails to load with a bare `can't find crate`, naming the macro rather than the
+# profile that removed it. `ctor-proc-macro`, pulled in by `tauri-utils`, is the
+# one this repository hits: the release build stops at `pub use ctor_proc_macro::ctor`
+# while the dev profile compiles the same graph.
+[profile.release.build-override]
+strip = false

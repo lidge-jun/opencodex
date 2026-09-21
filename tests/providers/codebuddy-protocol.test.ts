@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_PROJECTED_HISTORY_CHARS,
   buildConversationInput,
   buildInputLines,
   buildSystemPrompt,
   mapStreamMessageToEvents,
+  projectedHistoryCharLimit,
   readJsonLines,
   usageFromResult,
 } from "../../src/adapters/coding-agent/protocol";
@@ -350,5 +352,43 @@ describe("codebuddy conversation input builder (Strategy C projection)", () => {
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "QUJD" },
     });
+  });
+});
+describe("projected history ceiling derives from the model context window", () => {
+  test("absent or invalid window metadata keeps the legacy flat cap", () => {
+    expect(projectedHistoryCharLimit(undefined)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+    expect(projectedHistoryCharLimit(Number.NaN)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+    expect(projectedHistoryCharLimit(0)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+    expect(projectedHistoryCharLimit(-1)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+  });
+
+  test("a small window never lowers the cap below the legacy default", () => {
+    expect(projectedHistoryCharLimit(64_000)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+  });
+
+  test("a large window scales the cap until the hard ceiling", () => {
+    expect(projectedHistoryCharLimit(128_000)).toBe(384_000);
+    expect(projectedHistoryCharLimit(1_000_000)).toBe(3_000_000);
+    expect(projectedHistoryCharLimit(Number.MAX_SAFE_INTEGER)).toBe(4_000_000);
+  });
+
+  test("buildConversationInput keeps the history a derived ceiling admits", () => {
+    const history = Array.from({ length: 5 }, (_, index) => ({
+      role: "user" as const,
+      content: "EARLY-MARKER-" + String(index) + " " + "a".repeat(50_000),
+      timestamp: index,
+    }));
+    const messages = [...history, { role: "user", content: "current request", timestamp: 5 }];
+    const parsed = parsedRequest({ context: { messages } });
+
+    const wide = buildConversationInput(parsed, { maxHistoryChars: projectedHistoryCharLimit(1_000_000) })
+      .map(line => JSON.parse(line));
+    expect(wide[0].message.content[0].text).toContain("EARLY-MARKER-0");
+    expect(wide[0].message.content[0].text).not.toContain("truncated for length");
+
+    const flat = buildConversationInput(parsed).map(line => JSON.parse(line));
+    expect(flat[0].message.content[0].text).not.toContain("EARLY-MARKER-0");
+    expect(flat[0].message.content[0].text).toContain("truncated for length");
+    expect(flat[0].message.content[0].text).toContain("current request");
   });
 });

@@ -1,4 +1,6 @@
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
+import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
+import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wire";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import { modelInList } from "../types";
@@ -40,7 +42,7 @@ import {
 } from "./openai-chat/errors";
 import { messagesToChatFormat } from "./openai-chat/messages";
 import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
-import { isNativeOpenAIChatTarget, openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
+import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
 
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
@@ -142,51 +144,21 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
         if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
         const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
-        // Some gateways accept a reasoning-effort field on a plain turn but reject the
-        // effort + tools combination. `noReasoningModels` would fix that only by
-        // stripping reasoning everywhere, costing the model its whole picker. This keeps
-        // the ladder advertised and drops the wire field for tool-bearing requests only.
-        const omitReasoningEffortWithTools = !!tools
-          && modelInList(provider.omitReasoningEffortWithToolsModels, parsed.modelId);
-        const reasoningEffort = omitReasoningEffortWithTools
-          ? undefined
-          : mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
-        const nativeOpenAI = isNativeOpenAIChatTarget(provider);
+        const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+        const explicitReasoning = applyExplicitChatReasoningWirePolicy({
+          provider,
+          modelId: parsed.modelId,
+          hasTools: !!tools,
+          requestedEffort: parsed.options.reasoning,
+          wireEffort: reasoningEffort,
+          reasoningDisabled,
+          body,
+        });
         let reasoningLog: AdapterRequest["reasoningLog"];
-        if (!reasoningDisabled && !omitReasoningEffortWithTools && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
-          if (nativeOpenAI) {
-            body.reasoning_effort = "none";
-            reasoningLog = {
-              effectiveEffort: "none",
-              wireField: "reasoning_effort",
-              wireValue: "none",
-            };
-          } else {
-            body.reasoning = { enabled: false };
-            reasoningLog = {
-              effectiveEffort: "none",
-              wireField: "reasoning.enabled",
-              wireValue: false,
-            };
-          }
+        if (explicitReasoning.handled) {
+          reasoningLog = explicitReasoning.reasoningLog;
         } else if (reasoningEffort !== undefined) {
-          if (provider.reasoningWireFormat === "gateway-object") {
-            if (nativeOpenAI) {
-              body.reasoning_effort = reasoningEffort;
-              reasoningLog = {
-                effectiveEffort: reasoningEffort,
-                wireField: "reasoning_effort",
-                wireValue: reasoningEffort,
-              };
-            } else {
-              body.reasoning = { enabled: true, effort: reasoningEffort };
-              reasoningLog = {
-                effectiveEffort: reasoningEffort,
-                wireField: "reasoning.effort",
-                wireValue: reasoningEffort,
-              };
-            }
-          } else if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
+          if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
             const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
             if (budget !== undefined) {
               body.thinking_budget = budget;
@@ -249,19 +221,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
 
         if (tools) {
-          if (provider.parallelToolCalls === false) {
-            // NIM documents the Boolean defaulting to false and kimi rejects true; pin the
-            // wire bit so Codex cannot opt in via request.options. Other opted-out providers
-            // omit the field by default so strict OpenAI-compatible hosts never see an
-            // unsupported knob, but a self-hosted gateway that DOES honor the field and keeps
-            // emitting parallel calls without it can opt in via pinParallelToolCallsFalse.
-            if (provider.baseUrl === "https://integrate.api.nvidia.com/v1"
-                || provider.pinParallelToolCallsFalse === true) {
-              body.parallel_tool_calls = false;
-            }
-          } else if (provider.parallelToolCalls === true) {
-            body.parallel_tool_calls = parsed.options.parallelToolCalls !== false;
-          }
+          const parallelToolCalls = chatParallelToolCallsWireValue(provider, parsed.options.parallelToolCalls);
+          if (parallelToolCalls !== undefined) body.parallel_tool_calls = parallelToolCalls;
         }
         if (parsed.stream) body.stream_options = { include_usage: true };
 

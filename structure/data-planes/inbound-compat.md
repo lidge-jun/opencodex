@@ -28,6 +28,20 @@ keep credentials and audio content out of redirects, request logs and durable st
 `tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
 `tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
 
+`src/server/audio-upstream.ts` is also where a configured key's model and provider scope is
+applied, once for every audio surface that resolves through it: the model it is handed is the one
+the upstream will run — the transcription model, the live session model, the model a standalone
+socket names in its own query, or the model a bound call settled on when the same key created it —
+and a refused forward request releases its probe lease. `LiveCallBinding` records that model for
+exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
+
+The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
+records nothing about the calls it relays, so a join, and a call-create that sends no session
+model, name no destination at all; a key carrying a model list is refused there rather than
+admitted against an assumed default, while a provider-only scope and an unscoped key are
+unchanged. Coverage lives in `tests/server/api-key-scope-audio.test.ts` and
+`tests/server/api-key-scope-live.test.ts`.
+
 ## Streaming audio
 
 `src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
@@ -51,9 +65,9 @@ separate. Coverage lives in `tests/server/audio-client.test.ts`,
 `tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
 
 Translated Claude timeline reminders use the Chat adapter's
-[OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
-on its exact supported route. This is separate from trailing-notice stabilization
-and from native Chat message passthrough.
+[chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
+on every destination. This is separate from trailing-notice stabilization and from
+native Chat message passthrough.
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
@@ -80,7 +94,10 @@ take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitte
 parallel tools (or pinned false by the existing provider opt-out contract).
 The native passthrough still applies the existing model capability authority to reasoning: an
 explicit empty ladder removes caller `reasoning_effort`, while an unknown ladder remains
-unclassified. This guard does not alter the separate raw service-tier contract.
+unclassified. The two Chat builders share the explicit wire policy after provider resolution:
+`reasoningWireFormat: "gateway-object"` projects the configured object shape, and a listed
+tool-bearing model omits reasoning effort on both paths. With neither declaration, native raw
+reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.
 
 On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
 tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body
@@ -95,6 +112,21 @@ Combo/policy routes and requests that need Responses-only hosted tools, continua
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
 aliasing as native Responses; see [`responses.md`](../transports/responses.md).
+
+On that bridge, `src/chat/inbound.ts` decides where a `system` or `developer` message lands by
+where the caller wrote it. A leading block, before any conversational item exists, becomes
+`instructions`. One that arrives after the conversation has started becomes a chronological
+`role:"developer"` input item instead, the same representation `src/claude/inbound.ts` mints for a
+mid-conversation instruction, so the slot the caller chose survives to the adapter that preserves
+it. The role is `developer` rather than `system` because the native ChatGPT backend refuses a
+`system` item inside `input` and canonical forwarding folds a message-shaped `system` item back
+onto `instructions`. An instruction that arrives between a tool call and its result is held until
+the batch drains, or until the next user or assistant turn, so the pair the Kiro, Anthropic and
+Google mappers require to stay adjacent is never split. Placement on the wire is then owned by
+[chronological in-conversation instructions](../providers/chat-compat.md#chronological-in-conversation-instructions),
+which also decides which role that slot carries. Regression coverage is in
+`tests/responses/chat-inbound-developer-position.test.ts`, which compares the final upstream body
+on the native Chat route, a combo route and the Responses endpoint.
 
 The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
@@ -334,7 +366,11 @@ default and require an explicit `thinking:{type:"disabled"}` to stop.
 
 The native Chat path retains provider-native file/audio blocks. When a request instead needs
 Chat-to-Responses projection, `src/chat/inbound.ts` rejects recognized audio/file content
-before it can become empty text, regardless of message role. Legacy `function`-role images
+before it can become empty text. The one exception is a `file` part carrying inline base64
+bytes in a `user` message: that projection builds an `input_file` block and the bytes survive
+to any wire with a counterpart. The same part in a `system`, `developer`, `assistant` or
+`tool` message is still refused, because those branches flatten their content to a string.
+Legacy `function`-role images
 also return an explicit error; their call/result pairing is not implemented by this projection.
 Modern `tool` images continue through the existing following-user carrier. These errors state
 an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter

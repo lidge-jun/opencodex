@@ -46,9 +46,9 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 95 total: 79 key-based, 12 OAuth, three local, and one default
+documented split is 96 total: 80 key-based, 12 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
-quickstarts carry the same counts, and the guides carry the same fixed-host discovery limits.
+quickstarts carry the same counts.
 
 That recount is no longer a manual obligation. Seventeen places restate these numbers and sixteen
 of them drifted once already — the English guide reached 95 while every translation and every
@@ -57,6 +57,19 @@ caught it. `tests/ci-workflows/docs-provider-preset-counts.test.ts` now derives 
 key-based split from `PROVIDER_REGISTRY` and asserts them against each page, so the next preset
 fails every locale at once instead of drifting. Each page is located by a locale-specific phrase
 rather than by its number, so rewording a sentence fails the check and asks to be re-anchored.
+
+The fixed-host discovery limits are the same shape one layer down, and this document used to
+assert their parity in prose: it claimed the guides carried the same limits, across sixteen-plus
+files, verified by nobody. That claim was false when it was written — the Korean guide had no
+Featherless section at all, so it documented twelve of the thirteen limited presets.
+`tests/ci-workflows/docs-provider-discovery-limits.test.ts` replaces the claim with the check:
+each section's byte and row ceilings are read from that preset's `modelDiscovery` and asserted
+against every shipped guide, and a grouped section must first agree in the registry before one
+sentence may describe both presets. Sections are located by brand name and the presence of a
+`KiB`/`MiB` token rather than by a translated phrase, because a restated anchor is the same
+hand-copied value the guard exists to remove; a section that is missing or duplicated fails by
+name. The byte ceiling is compared as an exact token set, so a stale number left beside the
+current one fails instead of passing on a substring.
 
 Native retirement keeps active model/quota instructions aligned across locales with the
 [catalog contract](../catalog.md#shared-catalog). Historical records and other providers
@@ -255,6 +268,10 @@ typecheck and GUI build. `scripts/release.ts` accepts either an explicit version
 `scripts/version-line.ts`. It runs local typecheck, `bun test --isolate tests`, and
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
 Release workflow dispatch. Docs publishing is separate from npm release publishing.
+
+The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
+`ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
+publishes SHA-256 sidecars for the attach job.
 
 Opening a release starts with the `dev` pre-move. Dispatch
 `.github/workflows/dev-version-bump.yml` with the intended version, merge the pull request it opens,

@@ -390,6 +390,8 @@ OpenCodex를 업데이트한 뒤 기존 Windows shim에 이 동작을 적용하�
 Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로그인 시 시작되며, 프록시를 원클릭으로
 제어할 수 있습니다. `start`와 `stop`은 아이콘만 제어합니다. 프록시 제어는 메뉴를 사용하세요.
 `--no-start`는 `install`에 적용되며, 트레이를 바로 실행하지 않고 설치합니다.
+지원 중단 예정: OpenCodex 데스크톱 앱이 Windows, macOS, Linux에서 트레이를 제공합니다.
+`ocx tray`는 데스크톱 앱이 없는 설치를 위해 계속 사용할 수 있습니다.
 
 ## 대시보드
 

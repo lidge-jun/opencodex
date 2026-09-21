@@ -32,7 +32,7 @@ function canonicalCommandCodeModelId(modelId: string): string {
 /** Flatten tool-result content for the text-only wire output, keeping an `[image]` marker per image part in content order. */
 function toolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
-  return content.map(part => (part.type === "text" ? part.text : "[image]")).join("");
+  return content.map(part => (part.type === "text" || part.type === "document" ? part.text : "[image]")).join("");
 }
 
 /** Best-effort media type from a remote https URL extension, e.g. image/png. */
@@ -149,6 +149,7 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
     else for (const part of message.content) {
       if (part.type === "text") content.push({ type: "text", text: part.text });
       else if (part.type === "image") content.push(wireImagePart(part.imageUrl));
+      else if (part.type === "document") content.push({ type: "text", text: part.text });
       else content.push({ type: "text", text: "[video]" });
     }
     out.push({ role: "user", content });

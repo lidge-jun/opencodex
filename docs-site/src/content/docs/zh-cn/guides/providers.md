@@ -101,7 +101,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用独立的 Grok CLI 订阅网关。API 密钥覆盖模式使用 `https://api.x.ai/v1`，并可能注入 Priority Processing。优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 编程模型。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan 编程模型。默认使用稳定的 `kimi-for-coding` 别名（当前指向 K2.8 Preview）：100 万 token 上下文、可调 `low`/`high`/`max` 思考档（默认 `max`）、支持文本 + 图片输入。已下架的 `kimi-k2.x` 选择会在升级时自动迁移到该别名。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 订阅网关（与 Hermes Agent 使用同一后端）。通过设备授权登录 `portal.nousresearch.com`；access 令牌是每个请求的 inference JWT。付费 + `:free` 模型混合目录（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）会从已登录账户实时发现。Refresh 令牌是单次使用，每次刷新都会轮换。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
@@ -173,7 +173,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 95 个预设：79 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 96 个预设：80 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 

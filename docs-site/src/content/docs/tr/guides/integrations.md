@@ -281,6 +281,34 @@ doğrulanmıştır; neyin ne zaman denetlendiğine ilişkin
 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` içindeki
 araştırma notlarına bakın.
 
+## ZCode 3.14 ve sonrası
+
+ZCode 3.14 özel sağlayıcılarını `~/.zcode/v2/provider_config.json` dosyasına taşıdı; bu
+entegrasyonun yazdığı `~/.zcode/v2/config.json` dosyasına artık yalnızca, yeni dosya yokken bir kez
+çalışan bir içe aktarma üzerinden ulaşıyor. ZCode yeni dosyayı ilk çalıştırmada oluşturduğu için,
+bir kez bile başlatılmış her kurulumda bu içe aktarma çoktan tükenmiştir ve `config.json` dosyasına
+yazmak hiçbir şeye ulaşmaz.
+
+opencodex artık mümkün olduğunda `provider_config.json` dosyasını doğrudan yazıyor. Entegrasyonu
+etkinleştirmek bu dosyaya `opencodex` sağlayıcı kuralını ekler, katalog yenilemesi onu günceller ve
+devre dışı bırakmak opencodex'in oraya koyduğu şeyi tam olarak kaldırır. Dosyadaki diğer her kural
+olduğu gibi kalır; buna başka bir sağlayıcının, bizde de bulunan bir model kimliği için tuttuğu
+kural da dahildir. opencodex'in yazmadığı, `opencodex` kimliğini taşıyan bir kural devralınacak bir
+şey değil, bir çakışmadır: ZCode içinde çözün ya da açık üzerine yazmayı kullanın.
+
+İki durum hâlâ yazmak yerine reddeder. ZCode deposunu taşımadan önce opencodex'in yazdığı bir blok,
+entegrasyonu `config.json` üzerinde tutar: önce orada devre dışı bırakın, sonra yeni depoyu yazmak
+için yeniden etkinleştirin. `schemaVersion` değeri opencodex'in gözlemlediklerinden biri olmayan
+bir `provider_config.json` ise birleştirilmez, bildirilir: o dosya ZCode'un tüm sağlayıcılarını
+tutar ve oraya bir şekil dayatmak sessiz bir etkisizliği sessiz bir kayıpla değiştirirdi. Durum
+ekranı, entegrasyon o dosyayı yazmadığı her durumda ZCode'un okuduğu dosyayı adlandırır.
+
+Bu ikinci durumda sağlayıcıyı ZCode'un kendi ayarlarından ekleyin: temel URL
+`http://127.0.0.1:10100/v1` (bağlantı noktasını kendi bağınıza göre ayarlayın), boş olmayan
+herhangi bir anahtar ve `ocx export --client zcode` çıktısındaki model kimlikleri. ZCode'un içe
+aktarmasını yeniden tetiklemek için `provider_config.json` dosyasını silmek desteklenmez: bu,
+ZCode'un orada sakladığı tüm sağlayıcıları yok eder.
+
 ## Cline CLI
 
 Cline CLI providers.json ve models.json kullanır. Değişiklik veya eşitleme öncesinde Cline’ı kapatın, sonra yeniden başlatın. Geri al iki özgün dosyayı geri yükler. Varsayılan sağlayıcı değişmez. Eski VS Code uzantısının depolaması taşınmaz.

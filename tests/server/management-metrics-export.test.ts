@@ -16,7 +16,15 @@ import {
   type RequestLogContext,
   type RequestLogEntry,
 } from "../../src/server/request-log";
-import { createRequestMetricsOwner } from "../../src/server/request-metrics";
+import {
+  createRequestMetricsOwner,
+  REQUEST_DURATION_BUCKETS_SECONDS,
+  REQUEST_METRICS_PROTOCOLS,
+  REQUEST_METRICS_RECOVERY_CLASSES,
+  REQUEST_METRICS_FAILURE_CAUSES,
+  REQUEST_METRICS_RESULTS,
+  REQUEST_TTFT_BUCKETS_SECONDS,
+} from "../../src/server/request-metrics";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import type { AttemptRecoveryKind } from "../../src/usage/log";
@@ -339,6 +347,31 @@ describe("request metrics aggregation", () => {
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="rate_limit"}')).toBe(2);
   });
 
+  test("the four refusals an operator responds to differently get four different classes", () => {
+    const metrics = createRequestMetricsOwner(123);
+    addFinalRequestLog("refusal-classes", Date.now() - 1_000, {
+      model: "m", provider: "p", inboundProtocol: "responses", requestMetricsRecorder: metrics,
+      attempts: [
+        attempt(1, ["opaque-blob-rejection"]),
+        { ...attempt(1, ["rate-limit-429"]), ordinal: 2 },
+        { ...attempt(1, ["reasoning-effort-downgrade"]), ordinal: 3 },
+        { ...attempt(1, ["image-413"]), ordinal: 4 },
+      ],
+    } as RequestLogContext, 400, undefined, () => {});
+
+    const output = metrics.snapshot();
+    // A rejected opaque blob is a ciphertext refusal, not a payload problem: the payload was fine
+    // and the stale encrypted state was not. Counting it as payload alongside an oversize image
+    // told an operator to look at the wrong thing.
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="ciphertext"}')).toBe(1);
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="payload"}')).toBe(1);
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="rate_limit"}')).toBe(1);
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="effort_downgrade"}')).toBe(1);
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="quota"}')).toBe(0);
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="policy"}')).toBe(0);
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="other"}')).toBe(0);
+  });
+
   test("a failed terminal carried over HTTP 200 is never counted as completed", () => {
     const metrics = createRequestMetricsOwner(123);
     metrics.recordFinalRequest({
@@ -405,6 +438,7 @@ describe("request metrics aggregation", () => {
       toolBody: canaries[8],
     } as unknown as RequestLogContext;
     addFinalRequestLog(canaries[0]!, Date.now() - 1, logCtx, 400, undefined, () => {});
+    const beforeFanOut = metrics.snapshot().split("\n").filter(line => line && !line.startsWith("#")).length;
     for (let index = 0; index < 64; index += 1) {
       addFinalRequestLog(`request-${index}`, Date.now() - 1, {
         model: `model-${index}`,
@@ -417,7 +451,24 @@ describe("request metrics aggregation", () => {
     const output = metrics.snapshot();
     for (const canary of canaries) expect(output).not.toContain(canary);
     const samples = output.split("\n").filter(line => line && !line.startsWith("#"));
-    expect(samples).toHaveLength(453);
+    // The property, stated directly: 64 requests carrying 64 distinct models, providers, keys and
+    // account labels add no series at all. A dynamic label map would show up here as growth.
+    expect(samples).toHaveLength(beforeFanOut);
+    // And the absolute size, derived from the closed vocabularies rather than restated as a
+    // literal. The literal was correct and went stale the moment a bounded label value was added,
+    // which is the failure mode this repository keeps hitting in merges.
+    const perHistogram = (bounds: readonly number[]): number => bounds.length + 1 + 2;
+    const cells = REQUEST_METRICS_PROTOCOLS.length * REQUEST_METRICS_RESULTS.length;
+    expect(samples).toHaveLength(
+      cells
+      + REQUEST_METRICS_PROTOCOLS.length
+      + REQUEST_METRICS_PROTOCOLS.length * REQUEST_METRICS_RECOVERY_CLASSES.length
+      + REQUEST_METRICS_PROTOCOLS.length * REQUEST_METRICS_FAILURE_CAUSES.length
+      + cells * perHistogram(REQUEST_DURATION_BUCKETS_SECONDS)
+      + cells * perHistogram(REQUEST_TTFT_BUCKETS_SECONDS)
+      + cells
+      + 1,
+    );
   });
 
   test("text exposition has deterministic HELP/TYPE groups and cumulative +Inf buckets", () => {
@@ -431,10 +482,15 @@ describe("request metrics aggregation", () => {
       .toBeLessThan(output.indexOf("opencodex_request_duration_seconds_bucket"));
     const helpLines = output.split("\n").filter(line => line.startsWith("# HELP "));
     const typeLines = output.split("\n").filter(line => line.startsWith("# TYPE "));
-    expect(helpLines).toHaveLength(7);
-    expect(typeLines).toHaveLength(7);
-    expect(new Set(helpLines.map(line => line.split(" ")[2])).size).toBe(7);
-    expect(new Set(typeLines.map(line => line.split(" ")[2])).size).toBe(7);
+    // Every metric name the exporter emits, read from the exposition rather than counted by
+    // hand: the literal was correct until a metric was added, which is the same staleness the
+    // sample arithmetic above avoids.
+    const metricNames = new Set(helpLines.map(line => line.split(" ")[2]));
+    expect(helpLines).toHaveLength(metricNames.size);
+    expect(typeLines).toHaveLength(metricNames.size);
+    expect(new Set(typeLines.map(line => line.split(" ")[2]))).toEqual(metricNames);
+    // Each name appears exactly once in each group, which is what deterministic grouping means.
+    expect(helpLines.length).toBeGreaterThan(REQUEST_METRICS_PROTOCOLS.length);
     expect(sampleValue(output, 'opencodex_request_duration_seconds_bucket{protocol="responses",result="completed",le="+Inf"}'))
       .toBe(sampleValue(output, 'opencodex_request_duration_seconds_count{protocol="responses",result="completed"}'));
     expect(metrics.snapshot()).toBe(output);

@@ -1,13 +1,40 @@
 import type { ResponsesTerminalStatus } from "../bridge";
 import type { AttemptRecoveryKind } from "../usage/log";
+import {
+  REQUEST_FAILURE_CAUSES,
+  type RequestFailureCause,
+  causeForRecoveryKind,
+} from "../lib/request-failure-model";
+import {
+  REQUEST_OUTCOME_CLASSES,
+  classifyRequestOutcome,
+  type RequestOutcomeClass,
+} from "../usage/request-outcome";
 
 export const REQUEST_METRICS_PROTOCOLS = Object.freeze(["responses", "chat", "messages", "unknown"] as const);
-export const REQUEST_METRICS_RESULTS = Object.freeze(["completed", "failed", "incomplete", "aborted"] as const);
+/**
+ * The exporter's result label set IS the shared outcome vocabulary, not a copy of it. Restating
+ * these four strings here is what let the exporter and the dashboard drift into disagreeing about
+ * the same request.
+ */
+export const REQUEST_METRICS_RESULTS = REQUEST_OUTCOME_CLASSES;
+/**
+ * Closed recovery classes exported as Prometheus label values.
+ *
+ * Bounded by construction: the label can only ever take one of these strings, so no user, model,
+ * account or request identifier can reach a series name. `quota`, `policy` and `ciphertext` are
+ * separate members because an operator seeing a spike needs to know which one it is -- waiting
+ * out a rate limit, changing accounts, changing the prompt and dropping stale ciphertext are
+ * four different responses, and collapsing them is what made the existing counter unactionable.
+ */
 export const REQUEST_METRICS_RECOVERY_CLASSES = Object.freeze([
   "transient",
   "connection",
   "credential",
   "rate_limit",
+  "quota",
+  "policy",
+  "ciphertext",
   "payload",
   "empty_completion",
   "effort_downgrade",
@@ -17,8 +44,20 @@ export const REQUEST_METRICS_RECOVERY_CLASSES = Object.freeze([
 export const REQUEST_DURATION_BUCKETS_SECONDS = Object.freeze([0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60] as const);
 export const REQUEST_TTFT_BUCKETS_SECONDS = Object.freeze([0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30] as const);
 
+/**
+ * The failure-cause label set IS the shared dictionary, for the same reason the result label set
+ * is the shared outcome vocabulary: a restated copy is what let two surfaces drift into
+ * disagreeing about the same request.
+ *
+ * It labels a COUNTER and never a histogram. Fifteen causes across four protocols is sixty
+ * series, fixed for the lifetime of the roster, and every value comes from a frozen list, so no
+ * user, model, account or request identifier can reach a series name. A histogram labelled by
+ * cause would multiply that by its bucket count for no question anyone asks.
+ */
+export const REQUEST_METRICS_FAILURE_CAUSES = REQUEST_FAILURE_CAUSES;
+
 export type RequestMetricsProtocol = typeof REQUEST_METRICS_PROTOCOLS[number];
-export type RequestMetricsResult = typeof REQUEST_METRICS_RESULTS[number];
+export type RequestMetricsResult = RequestOutcomeClass;
 export type RequestMetricsRecoveryClass = typeof REQUEST_METRICS_RECOVERY_CLASSES[number];
 
 export interface RequestMetricFinalFact {
@@ -33,6 +72,11 @@ export interface RequestMetricFinalFact {
     recoveryKinds: readonly AttemptRecoveryKind[];
   }>;
   spendSends?: number;
+  /**
+   * Why this request failed, as the recorder derived it. Absent when it did not fail, which is
+   * why the counter below cannot be reconstructed by subtracting completions from totals.
+   */
+  failureCause?: RequestFailureCause;
 }
 
 export interface RequestMetricsRecorder {
@@ -56,6 +100,7 @@ interface HistogramCell {
 const protocolCell = (value: RequestMetricsProtocol): number => REQUEST_METRICS_PROTOCOLS.indexOf(value);
 const resultCell = (value: RequestMetricsResult): number => REQUEST_METRICS_RESULTS.indexOf(value);
 const recoveryCell = (value: RequestMetricsRecoveryClass): number => REQUEST_METRICS_RECOVERY_CLASSES.indexOf(value);
+const failureCauseCell = (value: RequestFailureCause): number => REQUEST_METRICS_FAILURE_CAUSES.indexOf(value);
 
 function matrix(rows: number, columns: number): number[][] {
   return Array.from({ length: rows }, () => Array.from({ length: columns }, () => 0));
@@ -71,35 +116,34 @@ function histograms(bounds: readonly number[]): HistogramCell[][] {
   ));
 }
 
-function classifyResult(fact: RequestMetricFinalFact): RequestMetricsResult {
-  if (fact.closeReason === "client_cancel" || fact.status === 499) return "aborted";
-  if (fact.terminalStatus === "failed") return "failed";
-  if (fact.terminalStatus === "incomplete"
-    || fact.closeReason === "body_stall"
-    || fact.closeReason === "body_overflow") return "incomplete";
-  if (fact.terminalStatus === "completed") return "completed";
-  if (fact.terminalStatus === undefined
-    && (fact.status === 101 || (fact.status >= 200 && fact.status < 400))) return "completed";
-  return "failed";
-}
+/**
+ * Metrics class for each shared failure cause.
+ *
+ * Keyed on the cause rather than on the recovery kind so this projection and the durable log
+ * speak one vocabulary. Total by construction: the previous switch ended in `default: "other"`,
+ * which meant a recovery kind added later compiled cleanly and then disappeared into an
+ * unactionable bucket. A missing member is now a typecheck failure.
+ */
+const CAUSE_METRICS_CLASS = {
+  "transport-unsent": "connection",
+  "transport-ambiguous": "connection",
+  "upstream-declined": "transient",
+  "rate-limit": "rate_limit",
+  "quota-exhausted": "quota",
+  "credential-rejected": "credential",
+  "policy-refusal": "policy",
+  "parameter-rejected": "effort_downgrade",
+  "ciphertext-refusal": "ciphertext",
+  "payload-too-large": "payload",
+  "payload-rejected": "payload",
+  "upstream-fault": "transient",
+  "empty-output": "empty_completion",
+  "client-cancelled": "other",
+  "local-refusal": "other",
+} as const satisfies Record<RequestFailureCause, RequestMetricsRecoveryClass>;
 
 function recoveryClass(kind: AttemptRecoveryKind): RequestMetricsRecoveryClass {
-  switch (kind) {
-    case "transient-5xx": return "transient";
-    case "connection-reset": return "connection";
-    case "oauth-401":
-    case "key-401": return "credential";
-    case "key-429":
-    case "rate-limit-429":
-    case "anthropic-oauth-429":
-    case "oauth-account-429": return "rate_limit";
-    case "image-413":
-    case "console-go-upload-retry":
-    case "opaque-blob-rejection": return "payload";
-    case "empty-completion": return "empty_completion";
-    case "reasoning-effort-downgrade": return "effort_downgrade";
-    default: return "other";
-  }
+  return CAUSE_METRICS_CLASS[causeForRecoveryKind(kind)];
 }
 
 function observeHistogram(cell: HistogramCell, bounds: readonly number[], value: number): void {
@@ -145,6 +189,7 @@ export function createRequestMetricsOwner(
   let logicalRequests = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RESULTS.length);
   let physicalSends = Array.from({ length: REQUEST_METRICS_PROTOCOLS.length }, () => 0);
   let recoveries = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RECOVERY_CLASSES.length);
+  let failureCauses = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_FAILURE_CAUSES.length);
   let durations = histograms(REQUEST_DURATION_BUCKETS_SECONDS);
   let ttft = histograms(REQUEST_TTFT_BUCKETS_SECONDS);
   let missingTtft = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RESULTS.length);
@@ -152,7 +197,7 @@ export function createRequestMetricsOwner(
   return {
     recordFinalRequest(fact): void {
       const protocol: RequestMetricsProtocol = fact.protocol ?? "unknown";
-      const result = classifyResult(fact);
+      const result = classifyRequestOutcome(fact);
       const protocolIndex = protocolCell(protocol);
       const resultIndex = resultCell(result);
       logicalRequests[protocolIndex]![resultIndex]! += 1;
@@ -164,6 +209,13 @@ export function createRequestMetricsOwner(
           Number.isInteger(attempt.sendCount) && attempt.sendCount >= 0 ? total + attempt.sendCount : total
         ), 0);
       physicalSends[protocolIndex]! += sends;
+
+      // Counted from the cause the recorder derived, not re-derived here. Two derivations of one
+      // answer is the disagreement this batch exists to remove, and the recorder is the only
+      // place that sees the transport facts a cause needs.
+      if (fact.failureCause !== undefined) {
+        failureCauses[protocolIndex]![failureCauseCell(fact.failureCause)]! += 1;
+      }
 
       for (const attempt of attempts ?? []) {
         for (const kind of new Set(attempt.recoveryKinds)) {
@@ -205,6 +257,15 @@ export function createRequestMetricsOwner(
           lines.push(`opencodex_recoveries_total{protocol="${protocol}",recovery="${recovery}"} ${recoveries[protocolCell(protocol)]![recoveryCell(recovery)]}`);
         }
       }
+      lines.push(
+        "# HELP opencodex_request_failures_total Finalized logical requests that did not deliver an answer, by derived cause.",
+        "# TYPE opencodex_request_failures_total counter",
+      );
+      for (const protocol of REQUEST_METRICS_PROTOCOLS) {
+        for (const cause of REQUEST_METRICS_FAILURE_CAUSES) {
+          lines.push(`opencodex_request_failures_total{protocol="${protocol}",cause="${cause}"} ${failureCauses[protocolCell(protocol)]![failureCauseCell(cause)]}`);
+        }
+      }
       appendHistogram(lines, "opencodex_request_duration_seconds", "Finalized logical request duration in seconds.", durations, REQUEST_DURATION_BUCKETS_SECONDS);
       appendHistogram(lines, "opencodex_ttft_seconds", "Observed time to first output in seconds.", ttft, REQUEST_TTFT_BUCKETS_SECONDS);
       lines.push(
@@ -228,6 +289,7 @@ export function createRequestMetricsOwner(
       logicalRequests = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RESULTS.length);
       physicalSends = Array.from({ length: REQUEST_METRICS_PROTOCOLS.length }, () => 0);
       recoveries = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RECOVERY_CLASSES.length);
+      failureCauses = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_FAILURE_CAUSES.length);
       durations = histograms(REQUEST_DURATION_BUCKETS_SECONDS);
       ttft = histograms(REQUEST_TTFT_BUCKETS_SECONDS);
       missingTtft = matrix(REQUEST_METRICS_PROTOCOLS.length, REQUEST_METRICS_RESULTS.length);

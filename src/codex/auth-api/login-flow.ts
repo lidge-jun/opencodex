@@ -226,9 +226,12 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
     // machine. Opening it on the hub host is useless at best, and on a
     // headless host it fails. `deviceCode` is the same signal the generic
     // OAuth login route uses to make this decision.
+    // Reported to the caller rather than discarded (#5261): a login whose browser never opened
+    // is indistinguishable from one that did, so it reads as success while nothing happens.
+    let browserLaunch: "started" | "failed" | "skipped" = "skipped";
     if (result.url && !result.deviceCode && shouldOpenBrowserForLogin(body.openBrowser, runtimeConfig)) {
       const { openUrl } = await import("../../lib/open-url");
-      openUrl(result.url);
+      browserLaunch = (await openUrl(result.url)).status === "started" ? "started" : "failed";
     }
 
     (async () => {
@@ -488,6 +491,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
       flowId,
       url: result.url,
       instructions: result.instructions,
+      // Never fatal: the URL is still a valid thing to open by hand, and the flow stays live.
+      browserLaunch,
       // Dropped before #3366: every device-code surface renders this field,
       // so withholding it left the GUI and CLI with no code to show.
       ...(result.deviceCode ? { deviceCode: result.deviceCode } : {}),

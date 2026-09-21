@@ -8,7 +8,7 @@ namespace handling retain their provider contract; the bounded native scope live
 [the shared catalog](../catalog.md#shared-catalog).
 
 Cursor's direct adapter does not enter the OpenAI Chat serializer's
-[OpenCode Go instruction ordering](chat-compat.md#opencode-go-chronological-instructions).
+[chronological instruction ordering](chat-compat.md#chronological-in-conversation-instructions).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 

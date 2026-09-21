@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../../base-url-choice";
 import { readJsonIfOk } from "../../fetch-json";
+import { confirmAction } from "../../action-dialogs";
 import { createBoundedFetch } from "../../bounded-fetch";
 import { startVisibilityPoll } from "../../visibility-poll";
 import { useT } from "../../i18n/shared";
@@ -295,6 +296,23 @@ export default function ProviderSettings({
     }
   };
 
+  /**
+   * Asks before switching, because flipping modes rebinds running threads and changes quota
+   * accounting. Written as a named async function rather than a promise chain inside the
+   * handler: a floating `.then` in a JSX handler has no rejection path and is what
+   * `no-floating-then-in-jsx-handler` exists to catch.
+   */
+  const requestAccountMode = async (next: "pool" | "direct", select: HTMLSelectElement) => {
+    if (await confirmAction({ message: t("pws.accountModeConfirm") })) {
+      await applyAccountMode(next);
+      return;
+    }
+    // Keep the visible choice aligned with the applied mode. React re-renders this
+    // controlled <select> only when `accountMode` changes, and a refusal leaves it
+    // unchanged, so the declined option would otherwise stay shown.
+    select.value = accountMode;
+  };
+
   const discard = () => {
     setAdapter(item.adapter); setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? ""); setAuthMode(initialAuth);
@@ -415,14 +433,8 @@ export default function ProviderSettings({
             onChange={e => {
               const next = e.target.value as "pool" | "direct";
               if (next === accountMode) return;
-              // Flipping modes rebinds running threads and changes quota accounting,
-              // so the PATCH only fires after an explicit confirmation.
-              if (!window.confirm(t("pws.accountModeConfirm"))) {
-                // Keep the visible choice aligned with the applied mode.
-                e.target.value = accountMode;
-                return;
-              }
-              void applyAccountMode(next);
+              // currentTarget is read here: it is null once the handler resumes after an await.
+              void requestAccountMode(next, e.currentTarget);
             }}
           >
             <option value="pool">{t("codexAuth.accountModePool")}</option>

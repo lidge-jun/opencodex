@@ -1,4 +1,5 @@
 import type { OcxContentPart, OcxTextContent } from "../types";
+import { inlineDocumentFromDataUrl } from "./inline-document";
 
 export function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -90,8 +91,13 @@ export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
       if (fileId) {
         parts.push({ type: "text", text: `[file: ${fileId}]` });
       } else if (fileData) {
-        // Inline file_data is often large base64. Preserve only its presence and name, never bytes.
-        parts.push({ type: "text", text: filename ? `[file: ${filename}]` : "[file: inline data]" });
+        // Inline bytes used to be reduced to a name here, which meant no adapter could forward
+        // the attachment even to a target that has a representation for it, and a title-only
+        // forward came back as a confident answer about a document the model never saw (#5212).
+        // The marker survives on the part for every wire that still cannot carry one. Bytes with
+        // no declared media type are not decodable into a document and keep the marker they had.
+        const document = inlineDocumentFromDataUrl(fileData, filename);
+        parts.push(document ?? { type: "text", text: filename ? `[file: ${filename}]` : "[file: inline data]" });
       }
       // A bare filename is not a file resource in the Responses schema, so omit it rather than
       // fabricating a "[file: ...]" marker for an attachment that was never sent.
