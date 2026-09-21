@@ -125,13 +125,23 @@ describe("the one-port hub recipe", () => {
 
   test("both locales warn that the companion requires a dedicated host", async () => {
     const warnings = [
-      ["en", GUIDE, "every process and OS user", "shared or multi-tenant host"],
-      ["ko", KO_GUIDE, "모든 프로세스와 OS 사용자", "공유 또는 다중 테넌트 호스트에서는 활성화하지 마세요"],
+      ["en", GUIDE, "every process and OS user", "shared or multi-tenant host", "dedicated single-tenant host", "Do not enable"],
+      ["ko", KO_GUIDE, "모든 프로세스와 OS 사용자", "공유 또는 다중 테넌트 호스트에서는 활성화하지 마세요", "전용 단일 테넌트 호스트", "활성화하지 마세요"],
     ] as const;
-    for (const [locale, file, localAccess, sharedHost] of warnings) {
+    for (const [locale, file, localAccess, sharedHost, dedicated, doNotEnable] of warnings) {
       const source = await Bun.file(file).text();
       expect(source, locale).toContain(localAccess);
       expect(source, locale).toContain(sharedHost);
+      expect(source, locale).toContain(dedicated);
+      expect(source, locale).toContain(doNotEnable);
+      // The warning must render as a danger box, not flow past as ordinary prose.
+      expect(source, locale).toContain(":::danger");
+      // The same unauthenticated surface is offered again by the ported form; the warning
+      // must reach that command too, or a reader following only that section misses it.
+      const ported = source.indexOf('"port":10104');
+      expect(ported, locale).toBeGreaterThan(-1);
+      const after = source.slice(ported, ported + 600);
+      expect(after, locale).toMatch(/unauthenticated|인증/);
     }
   });
 
