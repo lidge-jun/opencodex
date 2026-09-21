@@ -615,6 +615,17 @@ describe("legacy pool contract goldens (#wp5)", () => {
       const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
       return resp!.status;
     };
+    const previousHome = process.env.OPENCODEX_HOME;
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-pool-validator-"));
+    process.env.OPENCODEX_HOME = testDir;
+    saveConfig({
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" },
+      },
+    } as OcxConfig);
     const server = startServer(0);
     try {
       const oauth = async (payload: Record<string, unknown>) => {
@@ -623,11 +634,14 @@ describe("legacy pool contract goldens (#wp5)", () => {
         });
         return res.status;
       };
-      for (const strategy of ["weighted", "", 3, null]) {
+      for (const strategy of ["weighted", "", 3]) {
         expect(await codex({ strategy })).toBe(400);
         expect(await oauth({ provider: "anthropic", strategy })).toBe(400);
         expect(await oauth({ provider: "google-antigravity", strategy })).toBe(400);
       }
+      expect(await codex({ strategy: null })).toBe(400);
+      expect(await oauth({ provider: "anthropic", strategy: null })).toBe(400);
+      expect(await oauth({ provider: "google-antigravity", strategy: null })).toBe(200);
       // 0 and 101 sit just outside the shared bound; 1 and 100 are the edges that must pass.
       for (const stickyLimit of [0, 101, 1.5]) {
         expect(await codex({ stickyLimit })).toBe(400);
@@ -639,6 +653,9 @@ describe("legacy pool contract goldens (#wp5)", () => {
       }
     } finally {
       await server.stop(true);
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(testDir);
     }
   });
 
