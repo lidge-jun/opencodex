@@ -1,4 +1,9 @@
-use crate::{formatting, proxy::ProxyClient, updater, widget, window};
+use crate::{
+    exit::{self, ExitReason},
+    formatting,
+    proxy::ProxyClient,
+    updater, widget, window,
+};
 use serde_json::Value;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -13,13 +18,15 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
 pub struct TrayState {
-    pub menu: Mutex<Option<UpdateMenu>>,
+    pub menu: Mutex<Option<TrayMenu>>,
     pub installing: AtomicBool,
 }
 
-pub struct UpdateMenu {
+#[derive(Clone)]
+pub struct TrayMenu {
     check_updates: MenuItem<Wry>,
     install_update: MenuItem<Wry>,
+    stop: MenuItem<Wry>,
 }
 
 impl Default for TrayState {
@@ -31,7 +38,11 @@ impl Default for TrayState {
     }
 }
 
-pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
+/// Build the tray.
+///
+/// The proxy is not passed in. The tray is installed before a runtime has been resolved, so every
+/// use reads the current client from the app instead of holding one that might not exist yet.
+pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open-dashboard", "Open Dashboard", true, None::<&str>)?;
     let browser = MenuItem::with_id(app, "open-browser", "Open in Browser", true, None::<&str>)?;
     let login = CheckMenuItem::with_id(
@@ -42,12 +53,12 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let spawned_by_us = app
-        .state::<crate::AppState>()
-        .spawned_by_us
-        .load(Ordering::Relaxed);
-    let stop = MenuItem::with_id(app, "stop-proxy", "Stop proxy", spawned_by_us, None::<&str>)?;
-    let stop_item = stop.clone();
+    // The tray is built before the startup sequence has decided anything, so nothing owns a
+    // runtime yet. Ownership arrives later and reaches this item through [`set_owned`].
+    let owned = app
+        .try_state::<crate::AppState>()
+        .is_some_and(|state| state.owns_runtime());
+    let stop = MenuItem::with_id(app, "stop-proxy", "Stop proxy", owned, None::<&str>)?;
     let check_updates = MenuItem::with_id(
         app,
         "check-updates",
@@ -74,9 +85,10 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
         ],
     )?;
     if let Ok(mut state) = app.state::<TrayState>().menu.lock() {
-        *state = Some(UpdateMenu {
+        *state = Some(TrayMenu {
             check_updates: check_updates.clone(),
             install_update: install_update.clone(),
+            stop: stop.clone(),
         });
     }
 
@@ -103,7 +115,13 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
                 }
             }
             "open-browser" => {
-                let endpoint = app.state::<crate::AppState>().proxy.endpoint();
+                let Some(endpoint) = app
+                    .state::<crate::AppState>()
+                    .proxy()
+                    .map(|proxy| proxy.endpoint())
+                else {
+                    return;
+                };
                 let _ = app
                     .opener()
                     .open_url(format!("{}#/usage", endpoint.url("/")), None::<String>);
@@ -117,31 +135,9 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
                 }
             }
             "stop-proxy" => {
-                if app
-                    .state::<crate::AppState>()
-                    .spawned_by_us
-                    .load(Ordering::Relaxed)
-                {
-                    let proxy = app.state::<crate::AppState>().proxy.clone();
-                    let app = app.clone();
-                    let stop_item = stop_item.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let mut stopped = proxy.stop().await.is_ok();
-                        for _ in 0..10 {
-                            if stopped || proxy.is_alive().await.is_err() {
-                                stopped = true;
-                                break;
-                            }
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        }
-                        if stopped {
-                            app.state::<crate::AppState>().shutdown_child();
-                            let _ = stop_item.set_enabled(false);
-                        } else {
-                            eprintln!("tray: proxy still answering /healthz after stop request");
-                        }
-                    });
-                }
+                // Through the coordinator, not beside it: Stop pressed twice, Stop then Quit, and
+                // Stop during an update all have to be one execution over one child.
+                exit::request_stop(app);
             }
             "check-updates" => {
                 let app = app.clone();
@@ -175,18 +171,26 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
                     }
                 });
             }
-            "quit" => app.exit(0),
+            // The only gesture that ends the app. It does not call `exit` itself: the coordinator
+            // holds the exit, drains an app-owned runtime and only then lets the process end.
+            "quit" => exit::request(app, ExitReason::UserQuit),
             _ => {}
         })
         .build(app)?;
 
-    refresh_title(&tray, &proxy);
-    widget::refresh(&proxy);
+    refresh(app, &tray);
     let tray = tray.clone();
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut tick = 0;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let Some(proxy) = app
+                .try_state::<crate::AppState>()
+                .and_then(|state| state.proxy())
+            else {
+                continue;
+            };
             refresh_title(&tray, &proxy);
             tick += 1;
             if tick % 5 == 0 {
@@ -197,30 +201,52 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
     Ok(())
 }
 
+fn refresh(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>) {
+    let Some(proxy) = app
+        .try_state::<crate::AppState>()
+        .and_then(|state| state.proxy())
+    else {
+        return;
+    };
+    refresh_title(tray, &proxy);
+    widget::refresh(&proxy);
+}
+
+/// Take a copy of the menu handles, holding the lock only for the copy.
+///
+/// Every Tauri menu setter dispatches to the main thread and waits for it. The tray is built *on*
+/// the main thread and takes this same mutex while doing so, so calling a setter with the lock held
+/// is a cycle: a background update owns the mutex and waits for the main thread, and the main
+/// thread waits for the mutex. The app would stop answering Quit.
+fn menu_handles(app: &AppHandle) -> Option<TrayMenu> {
+    let state = app.try_state::<TrayState>()?;
+    let handles = state.menu.lock().ok()?;
+    handles.as_ref().cloned()
+}
+
+/// Reflect who owns the runtime in the tray's Stop item.
+pub fn set_owned(app: &AppHandle, owned: bool) {
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu.stop.set_enabled(owned);
+    }
+}
+
 pub fn show_update_available(app: &AppHandle, version: &str) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu.install_update.set_text(updater::update_label(version));
-                let _ = menu.install_update.set_enabled(true);
-                let _ = menu.check_updates.set_enabled(true);
-                let _ = menu.check_updates.set_text("Check for Updates…");
-            }
-        }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu.install_update.set_text(updater::update_label(version));
+        let _ = menu.install_update.set_enabled(true);
+        let _ = menu.check_updates.set_enabled(true);
+        let _ = menu.check_updates.set_text("Check for Updates…");
     }
 }
 
 pub fn show_up_to_date(app: &AppHandle) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu
-                    .check_updates
-                    .set_text(format!("Up to date (v{})", env!("CARGO_PKG_VERSION")));
-                let _ = menu.check_updates.set_enabled(true);
-                let _ = menu.install_update.set_enabled(false);
-            }
-        }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu
+            .check_updates
+            .set_text(format!("Up to date (v{})", env!("CARGO_PKG_VERSION")));
+        let _ = menu.check_updates.set_enabled(true);
+        let _ = menu.install_update.set_enabled(false);
     }
 }
 
@@ -232,15 +258,13 @@ pub fn is_installing(app: &AppHandle) -> bool {
 fn set_installing(app: &AppHandle, version: &str) {
     if let Some(state) = app.try_state::<TrayState>() {
         state.installing.store(true, Ordering::Release);
-        if let Ok(menu) = state.menu.lock() {
-            if let Some(menu) = menu.as_ref() {
-                let _ = menu
-                    .install_update
-                    .set_text(format!("Installing update v{version}…"));
-                let _ = menu.install_update.set_enabled(false);
-                let _ = menu.check_updates.set_enabled(false);
-            }
-        }
+    }
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu
+            .install_update
+            .set_text(format!("Installing update v{version}…"));
+        let _ = menu.install_update.set_enabled(false);
+        let _ = menu.check_updates.set_enabled(false);
     }
 }
 
