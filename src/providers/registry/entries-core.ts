@@ -472,8 +472,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.kimi.com/coding/v1",
     authKind: "oauth",
     modelSuffixBracketStrip: true,
-    // Same wire-capability defaults as the Chat preset; promptCacheKey is a stable
-    // session/task key Kimi documents for cache affinity on both wires.
+    // Same wire-capability defaults as the Chat preset. promptCacheKey is copied here
+    // deliberately even though only the Chat adapter reads it today: the field is a
+    // stable session/task key Kimi documents for cache affinity, and the Responses
+    // endpoint already accepts it (live probe 260921: prompt_cache_key round-trips 200).
     promptCacheKey: true,
     // Kimi's Responses endpoint rejects hook-provided context between a tool call and
     // its matching result (#4726); the flag is live on this wire.
