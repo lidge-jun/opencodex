@@ -144,7 +144,7 @@ test("every HTTP surface answers an ambiguous reset with one send and no client 
     { name: "native Chat", path: "/v1/chat/completions", body: { model: "native/model", ...CHAT_TURN } },
     { name: "translated Chat", path: "/v1/chat/completions", body: { model: "bridged/model", ...CHAT_TURN } },
     { name: "Responses", path: "/v1/responses", body: { model: "bridged/model", ...RESPONSES_TURN } },
-    { name: "Claude Messages", path: "/v1/messages", body: { model: "bridged/model", ...CLAUDE_TURN } },
+    { name: "routed Claude Messages", path: "/v1/messages", body: { model: "bridged/model", ...CLAUDE_TURN } },
   ];
   try {
     for (const surface of surfaces) {

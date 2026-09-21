@@ -1402,7 +1402,7 @@ arriving as `status: "failed"` is not reported as the 502 a Codex client retries
 Because a re-wrap is where the in-process marker is lost, `retainReplayRefusal` and
 `carryReplayRefusal` in `src/lib/upstream-retry.ts` are what each formatter calls:
 `src/bridge/errors.ts`, `src/server/responses/passthrough-error.ts`, both Chat wrappers, the
-Claude Messages wrapper, and the deferred-logging re-wrap in `src/server/relay.ts`.
+routed Claude Messages wrapper, and the deferred-logging re-wrap in `src/server/relay.ts`.
 
 **Dropping `Retry-After` is necessary and not sufficient.** The status stays 429 because Codex
 stops there and a 5xx invites four more sends, but the Stainless-generated clients — `openai`

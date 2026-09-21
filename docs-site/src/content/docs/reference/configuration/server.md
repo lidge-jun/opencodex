@@ -66,9 +66,9 @@ deliberate: a 5xx here is an instruction to most clients, including Codex, to se
 turn again, which is the duplicate the refusal exists to prevent. No `Retry-After` is
 attached, and the response carries `x-should-retry: false`, which the official OpenAI and
 Anthropic SDKs read before their own status rules — without it those clients retry a 429 on
-their own schedule and resend the turn anyway. The answer is identical on `/v1/responses`,
-`/v1/chat/completions`, and `/v1/messages`, whether the request is forwarded natively or
-translated. The proxy
+their own schedule and resend the turn anyway. The answer is identical on `/v1/responses` and
+`/v1/chat/completions`, whether the request is forwarded natively or translated, and on routed
+`/v1/messages` requests translated through Responses. The proxy
 performs no key rotation, account failover or same-target replay on it, nor does it record the
 refusal as rate-limit or quota evidence against the credential it was holding. Tool-call side
 requests such as vision and web search are replayed normally, because repeating them cannot
