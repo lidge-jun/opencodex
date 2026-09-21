@@ -338,8 +338,13 @@ export async function readBoundedResponseBody(
 
 			const { value, done } = outcome as ReadableStreamReadResult<Uint8Array>;
 			if (done) {
-				if (options.reportUtf8Validity && options.fatalUtf8 !== true) {
-					const decoded = decodeUtf8WithValidity(retained.subarray(0, retainedBytes));
+				if (options.reportUtf8Validity) {
+					const bytes = retained.subarray(0, retainedBytes);
+					// A fatal decode that returned already proved the bytes valid; still
+					// honour the reporting contract instead of dropping utf8Valid.
+					const decoded = options.fatalUtf8 === true
+						? { text: decodeUtf8([bytes], true), utf8Valid: true }
+						: decodeUtf8WithValidity(bytes);
 					return {
 						text: decoded.text,
 						truncated: false,

@@ -22,6 +22,22 @@ function responseFromChunks(...chunks: Uint8Array[]): Response {
 }
 
 describe("readBoundedResponseBody", () => {
+	test("reportUtf8Validity is honoured on the fatal decode path at EOF", async () => {
+		const valid = await readBoundedResponseBody(responseFromChunks(encoder.encode('{"ok":true}')), {
+			fatalUtf8: true,
+			reportUtf8Validity: true,
+		});
+		expect(valid.utf8Valid).toBe(true);
+		let caught: unknown;
+		try {
+			await readBoundedResponseBody(responseFromChunks(new Uint8Array([0xff])), {
+				fatalUtf8: true,
+				reportUtf8Validity: true,
+			});
+		} catch (error) { caught = error; }
+		expect(boundedBodyDecodeFailure(caught)).toBe("invalid_utf8");
+	});
+
 	test("only actual decoder exceptions carry the decode discriminator", async () => {
 		for (const bytes of [new Uint8Array([0xff]), new Uint8Array([0xe2, 0x82])]) {
 			let caught: unknown;
