@@ -7,7 +7,7 @@ A local branch is deletable when at least one holds, and no guard fires.
 ```
 T1 ancestry      git merge-base --is-ancestor <br> origin/dev
 T2 patch-equiv   git cherry origin/dev <br>            -> no '+' lines
-T3 content       paths = git diff --name-only origin/dev...<br>
+T3 content       paths = git diff --no-renames --name-only origin/dev...<br>
                  git diff --name-only origin/dev <br> -- <paths>  -> empty
 T4 scratch       branch name encodes a PR number whose state is MERGED or CLOSED
                  AND the name matches the scratch prefix set
@@ -21,6 +21,13 @@ merges: after a squash the branch shares no commit with `dev`, so T1 and T2 both
 report "unmerged" for work that is fully shipped. T3 asks the only question that
 is actually load-bearing — is there any difference left in the files this branch
 claims to change.
+
+Rename detection must be disabled while collecting that path set. Otherwise a
+rename contributes only its destination: if `dev` independently contains the
+same destination but retains the source, the restricted second diff is empty
+even though the complete tip trees differ. `--no-renames` emits both the deleted
+source and added destination, so the source-side difference prevents a false
+LANDED verdict.
 
 T4 is deliberately narrow. It fires only for throwaway prefixes
 (`pr*`, `rb-`, `jrb-`, `mtp/`, `big-`, `cf-`, `ocx-`, `wip/`, `backup/`,
