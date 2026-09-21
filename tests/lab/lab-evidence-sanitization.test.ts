@@ -310,6 +310,10 @@ describe("SEC-02 sanitizer boundary", () => {
     expect(sanitizeDiagnostic("dial tcp: lookup redis")).toBe("dial tcp: lookup [host]");
     expect(sanitizeDiagnostic("dial tcp: lookup redis: no such host"))
       .toBe("dial tcp: lookup [host]: no such host");
+    // A sentence-final period rides with the token: it must not defeat host
+    // classification, and it stays outside the mask.
+    expect(sanitizeDiagnostic("ECONNREFUSED redis.")).toBe("ECONNREFUSED [host].");
+    expect(sanitizeDiagnostic("dial tcp db.prod1.")).toBe("dial tcp [host].");
   });
 
   test("timeout and socket prose after a marker survives", () => {
