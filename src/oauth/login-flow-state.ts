@@ -97,13 +97,13 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
   // stashed and re-validated by the callback loop.
   const parsed = parseCallbackInput(trimmed);
   // Command Code's manual fallback accepts a pasted JSON callback payload
-  // (`{ apiKey, state, ... }`) which has no `code` param. Let it through the
-  // shared gate so the provider-specific parser can validate it.
-  const isCommandCodeJson = provider === "command-code" && trimmed.startsWith("{") && !parsed.code;
+  // (`{ apiKey, state, ... }`). Keep that opaque to the generic raw parser so
+  // hashes in JSON strings do not become a fake state suffix; its provider parser validates state.
+  const isCommandCodeJson = provider === "command-code" && trimmed.startsWith("{");
   if (!parsed.code && !isCommandCodeJson) return { ok: false, error: "no authorization code found in input" };
   // A raw paste carrying an explicit code#state suffix is state-bearing too: it
   // must match the expected state rather than bypass validation.
-  const stateBearing = parsed.kind !== "raw" || parsed.state !== undefined;
+  const stateBearing = !isCommandCodeJson && (parsed.kind !== "raw" || parsed.state !== undefined);
   if (stateBearing && slot.expectedState !== undefined) {
     if (parsed.state === undefined) return { ok: false, error: "redirect URL is missing the state parameter" };
     if (parsed.state !== slot.expectedState) {
