@@ -127,6 +127,21 @@ describe("runResolve", () => {
     expect(parsed.port.effective).toBe(RESOLVE_DEFAULT_PORT);
   });
 
+  test("accepts async dead probes for every candidate endpoint", async () => {
+    const lines: string[] = [];
+    const code = await runResolve({ json: true }, {
+      configDir: () => "/h",
+      readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
+      findLive: async () => null,
+      readRuntime: () => ({ port: 10110, hostname: "127.0.0.1" }),
+      probeEndpoint: async () => "dead",
+      cliVersion: () => "1.2.3",
+      stdout: { log: value => lines.push(value) },
+    });
+    expect(code).toBe(0);
+    expect((JSON.parse(lines[0]!) as { liveness: { status: string } }).liveness.status).toBe("absent-proven");
+  });
+
   test("an undecidable probe is unknown, and unknown is never answered as absent", async () => {
     // The launch decision keys on this verdict: a timed-out probe or a listener that
     // withholds /healthz must exit 1 rather than let the caller start a second runtime.
@@ -152,8 +167,8 @@ describe("runResolve", () => {
   test("absence requires every endpoint dead, not just the configured one", async () => {
     // The runtime record can point at a live port while the configured port refuses;
     // answering from the configured port alone would shadow-start over the record.
-    // everyEndpointProvenDown short-circuits on the first non-dead answer: an unknown
-    // runtime endpoint defeats the proof without the configured one being probed.
+    // Every candidate is probed: an unknown runtime endpoint defeats the proof even when the
+    // configured endpoint is dead.
     const seen: string[] = [];
     const code = await runResolve({ json: true }, {
       configDir: () => "/h",
