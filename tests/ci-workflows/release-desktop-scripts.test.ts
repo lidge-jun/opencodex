@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
 import { buildUpdaterManifest, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
 import { repoPath } from "../helpers/repo-root";
@@ -39,7 +39,10 @@ describe("desktop release scripts", () => {
         repoRoot: root,
       });
 
-      expect(files.map(path => path.split("/").at(-1))).toEqual([
+      // The paths come back from `join`, so on Windows they are separated by backslashes and a
+      // "/" split returns the whole path. Asking the platform for the last segment keeps this
+      // assertion about the asset names it is written to check.
+      expect(files.map(path => basename(path))).toEqual([
         "OpenCodex-2.61.0-macos.dmg",
         "OpenCodex-2.61.0-macos.dmg.sha256",
         "OpenCodex-2.61.0-macos.app.tar.gz",
@@ -79,7 +82,7 @@ describe("desktop release scripts", () => {
         repoRoot: root,
       });
 
-      expect(files.map(path => path.split("/").at(-1))).toEqual([
+      expect(files.map(path => basename(path))).toEqual([
         "OpenCodex-2.61.0-windows-x64.msi",
         "OpenCodex-2.61.0-windows-x64.msi.sig",
         "OpenCodex-2.61.0-windows-x64.msi.sha256",
