@@ -191,5 +191,12 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
 
     const texts = rootTexts(encode(messages));
     expect(texts.some(text => text.includes("Take a DIFFERENT action now"))).toBe(false);
+    // The oversized history does not ship at all: the envelope sheds every replayed
+    // entry rather than emitting a weakened note or a partial fragment, so only the
+    // system prompt root survives. The old REPEAT is provably gone — not just unnoted —
+    // and no recent tail leaks past the bound either.
+    expect(texts).toHaveLength(1);
+    expect(texts.some(text => text === REPEAT)).toBe(false);
+    expect(texts.some(text => text === "recent A" || text === "recent B")).toBe(false);
   });
 });
