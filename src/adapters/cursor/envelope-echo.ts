@@ -191,6 +191,12 @@ export class CursorMidstreamEchoObserver {
           this.lineDisarmed = true;
           return;
         }
+        // A new marker ends the previous marker's corruption window: the text
+        // between two markers belongs to the earlier finding only. Without this,
+        // every open watch consumed the same following text, so one corrupt
+        // call-id after a second marker also marked the first, clean finding
+        // corrupt (clean-then-corrupt cross-contamination).
+        while (this.corruptionWatches.length > 0) this.settleCorruption(0);
         if (this.recorded.length + this.corruptionWatches.length < MAX_MIDSTREAM_FINDINGS) {
           const finding: MidstreamEchoFinding = {
             marker,

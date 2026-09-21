@@ -98,7 +98,10 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
       const findings = observer.findings();
       expect(findings).toHaveLength(2);
       expect(findings[0]!.marker).toBe("[Tool Result]");
-      expect(findings[0]!.callIdCorrupt).toBe(true);
+      // The corrupt call-id sits after the second (duplicated) marker, so it is
+      // attributed to that marker's window — the first marker's span is clean.
+      expect(findings[0]!.callIdCorrupt).toBe(false);
+      expect(findings[1]!.callIdCorrupt).toBe(true);
     });
 
     test("clean call-id lines do not flag corruption", () => {
@@ -127,6 +130,17 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
         { marker: "[Tool Result]", offset: 5, callIdCorrupt: true },
         { marker: "[Tool Error]", offset: 44, callIdCorrupt: false },
       ]);
+    });
+
+    test("a clean marker is not contaminated by corruption after the next marker", () => {
+      const observer = new CursorMidstreamEchoObserver();
+      observer.feed("lead\n[Tool Result]\nclean\n[Tool Error]\nfc_123 mar-broken_0\n");
+      const findings = observer.findings();
+      expect(findings).toHaveLength(2);
+      expect(findings[0]!.marker).toBe("[Tool Result]");
+      expect(findings[0]!.callIdCorrupt).toBe(false);
+      expect(findings[1]!.marker).toBe("[Tool Error]");
+      expect(findings[1]!.callIdCorrupt).toBe(true);
     });
 
     test("a mid-line marker mention does not fire", () => {
@@ -648,4 +662,3 @@ describe("Cursor midstream envelope-echo remint", () => {
     clearCursorIncompleteToolRemintForTests();
   });
 });
-
