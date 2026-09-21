@@ -303,6 +303,7 @@ Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif,
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Installe et contrôle l’icône OpenCodex dans la zone de notification Windows. Elle démarre à l’ouverture de session et fournit des commandes du proxy accessibles en un clic. `start` et `stop` contrôlent uniquement l’icône ; utilisez son menu pour contrôler le proxy. `--no-start` s’applique à `install` et installe l’icône sans la lancer immédiatement.
+Obsolète : l’application OpenCodex fournit la zone de notification sous Windows, macOS et Linux ; `ocx tray` reste disponible pour les installations sans l’application de bureau.
 
 ## Tableau de bord
 

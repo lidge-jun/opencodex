@@ -52,3 +52,43 @@ export function debugProviderDiagnosticLazy(
     /* diagnostics must never affect request handling */
   }
 }
+
+/**
+ * One line per finalized attempt, formatted from what the recorder already counted.
+ *
+ * #3983 wanted this visibility and emitted a line per stream event to get it. Two things made
+ * that the wrong shape. It is a second record: `emitDebugLine` writes the ring AND stderr, and
+ * a service manager redirects stderr to a file, so an installed service accumulates a per-event
+ * history beside the ledger with its own retention and sequencing. And per-event lines needed a
+ * per-payload fingerprint to correlate, which under a process-global key makes every repeated
+ * prompt fragment and tool name correlatable for the life of the process.
+ *
+ * So this writes the ring ONLY -- `appendDebugLogLine` directly, never `emitDebugLine` -- and
+ * says nothing the ledger does not already hold. The ring becomes a live view of the durable
+ * record rather than a parallel source for it.
+ */
+export function debugAttemptDeliverySummary(
+  requestId: string,
+  attempt: {
+    ordinal: number;
+    adapter: string;
+    deliverySummary?: {
+      adapterEvents: number;
+      relayedEvents: number;
+      semanticBytes: number;
+      sideEffectEvents: number;
+      terminalEvents: number;
+    };
+  },
+): void {
+  if (!isDebugEnabled() || !attempt.deliverySummary) return;
+  try {
+    appendDebugLogLine(`[ocx:${attempt.adapter}:delivery] ${JSON.stringify({
+      requestId,
+      ordinal: attempt.ordinal,
+      ...attempt.deliverySummary,
+    })}`);
+  } catch {
+    /* diagnostics must never affect request handling */
+  }
+}

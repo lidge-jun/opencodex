@@ -495,10 +495,12 @@ describe("GitHub Actions hardening", () => {
       "Dockerfile",
       "LICENSE",
       "README.md",
+      "app/**",
       "assets/**",
       "bin/**",
       "bun.lock",
       "compose.yaml",
+      "desktop/**",
       "docker/**",
       "gui/**",
       "package.json",
@@ -826,7 +828,7 @@ describe("GitHub Actions hardening", () => {
         };
         publish?: {
           "runs-on"?: string;
-          needs?: string;
+          needs?: string[];
           permissions?: Record<string, string>;
         };
       };
@@ -841,7 +843,10 @@ describe("GitHub Actions hardening", () => {
       contents: "read",
     });
     
-    expect(release.jobs?.publish?.needs).toBe("validate-dispatch");
+    // Publication is the irreversible public act, so it waits for the pre-publication
+    // verification of everything it will publish; the full ordering contract is in
+    // tests/ci-workflows/release-pipeline-contract.test.ts.
+    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "verify-release"]);
     expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
@@ -916,9 +921,15 @@ describe("GitHub Actions hardening", () => {
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).
+    // The split alone does not bound a block: the last step of a job runs on into the next
+    // job's header, so a job-level `if: ${{ inputs.dry-run != true }}` — which is a condition,
+    // not shell — read as an injection in the step above it. Each block is cut at the first
+    // line that dedents to job level, which is where the step's script actually ends.
     const runBlocks = workflow.split(/\n {6,}- name: /).filter(block => block.includes("run: |"));
     for (const block of runBlocks) {
-      const runSource = block.slice(block.indexOf("run: |"));
+      const afterRun = block.slice(block.indexOf("run: |"));
+      const jobBoundary = afterRun.search(/\n {2}\S/);
+      const runSource = jobBoundary === -1 ? afterRun : afterRun.slice(0, jobBoundary);
       expect(runSource).not.toContain("${{ inputs.");
     }
 
@@ -5573,8 +5584,10 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       const script = prelude + (scenario.mode === "missing-receipt" ? "" : publish) + '\n'
         + (scenario.dry ? "" : `PUBLISHED=$(sed -n 's/^published=//p' "$GITHUB_OUTPUT")\n${smoke}`);
       const child = Bun.spawn(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+        // RESUME mirrors the workflow, where the env always defines it; the
+        // non-resume branches are what every scenario here exercises.
         env: { ...process.env, SCENARIO: scenario.mode, DRY_RUN: String(scenario.dry),
-          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", GITHUB_OUTPUT: output,
+          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", RESUME: "false", GITHUB_OUTPUT: output,
           GITHUB_STEP_SUMMARY: summary, CALLS: calls, COUNTER: join(dir, "counter") },
         stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });

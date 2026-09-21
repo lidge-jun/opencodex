@@ -122,6 +122,9 @@ export const toolSchema = z.object({
   description: z.string().optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   strict: z.boolean().optional(),
+  // Unknown keys are stripped here, so a field the parser is expected to read has to be
+  // declared: an undeclared allowed_callers never reached buildTools at all (#5210).
+  allowed_callers: z.array(z.string()).optional(),
 });
 
 const builtinToolSchema = z.object({ type: z.string() }).loose();

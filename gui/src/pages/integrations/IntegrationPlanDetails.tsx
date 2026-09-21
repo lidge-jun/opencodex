@@ -35,6 +35,7 @@ const REFUSAL_KEYS: Partial<Record<string, TKey>> = {
   conflict: "integrations.plan.refusal.conflict",
   unsafe: "integrations.plan.refusal.unsafe",
   non_loopback: "integrations.plan.refusal.nonLoopback",
+  superseded_store: "integrations.plan.refusal.supersededStore",
   drift_requires_confirm: "integrations.plan.refusal.driftRequiresConfirm",
   snapshot_expired: "integrations.plan.refusal.snapshotExpired",
   write_failed: "integrations.plan.refusal.writeFailed",

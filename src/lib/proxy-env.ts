@@ -127,6 +127,9 @@ export function effectiveProxyFor(
   if (socksProxy) return socksProxy;
   const schemeValue = env[key]?.trim() || env[key.toLowerCase()]?.trim();
   if (schemeValue) {
+    // A SOCKS URL in a scheme-matched variable is a usable proxy: admission
+    // binds it explicitly and the transport follows, so it applies here too.
+    if (isSocks5ProxyUrl(schemeValue)) return schemeValue;
     // A present but unusable scheme-matched variable fails closed: it is not a
     // proxy Bun fetch can use, and it must not fall through to ALL_PROXY either.
     // If Bun would have used ALL_PROXY here, keeping the DNS-pinned transport is
@@ -174,16 +177,34 @@ export function socks5ProxyFromEnv(env: ProxyEnvMap = process.env): string | und
   return candidates.find(value => typeof value === "string" && isSocks5ProxyUrl(value));
 }
 
+/**
+ * A request-scoped proxy decision as the outbound transports express it.
+ *
+ * `false` is Bun's documented "connect directly": it overrides HTTP_PROXY, HTTPS_PROXY and
+ * ALL_PROXY, and it overrides NO_PROXY too. Bun treats `undefined`, `null` and `""` alike as
+ * "no option given" and falls back to the environment, so none of those can express direct
+ * egress. Declared locally because the value travels through `RequestInit`, which does not
+ * carry it in the ambient DOM types.
+ */
+export type ProxyCapableRequestInit = RequestInit & { proxy?: string | false };
+
 export function configuredOutboundFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
   fallback?: typeof globalThis.fetch,
 ): Promise<Response> {
   const base = fallback ?? (globalThis.fetch === installedFetch ? nativeFetch : globalThis.fetch);
-  const explicitProxy = (init as (RequestInit & { proxy?: string }) | undefined)?.proxy;
-  const proxy = typeof explicitProxy === "string"
-    ? (isSocks5ProxyUrl(explicitProxy) ? explicitProxy : undefined)
-    : socks5ProxyFromEnv();
+  const explicitProxy = (init as ProxyCapableRequestInit | undefined)?.proxy;
+  // An explicit `false` is a decision, so it also has to win over the installed SOCKS wrapper.
+  // Reading it as "no string was supplied" would fall through to ALL_PROXY and send a request
+  // the caller pinned to direct egress through the global SOCKS proxy instead — the silent
+  // substitution the caller asked this option to prevent. Bun applies the same `false` to its
+  // own HTTP(S) proxy environment once the request reaches the base fetch below.
+  const proxy = explicitProxy === false
+    ? undefined
+    : typeof explicitProxy === "string"
+      ? (isSocks5ProxyUrl(explicitProxy) ? explicitProxy : undefined)
+      : socks5ProxyFromEnv();
   let url: URL;
   try {
     url = new URL(input instanceof Request ? input.url : String(input));

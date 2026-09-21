@@ -13,7 +13,8 @@ import { resolveServiceListenPort, reportServiceServing } from "./health";
 import { platformOps, proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand, installServiceSafely, installFreshWindowsSchedulerSafely, removeServiceInstallState, isServiceInstalled } from "./orchestration";
 import { repairService } from "./repair";
 import type { ServiceRepairVerb } from "./repair";
-import { TASK, plistPath, readServiceBackend } from "./state";
+import { TASK, plistPath, readServiceBackend, releaseServiceOwner, resolveServiceOwnership } from "./state";
+import { foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./repair";
 import type { ServiceBackend } from "./state";
 import { unitPath } from "./systemd";
 import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindowsSchedulerTask } from "./windows-scheduler";
@@ -233,6 +234,15 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "install":
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
+      // The install may advance provenance, but it may take back only the owner it observed
+      // before touching the registration. A desktop successor that claims ownership while
+      // the install is running must survive the late release below.
+      const ownershipBeforeInstall = resolveServiceOwnership();
+      if (ownershipBeforeInstall.kind === "unknown") {
+        console.error(`❌ ${unknownServiceOwnerRefusal(ownershipBeforeInstall.reason, "install")}`);
+        process.exitCode = 1;
+        break;
+      }
       // A manually started proxy can still own the configured port while the service
       // registration is absent or unloaded. Stop both the registered manager and any
       // tracked standalone listener before loading the freshly written service assets.
@@ -258,6 +268,23 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         process.exitCode = 1;
         break;
       }
+      // ONLY now. `install` is the verb that takes the runtime back, and it does so after the
+      // registration exists — releasing first meant a cancelled UAC prompt, a failed
+      // registration or an aborted cleanup left the retained npm registration looking
+      // CLI-owned, so the next incidental repair would reactivate it.
+      //
+      // `repair` and `restart` refuse under a foreign owner precisely because they run
+      // incidentally — from a tray helper, from `ocx update`, from a doctor suggestion — and
+      // undoing a takeover the user consented to must be something the user asked for.
+      {
+        const released = releaseServiceOwner(ownershipBeforeInstall, { allowRevisionAdvance: true });
+        if (released) {
+          console.log(
+            `ℹ️  The desktop app owned the background runtime (install ${released.installId}, `
+            + `consent generation ${released.consentGeneration}); this install took it back.`,
+          );
+        }
+      }
       // The wrapper was written moments ago in this process, so the configured port
       // and the baked one cannot have diverged yet — unlike `start`, which reads the
       // installed artifact instead.
@@ -269,15 +296,34 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
       await maybeShowStarPrompt();
       break;
-    case "start":
+    case "start": {
       // The installed launcher preserves the recorded CODEX_SQLITE_HOME: a
       // changed sqlite_home/CODEX_SQLITE_HOME/CODEX_HOME would start the service
       // on the recorded database while this shell resolves another, splitting
       // native Codex history between databases. Same guard `stop` already runs.
       assertServiceEnvironmentMatchesInstall();
+      // `start` activates the npm registration, so it refuses on the same terms repair does.
+      // The Windows tray starts the service automatically, which would otherwise put a second
+      // proxy beside the one the desktop app is running without anyone asking for it.
+      // `stop` and `uninstall` are deliberately NOT gated: they deactivate.
+      //
+      // Reported rather than thrown: the tray drives this through `runTrayProxyStart`, which
+      // does not catch, and a refusal is a decision rather than a crash.
+      const ownership = resolveServiceOwnership();
+      const refusal = ownership.kind === "unknown"
+        ? unknownServiceOwnerRefusal(ownership.reason, "start")
+        : ownership.kind === "owned" && ownership.ownership.owner !== "cli"
+          ? foreignServiceOwnerRefusal(ownership.ownership, "start")
+          : null;
+      if (refusal) {
+        console.error(`❌ ${refusal}`);
+        process.exitCode = 1;
+        break;
+      }
       ops.start();
       await reportServiceServing("started");
       break;
+    }
     case "stop": {
       assertServiceEnvironmentMatchesInstall();
       // Only stop what is actually installed. The unguarded call ran a real `launchctl unload`

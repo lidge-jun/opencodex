@@ -22,6 +22,7 @@ import {
   dropSpentCredentialFailure,
   getAccountHealth,
   getCodexQuotaHealthSnapshot,
+  hasUnrecoveredCodexQuotaRefusal,
   isCodexAccountSoftAvoided,
   isCodexQuotaAvoided,
   isIndependentCodexQuotaScope,
@@ -274,6 +275,40 @@ export function hasCodexQuotaHeadroom(
  */
 export function isCacheAffinityEnabled(config: OcxConfig): boolean {
   return config.pool?.cacheAffinity !== false;
+}
+
+/**
+ * Whether quota may retire shared state while cache affinity is active.
+ *
+ * A threshold crossing is a hint that an account is getting busy, not evidence it cannot
+ * serve — the same bar {@link mayRebindAffinityForQuota} applies to a live binding. Shared
+ * state held across a model detour gets that exhaustion boundary for the same reason: the
+ * detour is request-scoped, so retiring the binding over a hint pays a cold prefix for
+ * nothing. New/unbound selection still reads {@link hasCodexQuotaHeadroom}; only
+ * preservation of an existing shared selection or thread binding qualifies here. Like the
+ * live-binding rule, the configured threshold plays no role once retention applies: a
+ * genuinely exhausted (>=100%) account releases even with threshold switching disabled,
+ * while the fallback above keeps a disabled threshold's "never drained on quota alone".
+ */
+export function hasCodexSharedStateQuotaHeadroom(
+  config: OcxConfig,
+  accountId: string,
+  quotaScope: CodexQuotaScope | undefined,
+  selectionOptions?: CodexAccountUsabilityOptions,
+  now: number = Date.now(),
+): boolean {
+  if (
+    !isCacheAffinityEnabled(config)
+    || accountPoolStrategyForScope(config, quotaScope) !== "quota"
+  ) {
+    return hasCodexQuotaHeadroom(config, accountId, selectionOptions, now);
+  }
+  const usage = computeCodexUsageScore(
+    getAccountQuota(accountId),
+    getPoolAccountPlanForSelection(config, accountId, selectionOptions),
+    now,
+  );
+  return isUnknownUsage(usage) || usage < 100;
 }
 
 /** Earliest future shared short/weekly reset; missing evidence and ties use usage order. */
@@ -726,7 +761,8 @@ export function isHealthySharedCodexSelection(
   selectionOptions: CodexAccountUsabilityOptions | undefined,
 ): boolean {
   return isCodexAccountSelectable(config, accountId, now, quotaScope, selectionOptions)
-    && hasCodexQuotaHeadroom(config, accountId, selectionOptions, now)
+    && hasCodexSharedStateQuotaHeadroom(config, accountId, quotaScope, selectionOptions, now)
+    && !hasUnrecoveredCodexQuotaRefusal(accountId, quotaScope)
     && !shouldFailover(config, accountId, now);
 }
 

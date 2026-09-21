@@ -43,7 +43,12 @@ describe("the Responses passthrough lane reads the provider transient policy", (
   });
 
   test("every transient-retry send takes its attempts from that resolver", () => {
-    const sites = occurrences(packed, "fetchWithTransientRetry(");
+    // Every helper this lane sends through, not just the one it started with. The post-header
+    // replacement reaches upstream exactly like the legs above it and has to draw on the same
+    // resolver; counting only `fetchWithTransientRetry` would let a second send helper be added
+    // on the constant while this file still reported balance.
+    const sites = occurrences(packed, "fetchWithTransientRetry(")
+      + occurrences(packed, "refetchAfterProtocolSafeReset(");
     // The lane's initial send plus its recovery legs. A site that stops being counted here is a
     // site that stopped being governed by the policy.
     expect(sites).toBeGreaterThanOrEqual(4);

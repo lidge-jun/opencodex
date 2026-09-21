@@ -90,7 +90,34 @@ Use `ocx service` to run it in the background.
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
-It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+
+<details>
+<summary><b>Desktop app and macOS widget — beta</b></summary>
+
+A native shell around the same dashboard, plus a WidgetKit extension that shows proxy status,
+today's usage and provider quotas without opening a browser. The proxy is unchanged: the app
+finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays at
+**http://localhost:10100**.
+
+It is beta. Builds are signed for integrity but not notarized, so macOS asks for a
+right-click → **Open** on first launch and Windows SmartScreen warns on the installer. The
+widget needs macOS 14 or newer; the snapshot model it renders lives in [`app/`](./app)
+(`MenuBarCore`).
+
+Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
+it locally with `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
+
+Install locations, service files and everything else written to disk are listed in
+[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
+[Desktop App guide](https://lidge-jun.github.io/opencodex/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/) cover
+per-platform installation and the Gatekeeper prompt.
+
+</details>
+
+### ChatGPT account pool
+
+opencodex can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
 the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
 threads normally retain affinity to the account that started them, so long SSH, tmux, or

@@ -12,6 +12,14 @@ export const CODEX_REASONING_LEVELS: { effort: string; description: string }[] =
   { effort: "ultra", description: "Maximum reasoning with automatic task delegation" },
 ];
 
+/**
+ * One canonical rung. Catalog writers that hold a partially populated ladder derive their
+ * element type from this instead of restating `{ effort?: string }`: those restatements
+ * silently excluded `description`, so pushing a canonical rung into them is a type error
+ * that only surfaced once an unrelated import cycle through this module was broken.
+ */
+export type CodexReasoningLevel = (typeof CODEX_REASONING_LEVELS)[number];
+
 const CODEX_REASONING_ORDER = CODEX_REASONING_LEVELS.map(l => l.effort);
 const CODEX_REASONING_SET = new Set(CODEX_REASONING_ORDER);
 

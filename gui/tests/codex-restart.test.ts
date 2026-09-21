@@ -48,8 +48,9 @@ describe("requestCodexRestart", () => {
   });
 
   test("a network failure is reported as unreachable", async () => {
-    // requestProxyStop reads a dropped socket as "the stop started". This route
-    // does not kill the process serving it, so silence means something broke.
+    // requestProxyStop resolves a dropped socket by re-reading the instance, because the
+    // process it talks to is the one going away. This route does not kill the process
+    // serving it, so there is nothing to re-read and silence means something broke.
     const outcome = await requestCodexRestart("", {
       fetchFn: (async () => {
         throw new TypeError("Failed to fetch");
@@ -219,4 +220,3 @@ describe("requestCodexRestart", () => {
     expect(outcome).toEqual({ ok: false, message: "malformed" });
   });
 });
-

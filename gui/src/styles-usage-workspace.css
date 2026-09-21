@@ -214,6 +214,206 @@
   gap: 6px;
 }
 
+.usage-companion-panel {
+  display: grid;
+  gap: 16px;
+  padding-top: 4px;
+}
+.usage-companion-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.usage-companion-header .panel-title { margin: 0; }
+.usage-companion-header .card-sub { margin: 4px 0 0; }
+.usage-companion-install {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.usage-companion-install summary { cursor: pointer; color: var(--text); font-size: 12px; font-weight: 600; }
+.usage-companion-install-status { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12px; }
+.usage-companion-install-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.usage-companion-install-steps { display: grid; gap: 8px; margin: 0; padding-left: 20px; color: var(--muted); font-size: 12px; }
+.usage-companion-install-steps .btn { margin-left: 6px; }
+.usage-companion-install-last-seen { margin: 0; }
+.usage-companion-install-command { display: block; overflow-x: auto; padding: 7px 9px; border-radius: var(--radius-xs); background: var(--raised); color: var(--text); font-size: 11px; }
+.usage-companion-models { display: grid; gap: 8px; }
+.usage-companion-models-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.usage-companion-models-header > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.usage-companion-models-count { white-space: nowrap; }
+.usage-companion-models-list { max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.usage-companion-model-group + .usage-companion-model-group { border-top: 1px solid var(--border-soft); }
+.usage-companion-model-group-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 7px; padding: 8px 10px; background: color-mix(in srgb, var(--surface) 92%, var(--raised)); }
+.usage-companion-model-provider { flex: 1; min-width: 0; overflow: hidden; color: var(--text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.usage-companion-model-chip { padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); }
+.usage-companion-model-group-header .switch { flex: 0 0 auto; }
+.usage-companion-model-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 10px 7px 18px; }
+.usage-companion-model-row .switch { flex: 0 0 auto; }
+.usage-companion-model-row code { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.usage-companion-model-row.is-off code { color: var(--faint); text-decoration: line-through; }
+.usage-companion-model-total { flex: 0 0 auto; margin-left: auto; font-variant-numeric: tabular-nums; }
+.usage-companion-chart { min-width: 0; }
+.usage-companion-chart svg { display: block; width: 100%; height: 160px; overflow: visible; }
+.usage-companion-axis { stroke: var(--border); stroke-width: 1; }
+.usage-companion-axis-label { fill: var(--muted); font-size: 10px; }
+.usage-companion-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; }
+.usage-companion-legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+.usage-companion-swatch { width: 8px; height: 8px; border-radius: 50%; }
+.usage-companion-chart-skeleton {
+  height: 160px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  animation: pulse 1.2s ease-in-out infinite alternate;
+}
+.usage-companion-chart-state { display: flex; align-items: center; gap: 10px; min-height: 160px; color: var(--muted); }
+.usage-companion-controls { display: grid; gap: 14px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.usage-companion-control { display: grid; gap: 6px; min-width: 0; }
+.usage-companion-control > select, .usage-companion-control > input {
+  min-height: 34px; width: 100%; padding: 6px 9px;
+  border: 1px solid var(--border); border-radius: var(--radius-xs);
+  background: var(--raised); color: var(--text); font: inherit;
+}
+.usage-companion-control > .usage-segmented { width: fit-content; max-width: 100%; }
+.field-label { color: var(--muted); font-size: 11.5px; font-weight: 550; }
+.usage-companion-switches, .usage-companion-check-list {
+  display: grid; gap: 8px; border: 0; padding: 0; margin: 0;
+}
+.usage-companion-switches legend { padding: 0; margin-bottom: 2px; }
+.usage-companion-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text); font-size: 12px; }
+.usage-companion-switch .toggle { flex: 0 0 auto; }
+.usage-companion-advanced { border-top: 1px solid var(--border-soft); padding-top: 12px; }
+.usage-companion-advanced summary { cursor: pointer; color: var(--text); font-size: 12px; font-weight: 600; }
+.usage-companion-advanced-body { display: grid; gap: 14px; padding-top: 12px; }
+.usage-companion-check-list label { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 12px; }
+.usage-companion-save-status { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--muted); font-size: 11.5px; }
+.usage-companion-save-status.is-error { color: var(--red); }
+.usage-companion-loading { min-height: 160px; color: var(--muted); }
+
 @media (max-width: 640px) {
   .usage-source-row { align-items: flex-start; flex-direction: column; }
+  .usage-companion-header { align-items: stretch; flex-direction: column; }
+  .usage-companion-header .btn { align-self: flex-start; }
+  .usage-companion-control > .usage-segmented { width: 100%; }
+  .usage-companion-control > .usage-segmented .usage-segmented-btn { flex: 1 1 0; min-width: 0; padding-inline: 6px; }
+}
+
+/* ── Models table ─────────────────────────────────────── */
+
+/*
+  `.tbl` is `width: 100%`, which divides the shell's width across this table's twelve columns
+  until an eight-digit token total folds onto a second line. Give the table the width its content
+  asks for and let the shell scroll sideways instead; `.tbl-wrap` is already `overflow-x: auto`,
+  so `min-width: 100%` is what keeps the table filling a shell wide enough to hold it.
+
+  Every selector here is doubled as `.tbl.usage-models-tbl`, which is not decoration. This file is
+  `@import`ed from the top of `styles.css`, so the whole of `styles.css` cascades after it: a bare
+  `.usage-models-tbl { width: max-content }` ties `.tbl { width: 100% }` on specificity and loses
+  on source order, and the squeeze comes straight back. The rules that already lived in this file
+  buy the same margin with a descendant `.usw-section` prefix.
+*/
+.tbl.usage-models-tbl {
+  --usage-models-model-col: 14rem;
+  --usage-models-provider-col: 11rem;
+  width: max-content;
+  min-width: 100%;
+}
+
+.tbl.usage-models-tbl th,
+.tbl.usage-models-tbl td {
+  white-space: nowrap;
+}
+
+/* The share bar carries no text, so its column has no intrinsic width to size to. */
+.tbl.usage-models-tbl th:nth-child(3),
+.tbl.usage-models-tbl td:nth-child(3) {
+  min-width: 9rem;
+}
+
+/*
+  Model and provider stay legible while the numbers scroll under them. The scrollport is
+  `.tbl-wrap`, whose own `var(--space-3)` padding scrolls with the content, so — the same trick
+  the sticky header above plays with `top` — each offset is one padding step negative and the
+  stuck cell repaints that strip with its own background. The widths are fixed because the second
+  column's offset is the first column's width, and `box-sizing: border-box` is global, so the
+  declared width is the rendered width. A value too long for its column clips and keeps its full
+  text in the cell's `title`.
+*/
+.tbl.usage-models-tbl th:nth-child(1),
+.tbl.usage-models-tbl td:nth-child(1),
+.tbl.usage-models-tbl th:nth-child(2),
+.tbl.usage-models-tbl td:nth-child(2) {
+  position: sticky;
+  z-index: 2;
+  background: var(--surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tbl.usage-models-tbl th:nth-child(1),
+.tbl.usage-models-tbl td:nth-child(1) {
+  left: calc(-1 * var(--space-3));
+  width: var(--usage-models-model-col);
+  min-width: var(--usage-models-model-col);
+  max-width: var(--usage-models-model-col);
+}
+
+.tbl.usage-models-tbl th:nth-child(2),
+.tbl.usage-models-tbl td:nth-child(2) {
+  left: calc(var(--usage-models-model-col) - var(--space-3));
+  width: var(--usage-models-provider-col);
+  min-width: var(--usage-models-provider-col);
+  max-width: var(--usage-models-provider-col);
+}
+
+/*
+  Seam between the pinned pair and the scrolling columns, on the body rows only: the sticky
+  header cells already carry a `box-shadow` that repaints the header strip, and a second
+  declaration here would replace it rather than add to it.
+*/
+.tbl.usage-models-tbl tbody td:nth-child(2) {
+  box-shadow: inset -1px 0 0 var(--border-soft);
+}
+
+/*
+  A pinned cell has to stay opaque on hover. Two separate reasons, and missing either one lets
+  the scrolled columns read straight through the pinned pair: `.tbl tbody tr:hover td` outranks
+  the opaque fill above on its own, and `--hover` is a 3% overlay rather than a colour, so
+  assigning it alone replaces the surface with something almost entirely transparent. Paint the
+  overlay as a layer over the surface instead of in place of it.
+*/
+.tbl.usage-models-tbl tbody tr:hover td:nth-child(1),
+.tbl.usage-models-tbl tbody tr:hover td:nth-child(2) {
+  background: linear-gradient(var(--hover), var(--hover)), var(--surface);
+}
+
+/* The corner cells sit above both the scrolling body and the rest of the sticky header row. */
+.tbl.usage-models-tbl thead th:nth-child(1),
+.tbl.usage-models-tbl thead th:nth-child(2) {
+  z-index: 3;
+}
+
+/* The exclusion caption is a line under the amount, never a wrap of the same line. */
+.usage-cost-note {
+  display: block;
+}
+
+/* Narrower than this, two pinned columns cost more reading room than scrolling the table does. */
+@media (max-width: 720px) {
+  .tbl.usage-models-tbl th:nth-child(1),
+  .tbl.usage-models-tbl td:nth-child(1),
+  .tbl.usage-models-tbl th:nth-child(2),
+  .tbl.usage-models-tbl td:nth-child(2) {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .tbl.usage-models-tbl tbody td:nth-child(2) {
+    box-shadow: none;
+  }
 }

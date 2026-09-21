@@ -813,11 +813,11 @@ describe("composite listener shutdown", () => {
         async () => { ran.push("primary"); throw failure; },
         async () => { ran.push("loopback"); },
       ],
-      async () => { ran.push("lifecycle"); },
+      async listenersStopped => { ran.push(`lifecycle:${listenersStopped}`); },
     )).rejects.toBe(failure);
     // The whole point: a rejected primary stop must not strand the loopback socket or skip
     // the native lifecycle release.
-    expect(ran).toEqual(["primary", "loopback", "lifecycle"]);
+    expect(ran).toEqual(["primary", "loopback", "lifecycle:false"]);
   });
 
   test("two failures are reported together rather than one hiding the other", async () => {
@@ -848,8 +848,10 @@ describe("composite listener shutdown", () => {
   });
 
   test("an all-clear shutdown resolves", async () => {
-    await expect(runListenerShutdown([async () => {}, async () => {}], async () => {}))
+    let listenersStopped: boolean | undefined;
+    await expect(runListenerShutdown([async () => {}, async () => {}], async stopped => { listenersStopped = stopped; }))
       .resolves.toBeUndefined();
+    expect(listenersStopped).toBe(true);
   });
 });
 

@@ -1052,7 +1052,10 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
     expect(filter).toContain("isProtectedHomeUnderTest(dirname(path))");
     expect(filter).toContain("paths.filter(");
     expect(filter).toContain("refusing to write service install state");
-    expect(slice(state, "function writeServiceInstallState(", "function readServiceInstallState("))
+    // The fail-loud path resolution moved into the compare-and-swap writer when ownership
+    // became a preserved field. Same invariant, one layer down: nothing commits the record
+    // without resolving the write paths that refuse to write nowhere.
+    expect(slice(state, "export function swapServiceInstallState(", "/** The recorded owner of ONE"))
       .toContain("serviceStateWritePaths()");
   });
 

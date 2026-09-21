@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { Switch } from "../../ui";
+import { confirmAction } from "../../action-dialogs";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterFreeModelRows, freeOnlyInForce, modelPricingKnown, type ModelRow } from "../../pages/models-shared";
 import { putModelVisibility } from "../../model-visibility";
@@ -190,8 +191,21 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   const removeModel = async (row: ModelRow, button: HTMLButtonElement) => {
     const action = actionFor(row);
     if (actionsBlocked || flight.current || !action) return;
-    if (!window.confirm(t(action === "delete" ? "models.customDeleteConfirm" : "models.hideConfirm", { name: row.namespaced }))) return;
+    /*
+     * The single flight is claimed BEFORE consent is awaited. The gate used to be the
+     * synchronous `window.confirm()`, which nothing could interleave with; an in-page dialog
+     * yields, so without this a second row's button could open its own dialog while this one
+     * is still open and two removals would run against one revision. A browser's modal
+     * dialog makes the page inert, but that is the platform's courtesy, not this
+     * component's invariant.
+     */
     flight.current = true;
+    const consented = await confirmAction({
+      message: t(action === "delete" ? "models.customDeleteConfirm" : "models.hideConfirm", { name: row.namespaced }),
+      confirmLabel: t(action === "delete" ? "common.delete" : "common.ok"),
+      tone: "danger",
+    });
+    if (!consented) { flight.current = false; return; }
     setRequestPending(true);
     setMutation(null);
     focusIntent.current = { button, retained: document.activeElement === button };

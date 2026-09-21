@@ -14,8 +14,12 @@ let container: HTMLDivElement;
 let setting: { model: string; reasoningEffort?: string; triggers?: string[] } | null;
 let failLoad: boolean;
 let failSave: boolean;
+let combosUnavailable: boolean;
 let writes: unknown[];
 const models = [{ id: "cheap", provider: "gateway", namespaced: "gateway/cheap" }, { id: "compact", provider: "combo", namespaced: "combo/compact" }];
+// A combo reached through an alias carries no `combo/` prefix, which is the shape #5216 was
+// filed about: the panel has to learn what the selection resolves to, not read its name.
+const ALIASED_COMBO = { id: "fast", model: "quickpick", alias: "quickpick", targets: [{ provider: "xai", model: "a" }, { provider: "gateway", model: "b" }] };
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
@@ -25,10 +29,14 @@ beforeEach(() => {
   }
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   win.localStorage.setItem("ocx-lang", "en");
-  setting = null; failLoad = false; failSave = false; writes = [];
+  setting = null; failLoad = false; failSave = false; combosUnavailable = false; writes = [];
   Object.defineProperty(globalThis, "fetch", { configurable: true, writable: true, value: async (_input: unknown, init?: RequestInit) => {
     if (String(_input).endsWith("/api/combos")) {
-      return Response.json({ combos: [{ id: "compact", model: "combo/compact", targets: [{ provider: "gateway", model: "a" }, { provider: "openai-apikey", model: "b" }, { provider: "gateway", model: "c" }] }] });
+      if (combosUnavailable) return Response.json({ error: "unavailable" }, { status: 503 });
+      return Response.json({ combos: [
+        { id: "compact", model: "combo/compact", targets: [{ provider: "gateway", model: "a" }, { provider: "openai-apikey", model: "b" }, { provider: "gateway", model: "c" }] },
+        ALIASED_COMBO,
+      ] });
     }
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
@@ -148,7 +156,45 @@ test("discloses that the selected provider receives the full conversation", asyn
   await choose("model", "gateway/cheap");
   expect(container.querySelector('[role="note"]')?.textContent).toContain("sends the full conversation contents to gateway for summarization");
   await choose("model", "combo/compact");
-  expect(container.querySelector('[role="note"]')?.textContent).toContain("every target of combo combo/compact (gateway, openai-apikey), including failover targets");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("combo combo/compact");
+  expect(comboNote).toContain("(gateway, openai-apikey)");
+  // The runtime tries one target at a time and stops at the first answer; the panel used to
+  // promise fan-out to every target, which an operator would budget latency and cost for.
+  expect(comboNote).toContain("in order and uses the first that answers");
+  expect(comboNote).not.toContain("every target");
   await choose("model", "Use conversation model");
   expect(container.querySelector('[role="note"]')).toBeNull();
+});
+
+test("names the targets of a combo reached through an alias", async () => {
+  setting = { model: ALIASED_COMBO.model };
+  await render();
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  // Before #5216 this selection had no `combo/` prefix, so the panel called it a provider and
+  // named none of its targets.
+  expect(note).toContain(`combo ${ALIASED_COMBO.model}`);
+  expect(note).toContain("(xai, gateway)");
+  expect(note).not.toContain("its configured target providers");
+  expect(note).toContain("in order and uses the first that answers");
+});
+
+test("still calls a prefixed combo a combo when the combo list is unavailable", async () => {
+  // The combo list is the only source of target names, and losing it must not downgrade the
+  // disclosure to "the provider named combo receives your conversation".
+  combosUnavailable = true;
+  setting = { model: "combo/compact" };
+  await render();
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(note).toContain("combo combo/compact");
+  expect(note).toContain("its configured target providers");
+});
+
+test("an alias that shadows an Object member is not read as a target list", async () => {
+  // A combo id is free-form, so `constructor` is a legal alias. Reading it off a plain object
+  // would hand the renderer a function to join.
+  setting = { model: "constructor" };
+  await render();
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(note).toContain("sends the full conversation contents to constructor for summarization");
 });

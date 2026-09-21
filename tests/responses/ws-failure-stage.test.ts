@@ -9,10 +9,12 @@ import {
   closedBeforeTerminalMessage,
   codexWsFailureDetail,
   markCodexWsStage,
+  projectCodexWsFailure,
   readCodexWsStage,
   type CodexWsFailureStage,
   type CodexWsStageRecord,
 } from "../../src/server/responses/codex-ws-wire";
+import { permitsResend, resendPermission } from "../../src/lib/request-failure-model";
 import {
   codexWsUpstreamFetch,
   CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
@@ -159,6 +161,41 @@ describe("codex WS failure classification", () => {
     // The send is what makes a turn possibly live upstream, so it is read first.
     expect(classifyCodexWsFailure(stage({ sent: false, upstreamFrames: 4, relayedEvents: 2 })))
       .toBe("before-send");
+  });
+
+  /**
+   * The same four outcomes said in the shared stage-and-cause vocabulary, so a WebSocket failure
+   * can be compared with an HTTP one instead of being the one surface with private words for it.
+   * These rows are asserted individually because a projection is a mapping, and a mapping whose
+   * rows are only checked for totality can be rewritten wholesale without any case objecting.
+   */
+  test("projects each outcome onto the shared stage and cause", () => {
+    expect(projectCodexWsFailure(stage({ sent: false, elapsedMs: null })))
+      .toEqual({ stage: "pre-header", cause: "transport-unsent" });
+    expect(projectCodexWsFailure(stage()))
+      .toEqual({ stage: "pre-header", cause: "transport-ambiguous" });
+    expect(projectCodexWsFailure(stage({ upstreamFrames: 3, controlFrames: 3 })))
+      .toEqual({ stage: "protocol-prelude", cause: "transport-ambiguous" });
+    expect(projectCodexWsFailure(stage({ upstreamFrames: 9, controlFrames: 2, relayedEvents: 7 })))
+      .toEqual({ stage: "semantic-output", cause: "transport-ambiguous" });
+  });
+
+  /**
+   * The shared table has to reach the same verdict the transport already enforces on its own, or
+   * one of the two is lying about this exchange. A create frame that never left is the only
+   * outcome the origin provably did not see.
+   */
+  test("only an unsent create frame may be sent again", () => {
+    const resendable = ([
+      stage({ sent: false, elapsedMs: null }),
+      stage(),
+      stage({ upstreamFrames: 3, controlFrames: 3 }),
+      stage({ upstreamFrames: 9, controlFrames: 2, relayedEvents: 7 }),
+    ]).map(candidate => {
+      const projected = projectCodexWsFailure(candidate);
+      return permitsResend(resendPermission(projected.stage, projected.cause));
+    });
+    expect(resendable).toEqual([true, false, false, false]);
   });
 
   test("renders every field, with n/a for the durations that do not exist yet", () => {

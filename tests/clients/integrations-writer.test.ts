@@ -159,6 +159,10 @@ function reverseJsonObjectKeys(value: unknown): unknown {
 }
 
 describe("apply", () => {
+  // The symlink regressions skip Windows: creating one there needs a privilege
+  // the hosted runners do not grant, and the boundary under test — lstat
+  // classification and rename-replacement of the named entry — is the shared
+  // code path every platform takes.
   test.skipIf(process.platform === "win32")("refuses an omo catalog symlink without changing its target", () => {
     const configPath = installOmo();
     const victim = join(dirname(home), "victim.json");

@@ -34,6 +34,30 @@ test("Usage renders every section in one scrollable column with a sticky strip",
   expect(css).toContain("position: sticky");
 });
 
+test("the usage models table scrolls sideways with model and provider pinned", async () => {
+  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const css = await Bun.file(new URL("../src/styles-usage-workspace.css", import.meta.url)).text();
+
+  // The table opts into the rules below by class. Without it `.tbl`'s `width: 100%` divides the
+  // shell across every column until an eight-digit token total folds onto a second line.
+  expect(page).toContain('className="tbl usage-models-tbl"');
+  // Doubled selector on purpose: this file is `@import`ed from the top of `styles.css`, so a
+  // single class ties `.tbl { width: 100% }` and loses to it on source order.
+  expect(css).toMatch(/\.tbl\.usage-models-tbl \{[^}]*width: max-content/);
+  // Model and provider stay readable while the numbers scroll under them. The offsets are one
+  // scrollport padding step negative so a stuck cell repaints the strip it slides over.
+  expect(css).toMatch(/\.tbl\.usage-models-tbl td:nth-child\(2\) \{\s*position: sticky/);
+  expect(css).not.toMatch(/^\.usage-models-tbl/m);
+  expect(css).toContain("left: calc(-1 * var(--space-3));");
+  expect(css).toContain("left: calc(var(--usage-models-model-col) - var(--space-3));");
+  // `--hover` is a 3% overlay, so a pinned cell that takes it as its whole background turns
+  // nearly transparent and the scrolled columns read through it.
+  expect(css).toContain("background: linear-gradient(var(--hover), var(--hover)), var(--surface);");
+  // The excluded-request caption is a line under the amount, not a wrap of the same line.
+  expect(page).toContain("usage-cost-note");
+  expect(css).toMatch(/\.usage-cost-note \{[^}]*display: block/);
+});
+
 test("connected Usage defaults to the exact machine key and can toggle hub-wide without local fallback", async () => {
   const src = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
   expect(src).toContain('useState<UsageScope>("machine")');

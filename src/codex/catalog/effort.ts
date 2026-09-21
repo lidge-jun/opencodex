@@ -8,7 +8,7 @@ import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCa
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
-import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts, type CodexReasoningLevel } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
@@ -286,7 +286,7 @@ export function isGpt56NativeSlug(slug: string): boolean {
 
 export function ensureGpt56ReasoningLevels(entry: RawEntry): void {
   const levels = Array.isArray(entry.supported_reasoning_levels)
-    ? entry.supported_reasoning_levels as Array<{ effort?: string }>
+    ? entry.supported_reasoning_levels as Array<Partial<CodexReasoningLevel>>
     : [];
   const out = [...levels];
   // max is a real native rung on the 5.6 family — always restored; ultra always advertised.
@@ -300,7 +300,7 @@ export function ensureGpt56ReasoningLevels(entry: RawEntry): void {
 
 export function ensureUltraReasoningLevel(entry: RawEntry): void {
   const levels = Array.isArray(entry.supported_reasoning_levels)
-    ? entry.supported_reasoning_levels as Array<{ effort?: string }>
+    ? entry.supported_reasoning_levels as Array<Partial<CodexReasoningLevel>>
     : [];
   if (levels.length === 0) return;
   const wanted = ["max", "ultra"];

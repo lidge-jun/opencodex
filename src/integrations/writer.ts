@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { createClineIO, ClineTransactionError } from "./cline-io";
 import { serializeClineDocument, preserveClineSelection } from "./cline-document";
 import { dirname } from "node:path";
-import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
+import type { ExportModel, ManagedContribution } from "../clients/config-export";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
@@ -33,6 +33,7 @@ import {
 } from "./ownership-policy";
 import { AmbiguousSelectorError, createdContainerPaths, mergeContribution, removeFragments } from "./merge";
 import { INTEGRATION_CLIENTS, isLoopbackOnly, resolveIntegrationPaths, type IntegrationClientId } from "./registry";
+import { declaredIntegrationTarget } from "./target";
 import { exportContextOf } from "./state";
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
@@ -251,7 +252,7 @@ function applyOrRefreshIntegration(
 ): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } = pre;
+  const { store, io, clientId, spec, target, configPath, detectDir, before, parsed, contribution, record, classified } = pre;
 
   // The detect directory preflight already resolved, so it cannot name a
   // different account than the config path this operation is about to write.
@@ -261,6 +262,35 @@ function applyOrRefreshIntegration(
   if (isLoopbackOnly(clientId) && shouldInjectApiAuthHeader(input.config)) {
     return refuse(clientId, "non_loopback", classified.state,
       `The generated ${clientId} integration is loopback-only and does not emit the admission header a non-loopback bind requires. Give it loopback access instead, through a tunnel or a local forwarder.`);
+  }
+  /*
+   * The write would land, and nothing would read it.
+   *
+   * This is deliberately a refusal rather than a warning attached to a success.
+   * The file is writable, our block merges cleanly, and the ownership record
+   * that follows would describe a real state of a real file — which is exactly
+   * how the original defect stayed invisible: every check the integration runs
+   * passed, the journal recorded a correct apply, and no model ever appeared in
+   * the client (#5348). Reporting the operation as done is the part that is
+   * wrong, so the operation does not report at all.
+   *
+   * Reached only when the store cannot be written: either this project's block
+   * is still in the config file, where removing it is the way forward, or the
+   * store is not a document whose shape has been observed. Where the store can
+   * be written the operation targets it and never arrives here.
+   *
+   * Apply, overwrite and refresh only. Disable removes bytes this project put
+   * in this file, and that removal is as effective as it ever was.
+   */
+  if (target.ineffective !== null) {
+    const readsFrom = target.ineffective.store;
+    const fallback = `Add the proxy as a provider in ${clientId}'s own settings instead; \`ocx export --client ${clientId}\` prints the model list to copy.`;
+    return refuse(clientId, "superseded_store", classified.state,
+      target.ineffective.why === "owned-config-file"
+        ? `${clientId} now reads its providers from ${readsFrom}, and opencodex still has a block in ${configPath}, which it no longer reads. Disable the ${clientId} integration to remove that block, then enable it again to write ${readsFrom}.`
+        : readsFrom === configPath
+          ? `opencodex does not recognise the schema of ${readsFrom}, the file ${clientId} reads its providers from, so it will not merge into it. ${fallback}`
+          : `${clientId} now reads its providers from ${readsFrom}, whose schema opencodex does not recognise, so writing ${configPath} would change nothing it loads. ${fallback}`);
   }
   if (classified.state === "conflict") {
     if (conflictPolicy === "refuse") {
@@ -372,7 +402,7 @@ function applyOrRefreshIntegration(
       }
       text = patched;
     } else {
-      text = clientId === "cline" ? serializeClineDocument(nextDocument) : serializeDocument(nextDocument, exportSpec.format);
+      text = clientId === "cline" ? serializeClineDocument(nextDocument) : serializeDocument(nextDocument, target.format);
     }
   } catch (error) {
     if (error instanceof AmbiguousSelectorError) {
@@ -460,7 +490,7 @@ export function refreshIntegration(input: IntegrationWriteInput): WriteOutcome {
 export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, spec, exportSpec, configPath, before, parsed, record, classified } = pre;
+  const { store, io, clientId, spec, target, configPath, before, parsed, record, classified } = pre;
 
   if (classified.state === "absent") {
     return { ok: true, changed: false, state: "absent", clientId, message: "not applied" };
@@ -532,7 +562,7 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
       }
       text = patched;
     } else {
-      text = clientId === "cline" ? serializeClineDocument(doc) : serializeDocument(doc, exportSpec.format);
+      text = clientId === "cline" ? serializeClineDocument(doc) : serializeDocument(doc, target.format);
     }
   } catch (error) {
     if (!(error instanceof UnserializableValueError)) throw error;
@@ -570,13 +600,21 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   const clientId = entry.clientId;
   const resolvedPath = input.resolvedPaths?.configPath
     ?? INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
-  // Restore acts on the path the operation was journaled against. Resolving a
-  // different path here would let an operation recorded for one home delete a
-  // file in another.
   const configPath = entry.configPath;
-  if (resolvedPath !== configPath) {
+  /*
+   * Restore acts on the path the operation was journaled against. Resolving a
+   * different path here would let an operation recorded for one home delete a
+   * file in another — but a client may legally have written more than one file,
+   * so the question is whether this client still names that location, not
+   * whether it is the config file. The answer also carries the contribution
+   * shape those bytes are in, which is what the state below is measured against.
+   */
+  const rowTarget = declaredIntegrationTarget({
+    clientId, configPath, resolvedConfigPath: resolvedPath, env: input.env, home: input.home,
+  });
+  if (rowTarget === null) {
     return refuse(clientId, "conflict", "conflict",
-      `that operation was recorded for ${configPath}, but this client now resolves to ${resolvedPath}`);
+      `that operation was recorded for ${configPath}, which this client no longer writes; it now resolves to ${resolvedPath}`);
   }
   if (clientId === "cline") {
     try { io = createClineIO(io, configPath, store, true); }
@@ -625,7 +663,7 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   // exact bytes when the snapshot was taken. Re-deriving it from the file would
   // mean guessing which entries are ours, and a wrong guess deletes a user's.
   const restoredRecord = entry.priorRecord;
-  const fresh = EXPORT_CLIENTS[clientId].buildContribution(exportContextOf(input));
+  const fresh = rowTarget.buildContribution(exportContextOf(input));
   /*
    * Does the restored record actually describe the restored bytes?
    *
