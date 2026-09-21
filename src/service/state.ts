@@ -437,7 +437,9 @@ function authoritativeState(
   paths: readonly string[],
   unknownStateError?: (reason: string) => Error,
 ): { current: ServiceInstallState | null; revision: number; fingerprint: string } {
-  const selected = selectAuthoritativeServiceState(inspectServiceStateEvidence(paths));
+  const selected = selectAuthoritativeServiceState(
+    inspectServiceStateEvidence(paths) as readonly ServiceStateRecordEvidence[],
+  );
   if (selected.kind === "unknown") {
     throw unknownStateError?.(selected.reason) ?? new Error(`${selected.reason}; nothing was written`);
   }
