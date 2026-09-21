@@ -51,7 +51,7 @@ function devinAliasCredentialSlots(providerId: string): string[] {
  * resort; both are re-validated because neither is trusted more than the
  * network value.
  */
-export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "devin"): string {
+export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "devin", apiKey?: string): string {
   // Provider-scoped, keyed by the configured provider id verbatim and consulted
   // FIRST. `devin-cli` is a deprecated alias for `devin`, but an unmigrated
   // config row still owns its old credential slot until the startup migration
@@ -72,7 +72,10 @@ export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "
   // directions closes that window: "devin" finds the not-yet-rekeyed
   // "devin-cli" credential, and a lingering "devin-cli" row finds a credential
   // already rekeyed to "devin". Every candidate passes the same allowlist — an
-  // alias slot is not trusted more than the literal one.
+  // alias slot is not trusted more than the literal one. The candidate must
+  // also own the key this request will transmit: provider-configured and
+  // forwarded keys are resolved outside the credential store, and borrowing a
+  // host from a different key would cross an account or regional boundary.
   // Only when this id owns no credential at all. A present credential whose
   // apiBaseUrl is missing or off-allowlist is a different situation: the rekey
   // refuses an occupied destination slot, so both ids can hold credentials that
@@ -84,7 +87,9 @@ export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "
   // closed.
   if (literalCredential === null || literalCredential === undefined) {
     for (const slot of devinAliasCredentialSlots(providerId)) {
-      const host = validateDevinApiBaseUrl(getCredential(slot)?.apiBaseUrl);
+      const credential = getCredential(slot);
+      if (!apiKey || credential?.access !== apiKey) continue;
+      const host = validateDevinApiBaseUrl(credential.apiBaseUrl);
       if (host !== undefined) return host;
     }
   }

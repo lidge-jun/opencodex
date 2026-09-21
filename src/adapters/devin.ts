@@ -612,7 +612,7 @@ export function createDevinAdapter(
       // The signed-in account's tenant decides the host, not the static registry
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
-      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId);
+      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId, apiKey);
       // One catalog read per turn serves model-UID resolution, the input
       // ceiling, and the chat pre-flight inside streamChatEvents. Failures are
       // not cached, so a second read would only pay another fetch timeout on

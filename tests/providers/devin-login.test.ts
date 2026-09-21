@@ -259,14 +259,14 @@ describe("devin tenant selection is provider-scoped", () => {
     // tenant host sitting on "devin-cli"; otherwise the key is sent to the US
     // default and Cognition answers permission_denied.
     await seedSlot("devin-cli", EU_HOST);
-    expect(resolveDevinApiServer(undefined, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(undefined, "devin", KEY)).toBe(EU_HOST);
   });
 
   test("the signed-in alias tenant wins over a configured baseUrl", async () => {
     // RegisterUser recorded the tenant on the credential. A leftover US
     // baseUrl on the rewritten config row must not override that account.
     await seedSlot("devin-cli", EU_HOST);
-    expect(resolveDevinApiServer(US_HOST, "devin")).toBe(EU_HOST);
+    expect(resolveDevinApiServer(US_HOST, "devin", KEY)).toBe(EU_HOST);
   });
 
   test("the literal slot wins when both alias ids hold a tenant", async () => {
