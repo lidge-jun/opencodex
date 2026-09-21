@@ -226,7 +226,7 @@ Claude Code 2.1.129+ 透過 `GET /v1/models?limit=1000` 發現閘道器模型，
 
 | 介面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `ocx-claude-<provider>--<model>` | `ocx-claude-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字元 base36 雜湊） | `claude-opus-4-8-ncb` |
 
 代理會按請求選擇別名族：`?ids=cli` 或 `?ids=desktop` 優先；否則，`claude-code/*`
@@ -242,8 +242,11 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 模型。在較舊的 Claude Code 版本中，選擇器保持原生——可透過 `ANTHROPIC_MODEL` 設定槽位，或在
 `/model` 中輸入任意已路由 id（Claude Code 會原樣傳遞字串）。
 
-**別名語法規則：**provider 不得包含 `/` 或 `--`，也不得等於 `native`；model 不得包含
-`/`。易讀形式無法表達的路由會回退到雜湊別名。模型 ID **可以**包含 `--`（解析時只按第一個
+**別名語法規則：**provider 不得包含 `/` 或 `--`，也不得等於 `native`。
+不含 `/` 或 `~` 的一般 model ID 使用 v1 前綴 `ocx-claude-…`。包含 `/` 或 `~` 的 model ID
+使用 v2 前綴 `ocx-claude2-…` 並跳脫（`/` → `~s`，`~` → `~t`），例如
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
+易讀形式無法表達的路由會回退到雜湊別名。模型 ID **可以**包含 `--`（解析時只按第一個
 `--` 拆分）；包含 `--` 的原生 slug 會回退到雜湊形式。
 
 **模型解析順序：**移除 `[1m]` 標記 → 解碼易讀別名 → 解碼 Desktop 雜湊別名 →
