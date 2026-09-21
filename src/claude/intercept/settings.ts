@@ -169,6 +169,25 @@ export function applyClaudeInterceptSettings(
   return { ok: true, changed: true, path };
 }
 
+/**
+ * Rewrite an env block opencodex already owns when it no longer matches what this run
+ * would write — a pre-auth `http://127.0.0.1:<port>` left behind by an upgrade would get
+ * a 407 from the now-authenticated proxy until `ocx ensure` or an apply ran. Unlike apply
+ * this never creates an absent env: only `stale` (owned) state is rewritten, so the
+ * runtime can call it on every start without enabling the integration for anyone else.
+ */
+export function migrateClaudeInterceptSettings(
+  env: ClaudeInterceptEnv,
+  configDir = claudeConfigDir(),
+): ClaudeInterceptSettingsWrite {
+  const path = settingsPath(configDir);
+  const state = inspectClaudeInterceptSettings(env, configDir);
+  if (state.kind === "unreadable") return { ok: false, reason: "unreadable", path };
+  if (state.kind === "foreign") return { ok: false, reason: "foreign_env", path };
+  if (state.kind !== "stale") return { ok: true, changed: false, path };
+  return applyClaudeInterceptSettings(env, configDir);
+}
+
 /** Remove the managed keys, but only the values opencodex owns. */
 export function removeClaudeInterceptSettings(
   ownedCaPath: string,
