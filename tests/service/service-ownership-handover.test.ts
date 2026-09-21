@@ -20,7 +20,7 @@ const INSTALLED: ServiceDiagnostic = {
 };
 
 const DESKTOP_CLAIM = { owner: "desktop", installId: "app-install-a", consentGeneration: 2 } as const;
-const DESKTOP: ServiceOwnershipResolution = { kind: "owned", ownership: DESKTOP_CLAIM };
+const DESKTOP: ServiceOwnershipResolution = { kind: "owned", ownership: DESKTOP_CLAIM, revision: 4 };
 const UNKNOWN: ServiceOwnershipResolution = { kind: "unknown", reason: "a service state path could not be read (EACCES)" };
 
 describe("repair under an owner that is not this CLI", () => {
@@ -84,8 +84,8 @@ describe("repair under an owner that is not this CLI", () => {
 
   test("a CLI owner repairs normally, and so does a record with no claim at all", async () => {
     const resolutions: ServiceOwnershipResolution[] = [
-      { kind: "none" },
-      { kind: "owned", ownership: { owner: "cli", installId: "npm-install", consentGeneration: 4 } },
+      { kind: "none", revision: 0 },
+      { kind: "owned", ownership: { owner: "cli", installId: "npm-install", consentGeneration: 4 }, revision: 8 },
     ];
     for (const resolution of resolutions) {
       let repaired = false;
@@ -122,10 +122,10 @@ describe("which service verbs are gated", () => {
    * repair would reactivate it.
    */
   test("install releases the marker only after the registration succeeded", () => {
-    expect(installCase).toContain("releaseServiceOwner()");
-    expect(installCase.indexOf("installServiceSafely")).toBeLessThan(installCase.indexOf("releaseServiceOwner()"));
+    expect(installCase).toContain("releaseServiceOwner(ownershipBeforeInstall");
+    expect(installCase.indexOf("installServiceSafely")).toBeLessThan(installCase.indexOf("releaseServiceOwner(ownershipBeforeInstall"));
     // The failure branch leaves before the release.
-    expect(installCase.indexOf("Service install cleanup failed")).toBeLessThan(installCase.indexOf("releaseServiceOwner()"));
+    expect(installCase.indexOf("Service install cleanup failed")).toBeLessThan(installCase.indexOf("releaseServiceOwner(ownershipBeforeInstall"));
   });
 
   test("start refuses on the same terms, because it activates the registration", () => {
@@ -144,4 +144,3 @@ describe("which service verbs are gated", () => {
     expect(readFileSync(repoPath("src", "service", "repair.ts"), "utf8")).not.toContain("releaseServiceOwner");
   });
 });
-

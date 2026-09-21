@@ -11,6 +11,7 @@ import { readPid, readRuntimePort } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import type { ServiceOwnership } from "../service/state";
 import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
+import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallFromPath } from "./install-detection.mjs";
@@ -326,14 +327,29 @@ export function checkUpdatePackageIntegrity(
  * the runtime, and treating it as such is how an unreadable record reactivates the npm
  * launcher over a takeover the user consented to.
  */
-async function resolvedRuntimeOwnership(): Promise<{ ownership: ServiceOwnership | null; ownershipUnknown: boolean }> {
+interface RuntimeOwnershipObservation {
+  readonly ownership: ServiceOwnership | null;
+  readonly ownershipUnknown: boolean;
+  readonly subjectToken: string;
+}
+
+async function resolvedRuntimeOwnership(): Promise<RuntimeOwnershipObservation> {
   try {
     const { resolveServiceOwnership } = await import("../service");
     const resolution = resolveServiceOwnership();
-    if (resolution.kind === "owned") return { ownership: resolution.ownership, ownershipUnknown: false };
-    return { ownership: null, ownershipUnknown: resolution.kind === "unknown" };
+    if (resolution.kind === "owned") return {
+      ownership: resolution.ownership,
+      ownershipUnknown: false,
+      subjectToken: JSON.stringify(["owned", resolution.revision, resolution.ownership]),
+    };
+    if (resolution.kind === "none") return {
+      ownership: null,
+      ownershipUnknown: false,
+      subjectToken: JSON.stringify(["none", resolution.revision]),
+    };
+    return { ownership: null, ownershipUnknown: true, subjectToken: "unknown" };
   } catch {
-    return { ownership: null, ownershipUnknown: true };
+    return { ownership: null, ownershipUnknown: true, subjectToken: "unknown" };
   }
 }
 
@@ -404,11 +420,16 @@ export async function runUpdate(): Promise<void> {
   } catch { /* best-effort */ }
   // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
   // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
-  let runtimePlan = planUpdateRuntimeHandling({
-    ...(await resolvedRuntimeOwnership()),
+  const initialOwnership = await resolvedRuntimeOwnership();
+  const runtimePlan = planUpdateRuntimeHandling({
+    ...initialOwnership,
     serviceInstalled: serviceWasInstalled,
   });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
+  if (!runtimePlan.mayReplacePackage) {
+    console.error("⚠️  Update stopped before tray handoff, runtime stop, or package replacement because runtime ownership is unknown.");
+    process.exit(1);
+  }
   let trayWasInstalled = false;
   let trayWasRunning = false;
   if (process.platform === "win32") {
@@ -456,20 +477,7 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
   let stopAttempted = false;
-  // Re-read at the point of action rather than trusting the plan formed above. Between the
-  // two the Windows tray handoff spawns children and the listen target is captured, so a
-  // takeover can land in between — and stopping a runtime that just changed hands is the
-  // failure this lane exists to prevent. Reassigning the one variable keeps the recovery
-  // branches and the restart hint reading the same decision as the stop.
-  {
-    const atStop = planUpdateRuntimeHandling({
-      ...(await resolvedRuntimeOwnership()),
-      serviceInstalled: serviceWasInstalled,
-    });
-    if (atStop.notice && atStop.notice !== runtimePlan.notice) console.log(atStop.notice);
-    runtimePlan = atStop;
-  }
-  if (runtimePlan.stopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
+  if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
     stopAttempted = true;
     console.log("⏹  Stopping the running proxy before updating...");
     const stopStdio = updateChildStdio();
@@ -530,26 +538,45 @@ export async function runUpdate(): Promise<void> {
     }
   }
 
-  console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
-
   const installStdio = updateChildStdio();
-  // Every post-update action below receives this path. For pnpm it is replaced only
-  // by a path returned after tree+shim verification; on rollback, activePath is
-  // likewise returned only after the old group has been verified again.
-  let postUpdateLauncher = join(packageRoot(), "bin", "ocx.mjs");
-  // The pnpm owner preflight has verified this package tree and global group. Keep that exact
-  // package path as the recovery starting point; the path returned by the update transaction
-  // replaces it only after post-update tree+shim verification succeeds.
-  if (installer === "pnpm" && owner) {
-    postUpdateLauncher = join(owner.packagePath, "bin", "ocx.mjs");
-  }
+  let postUpdateLauncher = installer === "pnpm" && owner
+    ? join(owner.packagePath, "bin", "ocx.mjs")
+    : join(packageRoot(), "bin", "ocx.mjs");
   let postUpdateLauncherUsable = true;
   let r: {
     status: number | null;
     signal?: NodeJS.Signals | null;
     stdout?: string | Buffer | null;
     stderr?: string | Buffer | null;
-  };
+  } | null = null;
+  const { serviceStatePaths } = await import("../service");
+  const replacementLease = acquireOwnershipMutationLease(serviceStatePaths());
+  let replacementRefusal: string | null = null;
+  try {
+  // Ownership can change while registry and stop work is in flight. Unknown at this exact
+  // boundary blocks replacement; a confirmed desktop claim still permits updating the idle
+  // npm installation while leaving the bundled sidecar alone.
+  const replacementOwnership = await resolvedRuntimeOwnership();
+  const replacementPlan = planUpdateRuntimeHandling({
+    ...replacementOwnership,
+    serviceInstalled: serviceWasInstalled,
+  });
+  const replacementLiveness = runtimePlan.mayStopRuntime
+    ? (await proxyIdentityAt(capturedListen.port, { hostname: capturedListen.hostname })
+        ? "live"
+        : probeProxyLiveness(capturedListen.port, capturedListen.hostname))
+    : "dead";
+  if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+    || !replacementPlan.mayReplacePackage
+    || replacementLiveness !== "dead") {
+    replacementRefusal = replacementPlan.notice
+      ?? (replacementLiveness === "live"
+        ? "⚠️  Update stopped because a proxy became live after the stop decision; rerun from the beginning."
+        : "⚠️  Update stopped because runtime ownership or liveness changed after the stop decision; rerun from the beginning.");
+  } else {
+  console.log(`Updating${latest ? ` to v${latest}` : ""}…\n$ ${bin} ${cmdArgs.join(" ")}`);
+
+  // Every post-update action below receives the verified active launcher.
   if (installer === "pnpm") {
     let update: ReturnType<typeof runPnpmGlobalUpdate>;
     try {
@@ -597,7 +624,26 @@ export async function runUpdate(): Promise<void> {
       ...target.options,
     });
   }
-  if (installStdio === "pipe") logSpawnOutput("", r);
+  if (r && installStdio === "pipe") logSpawnOutput("", r);
+  }
+  } finally {
+    replacementLease.release();
+  }
+  if (replacementRefusal) {
+    if (trayWasRunning) {
+      try {
+        const { startWindowsTray } = await import("../tray/windows");
+        startWindowsTray();
+      } catch { /* preserve the ownership refusal */ }
+    }
+    console.error(replacementRefusal);
+    process.exit(1);
+  }
+  if (!r) throw new Error("update replacement returned no result");
+  const postInstallPlan = planUpdateRuntimeHandling({
+    ...(await resolvedRuntimeOwnership()),
+    serviceInstalled: serviceWasInstalled,
+  });
   if (r.status === 0) {
     console.log(`\n✅ Updated${latest ? ` to v${latest}` : ""}.`);
     // Re-enter through the verified active package launcher. This keeps the Codex
@@ -628,7 +674,7 @@ export async function runUpdate(): Promise<void> {
     // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
-    if (runtimePlan.refreshService) {
+    if (postInstallPlan.mayRestoreService) {
       console.log("🔁 Refreshing the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
       const { reclaimListenPort } = await import("../server/port-reclaim");
@@ -685,7 +731,7 @@ export async function runUpdate(): Promise<void> {
               ...(await resolvedRuntimeOwnership()),
               serviceInstalled: true,
             });
-            if (!nowOwned.stopRuntime) {
+            if (!nowOwned.mayStopRuntime) {
               console.warn(nowOwned.notice ?? "⚠️  The background runtime is owned elsewhere; not starting a second proxy.");
               return;
             }
@@ -716,20 +762,20 @@ export async function runUpdate(): Promise<void> {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
       }
-    } else if (runtimePlan.stopRuntime) {
+    } else if (postInstallPlan.mayStopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
     }
   } else {
     if (stopAttempted && trayWasRunning && postUpdateLauncherUsable) {
       spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], { stdio: "ignore", windowsHide: true });
     }
-    if (stopAttempted && runtimePlan.refreshService && postUpdateLauncherUsable) {
+    if (stopAttempted && postInstallPlan.mayRestoreService && postUpdateLauncherUsable) {
       const service = spawnSync(process.execPath, [postUpdateLauncher, "service", "repair"], {
         stdio: "inherit",
         windowsHide: true,
       });
       if (service.status !== 0) console.warn("⚠️  Previous background service could not be restored; run 'ocx service repair'.");
-    } else if (stopAttempted && postUpdateLauncherUsable) {
+    } else if (stopAttempted && postUpdateLauncherUsable && postInstallPlan.mayStopRuntime) {
       const env = { ...process.env };
       delete env.OCX_SERVICE;
       const child = spawn(process.execPath, [postUpdateLauncher, "start", "--port", String(capturedListen.port)], {
@@ -739,6 +785,8 @@ export async function runUpdate(): Promise<void> {
         env: withProcessRuntimeProvenance(env),
       });
       child.unref();
+    } else if (stopAttempted && !postInstallPlan.mayStopRuntime) {
+      console.warn(postInstallPlan.notice ?? "⚠️  Runtime ownership changed during the update; not starting a second proxy.");
     } else if (stopAttempted) {
       console.error("opencodex: no verified active launcher remains for automatic recovery; reinstall opencodex manually.");
     }

@@ -29,6 +29,12 @@ tauri-plugin-single-instance = "=2.4.0"
 tauri-plugin-updater = "=2.9.0"
 tokio = { version = "=1.45.1", features = ["sync", "time"] }
 
+# Linux only, and already in this graph: `tao` enables its own `dbus` feature by default, so
+# `libdbus-sys` is compiled for every Linux build of this shell today. Naming it here adds a
+# session-bus probe for the StatusNotifier watcher without adding a package or a system library.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "=0.9.12"
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

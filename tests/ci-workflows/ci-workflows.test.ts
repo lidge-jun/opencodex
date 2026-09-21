@@ -843,9 +843,10 @@ describe("GitHub Actions hardening", () => {
       contents: "read",
     });
     
-    // Publication is the irreversible public act, so it waits for both packaging jobs;
-    // the full ordering contract is in tests/ci-workflows/release-pipeline-contract.test.ts.
-    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "package-standalone", "package-desktop"]);
+    // Publication is the irreversible public act, so it waits for the pre-publication
+    // verification of everything it will publish; the full ordering contract is in
+    // tests/ci-workflows/release-pipeline-contract.test.ts.
+    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "verify-release"]);
     expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
@@ -5583,8 +5584,10 @@ test.skipIf(process.platform === "win32")("release shell recovers only unverifie
       const script = prelude + (scenario.mode === "missing-receipt" ? "" : publish) + '\n'
         + (scenario.dry ? "" : `PUBLISHED=$(sed -n 's/^published=//p' "$GITHUB_OUTPUT")\n${smoke}`);
       const child = Bun.spawn(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+        // RESUME mirrors the workflow, where the env always defines it; the
+        // non-resume branches are what every scenario here exercises.
         env: { ...process.env, SCENARIO: scenario.mode, DRY_RUN: String(scenario.dry),
-          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", GITHUB_OUTPUT: output,
+          NPM_DIST_TAG: "latest", RELEASE_VERSION: "9.8.7", RESUME: "false", GITHUB_OUTPUT: output,
           GITHUB_STEP_SUMMARY: summary, CALLS: calls, COUNTER: join(dir, "counter") },
         stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });

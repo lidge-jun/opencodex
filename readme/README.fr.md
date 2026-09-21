@@ -92,23 +92,37 @@ Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
-### Application macOS dans la barre des menus
 
-Téléchargez l’application de bureau pour macOS, Windows ou Linux depuis la
-[page des releases](https://github.com/lidge-jun/opencodex/releases).
+<details>
+<summary><b>Application de bureau et widget macOS — bêta</b></summary>
 
-Un compagnon natif pour l’état du proxy, l’utilisation et les quotas des fournisseurs sans ouvrir
-le tableau de bord. Le code source se trouve dans [`app/`](../app) (Swift + AppKit, sans dépendance
-tierce). Téléchargez-le depuis la
-[page des releases](https://github.com/lidge-jun/opencodex/releases) ou compilez-le localement avec
+Une application native qui reprend le même tableau de bord, accompagnée d’une extension WidgetKit qui
+affiche l’état du proxy, l’utilisation du jour et les quotas des fournisseurs sans ouvrir de
+navigateur. Le proxy ne change pas : l’application détecte une instance en cours d’exécution ou
+démarre le sidecar `ocx` inclus, tandis que le tableau de bord reste accessible à l’adresse
+**http://localhost:10100**.
+
+Cette version est en bêta. Les versions distribuées sont signées pour en garantir l’intégrité, mais ne sont pas
+notariées : macOS demande donc un clic droit → **Ouvrir** au premier lancement, et Windows
+SmartScreen affiche un avertissement pour le programme d’installation. Le widget nécessite macOS 14
+ou une version ultérieure ; le modèle de données des instantanés qu’il affiche se trouve dans [`app/`](../app)
+(`MenuBarCore`).
+
+Téléchargez l’application depuis la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases),
+ou compilez-la localement avec
 `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
 
-Le premier lancement nécessite un clic droit → Ouvrir, car l’application est signée ad hoc et non
-notarisée. Consultez le [guide de l’application macOS dans la barre des menus](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-pour l’explication complète.
+Les emplacements d’installation, les fichiers de service et tous les autres éléments écrits sur le
+disque sont répertoriés dans [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed).
+Le [guide de l’application de bureau](https://lidge-jun.github.io/opencodex/guides/desktop-app/) et le
+[guide de l’application macOS dans la barre des menus](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
+détaillent l’installation sur chaque plateforme et le message de Gatekeeper.
 
-L’application inclut également un widget macOS 14+ affichant l’état du proxy, l’utilisation du jour et les quotas.
-Il peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
+</details>
+
+### Groupe de comptes ChatGPT
+
+opencodex peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
 comptes ChatGPT / Codex et actualisez leurs quotas 5 h / hebdomadaires / 30 j dans le tableau de bord.
 Avec le routage par quota, les nouvelles sessions peuvent utiliser le compte opérationnel le moins sollicité ;
 les modes round-robin et fill-first appliquent leurs propres politiques. Les fils Codex existants restent

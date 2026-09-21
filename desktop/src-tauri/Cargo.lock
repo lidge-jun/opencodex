@@ -2543,6 +2543,7 @@ dependencies = [
 name = "opencodex-desktop"
 version = "2.61.0"
 dependencies = [
+ "dbus",
  "reqwest 0.12.24",
  "serde",
  "serde_json",

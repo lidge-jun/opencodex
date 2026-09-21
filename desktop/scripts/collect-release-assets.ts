@@ -11,13 +11,13 @@ import { join, resolve } from "node:path";
 
 type BundleKind = "dmg" | "app.tar.gz" | "msi" | "appimage" | "deb";
 
-interface BundleSpec {
+export interface BundleSpec {
   kind: BundleKind;
   dir: string;
   name: string;
 }
 
-const bundlesByTarget: Record<string, BundleSpec[]> = {
+export const bundlesByTarget: Record<string, BundleSpec[]> = {
   "universal-apple-darwin": [
     { kind: "dmg", dir: "dmg", name: "macos.dmg" },
     { kind: "app.tar.gz", dir: "macos", name: "macos.app.tar.gz" },

@@ -68,6 +68,8 @@ mod macos {
         Unauthorized,
         Http,
         Decode,
+        /// The port answered, but as something other than the runtime this shell is bound to.
+        Foreign,
     }
 
     fn state_for_error(
@@ -85,6 +87,18 @@ mod macos {
                 "Needs API key",
                 Some("This proxy requires an API key.".into()),
             ),
+            // A runtime this app did not start is a different event from a fault, so it does not
+            // borrow the vocabulary of one. "degraded" would claim the proxy is misbehaving and
+            // "unreachable" would claim nothing is there; a user who started the runtime from npm
+            // or the CLI themselves would read either as a defect in a setup that is working.
+            // The widget has no red for this: `tone` in `app/Sources/OpenCodexWidget/Views.swift`
+            // maps a state it does not know to the neutral secondary colour, which is the right
+            // signal for "serving, just not ours".
+            ErrorKind::Foreign => (
+                "foreign",
+                "External runtime",
+                Some("This port is served by a runtime this app did not start.".into()),
+            ),
             ErrorKind::Http | ErrorKind::Decode => ("degraded", "Degraded", detail),
         }
     }
@@ -95,6 +109,7 @@ mod macos {
             ProxyError::Unauthorized => (ErrorKind::Unauthorized, None),
             ProxyError::Http(status) => (ErrorKind::Http, Some(format!("HTTP {status}"))),
             ProxyError::Decode(error) => (ErrorKind::Decode, Some(error.to_string())),
+            ProxyError::Foreign => (ErrorKind::Foreign, None),
         }
     }
 
@@ -434,7 +449,7 @@ mod macos {
         }
 
         #[test]
-        fn error_state_mapping_covers_four_kinds() {
+        fn error_state_mapping_covers_every_kind() {
             assert_eq!(
                 state_for_error(ErrorKind::Unreachable, None).0,
                 "unreachable"
@@ -451,6 +466,19 @@ mod macos {
                 state_for_error(ErrorKind::Decode, Some("bad".into())).0,
                 "degraded"
             );
+            assert_eq!(state_for_error(ErrorKind::Foreign, None).0, "foreign");
+        }
+
+        #[test]
+        fn a_foreign_runtime_is_not_reported_as_a_failure() {
+            // The mapping is the whole point of the variant. Folding it into either neighbour
+            // tells a user whose own CLI or npm runtime holds the port that something is broken,
+            // and the widget is the one surface where that claim is read without any context.
+            assert_eq!(proxy_error(&ProxyError::Foreign).0, ErrorKind::Foreign);
+            let (state, title, detail) = state_for_error(ErrorKind::Foreign, None);
+            assert_eq!(state, "foreign");
+            assert_eq!(title, "External runtime");
+            assert!(detail.unwrap().contains("did not start"));
         }
 
         #[test]

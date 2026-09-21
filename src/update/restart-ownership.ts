@@ -1,5 +1,10 @@
 import { resolveServiceOwnership } from "../service";
 import type { ServiceOwnershipResolution } from "../service";
+import { serviceStatePaths } from "../service/state";
+import {
+  acquireOwnershipMutationLease,
+  OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
+} from "../service/ownership-mutation-lease.mjs";
 import { planUpdateRuntimeHandling } from "./runtime-ownership.mjs";
 
 export type { ServiceOwnershipResolution };
@@ -27,6 +32,23 @@ export function updateRestartVeto(
     // The restart decision does not refresh the service; only the stop veto is read here.
     serviceInstalled: false,
   });
-  if (plan.stopRuntime) return null;
+  if (plan.mayStopRuntime) return null;
   return plan.notice ?? "The background runtime is owned elsewhere; it was left running.";
+}
+
+export async function runUpdateRestartWithOwnershipLease<T>(
+  resolve: (() => ServiceOwnershipResolution) | undefined,
+  restart: () => Promise<T>,
+): Promise<{ readonly kind: "veto"; readonly notice: string } | { readonly kind: "ran"; readonly value: T }> {
+  const lease = acquireOwnershipMutationLease(serviceStatePaths());
+  const previous = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = lease.token;
+  try {
+    const veto = updateRestartVeto(resolve);
+    return veto ? { kind: "veto", notice: veto } : { kind: "ran", value: await restart() };
+  } finally {
+    if (previous === undefined) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+    else process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV] = previous;
+    lease.release();
+  }
 }

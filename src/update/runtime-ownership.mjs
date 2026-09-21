@@ -7,17 +7,6 @@
  * situation separately is how a fix ships on one side only.
  */
 
-/*
- * There is deliberately no ownership PARSER here any more.
- *
- * This module used to carry one so the Node launcher could read the record without importing
- * TypeScript, kept "in step" with the authoritative reader by a test that drove the same
- * shapes through both. It was not in step: it inspected one path and treated a record that
- * failed the whole install-state contract as an unowned runtime whenever its `ownership`
- * field was simply absent. Reading and resolving now live in
- * `src/service/install-state-contract.mjs`, which both runtimes import, so there is one
- * algorithm rather than two that a test has to keep aligned.
- */
 /**
  * Decide how an update treats a runtime it may not own.
  *
@@ -38,25 +27,24 @@
  * two-record ownership design accepted; `ocx service install` clears the marker and restores
  * the ordinary path.
  *
- * Both returned flags are VETOES, not commands: each updater already has its own reasons to
- * stop the proxy and to refresh the service, and this plan can only take them away.
+ * The three returned flags are separate authorities, not commands. In particular, leaving
+ * a runtime running is not permission to replace the package it may be executing from.
  *
- * THE LIMIT OF THIS RULE. It reads the recorded claim, not the live process. If the app was
- * deleted and the user then starts an npm proxy by hand, the stale claim still vetoes the
- * stop and the update replaces package files under a live server. Proving WHICH runtime is
- * answering needs the identity the bundled CLI's resolve contract will carry; until then the
- * notice tells the user how to clear the marker.
+ * A recorded desktop claim does not prove which binary is live. Until the bundled resolver
+ * carries installation identity, it therefore blocks package replacement as well as stop and
+ * restoration; the notice tells a stale-marker user how to take ownership back explicitly.
  *
  * @param {{ ownership: { owner: string, installId: string, consentGeneration: number } | null, ownershipUnknown?: boolean, serviceInstalled: boolean }} input
- * @returns {{ stopRuntime: boolean, refreshService: boolean, notice: string | null }}
+ * @returns {{ mayReplacePackage: boolean, mayStopRuntime: boolean, mayRestoreService: boolean, notice: string | null }}
  */
 export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false, serviceInstalled }) {
   // Unreadable, malformed or contradictory is not "nobody owns it". Reading it that way is
   // how a permissions error reactivates the npm launcher over a consented takeover.
   if (ownershipUnknown) {
     return {
-      stopRuntime: false,
-      refreshService: false,
+      mayReplacePackage: false,
+      mayStopRuntime: false,
+      mayRestoreService: false,
       notice: "⚠️  The background runtime's recorded owner could not be determined, so it was "
         + "left running and the service registration was not touched. "
         + "Run 'ocx service install' to re-register the service and take the runtime back.",
@@ -67,13 +55,68 @@ export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false,
   // registration.
   if (ownership && ownership.owner !== "cli") {
     return {
-      stopRuntime: false,
-      refreshService: false,
+      // A claim does not prove which binary is live. A stale desktop marker beside a
+      // manually started npm proxy would otherwise replace that proxy's executing files.
+      mayReplacePackage: false,
+      mayStopRuntime: false,
+      mayRestoreService: false,
       notice: `🖥️  The desktop app owns the background runtime (install ${ownership.installId}, `
-        + `consent generation ${ownership.consentGeneration}). It was left running, and the `
+        + `consent generation ${ownership.consentGeneration}). It and the npm package were left unchanged, and the `
         + "service registration was neither re-enabled nor restarted. "
         + "If the desktop app is gone, run 'ocx service install' to take the runtime back.",
     };
   }
-  return { stopRuntime: true, refreshService: serviceInstalled, notice: null };
+  return {
+    mayReplacePackage: true,
+    mayStopRuntime: true,
+    mayRestoreService: serviceInstalled,
+    notice: null,
+  };
+}
+
+/** Decide recovery after this updater already stopped the prior CLI-owned runtime. */
+export function planStoppedRuntimeRecovery({
+  stopAttempted,
+  ownership,
+  ownershipUnknown = false,
+  sameOwner,
+  liveness,
+  serviceInstalled,
+  launcherUsable,
+  hadRuntimeState,
+}) {
+  if (!stopAttempted) return { action: "none", reason: "not-stopped" };
+  if (ownershipUnknown) return { action: "manual", reason: "ownership-unknown" };
+  if (!sameOwner || (ownership && ownership.owner !== "cli")) {
+    return { action: "none", reason: "ownership-transferred" };
+  }
+  if (liveness !== "dead") return { action: "manual", reason: `runtime-${liveness}` };
+  if (!launcherUsable) return { action: "manual", reason: "launcher-unavailable" };
+  if (serviceInstalled) return { action: "service", reason: "same-cli-owner" };
+  if (hadRuntimeState) return { action: "direct", reason: "same-cli-owner" };
+  return { action: "none", reason: "nothing-to-restore" };
+}
+
+/**
+ * Re-read the current package runtime before probing. The result keeps an absent current
+ * record distinct from a dead captured endpoint while still projecting one fail-closed
+ * liveness verdict for replacement and recovery decisions.
+ */
+export function inspectPackageRuntimeLiveness({ capturedTarget, readCurrentTarget, probe }) {
+  const currentTarget = readCurrentTarget();
+  const observations = new Map();
+  const inspect = target => {
+    const key = `${target.hostname}:${target.port}`;
+    if (!observations.has(key)) observations.set(key, probe(target));
+    return observations.get(key);
+  };
+  // Probe the fresh record first. It is the address a replacement runtime may have
+  // published while the updater was waiting on the ownership lease.
+  const current = currentTarget.kind === "target" ? inspect(currentTarget.target) : currentTarget.kind;
+  const captured = inspect(capturedTarget);
+  const verdicts = current === "absent" ? [captured] : [current, captured];
+  const overall = verdicts.includes("live")
+    ? "live"
+    : verdicts.includes("unknown") ? "unknown" : "dead";
+  return { current, captured, overall };
 }

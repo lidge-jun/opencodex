@@ -1,23 +1,33 @@
-import { accessSync, chmodSync, closeSync, constants as fsConstants, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
+import { atomicWriteFileStreamed } from "../config/atomic-write";
 import { resolveCodexHomeDir, type CodexHomeDeps } from "../codex/home";
 import { resolveCodexSqliteHome } from "../codex/paths";
 import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
 import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
-import { hardenSecretPath } from "../lib/windows-secret-acl";
-import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isProtectedHomeUnderTest, isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { isStandaloneBinary } from "../lib/standalone";
 import {
   inspectInstallStateBytes,
   parseInstallStateRecord,
   parseOwnershipClaim,
-  resolveOwnershipFromEvidence,
+  SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+  SERVICE_OWNERSHIP_PROTOCOL_VERSION,
+  selectAuthoritativeServiceState,
+  serviceStateFingerprint,
   serviceStateFilesFor,
 } from "./install-state-contract.mjs";
+import type { ServiceStateRecordEvidence } from "./state-record.mjs";
+import { assertServiceStateLocksOwned, withServiceStateLocks, type ServiceStateLockHooks } from "./state-lock";
+import { withOwnershipMutationLease, type OwnershipMutationLeaseOptions } from "./ownership-mutation-lease.mjs";
+import {
+  assessServiceTakeoverCompatibility,
+  sameServiceTakeoverCompatibility,
+  type ManagingCliObservation,
+  type ServiceTakeoverCompatibility,
+} from "./ownership-compatibility";
 
 /**
  * Written only by the launchd plist and the systemd unit. `OCX_SERVICE=1` cannot stand in
@@ -28,6 +38,7 @@ export const SERVICE_MANAGED_ENV = "OCX_SERVICE_MANAGED";
 
 export const LABEL = "com.opencodex.proxy";
 export const TASK = "opencodex-proxy";
+export { SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION, SERVICE_OWNERSHIP_PROTOCOL_VERSION };
 
 // This module lives one level below the original src/service.ts, so path-relative
 // lookups anchored at that file's directory go through this constant instead.
@@ -143,8 +154,6 @@ function defaultOpenCodexHome(): string {
 }
 
 export function serviceStatePathsForOpenCodexHome(opencodexHome: string): string[] {
-  // Shared with the Node launcher, which has to consult the SAME list: reading only the
-  // anchor is how it missed a claim recorded on the legacy default-home path.
   return serviceStateFilesFor(opencodexHome, defaultOpenCodexHome());
 }
 
@@ -264,6 +273,8 @@ export interface ServiceInstallState {
    * one as its own prior consent.
    */
   consentGenerationCeiling?: number;
+  /** Written only by CLIs whose start/repair/update paths honor a desktop claim. */
+  ownershipProtocolVersion?: number;
 }
 
 /**
@@ -341,6 +352,7 @@ function installProvenanceRecord(backend: ServiceBackend, launcherPath?: string 
     codexSqliteHome: resolveCodexSqliteHome({ codexHome }),
     bunPath: bun,
     cliPath: cli,
+    ownershipProtocolVersion: SERVICE_OWNERSHIP_PROTOCOL_VERSION,
     ...(launcherPath ? { launcherPath } : {}),
     backend,
     ...(backend === "native" ? { winswVersion: WINSW_VERSION, winswSha256: WINSW_SHA256 } : {}),
@@ -357,40 +369,22 @@ function installProvenanceRecord(backend: ServiceBackend, launcherPath?: string 
  * runtime back to the npm launcher without saying anything. Preserving it here is what makes
  * the consent durable.
  */
-export function writeServiceInstallState(backend: ServiceBackend = "scheduler", launcherPath?: string | null): void {
+export function writeServiceInstallState(
+  backend: ServiceBackend = "scheduler",
+  launcherPath?: string | null,
+  deps: ServiceStateSwapDeps = {},
+): void {
   swapServiceInstallState(current => ({
     ...installProvenanceRecord(backend, launcherPath),
-    // Resolved INSIDE the swap, which runs while the anchor lock is held, and across every
-    // state path so a claim living only on the legacy mirror is carried onto the anchor.
-    //
-    // Resolving before the lock was a lost-update window of its own: a takeover recorded
-    // between the resolution and the swap's base read lands in `current`, passes the revision
-    // check untouched, and is then overwritten by the older claim this function captured.
-    // The compare-and-swap cannot see that, because the stale value never came from the base.
-    //
-    // This does NOT refuse on an unknown resolution. It runs at the END of a successful
-    // install or repair, where a throw would report a service that is registered and running
-    // as a failure. The fail-closed decision belongs in front of the mutation, where repair
-    // and the updaters make it; here the job is to preserve as much as can be read.
-    ...preservedConsent(current, resolveServiceOwnership()),
-  }));
+    ...preservedConsent(current),
+  }), deps);
 }
 
 /** The ownership half of a record: the claim itself plus the generation high-water mark. */
 function preservedConsent(
   current: ServiceInstallState | null,
-  resolution: ServiceOwnershipResolution,
 ): Pick<ServiceInstallState, "ownership" | "consentGenerationCeiling"> {
-  // Both inputs are read under the lock, and they can still disagree: `current` is the anchor
-  // alone, the resolution spans every path. Never let the older grant win, and on an equal
-  // generation keep `current` — the anchor is the record every reader resolves first, so
-  // preferring it is the fail-safe tie.
-  const resolved = resolution.kind === "owned" ? resolution.ownership : undefined;
-  const ownership = resolved === undefined
-    ? current?.ownership
-    : current?.ownership && current.ownership.consentGeneration >= resolved.consentGeneration
-      ? current.ownership
-      : resolved;
+  const ownership = current?.ownership;
   const ceiling = Math.max(current?.consentGenerationCeiling ?? 0, ownership?.consentGeneration ?? 0);
   return {
     ...(ownership ? { ownership } : {}),
@@ -399,23 +393,16 @@ function preservedConsent(
 }
 
 export function readServiceInstallState(): ServiceInstallState | null {
-  for (const path of serviceStatePaths()) {
-    try {
-      const parsed = parseServiceInstallState(JSON.parse(readFileSync(path, "utf8")));
-      if (parsed) return parsed;
-    } catch {
-      /* try the next known state path */
-    }
-  }
-  return null;
+  const resolved = resolveServiceState();
+  return resolved.kind === "state" ? resolved.state : null;
 }
 
-/** Raised when a state write kept losing its compare-and-swap; NOTHING was written. */
+/** Raised when a non-cooperating writer prevents a stable authoritative commit. */
 export class ServiceStateConflictError extends Error {
   constructor(readonly path: string, readonly attempts: number) {
     super(
       `service install state at ${path} was rewritten by another process during all ${attempts} `
-      + "compare-and-swap attempts; nothing was written. Re-run the command.",
+      + "compare-and-swap attempts; a stable commit could not be verified. Re-run the command.",
     );
     this.name = "ServiceStateConflictError";
   }
@@ -434,177 +421,43 @@ export interface ServiceStateSwapDeps {
   beforeCommit?: (attempt: number) => void;
   /** How long to wait for another process to release the anchor lock. */
   lockWaitMs?: number;
+  /** Deterministic lock seams for failure-order tests. */
+  lockHooks?: ServiceStateLockHooks;
+  /** Atomic publisher seam. The callback must run immediately before its commit point. */
+  commitStateFile?: (path: string, serialized: string, validate: () => void) => void;
+  /** A mirror failure occurs after the authority committed and is therefore diagnostic. */
+  onMirrorError?: (path: string, error: unknown) => void;
+  /** Allows consented mutations to preserve a machine-readable unknown-subject error. */
+  unknownStateError?: (reason: string) => Error;
+  /** Shared with update/install/start so replacement and ownership mutation cannot overlap. */
+  mutationLease?: OwnershipMutationLeaseOptions;
+}
+
+export interface ServiceStateMutationContext {
+  readonly revision: number;
 }
 
 const SERVICE_STATE_SWAP_ATTEMPTS = 5;
-const SERVICE_STATE_LOCK_WAIT_MS = 2_000;
-const SERVICE_STATE_LOCK_POLL_MS = 20;
-/**
- * How old a lock must be before it is treated as abandoned.
- *
- * It has to exceed the longest legitimate critical section, not the typical one. On Windows
- * each committed path runs `hardenSecretPath` synchronously, whose own documentation records
- * a worst case around ninety seconds for sequential calls under load; a thirty-second
- * threshold would let a second writer evict a holder that is simply still working, and both
- * would then compute the same base revision and write over each other.
- */
-const SERVICE_STATE_LOCK_STALE_MS = 300_000;
-const SERVICE_STATE_REPLACE_ATTEMPTS = 5;
-const SERVICE_STATE_REPLACE_RETRY_MS = 40;
-/** Lock paths this process holds, with the token written into each and a re-entrancy depth. */
-const heldStateLocks = new Map<string, { depth: number; token: string }>();
 
-/** The token inside a lock file, or null when it cannot be read. */
-function readLockToken(lockPath: string): string | null {
-  try { return readFileSync(lockPath, "utf8").trim() || null; } catch { return null; }
+function authoritativeState(
+  paths: readonly string[],
+  unknownStateError?: (reason: string) => Error,
+): { current: ServiceInstallState | null; revision: number; fingerprint: string } {
+  const selected = selectAuthoritativeServiceState(
+    inspectServiceStateEvidence(paths) as readonly ServiceStateRecordEvidence[],
+  );
+  if (selected.kind === "unknown") {
+    throw unknownStateError?.(selected.reason) ?? new Error(`${selected.reason}; nothing was written`);
+  }
+  if (selected.kind === "none") return { current: null, revision: 0, fingerprint: "none" };
+  const current = selected.state as ServiceInstallState;
+  return { current, revision: selected.revision, fingerprint: serviceStateFingerprint(current) };
 }
 
-function isFileExistsError(error: unknown): boolean {
-  return Boolean(error) && typeof error === "object" && "code" in (error as object)
-    && (error as { code?: unknown }).code === "EEXIST";
-}
-
-/**
- * Hold an exclusive lock over the anchor record for one whole read-modify-write.
- *
- * The revision check alone cannot make the swap atomic: two processes can both pass it,
- * both commit, and both verify their own bytes, after which the second silently drops the
- * first's mutation and reports success. `O_EXCL` creation is the cheap cross-process
- * exclusion that closes it for every writer that comes through here.
- *
- * The revision check stays anyway, because this lock binds only cooperating writers — an
- * older `ocx` on the same machine does not take it.
- *
- * Re-entrant per process. A swap nested inside another one is a caller ordering its own
- * writes, not a race, and blocking it would be a self-deadlock.
- */
-function withServiceStateLock<T>(anchor: string, run: () => T, waitMs = SERVICE_STATE_LOCK_WAIT_MS): T {
-  const lockPath = `${anchor}.lock`;
-  const held = heldStateLocks.get(lockPath);
-  if (held !== undefined) {
-    held.depth += 1;
-    try { return run(); } finally { releaseHeldLock(lockPath); }
-  }
-  const dir = dirname(lockPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + waitMs;
-  const token = randomUUID();
-  let fd: number;
-  for (;;) {
-    try {
-      fd = openSync(lockPath, "wx", 0o600);
-      break;
-    } catch (error) {
-      // A lock we could not create for any reason OTHER than "it is held" is a filesystem
-      // failure, and writing the record anyway is the unprotected path this exists to close.
-      if (!isFileExistsError(error)) throw error;
-      if (Date.now() < deadline) { Bun.sleepSync(SERVICE_STATE_LOCK_POLL_MS); continue; }
-      // Break a lock whose holder is gone. Age comes from the lock file itself, so a holder
-      // that is merely slow keeps refusing us rather than being evicted mid-write.
-      //
-      // The token is re-read and compared before the unlink: without it, a holder that
-      // released and a NEW holder that took the lock in the same instant would be evicted as
-      // if it were the abandoned one, and two writers would proceed from one base revision.
-      const abandoned = readLockToken(lockPath);
-      let ageMs: number | null = null;
-      try { ageMs = Date.now() - statSync(lockPath).mtimeMs; } catch { ageMs = null; }
-      if (ageMs !== null && ageMs > SERVICE_STATE_LOCK_STALE_MS) {
-        if (readLockToken(lockPath) === abandoned) {
-          try { unlinkSync(lockPath); } catch { /* another process broke it first */ }
-        }
-        continue;
-      }
-      throw new Error(
-        `another process is writing the service install state at ${anchor} and did not release `
-        + `it within ${waitMs}ms; nothing was written. Re-run the command.`,
-      );
-    }
-  }
-  // Identify the holder inside the file so neither eviction nor release can remove a lock
-  // some other process has since taken.
-  try { writeFileSync(fd, `${token}\n`, { encoding: "utf8" }); } catch { /* best-effort */ }
-  heldStateLocks.set(lockPath, { depth: 1, token });
-  try {
-    return run();
-  } finally {
-    try { closeSync(fd); } catch { /* best-effort */ }
-    releaseHeldLock(lockPath);
-  }
-}
-
-function releaseHeldLock(lockPath: string): void {
-  const held = heldStateLocks.get(lockPath);
-  if (held === undefined) return;
-  held.depth -= 1;
-  if (held.depth > 0) return;
-  heldStateLocks.delete(lockPath);
-  // Remove OUR lock instance only. If the file on disk carries a different token, this
-  // holder was evicted as stale and someone else owns the pathname now; unlinking it would
-  // hand a third writer the lock while the second is still inside its critical section.
-  if (readLockToken(lockPath) !== held.token) return;
-  try { unlinkSync(lockPath); } catch { /* best-effort */ }
-}
-
-/** One state path's record, or null when it is absent or unparseable. Throws if unreadable. */
-function readServiceInstallStateAt(path: string): ServiceInstallState | null {
-  const evidence = inspectServiceStateEvidence([path])[0]!;
-  // Unreadable is not absent. Treating EACCES as "no record" would compute a swap from an
-  // empty base and erase an ownership claim we were merely not allowed to look at.
-  if (evidence.kind === "unreadable") {
-    throw new Error(
-      `service install state at ${path} could not be read (${evidence.reason}), so its recorded `
-      + "owner cannot be preserved; nothing was written. Fix the file's permissions and retry.",
-    );
-  }
-  // Invalid IS overwritten: there is no claim in an unparseable record to preserve.
-  return evidence.kind === "valid" ? evidence.state : null;
-}
-
-/**
- * Publish one state file, replacing it as a unit.
- *
- * An in-place write truncates first, so a kill, a power loss or a failed write between the
- * truncate and the last byte leaves the anchor empty or half-serialized. That used to read
- * back as "no install state"; since the reader became fail-closed it reads as `unknown`,
- * which blocks `service start`, repair, restart and every update until the operator runs a
- * takeover install. Writing a sibling temporary file and renaming it means the previous valid
- * record survives an interrupted commit.
- *
- * The temporary file is hardened BEFORE the rename, not after: between rename and chmod the
- * record would otherwise be readable at the default mode.
- *
- * Windows can refuse the replace while a scanner or another reader holds the destination
- * open. That is transient, so it is retried briefly and then falls back to the in-place
- * write — a narrow torn-write window is a better failure than an install that cannot record
- * what it just registered.
- */
-function commitServiceStateFile(path: string, serialized: string): void {
-  const dir = dirname(path);
-  recordOwnedConfigPath(getConfigDir(), path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const staged = `${path}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
-  try {
-    writeFileSync(staged, serialized, { encoding: "utf8", mode: 0o600 });
-    try { chmodSync(staged, 0o600); } catch { /* best-effort */ }
-    if (process.platform === "win32") hardenSecretPath(staged, { required: true });
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        renameSync(staged, path);
-        return;
-      } catch {
-        if (attempt >= SERVICE_STATE_REPLACE_ATTEMPTS - 1) {
-          writeFileSync(path, serialized, { encoding: "utf8", mode: 0o600 });
-          try { chmodSync(path, 0o600); } catch { /* best-effort */ }
-          if (process.platform === "win32") hardenSecretPath(path, { required: true });
-          return;
-        }
-        Bun.sleepSync(SERVICE_STATE_REPLACE_RETRY_MS);
-      }
-    }
-  } finally {
-    // A rename that succeeded consumed the staged path; anything left is ours to clean up.
-    if (existsSync(staged)) { try { unlinkSync(staged); } catch { /* best-effort */ } }
-  }
+function commitServiceStateFile(path: string, serialized: string, validate: () => void): void {
+  atomicWriteFileStreamed(path, descriptor => {
+    writeFileSync(descriptor, serialized, { encoding: "utf8" });
+  }, { validateBeforeRename: validate });
 }
 
 /**
@@ -621,41 +474,79 @@ function commitServiceStateFile(path: string, serialized: string): void {
  * because two writers racing from one base both compute the same next revision — identical
  * bytes mean nothing was lost, and differing bytes mean something was.
  *
- * WHAT THE LOCK IS. {@link withServiceStateLock} holds the anchor exclusively for the whole
- * read-modify-write, because the revision check alone is not atomic: two processes can both
- * pass it, both commit and both verify their own bytes, after which the second silently
- * drops the first's mutation and reports success. The revision check remains the guard
- * against a writer that does not take the lock, such as an older `ocx` on the same machine.
+ * The final path is the authority. With a custom home that is the legacy default-home path —
+ * the only path every writer can derive — and the active-home path is a compatibility mirror.
+ * The authority's atomic rename is the commit point. A mirror failure is reported but cannot
+ * roll back or reclassify the already committed mutation; the next writer repairs the mirror.
  */
 export function swapServiceInstallState(
-  mutate: (current: ServiceInstallState | null) => ServiceInstallState | null,
+  mutate: (current: ServiceInstallState | null, context: ServiceStateMutationContext) => ServiceInstallState | null,
   deps: ServiceStateSwapDeps = {},
 ): ServiceInstallState | null {
   const paths = deps.paths ?? serviceStateWritePaths();
-  // The anchor is the first path, which is the state path for THIS OpenCodex home;
-  // `readServiceInstallState` reads the same list in the same order, so the record the
-  // swap compares against is the record every reader resolves. The remaining paths are
-  // legacy mirrors and receive a copy of whatever the anchor commits.
-  const anchor = paths[0];
-  if (anchor === undefined) throw new Error("refusing to swap service install state with no state path");
+  const authority = paths.at(-1);
+  if (authority === undefined) throw new Error("refusing to swap service install state with no state path");
+  const mirrors = paths.filter(path => path !== authority);
   const attempts = deps.attempts ?? SERVICE_STATE_SWAP_ATTEMPTS;
-  return withServiceStateLock(anchor, () => {
+  const publish = deps.commitStateFile ?? commitServiceStateFile;
+  return withOwnershipMutationLease(paths, () => withServiceStateLocks(paths, () => {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const base = readServiceInstallStateAt(anchor);
-      const baseRevision = base?.revision ?? 0;
-      const candidate = mutate(base);
-      if (candidate === null) return base;
-      const next: ServiceInstallState = { ...candidate, revision: baseRevision + 1 };
+      const base = authoritativeState(paths, deps.unknownStateError);
+      const candidate = mutate(base.current, { revision: base.revision });
+      if (candidate === null) return base.current;
+      if (base.revision >= Number.MAX_SAFE_INTEGER) {
+        throw new Error("service state revision is exhausted; refusing to publish an unversioned mutation");
+      }
+      const next: ServiceInstallState = { ...candidate, revision: base.revision + 1 };
       const serialized = JSON.stringify(next, null, 2) + "\n";
       deps.beforeCommit?.(attempt);
-      if ((readServiceInstallStateAt(anchor)?.revision ?? 0) !== baseRevision) continue;
-      for (const path of paths) commitServiceStateFile(path, serialized);
-      let committed: string | null = null;
-      try { committed = readFileSync(anchor, "utf8"); } catch { /* the comparison below decides */ }
-      if (committed === serialized) return next;
+      assertServiceStateLocksOwned(paths);
+      const fresh = authoritativeState(paths, deps.unknownStateError);
+      if (fresh.revision !== base.revision || fresh.fingerprint !== base.fingerprint) continue;
+      const validate = () => assertServiceStateLocksOwned(paths);
+      publish(authority, serialized, validate);
+      const committed = authoritativeState([authority]);
+      if (committed.revision !== next.revision || committed.fingerprint !== serviceStateFingerprint(next)) continue;
+      for (const mirror of mirrors) {
+        try { publish(mirror, serialized, validate); }
+        catch (error) {
+          (deps.onMirrorError ?? ((path, cause) => console.warn(
+            `service state committed, but compatibility mirror ${path} could not be refreshed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          )))(mirror, error);
+        }
+      }
+      return next;
     }
-    throw new ServiceStateConflictError(anchor, attempts);
-  }, deps.lockWaitMs);
+    throw new ServiceStateConflictError(authority, attempts);
+  }, { waitMs: deps.lockWaitMs, hooks: deps.lockHooks }), deps.mutationLease);
+}
+
+export interface RemoveServiceStateDeps {
+  readonly paths?: readonly string[];
+  readonly unlink?: (path: string) => void;
+  readonly lockWaitMs?: number;
+  readonly lockHooks?: ServiceStateLockHooks;
+}
+
+/**
+ * Delete mirrors first and the authority last under the same ownership locks.
+ *
+ * A crash or mirror error before the final unlink leaves the authority in place, so a stale
+ * mirror can never become a migration source and resurrect a released desktop claim.
+ */
+export function removeServiceInstallStateRecords(deps: RemoveServiceStateDeps = {}): void {
+  const paths = deps.paths ?? serviceStateWritePaths();
+  const authority = paths.at(-1);
+  if (!authority) return;
+  const unlink = deps.unlink ?? unlinkSync;
+  withOwnershipMutationLease(paths, () => withServiceStateLocks(paths, () => {
+    for (const mirror of paths.slice(0, -1)) {
+      assertServiceStateLocksOwned(paths);
+      if (existsSync(mirror)) unlink(mirror);
+    }
+    assertServiceStateLocksOwned(paths);
+    if (existsSync(authority)) unlink(authority);
+  }, { waitMs: deps.lockWaitMs, hooks: deps.lockHooks }), { waitMs: deps.lockWaitMs });
 }
 
 /** The recorded owner of ONE already-read record, or null. Prefer {@link resolveServiceOwnership}. */
@@ -672,18 +563,91 @@ export function serviceOwnership(state: ServiceInstallState | null = readService
  * exact demotion the record exists to prevent. Absence is the only thing that may mean no
  * claim.
  */
-export type ServiceOwnershipResolution =
-  | { readonly kind: "none" }
-  | { readonly kind: "owned"; readonly ownership: ServiceOwnership }
+export type ServiceStateResolution =
+  | { readonly kind: "none"; readonly revision: 0; readonly needsRepair: false }
+  | { readonly kind: "state"; readonly state: ServiceInstallState; readonly revision: number; readonly needsRepair: boolean }
   | { readonly kind: "unknown"; readonly reason: string };
+
+export type ServiceOwnershipSubject =
+  | { readonly kind: "none"; readonly revision: number }
+  | { readonly kind: "owned"; readonly ownership: ServiceOwnership; readonly revision: number };
+
+export type ServiceOwnershipResolution = ServiceOwnershipSubject
+  | { readonly kind: "unknown"; readonly reason: string };
+
+export function resolveServiceState(
+  evidence: readonly ServiceStateEvidence[] = inspectServiceStateEvidence(),
+): ServiceStateResolution {
+  const selected = selectAuthoritativeServiceState(evidence as readonly ServiceStateRecordEvidence[]);
+  if (selected.kind === "unknown") return selected;
+  if (selected.kind === "none") return selected;
+  return {
+    kind: "state",
+    state: selected.state as ServiceInstallState,
+    revision: selected.revision,
+    needsRepair: selected.needsRepair,
+  };
+}
 
 export function resolveServiceOwnership(
   evidence: readonly ServiceStateEvidence[] = inspectServiceStateEvidence(),
 ): ServiceOwnershipResolution {
-  // The resolution rule is the shared contract's, for the same reason the record contract is:
-  // the Node launcher decides this question too, and a weaker copy there is an authorization
-  // gap rather than a style problem.
-  return resolveOwnershipFromEvidence(evidence) as unknown as ServiceOwnershipResolution;
+  const state = resolveServiceState(evidence);
+  if (state.kind === "unknown") return state;
+  if (state.kind === "none" || !state.state.ownership) return { kind: "none", revision: state.revision };
+  return { kind: "owned", ownership: state.state.ownership, revision: state.revision };
+}
+
+export function sameServiceOwnershipSubject(
+  left: ServiceOwnershipSubject,
+  right: ServiceOwnershipSubject,
+): boolean {
+  if (left.kind !== right.kind || left.revision !== right.revision) return false;
+  if (left.kind === "none" || right.kind === "none") return true;
+  return left.ownership.owner === right.ownership.owner
+    && left.ownership.installId === right.ownership.installId
+    && left.ownership.consentGeneration === right.ownership.consentGeneration;
+}
+
+function sameServiceOwnershipIdentity(left: ServiceOwnershipSubject, right: ServiceOwnershipSubject): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "none" || right.kind === "none") return true;
+  return left.ownership.owner === right.ownership.owner
+    && left.ownership.installId === right.ownership.installId
+    && left.ownership.consentGeneration === right.ownership.consentGeneration;
+}
+
+function serviceOwnershipSubject(
+  state: ServiceInstallState | null,
+  revision: number,
+): ServiceOwnershipSubject {
+  return state?.ownership
+    ? { kind: "owned", ownership: state.ownership, revision }
+    : { kind: "none", revision };
+}
+
+export class ServiceOwnershipSubjectMismatchError extends Error {
+  readonly code = "service-ownership-subject-mismatch" as const;
+  constructor(readonly expected: ServiceOwnershipSubject, readonly actual: ServiceOwnershipSubject) {
+    super("service ownership changed after consent; resolve again and ask for fresh approval");
+    this.name = "ServiceOwnershipSubjectMismatchError";
+  }
+}
+
+export class ServiceOwnershipSubjectUnknownError extends Error {
+  readonly code = "service-ownership-subject-unknown" as const;
+  constructor(readonly expected: ServiceOwnershipSubject, readonly reason: string) {
+    super(`service ownership could not be revalidated after consent (${reason}); nothing was written`);
+    this.name = "ServiceOwnershipSubjectUnknownError";
+  }
+}
+
+export class ServiceTakeoverCompatibilityChangedError extends Error {
+  readonly code = "service-takeover-compatibility-changed" as const;
+  constructor(readonly actual: ServiceTakeoverCompatibility) {
+    super("the managing CLI compatibility changed after consent; resolve again and ask for fresh approval");
+    this.name = "ServiceTakeoverCompatibilityChangedError";
+  }
 }
 
 /**
@@ -742,21 +706,65 @@ function ownershipBaseRecord(current: ServiceInstallState | null): ServiceInstal
  * generation alone, so every relaunch of an app that already has consent is a no-op on the
  * number. A different owner or a different install id is a new grant and increments it once.
  */
+export interface RecordServiceOwnerRequest {
+  readonly owner: ServiceOwner;
+  readonly installId: string;
+  readonly expectedSubject: ServiceOwnershipSubject;
+  readonly expectedCompatibility: Extract<ServiceTakeoverCompatibility, { kind: "supported" }>;
+}
+
+export interface RecordServiceOwnerDeps extends ServiceStateSwapDeps {
+  /** Re-observes BOTH the registered manager and the current PATH manager inside the lock. */
+  readonly observeManagers: () => Readonly<Record<"service-registration" | "path", ManagingCliObservation>>;
+}
+
 export function recordServiceOwner(
-  claim: { owner: ServiceOwner; installId: string },
-  deps: ServiceStateSwapDeps = {},
-): ServiceOwnership {
-  if (!claim.installId) throw new Error("refusing to record service ownership without an install id");
+  request: RecordServiceOwnerRequest,
+  deps: RecordServiceOwnerDeps,
+): Extract<ServiceOwnershipSubject, { kind: "owned" }> {
+  if (!request.installId) throw new Error("refusing to record service ownership without an install id");
+  if (!request.expectedSubject || request.expectedCompatibility?.kind !== "supported") {
+    throw new Error("refusing to record service ownership without the exact approved subject and compatibility token");
+  }
+  if (!deps || typeof deps.observeManagers !== "function") {
+    throw new Error("refusing to record service ownership without a managing-CLI revalidation callback");
+  }
+  const { observeManagers, ...swapDeps } = deps;
   let recorded: ServiceOwnership | null = null;
-  swapServiceInstallState(current => {
+  const committed = swapServiceInstallState((current, context) => {
+    const actualSubject = serviceOwnershipSubject(current, context.revision);
+    if (!sameServiceOwnershipSubject(request.expectedSubject, actualSubject)) {
+      throw new ServiceOwnershipSubjectMismatchError(request.expectedSubject, actualSubject);
+    }
+    let managers: Readonly<Record<"service-registration" | "path", ManagingCliObservation>>;
+    try { managers = observeManagers(); }
+    catch (error) {
+      throw new ServiceTakeoverCompatibilityChangedError({
+        kind: "blocked",
+        reason: "managing-cli-unknown",
+        detail: error instanceof Error ? error.message : String(error),
+        minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+      });
+    }
+    const compatibility = assessServiceTakeoverCompatibility({
+      state: current,
+      subject: actualSubject,
+      managers,
+    });
+    if (!sameServiceTakeoverCompatibility(request.expectedCompatibility, compatibility)) {
+      throw new ServiceTakeoverCompatibilityChangedError(compatibility);
+    }
     const previous = current?.ownership ?? null;
     // The ceiling, not just the live claim: a grant that was released left its number
     // behind on purpose, so a later grant cannot reuse it.
     const floor = Math.max(previous?.consentGeneration ?? 0, current?.consentGenerationCeiling ?? 0);
+    if (floor >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("service ownership consent generation is exhausted; nothing was written");
+    }
     recorded = {
-      owner: claim.owner,
-      installId: claim.installId,
-      consentGeneration: previous && ownershipGrantedTo(previous, claim.owner, claim.installId)
+      owner: request.owner,
+      installId: request.installId,
+      consentGeneration: previous && ownershipGrantedTo(previous, request.owner, request.installId)
         ? previous.consentGeneration
         : floor + 1,
     };
@@ -765,9 +773,14 @@ export function recordServiceOwner(
       ownership: recorded,
       consentGenerationCeiling: Math.max(floor, recorded.consentGeneration),
     };
-  }, deps);
-  if (recorded === null) throw new Error("service ownership was not recorded");
-  return recorded;
+  }, {
+    ...swapDeps,
+    unknownStateError: reason => new ServiceOwnershipSubjectUnknownError(request.expectedSubject, reason),
+  });
+  if (recorded === null || !committed?.ownership || committed.revision === undefined) {
+    throw new Error("service ownership was not recorded");
+  }
+  return { kind: "owned", ownership: committed.ownership, revision: committed.revision };
 }
 
 /**
@@ -776,9 +789,23 @@ export function recordServiceOwner(
  * Writes nothing when there is no claim to release, so asking about an unowned runtime never
  * creates an install record describing a service nobody registered.
  */
-export function releaseServiceOwner(deps: ServiceStateSwapDeps = {}): ServiceOwnership | null {
+export interface ReleaseServiceOwnerDeps extends ServiceStateSwapDeps {
+  /** Service install refreshes provenance first; that known write may advance only revision. */
+  readonly allowRevisionAdvance?: boolean;
+}
+
+export function releaseServiceOwner(
+  expectedSubject: ServiceOwnershipSubject,
+  deps: ReleaseServiceOwnerDeps = {},
+): ServiceOwnership | null {
+  const { allowRevisionAdvance = false, ...swapDeps } = deps;
   let released: ServiceOwnership | null = null;
-  swapServiceInstallState(current => {
+  swapServiceInstallState((current, context) => {
+    const actualSubject = serviceOwnershipSubject(current, context.revision);
+    const matches = allowRevisionAdvance
+      ? sameServiceOwnershipIdentity(expectedSubject, actualSubject) && actualSubject.revision >= expectedSubject.revision
+      : sameServiceOwnershipSubject(expectedSubject, actualSubject);
+    if (!matches) throw new ServiceOwnershipSubjectMismatchError(expectedSubject, actualSubject);
     released = current?.ownership ?? null;
     if (!current?.ownership) return null;
     const { ownership: _released, ...withoutOwnership } = current;
@@ -792,7 +819,10 @@ export function releaseServiceOwner(deps: ServiceStateSwapDeps = {}): ServiceOwn
         current.ownership.consentGeneration,
       ),
     };
-  }, deps);
+  }, {
+    ...swapDeps,
+    unknownStateError: reason => new ServiceOwnershipSubjectUnknownError(expectedSubject, reason),
+  });
   return released;
 }
 
@@ -806,20 +836,15 @@ export type ServiceStateEvidence =
 /**
  * Every state path, with what each one said.
  *
- * `readServiceInstallState` returns the FIRST path that parsed and discards the
- * rest, so a valid mirror beside a corrupt one reads as clean. That is the right
- * behavior for callers that just need the install state; it is the wrong input
- * for deciding ownership, where a disagreement between mirrors is exactly the
- * evidence that matters.
+ * The final path is authoritative; earlier paths are compatibility mirrors and the
+ * migration source only while the authority is absent. Keeping the raw evidence separate
+ * lets the selector distinguish migration, degraded mirrors and unordered conflicts.
  */
 export function inspectServiceStateEvidence(
   paths: readonly string[] = serviceStatePaths(),
 ): readonly ServiceStateEvidence[] {
-  // ENOENT is an answer. EACCES, ENOTDIR and the rest are a failure to ask, and collapsing
-  // them into absence is how a locked-down state file would become permission to write.
-  // The classification is the shared contract's, so the launcher makes the same call.
   return paths.map(path => (
-    inspectInstallStateBytes(path, at => readFileSync(at, "utf8")) as unknown as ServiceStateEvidence
+    inspectInstallStateBytes(path, at => readFileSync(at, "utf8")) as ServiceStateEvidence
   ));
 }
 
