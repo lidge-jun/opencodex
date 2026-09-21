@@ -1131,6 +1131,30 @@ describe("doctor Codex default model exposure (#4646)", () => {
     expect(result.source).toBe("catalog");
   });
 
+  test("an implausibly large proxy model list falls back to the catalog", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: Array.from({ length: 10_001 }, () => ({ id: "gpt-5.6-sol" })) }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
+  test("an implausibly long proxy model id falls back to the catalog", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: [{ id: "x".repeat(1_025) }] }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
   test("a retained hide row is not exposure: the pin Desktop can still show is still reported", async () => {
     const result = await collectDefaultModelExposure({
       readConfiguredModelFn: () => "gpt-5.6-terra",
