@@ -605,7 +605,12 @@ export async function fetchWithResetRetry(
     // rethrow, abort), so a per-send report is the only shape that is correct on all of them.
     opts.onSendsConsumed?.(1);
     try {
-      return await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      const response = await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      if (spentOperatorReplacement && isTransientUpstreamStatus(response.status)) {
+        cancelResponseBodyBestEffort(response);
+        return replayRefusalResponse();
+      }
+      return response;
     } catch (err) {
       if (opts.abortSignal?.aborted) throw err;
       if (!isConnectionResetError(err)) {
