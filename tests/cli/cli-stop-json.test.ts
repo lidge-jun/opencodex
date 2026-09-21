@@ -171,12 +171,19 @@ describe("ocx stop --json dispatch", () => {
     try {
       const code = await dispatchCommand(
         { kind: "command", command: "stop", args: ["stop", "--json"] },
-        stopDeps(async () => ({ ok: true, summary }), ["stop", "--json"]),
+        stopDeps(async () => {
+          // The real handleStop logs through console.log; the JSON dispatch must move
+          // that stream to stderr for the duration of the stop call.
+          console.log("Service manager stopped.");
+          return { ok: true, summary };
+        }, ["stop", "--json"]),
       );
       expect(code).toBe(0);
       expect(captured.stdout).toHaveLength(1);
       expect(JSON.parse(captured.stdout[0]!)).toEqual(summary);
-      // The downtime warning is human output: stderr in JSON mode.
+      // The stop path's human line and the downtime warning are human output: stderr
+      // in JSON mode.
+      expect(captured.stderr.some(line => line.includes("Service manager stopped."))).toBe(true);
       expect(captured.stderr.some(line => line.includes("will fail until it is restarted"))).toBe(true);
     } finally {
       captured.restore();
@@ -213,9 +220,13 @@ describe("ocx stop --json dispatch", () => {
     try {
       const code = await dispatchCommand(
         { kind: "command", command: "stop", args: ["stop"] },
-        stopDeps(async () => ({ ok: true, summary }), ["stop"]),
+        stopDeps(async () => {
+          console.log("Service manager stopped.");
+          return { ok: true, summary };
+        }, ["stop"]),
       );
       expect(code).toBe(0);
+      expect(captured.stdout.some(line => line.includes("Service manager stopped."))).toBe(true);
       expect(captured.stdout.some(line => line.includes("will fail until it is restarted"))).toBe(true);
       expect(captured.stdout.every(line => { try { JSON.parse(line); return false; } catch { return true; } })).toBe(true);
     } finally {
