@@ -31,8 +31,17 @@ pub struct AppState {
     /// Absent until the startup sequence has resolved a home and a port. Nothing guesses an
     /// endpoint any more, so there is no client to hand out before that.
     proxy: Mutex<Option<proxy::ProxyClient>>,
-    spawned_by_us: AtomicBool,
     child: Mutex<Option<CommandChild>>,
+    /// The pid of the child this app started, if it started one.
+    child_pid: Mutex<Option<u32>>,
+    /// Whether the process answering the endpoint has been confirmed to be that child.
+    ///
+    /// Durable consent and current process ownership are different facts. Consent is a recorded
+    /// claim that survives restarts; this is a statement about the process on the other end of the
+    /// endpoint right now, and it has to be re-established whenever the endpoint or the answering
+    /// process can have changed. Carrying a bool across an attach is how a retry that lands on a
+    /// foreign runtime would still send it an owner's stop.
+    confirmed: AtomicBool,
     /// The consumed spawn event stream of the child, if this app started one.
     pub watch: sidecar::SidecarWatch,
 }
@@ -41,8 +50,9 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             proxy: Mutex::new(None),
-            spawned_by_us: AtomicBool::new(false),
             child: Mutex::new(None),
+            child_pid: Mutex::new(None),
+            confirmed: AtomicBool::new(false),
             watch: sidecar::SidecarWatch::default(),
         }
     }
@@ -55,17 +65,37 @@ impl AppState {
         Self::slot(&self.proxy).clone()
     }
 
+    /// Point at a runtime. Nothing is owned until it is confirmed again.
     pub fn attach(&self, proxy: proxy::ProxyClient) {
+        self.confirmed.store(false, Ordering::Release);
         *Self::slot(&self.proxy) = Some(proxy);
     }
 
     pub fn owns_runtime(&self) -> bool {
-        self.spawned_by_us.load(Ordering::Acquire)
+        self.confirmed.load(Ordering::Acquire)
+    }
+
+    pub fn child_pid(&self) -> Option<u32> {
+        *Self::slot(&self.child_pid)
+    }
+
+    /// Confirm that the instance answering is the child this app started.
+    ///
+    /// This is the only thing that grants ownership. A spawn records a pid; it does not record that
+    /// the pid is what holds the port, because between the two the child can exit and a service can
+    /// take the port back.
+    pub fn confirm_ownership(&self, identity: proxy::RuntimeIdentity) -> bool {
+        let ours = self.child_pid() == Some(identity.pid);
+        self.confirmed.store(ours, Ordering::Release);
+        ours
     }
 
     pub fn adopt(&self, child: CommandChild) {
+        *Self::slot(&self.child_pid) = Some(child.pid());
         *Self::slot(&self.child) = Some(child);
-        self.spawned_by_us.store(true, Ordering::Release);
+        // Spawned, not yet confirmed: the health probe is what establishes that this pid is the
+        // one answering.
+        self.confirmed.store(false, Ordering::Release);
     }
 
     /// Let go of a runtime that has already been drained.
@@ -73,7 +103,8 @@ impl AppState {
     /// Dropping the handle does not signal the process — the shell plugin installs no `Drop` — so
     /// this releases ownership without reintroducing the `kill()` that D2 removed.
     pub fn release(&self) {
-        self.spawned_by_us.store(false, Ordering::Release);
+        self.confirmed.store(false, Ordering::Release);
+        let _ = Self::slot(&self.child_pid).take();
         let _ = Self::slot(&self.child).take();
     }
 }

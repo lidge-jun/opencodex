@@ -383,13 +383,19 @@ async fn run(app: &AppHandle) {
     );
 
     report(app, started, Phase::Probing, None);
-    if healthy_by(&proxy, (started + ATTACH_BUDGET).min(deadline)).await {
+    // The budget for an existing runtime is counted from here, not from the start of the sequence.
+    // Counted from the start, the registration above can spend it — and a tray or session-bus
+    // registration that took its time would then present as "nothing is listening", which starts a
+    // second proxy next to the one that was already there.
+    let probing_from = Instant::now();
+    if healthy_by(&proxy, (probing_from + ATTACH_BUDGET).min(deadline)).await {
         report(
             app,
             started,
             Phase::Attaching,
             Some("a runtime was already listening, so this app is a guest on it".to_owned()),
         );
+        bind(app, &proxy, deadline).await;
         finish(app, started, endpoint);
         return;
     }
@@ -433,6 +439,7 @@ async fn run(app: &AppHandle) {
     report(app, started, Phase::Waiting, None);
     while Instant::now() < deadline {
         if matches!(proxy.alive_within(deadline).await, Some(Ok(_))) {
+            bind(app, &proxy, deadline).await;
             finish(app, started, endpoint);
             return;
         }
@@ -599,7 +606,26 @@ async fn healthy_by(proxy: &ProxyClient, deadline: Instant) -> bool {
     }
 }
 
+/// Establish which instance is answering, and whether it is the child this app started.
+///
+/// The health body is unauthenticated and carries the marker, the pid and the port, so identity is
+/// settled before any credential is sent. It is also the only thing that grants process ownership:
+/// a spawn records a pid, and this is what says that pid is the one holding the port. An answer
+/// that cannot be read leaves the app owning nothing, which is the safe way round — an owner's stop
+/// sent to a listener that is not ours is a stop sent to somebody else's runtime.
+async fn bind(app: &AppHandle, proxy: &ProxyClient, deadline: Instant) {
+    let identity = match tokio::time::timeout_at(deadline, proxy.identify()).await {
+        Ok(Ok(identity)) => identity,
+        _ => return,
+    };
+    proxy.bind(identity);
+    if let Some(state) = app.try_state::<AppState>() {
+        state.confirm_ownership(identity);
+    }
+}
+
 fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
+    // Ownership is whatever the confirmation above established, not whatever a spawn assumed.
     crate::tray::set_owned(
         app,
         app.try_state::<AppState>()
