@@ -1,7 +1,11 @@
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { NativeResponseControl } from "./native-response-control";
 import type { NativeSteeringReplayObserver } from "./native-steering-replay";
-import { undeclaredToolCallNameInResponse } from "../responses-undeclared-tool-guard";
+import {
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
+  undeclaredToolCallMessage,
+  undeclaredToolCallNameInResponse,
+} from "../responses-undeclared-tool-guard";
 import type { ProviderExecutedCallType } from "../responses-undeclared-tool-guard";
 import {
   injectionError, injectionFingerprint, injectionId, injectionRecord as record, injectionResults,
@@ -101,10 +105,14 @@ export class NativeInjectionChannel implements NativeResponseControl {
     if (!this.send || this.finished) injectionError("injection_not_supported", "No live native injection transport is available on this route.");
   }
   private authorize(item: unknown): void {
-    if (this.declaredToolNames && undeclaredToolCallNameInResponse(
+    if (!this.declaredToolNames) return;
+    const undeclared = undeclaredToolCallNameInResponse(
       { output: [item] }, this.declaredToolNames, this.declaredNamelessCallTypes,
       this.providerExecutedCallTypes, this.declaredBareToolNames,
-    ) !== undefined) throw new Error("Native injection response emitted an undeclared client tool.");
+    );
+    if (undeclared !== undefined) {
+      injectionError(UNDECLARED_TOOL_CALL_ERROR_CODE, undeclaredToolCallMessage(undeclared));
+    }
   }
   /** Advertise client-owned function/custom calls and approvals, never hosted execution. */
   private advertise(item: unknown): void {

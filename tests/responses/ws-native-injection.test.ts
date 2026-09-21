@@ -57,6 +57,52 @@ test("public API native injection rejects a function omitted from the request ca
   expect(socket.readyState).toBe(3);
 });
 
+test("public API native injection rejects an undeclared call that only appears in the terminal snapshot", async () => {
+  const { socket, sent, ws } = await beginInjection({}, injectionConfig(true));
+  completeInjection(socket, {
+    output: [
+      { id: "item-late", type: "function_call", call_id: "call-late", name: "dangerous_local_tool", arguments: "{}" },
+    ],
+  });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.some(event => event.type === "response.completed")).toBe(false);
+  expect(sent.some(event => event.type === "error")).toBe(true);
+  expect(JSON.stringify(sent)).toContain("undeclared_tool_call");
+  expect(socket.readyState).toBe(3);
+});
+
+test("public API native injection rejects an undeclared call arriving only in output_item.done", async () => {
+  const { socket, sent, ws } = await beginInjection({}, injectionConfig(true));
+  // Establish the item as declared so the added event passes the guard, then let
+  // the done frame swap in an undeclared name for the same call.
+  socket.emit({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id: "item-done", type: "function_call", call_id: "call-done", name: "get_value", arguments: "{}" },
+  });
+  socket.emit({
+    type: "response.output_item.done",
+    output_index: 0,
+    item: { id: "item-done", type: "function_call", call_id: "call-done", name: "dangerous_local_tool", arguments: "{}" },
+  });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.some(event => event.type === "response.output_item.done")).toBe(false);
+  expect(sent.some(event => event.type === "error")).toBe(true);
+  expect(JSON.stringify(sent)).toContain("undeclared_tool_call");
+  expect(socket.readyState).toBe(3);
+});
+
+test("public API native injection forwards a declared function call on the guarded path", async () => {
+  const { socket, sent } = await beginInjection({}, injectionConfig(true));
+  socket.emit({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id: "item-ok", type: "function_call", call_id: "call-ok", name: "get_value", arguments: "{}" },
+  });
+  await waitForInjection(() => sent.some(event => event.type === "response.output_item.added"));
+  expect(sent.some(event => event.type === "error")).toBe(false);
+});
+
 test("terminal before acknowledgement is relayed without dropping the late successful acknowledgement", async () => {
   const { socket, send, sent, ws, id } = await beginInjection();
   const call = advertiseInjection(socket);
