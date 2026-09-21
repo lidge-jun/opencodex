@@ -1229,6 +1229,14 @@ export async function handleResponsesCompact(
             : callerCodexWorkspaceAccountId(req.headers),
           req.signal,
         );
+      // The scope check reads the rejection body asynchronously — the same window the
+      // comment above covers. Re-check before the branch below records A, cancels its
+      // body, and sends B for a caller that is gone.
+      if (alternate && req.signal.aborted) {
+        releaseCodexAuthContextProbeLease(alternate.authCtx);
+        recordCompactPoolOutcome(outcomeCtx, 499);
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
       if (alternate && sharedWorkspaceScope) {
         releaseCodexAuthContextProbeLease(alternate.authCtx);
       }

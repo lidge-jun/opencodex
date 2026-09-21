@@ -683,6 +683,17 @@ export async function retryCodexPoolOnAlternateAccount(
     return { kind: "no-alternate" };
   }
 
+  // The scope classification above reads the rejection body asynchronously, so the
+  // request may have been cancelled while it ran. Re-check before the send below
+  // mutates routing state or spends the alternate on a caller that is gone.
+  if (options.abortSignal?.aborted) {
+    recordWrappedQuotaOutcome();
+    recordUnmovedTransientOutcome();
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
+    return { kind: "no-alternate" };
+  }
+
   const quotaMeta = { ...codexQuotaOutcomeMeta(firstResponse), ...(await codexDenialOutcomeMeta(firstResponse)) };
   if (outcomeStatus === 429 || outcomeStatus === 402) {
     const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
