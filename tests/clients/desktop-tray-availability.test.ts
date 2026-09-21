@@ -78,7 +78,7 @@ describe("desktop tray availability", () => {
     const register = startup.slice(startup.indexOf("async fn register("), startup.indexOf("async fn install_tray("));
     expect(register).toContain("startup.registration()");
     expect(register.indexOf("return done;")).toBeLessThan(register.indexOf("install_tray(app, deadline)"));
-    expect(register).toContain("startup.remember_registration(login)");
+    expect(register).toContain("startup.remember_registration(registration.clone())");
   });
 
   test("tray availability decides the launch, not the origin of the launch", () => {
