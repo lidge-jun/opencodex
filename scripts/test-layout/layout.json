@@ -1620,6 +1620,7 @@
     "ci-structure-gate.test.ts": "ci-workflows",
     "responses-code-mode-patch-compile.test.ts": "responses",
     "gui-codex-usage-score-parity.test.ts": "gui",
+    "gui-tray-vibrancy-surface.test.ts": "gui",
     "web-search-sidecar-429.test.ts": "web-search",
     "management-google-tool-schema-policy.test.ts": "server",
     "codex-shim-destroyed-probe.test.ts": "codex-integration",
