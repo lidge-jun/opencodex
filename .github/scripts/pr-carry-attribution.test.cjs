@@ -131,6 +131,52 @@ describe("assessCarryAttribution", () => {
     assert.ok(performance.now() - started < 2_000, "fence scan should remain linear");
   });
 
+  it("strips a complete tilde fence that follows an unmatched backtick opener", () => {
+    // The unclosed opener stays ordinary text, but it must not swallow the
+    // independent fenced block after it.
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: [
+            "\u0060\u0060\u0060unclosed",
+            "~~~",
+            "Reimplements #2797",
+            "~~~",
+          ].join("\n"),
+        }),
+      ),
+      [],
+    );
+  });
+
+  it("strips a longer fence that follows an unmatched shorter opener", () => {
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: [
+            "\u0060\u0060\u0060unclosed",
+            "\u0060\u0060\u0060\u0060",
+            "Reimplements #2797",
+            "\u0060\u0060\u0060\u0060",
+          ].join("\n"),
+        }),
+      ),
+      [],
+    );
+  });
+
+  it("still reads carry language around an unmatched opener", () => {
+    // Falling back to ordinary text is not a license to hide a real claim:
+    // the unmatched opener line itself remains in the scanned text.
+    const failures = assessCarryAttribution(
+      base({
+        body: ["\u0060\u0060\u0060unclosed", "Reimplements #2797."].join("\n"),
+      }),
+    );
+    assert.equal(failures.length, 1);
+    assert.deepEqual(failures[0].paths, ["#2797"]);
+  });
+
   it("ignores carry language after an unclosed HTML comment", () => {
     // GitHub renders nothing after an unterminated `<!--`, so neither does the
     // gate. The closing-delimiter-only pattern used to match nothing here and

@@ -57,56 +57,58 @@ const TRAILER_RE = /^[ \t]*co-authored-by:[ \t]*(.+)$/gim;
 const INLINE_CODE_RE = /\u0060[^\u0060\n]*\u0060/g;
 
 /**
- * Remove fenced blocks in one forward pass.
+ * Remove fenced blocks in linear time.
  *
  * A regex that searches lazily for a closing fence has to retry from every
  * opening-looking line when no close exists. Pull request and commit text is
  * untrusted workflow input, so that quadratic failure mode is significant
- * here. Keep the opening range pending until a matching close is found: an
- * unclosed fence remains ordinary text, matching the previous behavior.
+ * here. Index the lines that are exactly a fence run -- the only lines that
+ * can close a block -- then walk the lines once: an opener pairs with the
+ * nearest later line carrying the same run, and an opener with no such line
+ * remains ordinary text, so a later opener can still pair with its own close.
  */
 function stripFencedCode(text) {
-  let output = "";
-  let copiedThrough = 0;
-  let pendingStart = -1;
-  let pendingFence = "";
-  let lineStart = 0;
-
-  while (lineStart <= text.length) {
-    const newline = text.indexOf("\n", lineStart);
-    const lineEnd = newline === -1 ? text.length : newline;
-    const line = text.slice(lineStart, lineEnd);
-
-    if (pendingStart === -1) {
-      const opening = /^[ \t]*(\u0060{3,}|~{3,})/.exec(line);
-      if (opening) {
-        pendingStart = lineStart;
-        pendingFence = opening[1];
-      }
-    } else {
-      let contentStart = 0;
-      let contentEnd = line.length;
-      while (line[contentStart] === " " || line[contentStart] === "\t") {
-        contentStart++;
-      }
-      while (line[contentEnd - 1] === " " || line[contentEnd - 1] === "\t" || line[contentEnd - 1] === "\r") {
-        contentEnd--;
-      }
-      if (line.slice(contentStart, contentEnd) !== pendingFence) {
-        if (newline === -1) break;
-        lineStart = newline + 1;
-        continue;
-      }
-      output += text.slice(copiedThrough, pendingStart);
-      copiedThrough = newline === -1 ? lineEnd : lineEnd + 1;
-      pendingStart = -1;
-      pendingFence = "";
-    }
-
-    if (newline === -1) break;
-    lineStart = newline + 1;
+  const lineStarts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") lineStarts.push(i + 1);
   }
 
+  const openRun = new Array(lineStarts.length).fill(null);
+  const closesByRun = new Map();
+  for (let i = 0; i < lineStarts.length; i++) {
+    const lineEnd = i + 1 < lineStarts.length ? lineStarts[i + 1] - 1 : text.length;
+    const line = text.slice(lineStarts[i], lineEnd);
+    const opening = /^[ \t]*(\u0060{3,}|~{3,})/.exec(line);
+    if (opening) openRun[i] = opening[1];
+    const trimmed = line.replace(/^[ \t]+/, "").replace(/[ \t\r]+$/, "");
+    if (/^(?:\u0060{3,}|~{3,})$/.test(trimmed)) {
+      const closes = closesByRun.get(trimmed);
+      if (closes) closes.push(i);
+      else closesByRun.set(trimmed, [i]);
+    }
+  }
+
+  // Scanning only moves forward, so each run's cursor into its close list
+  // never revisits a line: total work stays linear.
+  const cursors = new Map();
+  let output = "";
+  let copiedThrough = 0;
+  for (let i = 0; i < lineStarts.length; i++) {
+    const run = openRun[i];
+    if (run === null) continue;
+    const closes = closesByRun.get(run);
+    let close = -1;
+    if (closes) {
+      let cursor = cursors.get(run) || 0;
+      while (cursor < closes.length && closes[cursor] <= i) cursor++;
+      cursors.set(run, cursor);
+      if (cursor < closes.length) close = closes[cursor];
+    }
+    if (close === -1) continue;
+    output += text.slice(copiedThrough, lineStarts[i]);
+    copiedThrough = close + 1 < lineStarts.length ? lineStarts[close + 1] : text.length;
+    i = close;
+  }
   return output + text.slice(copiedThrough);
 }
 /**
