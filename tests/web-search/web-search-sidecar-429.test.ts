@@ -31,14 +31,20 @@ describe("web-search sidecar 429 replays", () => {
     return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
   }
 
-  function searchWith(fetchImpl: () => Promise<Response>) {
+  function searchWith(
+    fetchImpl: () => Promise<Response>,
+    timeoutMs = 30_000,
+    recordOutcome?: (outcome: number | "connect_error" | "connect_neutral" | "timeout") => void,
+  ) {
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
     return runOpenAiWebSearch(
       "current docs",
       { type: "web_search" },
       sidecarProvider(),
       new Headers({ authorization: "Bearer selected-token" }),
-      { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+      { model: "gpt-5.6-luna", reasoning: "low", timeoutMs },
+      undefined,
+      recordOutcome,
     );
   }
 
@@ -71,5 +77,43 @@ describe("web-search sidecar 429 replays", () => {
     });
     expect(calls).toBe(1);
     expect(outcome.error).toContain("429");
+  });
+
+  test("a Retry-After that cannot fit the sidecar deadline preserves the 429", async () => {
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const outcome = await searchWith(async () => {
+      calls += 1;
+      return new Response("slow down", { status: 429, headers: { "retry-after": "0.1" } });
+    }, 50, value => recorded.push(value));
+    expect(calls).toBe(1);
+    expect(outcome.error).toContain("429");
+    expect(recorded).toEqual([429]);
+  });
+
+  test("a deadline expiring during pre-retry body cleanup preserves the 429", async () => {
+    // The never-settling body is a worse leak than the other mocks leave behind: restore
+    // fetch so a later file's shared search loop does not inherit a 1s release per retry.
+    const originalFetch = globalThis.fetch;
+    try {
+      let calls = 0;
+      const recorded: Array<number | string> = [];
+      const outcome = await searchWith(async () => {
+        calls += 1;
+        // A cancel() that never settles makes the bounded 1s release run to its cap; the
+        // remaining deadline then cannot fit the backoff, so the wait ends mid-sleep. The
+        // observed 429 must survive that expiry instead of being recorded as a timeout.
+        const body = new ReadableStream<Uint8Array>({
+          start: controller => controller.enqueue(new TextEncoder().encode("rate limited")),
+          cancel: () => new Promise<void>(() => {}),
+        });
+        return new Response(body, { status: 429, headers: { "retry-after": "1" } });
+      }, 1_500, value => recorded.push(value));
+      expect(calls).toBe(1);
+      expect(outcome.error).toContain("429");
+      expect(recorded).toEqual([429]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

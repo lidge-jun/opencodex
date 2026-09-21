@@ -7,7 +7,16 @@ import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/l
 import { loadConfig, saveConfig } from "../../src/config";
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
-import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
+import {
+  clearReasoningReplayCacheForTests,
+  reasoningReplayDestinationIdentity,
+  reasoningReplayKeyCredentialIdentity,
+} from "../../src/responses/reasoning-replay-cache";
+import {
+  bridgeSearchReplayScope,
+  clearBridgeSearchReplayCacheForTests,
+  rememberBridgeSearchReplay,
+} from "../../src/responses/bridge-search-replay-cache";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
@@ -31,6 +40,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
+  clearBridgeSearchReplayCacheForTests();
 });
 
 afterEach(() => {
@@ -43,6 +53,7 @@ afterEach(() => {
   if (testDir) removeTreeWithRetry(testDir);
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
+  clearBridgeSearchReplayCacheForTests();
 });
 
 describe("server 429 key failover (end-to-end)", () => {
@@ -1181,4 +1192,108 @@ test.each([false, true])("key refetch retains transient recovery metadata (strea
     expect(attempts?.[1]).toMatchObject({ sendCount: 2, recoveryKinds: ["key-429", "transient-5xx"],
       usage: { inputTokens: 12, outputTokens: 2 } });
   } finally { await server.stop(true); }
+});
+
+test("a dispatch-time key switch rebuilds the bridged-search restore under the new credential", async () => {
+  // Regression for the oauthDispatch rebuild order: the Responses adapter restores a replayed
+  // web_search_call from the memo keyed by _reasoningReplayScope, so the rebuild must rebind
+  // that scope to the refreshed credential BEFORE buildRequest runs. Restoring under the key
+  // whose selection just lapsed, then sending under the newly selected key, would hand the
+  // first credential's recorded result to the second credential's upstream.
+  let now = 0;
+  let resumePacing: (() => void) | undefined;
+  const queued = Promise.withResolvers<void>();
+  setProviderRequestPacingRuntimeForTest({
+    now: () => now,
+    setTimer(callback, delayMs) {
+      resumePacing = () => { now += delayMs; callback(); };
+      queued.resolve();
+      return callback;
+    },
+    clearTimer() {},
+    enqueueMicrotask: queueMicrotask,
+  });
+  const seen: { authorization: string | null; input: Record<string, unknown>[] }[] = [];
+  upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    const body = await req.json() as { input?: unknown };
+    seen.push({
+      authorization: req.headers.get("authorization"),
+      input: Array.isArray(body.input) ? body.input as Record<string, unknown>[] : [],
+    });
+    return Response.json({
+      id: "resp_keyrace", object: "response", status: "completed", model: "test",
+      output: [{ type: "message", id: "msg_keyrace", role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: "done", annotations: [] }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+  } });
+  const baseUrl = `http://127.0.0.1:${upstream.port}/v1`;
+  const config = { port: 0, hostname: "127.0.0.1", defaultProvider: "pooled", providers: { pooled: {
+    adapter: "openai-responses", baseUrl, allowPrivateNetwork: true,
+    authMode: "key", apiKey: "synthetic-first",
+    apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }],
+    webSearchBridge: { enabled: true, backend: "ollama" },
+    requestPacing: { enabled: true, minIntervalMs: 100 },
+  } } } as OcxConfig;
+  saveConfig(config);
+
+  // Seed the bridged-search memo under the identity the FIRST key binds: same loopback
+  // principal and thread the request below carries, but the lapsed credential.
+  const cellId = "ws_keyrace";
+  rememberBridgeSearchReplay(
+    bridgeSearchReplayScope({
+      clientPrincipalId: "loopback",
+      clientThreadId: "thread-keyrace",
+      current: {
+        providerName: "pooled",
+        providerDestinationIdentity: reasoningReplayDestinationIdentity(baseUrl),
+        adapterName: "openai-responses",
+        modelId: "test",
+        credentialIdentity: reasoningReplayKeyCredentialIdentity({ apiKey: "synthetic-first" }),
+      },
+    }),
+    cellId,
+    { callId: "call_ws_1", name: "web_search",
+      argumentsText: "{\"query\":\"opencodex release\"}", output: "cached bridged result" },
+  );
+
+  const server = startServer(0);
+  const abort = new AbortController();
+  try {
+    await waitForProviderRequestSlot("pooled", config.providers.pooled);
+    const pending = fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "thread-id": "thread-keyrace" },
+      signal: abort.signal,
+      body: JSON.stringify({
+        model: "pooled/test", stream: false,
+        input: [
+          { role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] },
+          { type: "web_search_call", id: cellId, status: "completed",
+            action: { type: "search", query: "opencodex release", queries: ["opencodex release"] } },
+        ],
+      }),
+    });
+    await queued.promise;
+    const selected = await managementFetch(new URL("/api/providers/keys/active", server.url), {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "pooled", id: "second" }),
+    });
+    expect(selected.status).toBe(200);
+    await selected.text();
+    resumePacing!();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.authorization).toBe("Bearer synthetic-second");
+    // Rebound before rebuild: the memo lookup misses under the new credential, so the hosted
+    // cell reaches the second key's upstream verbatim instead of the first key's result.
+    expect(seen[0]!.input.some(item => item.type === "web_search_call" && item.id === cellId)).toBe(true);
+    expect(seen[0]!.input.some(item => item.call_id === "call_ws_1")).toBe(false);
+  } finally {
+    abort.abort();
+    await server.stop(true);
+    resetProviderRequestPacingForTest();
+  }
 });
