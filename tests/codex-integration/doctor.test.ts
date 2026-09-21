@@ -3,7 +3,7 @@ import * as proxyLiveness from "../../src/server/proxy-liveness";
 import * as cliHelp from "../../src/cli/help";
 import { getDefaultConfig } from "../../src/config";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -1169,5 +1169,13 @@ describe("doctor Codex default model exposure (#4646)", () => {
     expect(result.status).toBe("not_exposed");
     expect(result.source).toBe("catalog");
     expect(result.detail).not.toContain("/v1/models");
+  });
+
+  test("the default live fetch is the bounded direct local client", () => {
+    // Every test above injects fetchFn; nothing here would fail if production silently
+    // went back to the unbounded global fetch. Pin the default instead.
+    const src = readFileSync(new URL("../../src/cli/doctor.ts", import.meta.url), "utf8");
+    expect(src).toContain("deps.fetchFn ?? directLocalHttpFetch");
+    expect(src).not.toContain("deps.fetchFn ?? fetch");
   });
 });

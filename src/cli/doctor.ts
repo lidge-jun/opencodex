@@ -1097,8 +1097,9 @@ export interface DefaultModelExposureDeps {
  */
 async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch): Promise<Set<string> | null> {
   try {
+    // directLocalHttpFetch never follows redirects and aborts past its byte cap, so the
+    // unbounded-body and redirect cases are covered below the JSON parse, not by options here.
     const res = await fetchFn(`http://${probeHostname(live.hostname)}:${live.port}/v1/models`, {
-      redirect: "error",
       signal: AbortSignal.timeout(EXPOSED_MODELS_TIMEOUT_MS),
     });
     if (!res.ok) return null;
