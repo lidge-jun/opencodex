@@ -30,6 +30,13 @@
  * noun, and `регистрации` was the right genitive for the 24 the page used to claim while
  * `регистраций` is the right one for 28. The anchor here follows the corrected wording, so a
  * page that reverts to the stale number has to revert the inflection too, and this fails.
+ *
+ * Every Russian anchor carries an inflection its numeral governs, not only the state-store one:
+ * `удерживаемых хранилищ`, `наблюдаемых буфера` and `регистраций` each change form with the
+ * count. A future count that moves one of them stops this check matching and fails it, asking
+ * for a re-anchor. That is the designed outcome. The alternative — a pattern loose enough to
+ * match any noun form — would accept a sentence nobody re-read, which is the failure this guard
+ * exists to prevent.
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
