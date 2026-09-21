@@ -51,6 +51,10 @@ ocx sync
 
 데이터 리스너는 허브의 Tailscale 주소에 바인드하고, 허브 자신의 프로세스가 같은 포트를 자격 증명 없이 쓸 수 있도록 루프백 companion을 켜고, 관리 평면은 따로 공개합니다. 아래 값은 예시입니다.
 
+:::danger[전용 단일 테넌트 호스트를 사용하세요]
+루프백 companion은 인증이 없습니다. 이 머신의 모든 프로세스와 OS 사용자가 허브의 프로바이더 자격 증명과 계정 쿼터를 사용할 수 있고, 인증된 원격 클라이언트를 굶길 수 있습니다. 공유 또는 다중 테넌트 호스트에서는 활성화하지 마세요. 호스트가 공유라면 `unauthenticatedLoopbackListener` 명령을 생략하고 허브의 로컬 통합을 실행하지 마세요.
+:::
+
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
