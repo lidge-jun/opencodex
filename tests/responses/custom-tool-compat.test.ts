@@ -351,6 +351,20 @@ describe("undeclared historical custom-tool replay", () => {
     }, false)).toThrow(RoutedCustomToolCompatError);
   });
 
+  test("does not let a native function call claim a historical custom-tool output", () => {
+    const raw = {
+      input: [
+        { type: "function_call", call_id: "call_shared", name: "exec", arguments: "{}" },
+        { type: "custom_tool_call_output", call_id: "call_shared", output: "ok" },
+      ],
+    };
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, false);
+    expect(rewritten.body).toBe(raw);
+    expect((rewritten.body as typeof raw).input[1]).toEqual(raw.input[1]);
+    expect(() => validateFinalCustomToolCompatibility(rewritten.body, false))
+      .toThrow(/final_guard: custom_tool_call_output/);
+  });
+
   test("final guard reports leftover protocol items and ignores tool-output JSON", () => {
     expect(() => validateFinalCustomToolCompatibility({
       input: [{ type: "custom_tool_call", call_id: "call_x", name: "exec", input: "x" }],

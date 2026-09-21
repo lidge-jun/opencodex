@@ -301,6 +301,7 @@ function rewriteHistoricalCustomItems(
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   const calls = new Map<string, { name: string; namespace?: string }>();
+  const historicalCustomCallIds = new Set<string>();
   for (const item of body.input) {
     if (!isPlainObject(item)) continue;
     if (item.type !== "custom_tool_call" && item.type !== "function_call") continue;
@@ -322,6 +323,7 @@ function rewriteHistoricalCustomItems(
       throw new RoutedCustomToolCompatError("historical_item", "call_id");
     }
     calls.set(item.call_id, identity);
+    if (item.type === "custom_tool_call") historicalCustomCallIds.add(item.call_id);
   }
 
   let changed = false;
@@ -355,7 +357,7 @@ function rewriteHistoricalCustomItems(
     if (
       item.type === "custom_tool_call_output"
       && typeof item.call_id === "string"
-      && calls.has(item.call_id)
+      && historicalCustomCallIds.has(item.call_id)
     ) {
       changed = true;
       return { ...item, type: "function_call_output" };
