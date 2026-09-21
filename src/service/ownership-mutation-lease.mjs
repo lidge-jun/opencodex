@@ -165,10 +165,10 @@ export function acquireOwnershipMutationLease(
       held.set(path, { depth: 1, snapshot, delegated: false });
       return { token: record.token, release: () => release(path, options) };
     } catch (error) {
-      if (descriptor !== null) { try { closeSync(descriptor); } catch {} }
+      if (descriptor !== null) { try { closeSync(descriptor); } catch { /* stale recovery owns uncertain cleanup */ } }
       if (madeDirectory) {
-        try { unlinkSync(ownerPath); } catch {}
-        try { rmdirSync(path); } catch {}
+        try { unlinkSync(ownerPath); } catch { /* partial owner is recovered after dead-PID proof */ }
+        try { rmdirSync(path); } catch { /* owner entry or successor keeps the directory live */ }
       }
       if (error?.code !== "EEXIST") throw error;
       if (reclaim(path, now, alive)) continue;
@@ -191,7 +191,7 @@ function release(path, options) {
     if (!current || !sameOwner(currentHeld.snapshot, current)) return;
     unlinkSync(currentHeld.snapshot.ownerPath);
     rmdirSync(path);
-  } catch {}
+  } catch { /* token-specific stale recovery handles an uncertain release */ }
 }
 
 export function withOwnershipMutationLease(statePaths, run, options = {}) {
