@@ -52,6 +52,16 @@ describe("code-mode apply_patch compiles the body recognition accepted", () => {
     expect(compileAsBridge(JSON.stringify({ patch: PATCH }))).toBeUndefined();
   });
 
+  test("a default.apply_patch alias keeps the native apply_patch vocabulary", () => {
+    for (const key of ["patch", "content"]) {
+      expect(compileCodeModeHelperInput(
+        JSON.stringify({ [key]: PATCH }),
+        "default.apply_patch",
+        "default.apply_patch",
+      )).toBe(EXPECTED);
+    }
+  });
+
   test("a normal code-mode JavaScript body is left alone", () => {
     for (const body of [
       'const result = await tools.exec_command({ cmd: "ls" });\ntext(result);',

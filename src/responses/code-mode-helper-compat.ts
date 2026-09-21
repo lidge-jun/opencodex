@@ -43,8 +43,12 @@ export function compileCodeModeHelperInput(
     // is an apply_patch wrapper and is not an `exec` fallback field, and the recognizer already
     // declines it under `exec`; reading it here would compile a body that recognition rejected,
     // which is exactly the drift a second, looser unwrap introduces.
+    const bodyToolName = wireToolName ?? helperName;
+    const normalizedBodyToolName = bodyToolName.startsWith("default.")
+      ? bodyToolName.slice("default.".length)
+      : bodyToolName;
     const patch = normalizeApplyPatchDelimiters(
-      unwrapFreeformToolInput(argumentsText, wireToolName ?? helperName),
+      unwrapFreeformToolInput(argumentsText, normalizedBodyToolName),
     );
     return `const result = await tools.apply_patch(${JSON.stringify(patch)});\ntext(result);`;
   }
