@@ -137,6 +137,8 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
                         if stopped {
                             app.state::<crate::AppState>().shutdown_child();
                             let _ = stop_item.set_enabled(false);
+                        } else {
+                            eprintln!("tray: proxy still answering /healthz after stop request");
                         }
                     });
                 }

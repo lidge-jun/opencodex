@@ -45,7 +45,7 @@ pub fn navigation_allowed(endpoint: ProxyEndpoint) -> impl Fn(&Url) -> bool {
 fn is_app_origin(url: &Url) -> bool {
     match url.scheme() {
         "tauri" => true,
-        "http" | "https" => url.host_str() == Some("tauri.localhost"),
+        "http" => url.host_str() == Some("tauri.localhost"),
         _ => false,
     }
 }
@@ -81,7 +81,7 @@ pub fn set_tray_policy(app: &AppHandle, visible: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{navigation_allowed, webview_user_agent};
+    use super::{is_app_origin, navigation_allowed, webview_user_agent};
     use crate::discovery::ProxyEndpoint;
     use tauri::Url;
 
@@ -99,6 +99,9 @@ mod tests {
         ));
         assert!(allowed(
             &Url::parse("http://127.0.0.1:10100/#/usage").unwrap()
+        ));
+        assert!(!is_app_origin(
+            &Url::parse("https://tauri.localhost/index.html").unwrap()
         ));
         assert!(!allowed(&Url::parse("file:///C:/index.html").unwrap()));
     }
