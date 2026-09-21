@@ -83,3 +83,14 @@ interactive login session, so `link.exe` dies with `0xc0000142`. That needs cred
 8, 13 and 14; one run crossed the line and GitHub reported the expiry as a cancellation, which
 reads like infrastructure noise and is not. Rerun that job rather than widening the limit —
 `gh run rerun --failed` does not act on a cancelled job, so it needs `--job`.
+
+**`privacy:scan` never runs on the commits that add devlog content.** The scan lives in the
+`gates` job, and `gates` is gated on the `ci` paths filter, whose allowlist does not include
+`devlog/**`. A devlog-only change therefore skips it and the aggregate check still goes green.
+
+That is the one change class where the scan matters most. `AGENTS.md` says reading `devlog/` is
+"what makes a public devlog safe rather than merely visible", and this pull request — which adds
+sixteen devlog files to a public repository — was proven only by a hand sweep for addresses, mesh
+names, accounts and absolute user paths. The fix is not to add `devlog/**` to `ci`, which would
+start the cross-platform suite for a prose edit; it is to give the privacy scan its own trigger,
+the way `docs-site/**` already has its own build gate. Raised separately.
