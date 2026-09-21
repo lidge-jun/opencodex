@@ -131,11 +131,12 @@ function sameLock(left: ServiceStateLockSnapshot, right: ServiceStateLockSnapsho
     && left.ownerIdentity.size === right.ownerIdentity.size;
 }
 
-function parsedIncompleteOwner(lockPath: string): { ownerPath: string; pid: number; mtimeMs: number } | null {
+function parsedIncompleteOwner(lockPath: string): { ownerPath: string | null; pid: number | null; mtimeMs: number } | null {
   try {
     const lock = lstatSync(lockPath);
     if (!lock.isDirectory()) return null;
     const entries = readdirSync(lockPath);
+    if (entries.length === 0) return { ownerPath: null, pid: null, mtimeMs: lock.mtimeMs };
     if (entries.length !== 1) return null;
     const parsed = parseOwnerFileName(entries[0]!);
     if (!parsed) return null;
@@ -156,7 +157,7 @@ function reclaimStaleLock(lockPath: string, hooks: ServiceStateLockHooks): boole
   const ownerPath = snapshot?.ownerPath ?? incomplete!.ownerPath;
   const ownerPid = snapshot?.record.pid ?? incomplete!.pid;
   const createdAt = snapshot ? Math.max(snapshot.record.createdAt, snapshot.mtimeMs) : incomplete!.mtimeMs;
-  if (now() - createdAt <= SERVICE_STATE_LOCK_STALE_MS || processAlive(ownerPid)) {
+  if (now() - createdAt <= SERVICE_STATE_LOCK_STALE_MS || (ownerPid !== null && processAlive(ownerPid))) {
     return false;
   }
   if (snapshot) {
@@ -167,7 +168,7 @@ function reclaimStaleLock(lockPath: string, hooks: ServiceStateLockHooks): boole
   try {
     // The owner filename contains the holder's PID, process-instance nonce and token. A
     // successor has a different name, so this unlink cannot delete the successor's owner.
-    unlinkSync(ownerPath);
+    if (ownerPath) unlinkSync(ownerPath);
     rmdirSync(lockPath);
     return true;
   } catch {

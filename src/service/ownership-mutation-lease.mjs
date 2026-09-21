@@ -20,6 +20,7 @@ const POLL_MS = 20;
 const STALE_MS = 30_000;
 const PROCESS_INSTANCE = randomUUID();
 const held = new Map();
+const delegatedTokens = new Map();
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 export const OWNERSHIP_MUTATION_LEASE_TOKEN_ENV = "OCX_OWNERSHIP_MUTATION_LEASE_TOKEN";
 
@@ -128,14 +129,20 @@ export function acquireOwnershipMutationLease(
   }
   const now = options.now ?? Date.now;
   const alive = options.processAlive ?? processAlive;
-  const joinToken = options.joinToken ?? process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  const explicitJoinToken = options.joinToken;
+  const envJoinToken = process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  const joinToken = explicitJoinToken ?? envJoinToken ?? delegatedTokens.get(path);
   if (joinToken) {
     const owner = readOwner(path);
     if (owner?.record.token === joinToken && alive(owner.record.pid)) {
+      delegatedTokens.set(path, joinToken);
+      if (envJoinToken === joinToken) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
       held.set(path, { depth: 1, snapshot: owner, delegated: true });
       return { token: joinToken, release: () => release(path, options) };
     }
-    throw new Error("ownership mutation lease delegation is invalid or no longer live");
+    delegatedTokens.delete(path);
+    if (envJoinToken === joinToken) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+    if (explicitJoinToken) throw new Error("ownership mutation lease delegation is invalid or no longer live");
   }
   const wait = options.waitMs ?? WAIT_MS;
   const deadline = now() + wait;
