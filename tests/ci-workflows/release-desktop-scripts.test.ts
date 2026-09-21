@@ -216,6 +216,30 @@ describe("desktop release scripts", () => {
  * an extension signed that way, so the app would have installed with no widget and nothing in
  * the build would have said so.
  */
+describe("the desktop build toolchain carries the bundle-type marker", () => {
+  // updater.rs selects the deb updater target from tauri_utils::platform::bundle_type(),
+  // which reads a marker the tauri-bundler patches into the binary at packaging time.
+  // Bundlers before 2.5.0 (tauri-cli < 2.7.0) never patch: every packaged artifact then
+  // reports "unknown" and a deb install would resolve the AppImage payload it cannot
+  // apply. Verified statically at tag tauri-cli-v2.11.1: crates/tauri-bundler/src/
+  // bundle.rs maps Deb and AppImage to their marker values, patches per package type,
+  // signs after patching, and restores the unpatched binary between formats.
+  const minimumCliWithBundlePatch = { major: 2, minor: 7 };
+
+  test("the pinned Tauri CLI is new enough to patch the bundle type into each Linux artifact", () => {
+    const manifest = JSON.parse(readFileSync(repoPath("desktop", "package.json"), "utf8")) as {
+      devDependencies?: Record<string, string>;
+    };
+    const version = manifest.devDependencies?.["@tauri-apps/cli"];
+    expect(version).toBeDefined();
+    const [major, minor] = version!.split(".").map(Number);
+    expect(
+      major! > minimumCliWithBundlePatch.major
+        || (major === minimumCliWithBundlePatch.major && minor! >= minimumCliWithBundlePatch.minor),
+    ).toBe(true);
+  });
+});
+
 describe("widget extension signing", () => {
   const script = readFileSync(repoPath("desktop", "scripts", "build-widget.sh"), "utf8");
   const workflow = Bun.YAML.parse(
