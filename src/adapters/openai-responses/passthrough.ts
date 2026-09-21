@@ -300,7 +300,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const repairOrphanOutputs = forward || stateless || !unexpandedMiss;
         outBody = repairOrphanedInputItems(
           outBody,
-          repairOrphanOutputs && unexpandedMiss,
+          unexpandedMiss,
           synthesizeMissingCallOutputs,
           repairOrphanOutputs,
         );
