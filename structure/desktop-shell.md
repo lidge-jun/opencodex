@@ -220,3 +220,30 @@ The macOS desktop shell writes the WidgetKit snapshot to
 The schema version is `1`; the Rust writer refreshes it every five minutes after an
 immediate first write. The WidgetKit appex reads this privacy-safe file and performs no
 network access.
+
+## The tray icon opens a usage popup
+
+A left click on the tray icon opens a small always-on-top window anchored to the icon, not the
+dashboard. Reading the current numbers is the reason to look at a tray icon at all, and the
+dashboard is still one menu item away. The popup reuses the dashboard session and the same
+management endpoints; it is given no additional IPC capability and no admin token.
+
+Two platform facts shape it. A Linux tray host may deliver no usable click to the application,
+so the same surface is reachable from a menu item there. And before the startup sequence has
+resolved a runtime there is nothing to report, so a click with no proxy falls back to showing
+the main window rather than opening an empty popup.
+
+The popup uses the native translucent surface on macOS and Windows: macOS applies the active HUD
+window material with a 12-point corner radius, and Windows applies Acrylic. Linux remains opaque
+because its compositor owns blur and Tauri's window-effects path does not support it. The
+`VIBRANT_SURFACE` constant in `desktop/src-tauri/src/popup.rs` is the single platform verdict for
+both the transparent native builder and the page's `data-tray-vibrancy="on"` hook, so the page
+cannot make an opaque Linux window transparent by mistake.
+
+Transparent Tauri windows on macOS require the `macos-private-api` Cargo feature and
+`app.macOSPrivateApi` in `desktop/src-tauri/tauri.conf.json`. Enabling that API forecloses Mac App
+Store submission; this shell ships as a Developer ID DMG, so its release channel accepts that
+tradeoff.
+
+The tray title keeps its existing period. The popup answers the detailed question, so the title
+does not change meaning as a side effect of adding it.
