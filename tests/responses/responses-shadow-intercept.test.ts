@@ -4,7 +4,7 @@
  * default follows modern clients, while sourceModels keeps an escape hatch.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../../src/server/responses";
@@ -15,6 +15,7 @@ import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { repoPath } from "../helpers/repo-root";
 
 const originalFetch = globalThis.fetch;
 let releaseSpendHome: (() => void) | undefined;
@@ -307,6 +308,23 @@ function chatOk(text: string): Response {
 }
 
 describe("a combo shadow-call target enters the failover loop (#4129)", () => {
+  test("carries helper conversation isolation into concrete combo children", () => {
+    const prepare = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
+    const comboDispatch = prepare.slice(
+      prepare.indexOf("const comboId = !options.comboAttempt"),
+      prepare.indexOf("let unreadableEncryptedAgentTask"),
+    );
+    const parsedHandoff = prepare.slice(
+      prepare.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId"),
+      prepare.indexOf("} catch (err)", prepare.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId")),
+    );
+
+    expect(comboDispatch).toContain("shadowCallIntercepted,");
+    expect(parsedHandoff).toContain(
+      "if (options.shadowCallIntercepted === true) parsed._cursorIsolateConversation = true;",
+    );
+  });
+
   test("a helper call rewritten to a combo hops past a 429 to the second target", async () => {
     takeSpendHome();
     const urls: string[] = [];

@@ -203,6 +203,7 @@ export async function prepareResponsesRequest(
   }
   // Compaction may send the last client-visible bare model after a combo switch.
   // Configured selectors take precedence; otherwise recall before combo dispatch (#3891).
+  let shadowCallIntercepted = false;
   if (!options.comboAttempt && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const rawModel = (body as { model?: unknown }).model;
     const rawInput = (body as { input?: unknown }).input;
@@ -232,6 +233,7 @@ export async function prepareResponsesRequest(
       && isShadowSourceModel(rawShadowModel, shadowIntercept.sourceModels)) {
       const shadowComboId = resolveComboId(config, shadowIntercept.model);
       if (shadowComboId && Object.hasOwn(config.combos ?? {}, shadowComboId)) {
+        shadowCallIntercepted = true;
         (body as Record<string, unknown>).model = shadowIntercept.model;
         // Same rule as the late intercept site: record the operator-configured prefix that
         // matched, never the caller's raw model string. Matching is by prefix, so the raw
@@ -247,6 +249,9 @@ export async function prepareResponsesRequest(
     options.onRequestBodyRead?.();
     return requestDispatchers.handleComboResponses(req, body, comboId, config, logCtx, {
       ...options,
+      // Concrete combo child selectors no longer match the shadow source model. Carry the
+      // interception decision explicitly so provider-specific helper isolation still applies.
+      shadowCallIntercepted,
       // The original request body was accepted above. Combo children are synthetic
       // replays and must not repeat the caller-owned timeout transition.
       onRequestBodyRead: undefined,
@@ -369,6 +374,7 @@ export async function prepareResponsesRequest(
       }
     }
     if (cursorClientThreadId) parsed._cursorClientThreadId = cursorClientThreadId;
+    if (options.shadowCallIntercepted === true) parsed._cursorIsolateConversation = true;
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
       return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
