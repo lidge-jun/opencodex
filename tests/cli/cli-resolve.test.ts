@@ -152,6 +152,8 @@ describe("runResolve", () => {
   test("absence requires every endpoint dead, not just the configured one", async () => {
     // The runtime record can point at a live port while the configured port refuses;
     // answering from the configured port alone would shadow-start over the record.
+    // everyEndpointProvenDown short-circuits on the first non-dead answer: an unknown
+    // runtime endpoint defeats the proof without the configured one being probed.
     const seen: string[] = [];
     const code = await runResolve({ json: true }, {
       configDir: () => "/h",
@@ -165,7 +167,23 @@ describe("runResolve", () => {
     });
     expect(code).toBe(1);
     expect(seen).toContain("10110");
-    expect(seen).toContain("10100");
+  });
+
+  test("proven absent probes both the runtime record and the configured port", async () => {
+    const seen: string[] = [];
+    const lines: string[] = [];
+    const code = await runResolve({ json: true }, {
+      configDir: () => "/h",
+      readDiagnostics: () => ({ config: { port: 10100 }, source: "file", error: null } as ConfigDiagnostics),
+      findLive: async () => null,
+      readRuntime: () => ({ port: 10110, hostname: "127.0.0.1" }),
+      probeEndpoint: endpoint => { seen.push(String(endpoint.port)); return "dead"; },
+      cliVersion: () => "1.2.3",
+      stdout: { log: value => lines.push(value) },
+    });
+    expect(code).toBe(0);
+    expect(seen).toEqual(["10110", "10100"]);
+    expect((JSON.parse(lines[0]!) as { liveness: { status: string } }).liveness.status).toBe("absent-proven");
   });
 
   test("a config read failure exits 1 with nothing on stdout", async () => {
