@@ -89,26 +89,39 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 打开 **http://localhost:10100**，在 Web 仪表板中完成所有配置 —— 添加提供商
 （40 多个内置，或任意 OpenAI 兼容端点）、选择模型、管理账户。随时运行 `ocx gui`
 可重新打开仪表板。
-它还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，
+
+<details>
+<summary><b>桌面应用与 macOS 小组件 —— 测试版</b></summary>
+
+它是同一套仪表板的原生外壳，另带 WidgetKit 扩展，无需打开浏览器即可查看代理状态、
+今日用量和提供商配额。代理本身没有变化：应用会连接已在运行的代理；若未发现，
+则启动内置的 `ocx` sidecar。仪表板仍位于 **http://localhost:10100**。
+
+桌面应用目前仍处于测试阶段。构建已签名以保障完整性，但尚未公证，因此 macOS
+首次启动时需要右键点击并选择“打开”，Windows SmartScreen 也会对安装程序发出警告。
+小组件需要 macOS 14 或更高版本；它所呈现的快照模型位于 [`app/`](../app)
+（`MenuBarCore`）。
+
+请从[最新发布版本](https://github.com/lidge-jun/opencodex/releases)下载，或使用
+`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` 在本地构建。
+
+安装位置、服务文件以及写入磁盘的其他内容均列在
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) 中。
+[桌面应用指南](https://lidge-jun.github.io/opencodex/guides/desktop-app/)和
+[macOS 菜单栏应用指南](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
+介绍了各平台的安装方式和 Gatekeeper 提示。
+
+</details>
+
+### ChatGPT 账户池
+
+opencodex 还能为 Codex 认证管理一个 **ChatGPT 账户池**。添加多个 ChatGPT / Codex 账户，
 在仪表板中刷新它们的 5 小时 / 每周 / 30 天配额。在配额路由下，新会话可以使用
 使用量最低的健康账户；round-robin 和 fill-first 则各自使用自己的策略。现有 Codex
 线程通常会保持对启动它的账户的亲和性，因此长时间的 SSH、tmux 或移动端连接的会话
 不会在对话中途跳账户 —— 但配额重新评估、故障转移、账户排除、亲和性过期，或
 401/403 与 429 恢复，仍可能重新绑定。给账户设定选择顺序，以便其中某个账户 ——
 通常是你的 Codex Desktop 登录 —— 只在其他账户耗尽后才被选中。
-
-### macOS 菜单栏应用
-
-请从[发布页面](https://github.com/lidge-jun/opencodex/releases)下载 macOS、Windows 或 Linux 桌面应用。
-
-无需打开仪表板即可查看代理状态、用量和提供商配额的原生伴侣应用。源代码位于
-[`app/`](../app)（Swift + AppKit，无第三方依赖）。请从[发布页面](https://github.com/lidge-jun/opencodex/releases)
-下载，或使用 `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` 在本地构建。
-
-应用采用未公证的临时签名，首次启动时请右键点击并选择“打开”。详情请参阅
-[macOS 菜单栏应用指南](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)。
-
-应用还包含适用于 macOS 14 及更高版本的小组件，可显示代理状态、今日用量和配额。
 
 ### 赞助商
 

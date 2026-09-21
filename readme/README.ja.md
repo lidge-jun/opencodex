@@ -90,28 +90,41 @@ ocx start                         # プロキシとダッシュボードが loca
 **http://localhost:10100** を開き、Web ダッシュボードですべて設定します。プロバイダーの追加（40 以上の
 組み込み、または任意の OpenAI 互換エンドポイント）、モデルの選択、アカウントの管理はここで行います。
 `ocx gui` でいつでもダッシュボードを開き直せます。
-Codex 認証用の **ChatGPT アカウントプール**も管理できます。ChatGPT / Codex のアカウントを複数追加し、
-5 時間 / 週間 / 30 日のクォータをダッシュボードで更新します。クォータルーティングでは、新しいセッション
-が使用量の最も少ない健全なアカウントを使えます。ラウンドロビンと fill-first はそれぞれの方針に従います。
-既存の Codex スレッドは通常、開始したアカウントとの affinity を保つので、長い SSH・tmux・モバイル接続
-のセッションが会話の途中でアカウントを乗り換えることはありません。ただしクォータの再評価、failover、
-アカウントの除外、affinity の失効、401/403 や 429 からの復帰では再バインドされることがあります。ふだん
-は使わず他が尽きたときだけ回したいアカウント（多くは Codex Desktop のログイン）があるなら、アカウント
-に選択順を指定してください。
 
-### macOS メニューバーアプリ
+<details>
+<summary><b>デスクトップアプリと macOS ウィジェット — ベータ版</b></summary>
 
-macOS、Windows、Linux 向けのデスクトップアプリを[リリースページ](https://github.com/lidge-jun/opencodex/releases)からダウンロードできます。
+同じダッシュボードを包むネイティブアプリに、ブラウザーを開かなくてもプロキシの状態、今日の使用量、
+プロバイダーのクォータを確認できる WidgetKit 拡張を加えたものです。プロキシ自体は変わりません。アプリは
+起動中のプロキシを見つけるか、同梱の `ocx` サイドカーを起動し、ダッシュボードは引き続き
+**http://localhost:10100** で開きます。
 
-ダッシュボードを開かずにプロキシの状態、使用量、プロバイダーのクォータを確認できるネイティブ
-コンパニオンです。ソースは [`app/`](../app)（Swift + AppKit、サードパーティ依存なし）にあります。
-[リリースページ](https://github.com/lidge-jun/opencodex/releases)からダウンロードするか、
+現在はベータ版です。ビルドは改ざん検知のため署名されていますが公証はされていないため、macOS では
+初回起動時に右クリックして「開く」を選ぶ必要があり、Windows ではインストーラーに SmartScreen の警告が
+表示されます。ウィジェットには macOS 14 以降が必要です。表示に使うスナップショットモデルは
+[`app/`](../app)（`MenuBarCore`）にあります。
+
+[最新リリース](https://github.com/lidge-jun/opencodex/releases)からダウンロードするか、
 `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` でローカルビルドできます。
 
-アプリは未公証のアドホック署名のため、初回起動時は右クリックして「開く」を選択してください。
-詳しくは [macOS メニューバーアプリガイド](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)をご覧ください。
+インストール先、サービスファイルなどディスクに書き込まれるものは
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にまとめています。
+[デスクトップアプリガイド](https://lidge-jun.github.io/opencodex/guides/desktop-app/)と
+[macOS メニューバーアプリガイド](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)では、
+プラットフォーム別のインストール手順と Gatekeeper の確認画面を説明しています。
 
-macOS 14 以降では、プロキシの状態、今日の使用量、クォータを表示するウィジェットも利用できます。
+</details>
+
+### ChatGPT アカウントプール
+
+opencodex では、Codex 認証用の **ChatGPT アカウントプール**も管理できます。ChatGPT / Codex のアカウントを
+複数追加し、5 時間 / 週間 / 30 日のクォータをダッシュボードで更新します。クォータルーティングでは、新しい
+セッションが使用量の最も少ない健全なアカウントを使えます。ラウンドロビンと fill-first はそれぞれの方針に
+従います。既存の Codex スレッドは通常、開始したアカウントとの affinity を保つので、長い SSH・tmux・
+モバイル接続のセッションが会話の途中でアカウントを乗り換えることはありません。ただしクォータの再評価、
+failover、アカウントの除外、affinity の失効、401/403 や 429 からの復帰では再バインドされることがあります。
+ふだんは使わず他が尽きたときだけ回したいアカウント（多くは Codex Desktop のログイン）があるなら、
+アカウントに選択順を指定してください。
 
 ### スポンサー
 
