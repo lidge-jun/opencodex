@@ -1,9 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { createHash, generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
 import { buildUpdaterManifest, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
+import { standaloneTargets } from "../../scripts/standalone-targets";
+import {
+  expectedReleaseAssets,
+  parseMinisignPublicKey,
+  releaseMatrixTargets,
+  verifyChecksums,
+  verifyReleaseAssets,
+  verifyUpdaterSignature,
+} from "../../desktop/scripts/verify-release-assets";
 import { repoPath } from "../helpers/repo-root";
 
 function temporaryDirectory(): string {
@@ -276,5 +286,235 @@ describe("widget extension signing", () => {
     // The refusal is resolved before the Swift build so a misconfigured release fails fast.
     expect(script.indexOf("refusing to ad-hoc sign a release widget"))
       .toBeLessThan(script.indexOf("swift build"));
+  });
+});
+
+/**
+ * The pre-publication verifier is the authority the verify-release job runs before
+ * anything may publish. Its expected set is derived from the real release matrices
+ * and the producer tables, its signatures are real Ed25519 fixtures in minisign
+ * shape, and the receipt it writes is the one attach-release requires.
+ */
+describe("release asset verification", () => {
+  const VERSION = "2.61.0";
+
+  function writeAsset(dir: string, name: string, payload: Buffer): void {
+    const digest = createHash("sha256").update(payload).digest("hex");
+    writeFileSync(join(dir, name), payload);
+    writeFileSync(join(dir, `${name}.sha256`), `${digest}  ${name}\n`);
+  }
+
+  function makeMinisignKeypair(keyIdHex: string): {
+    pubkeyText: string;
+    keyId: Buffer;
+    signPayload: (payload: Buffer) => string;
+  } {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const raw = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32);
+    const keyId = Buffer.from(keyIdHex, "hex");
+    const pubkeyText = `untrusted comment: test public key\n${Buffer.concat([Buffer.from("Ed"), keyId, raw]).toString("base64")}\n`;
+    const signPayload = (payload: Buffer): string =>
+      `untrusted comment: test signature\n${Buffer.concat([Buffer.from("Ed"), keyId, ed25519Sign(null, payload, privateKey)]).toString("base64")}\n`;
+    return { pubkeyText, keyId, signPayload };
+  }
+
+  test("derives the expected set from the real release matrices and producer tables", () => {
+    const workflow = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
+    const { standaloneTargets: workflowStandalone, desktopTargets } = releaseMatrixTargets(workflow);
+    // The workflow matrix and the builder's shared target set must agree exactly.
+    expect([...workflowStandalone].sort()).toEqual([...standaloneTargets].sort());
+    expect(desktopTargets).toHaveLength(3);
+
+    const expected = expectedReleaseAssets({
+      version: VERSION,
+      desktopTargets,
+      requireSignatures: true,
+    });
+    for (const name of [
+      `ocx-${VERSION}-bun-windows-x64.zip`,
+      `ocx-${VERSION}-bun-linux-x64.tar.gz`,
+      `ocx-${VERSION}-bun-darwin-arm64.tar.gz.sha256`,
+      `OpenCodex-${VERSION}-macos.dmg`,
+      `OpenCodex-${VERSION}-macos.app.tar.gz.sig`,
+      `OpenCodex-${VERSION}-windows-x64.msi`,
+      `OpenCodex-${VERSION}-linux-x86_64.AppImage`,
+      `OpenCodex-${VERSION}-linux-amd64.deb`,
+    ]) {
+      expect(expected).toContain(name);
+    }
+    // Only the updater targets carry signatures; the DMG and the deb never do.
+    expect(expected).not.toContain(`OpenCodex-${VERSION}-macos.dmg.sig`);
+    expect(expected).not.toContain(`OpenCodex-${VERSION}-linux-amd64.deb.sig`);
+    expect(expected.some(name => name.includes("/"))).toBe(false);
+  });
+
+  test("verifies every recorded checksum and refuses a directory-prefixed record", () => {
+    const dir = temporaryDirectory();
+    try {
+      writeAsset(dir, "ocx-1.0.0-bun-linux-x64.tar.gz", Buffer.from("payload"));
+      expect(verifyChecksums(dir)).toBe(1);
+
+      const digest = createHash("sha256").update(Buffer.from("payload")).digest("hex");
+      writeFileSync(join(dir, "bad.sha256"), `${digest}  ocx-1.0.0-bun-linux-x64.tar.gz\n`);
+      expect(() => verifyChecksums(dir)).toThrow(/must record its own payload/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a tampered payload and a missing payload", () => {
+    const dir = temporaryDirectory();
+    try {
+      writeAsset(dir, "ocx-1.0.0-bun-linux-x64.tar.gz", Buffer.from("payload"));
+      writeFileSync(join(dir, "ocx-1.0.0-bun-linux-x64.tar.gz"), Buffer.from("tampered"));
+      expect(() => verifyChecksums(dir)).toThrow(/Checksum mismatch/);
+
+      rmSync(join(dir, "ocx-1.0.0-bun-linux-x64.tar.gz"));
+      expect(() => verifyChecksums(dir)).toThrow(/which is missing/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("verifies updater signatures against the pinned key and refuses lookalikes", () => {
+    const dir = temporaryDirectory();
+    try {
+      const { pubkeyText, signPayload } = makeMinisignKeypair("0123456789abcdef");
+      const key = parseMinisignPublicKey(pubkeyText);
+      const payload = Buffer.from("signed payload bytes");
+      const asset = join(dir, "OpenCodex-1.0.0-macos.app.tar.gz");
+      writeFileSync(asset, payload);
+      writeFileSync(`${asset}.sig`, signPayload(payload));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+
+      writeFileSync(asset, Buffer.from("tampered payload"));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      writeFileSync(asset, payload);
+
+      const other = makeMinisignKeypair("fedcba9876543210");
+      writeFileSync(`${asset}.sig`, other.signPayload(payload));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/not the pinned updater key/);
+
+      const hashed = `untrusted comment: test\n${Buffer.concat([Buffer.from("ED"), other.keyId, Buffer.alloc(64)]).toString("base64")}\n`;
+      writeFileSync(`${asset}.sig`, hashed);
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Unsupported signature algorithm/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs the full pre-publication verification and writes the receipt", () => {
+    const root = temporaryDirectory();
+    try {
+      const { pubkeyText, signPayload } = makeMinisignKeypair("0123456789abcdef");
+      // The verifier reads the matrices and the pinned key from the repo root, so the
+      // scratch root gets the real workflow and a conf carrying the fixture key.
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(root, ".github", "workflows", "release.yml"),
+        readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8"),
+      );
+      mkdirSync(join(root, "desktop", "src-tauri"), { recursive: true });
+      writeFileSync(
+        join(root, "desktop", "src-tauri", "tauri.conf.json"),
+        JSON.stringify({ plugins: { updater: { pubkey: Buffer.from(pubkeyText, "utf8").toString("base64") } } }),
+      );
+
+      const dir = join(root, "dist", "release");
+      mkdirSync(dir, { recursive: true });
+      // The fixture is an independent producer oracle, written out by hand: five
+      // standalone archives, five desktop bundles, and signatures on exactly the
+      // three updater targets. Building it with the function under test would hide
+      // an omission in the expected set.
+      const produced = [
+        `ocx-${VERSION}-bun-darwin-arm64.tar.gz`,
+        `ocx-${VERSION}-bun-darwin-x64.tar.gz`,
+        `ocx-${VERSION}-bun-windows-x64.zip`,
+        `ocx-${VERSION}-bun-linux-x64.tar.gz`,
+        `ocx-${VERSION}-bun-linux-arm64.tar.gz`,
+        `OpenCodex-${VERSION}-macos.dmg`,
+        `OpenCodex-${VERSION}-macos.app.tar.gz`,
+        `OpenCodex-${VERSION}-windows-x64.msi`,
+        `OpenCodex-${VERSION}-linux-x86_64.AppImage`,
+        `OpenCodex-${VERSION}-linux-amd64.deb`,
+      ];
+      const signed = new Set([
+        `OpenCodex-${VERSION}-macos.app.tar.gz`,
+        `OpenCodex-${VERSION}-windows-x64.msi`,
+        `OpenCodex-${VERSION}-linux-x86_64.AppImage`,
+      ]);
+      for (const name of produced) {
+        writeAsset(dir, name, Buffer.from(`payload:${name}`));
+        if (signed.has(name)) {
+          writeFileSync(join(dir, `${name}.sig`), signPayload(readFileSync(join(dir, name))));
+        }
+      }
+
+      // The derivation is checked against the oracle, not trusted: the expected set
+      // must be exactly the produced payloads plus their companions.
+      const expected = expectedReleaseAssets({
+        version: VERSION,
+        desktopTargets: releaseMatrixTargets(
+          readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8"),
+        ).desktopTargets,
+        requireSignatures: true,
+      });
+      const oracle = produced.flatMap(name =>
+        signed.has(name) ? [name, `${name}.sha256`, `${name}.sig`] : [name, `${name}.sha256`]);
+      expect([...expected].sort()).toEqual([...oracle].sort());
+
+      const receiptPath = join(root, "verification", "receipt.json");
+      const manifestPath = join(dir, "latest.json");
+      const receipt = verifyReleaseAssets({
+        version: VERSION,
+        dir,
+        repo: "lidge-jun/opencodex",
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        repoRoot: root,
+        manifestOut: manifestPath,
+        receiptOut: receiptPath,
+        requireSignatures: true,
+      });
+
+      expect(receipt.expectedFiles).toBe(expected.length);
+      expect(receipt.checksumsVerified)
+        .toBe(produced.length);
+      expect(receipt.signaturesVerified).toBe(signed.size);
+      expect(receipt.manifestPlatforms).toEqual([
+        "darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64",
+      ]);
+      expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual(receipt);
+
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        platforms: Record<string, { url: string }>;
+      };
+      expect(manifest.platforms["linux-x86_64"]!.url)
+        .toBe(`https://github.com/lidge-jun/opencodex/releases/download/v${VERSION}/OpenCodex-${VERSION}-linux-x86_64.AppImage`);
+
+      // Anything beyond the expected set is refused rather than published.
+      writeFileSync(join(dir, "stray.txt"), "stray");
+      expect(() => verifyReleaseAssets({
+        version: VERSION,
+        dir,
+        repo: "lidge-jun/opencodex",
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        repoRoot: root,
+        manifestOut: manifestPath,
+        requireSignatures: true,
+      })).toThrow(/Unexpected files/);
+      rmSync(join(dir, "stray.txt"));
+
+      rmSync(join(dir, `OpenCodex-${VERSION}-windows-x64.msi`));
+      expect(() => verifyReleaseAssets({
+        version: VERSION,
+        dir,
+        repo: "lidge-jun/opencodex",
+        sha: "0123456789abcdef0123456789abcdef01234567",
+        repoRoot: root,
+        requireSignatures: true,
+      })).toThrow(/Missing expected release assets/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
