@@ -321,19 +321,33 @@ describe("undeclared historical custom-tool replay", () => {
     expect(second.body).toEqual(first.body);
   });
 
-  test("refuses illegal historical input and call_id identity collisions", () => {
+  test.each([
+    ["missing", { type: "custom_tool_call", name: "exec", input: "text(1)" }],
+    ["empty", { type: "custom_tool_call", call_id: "", name: "exec", input: "text(1)" }],
+  ] as const)("rejects historical custom calls with a %s call_id before lowering", (_label, item) => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({ input: [item] }, false))
+      .toThrow(/historical_item: custom_tool_call\.call_id/);
+  });
+
+  test("reports malformed historical fields separately from live-name collisions", () => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      input: [{ type: "custom_tool_call", call_id: "call_exec", name: "", input: "text(1)" }],
+    }, false)).toThrow(/historical_item: custom_tool_call\.name/);
     expect(() => rewriteRoutedCustomToolsForUpstream({
       input: [{ type: "custom_tool_call", call_id: "call_exec", name: "exec", input: { nested: true } }],
-    }, false)).toThrow(RoutedCustomToolCompatError);
+    }, false)).toThrow(/historical_item: custom_tool_call\.input/);
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      tools: [{ type: "function", name: "exec", parameters: { type: "object" } }],
+      input: [{ type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "text(1)" }],
+    }, false)).toThrow(/historical_collision: declared_function_name/);
+  });
+
+  test("refuses call_id identity collisions", () => {
     expect(() => rewriteRoutedCustomToolsForUpstream({
       input: [
         { type: "custom_tool_call", call_id: "call_dup", name: "exec", input: "a" },
         { type: "custom_tool_call", call_id: "call_dup", name: "apply_patch", input: "b" },
       ],
-    }, false)).toThrow(RoutedCustomToolCompatError);
-    expect(() => rewriteRoutedCustomToolsForUpstream({
-      tools: [{ type: "function", name: "exec", parameters: { type: "object" } }],
-      input: [{ type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "text(1)" }],
     }, false)).toThrow(RoutedCustomToolCompatError);
   });
 
