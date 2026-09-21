@@ -5,8 +5,10 @@ import { dirname, join } from "node:path";
 import type { ExportModel, ManagedContribution } from "../../src/clients/config-export";
 import {
   AmbiguousSelectorError,
+  InvalidSelectorError,
   createdContainerPaths,
   deletePath,
+  formatSelectorConjunction,
   parseSegment,
   setPath,
 } from "../../src/integrations/merge";
@@ -32,6 +34,18 @@ const OURS = { id: "opencodex", name: "OpenCodex" };
 const THEIRS = { id: "lmstudio", name: "LM Studio" };
 const SELECT = ["providers", "[id=opencodex]"] as const;
 
+function conjunction(criteria: Parameters<typeof formatSelectorConjunction>[0]): string {
+  const selector = formatSelectorConjunction(criteria);
+  if (selector === null) throw new Error("test fixture must be a valid conjunction");
+  return selector;
+}
+
+function withoutLastCriterion(selector: string): string {
+  const separator = selector.lastIndexOf(",");
+  if (separator < 0) throw new Error("test fixture must contain multiple criteria");
+  return `${selector.slice(0, separator)}${selector.slice(-1)}`;
+}
+
 function contribution(path: readonly string[], value: unknown = OURS): ManagedContribution {
   return { clientId: "raycast", fragments: [{ path, value }] };
 }
@@ -49,22 +63,35 @@ describe("parseSegment", () => {
     expect(parseSegment("[id=x")).toEqual({ kind: "key", key: "[id=x" });
   });
 
-  test("a conjunction names every field, and one comma alone still does not", () => {
-    expect(parseSegment("[providerId=opencodex,modelId=anthropic/claude-opus-5]")).toEqual({
+  test("unversioned selectors keep commas and equals inside one legacy value", () => {
+    expect(parseSegment("[id=a,b=c]")).toEqual({
       kind: "select",
-      criteria: [
-        { field: "providerId", value: "opencodex" },
-        { field: "modelId", value: "anthropic/claude-opus-5" },
-      ],
+      criteria: [{ field: "id", value: "a,b=c" }],
     });
-    /*
-     * The old grammar let a single value contain a comma, and ownership records
-     * on disk are written in that grammar. Only a string whose every part is
-     * `field=value` becomes a conjunction, so an existing recorded path keeps
-     * addressing the element it always addressed.
-     */
     expect(parseSegment("[name=Acme, Inc.]"))
       .toEqual({ kind: "select", criteria: [{ field: "name", value: "Acme, Inc." }] });
+  });
+
+  test("a formatted conjunction names every criterion and malformed marked input is refused", () => {
+    const criteria = [
+      { field: "providerId", value: "opencodex" },
+      { field: "modelId", value: "anthropic/claude-opus-5" },
+    ];
+    const selector = conjunction(criteria);
+    expect(parseSegment(selector)).toEqual({ kind: "select", criteria });
+    expect(() => parseSegment(withoutLastCriterion(selector))).toThrow(InvalidSelectorError);
+  });
+
+  test("the conjunction formatter refuses unrepresentable criteria", () => {
+    const invalid: Parameters<typeof formatSelectorConjunction>[0][] = [
+      [],
+      [{ field: "id", value: "one" }],
+      [{ field: "not-a-field", value: "one" }, { field: "id", value: "two" }],
+      [{ field: "providerId", value: "" }, { field: "modelId", value: "two" }],
+      [{ field: "providerId", value: "one,two" }, { field: "modelId", value: "two" }],
+      [{ field: "providerId", value: "one]two" }, { field: "modelId", value: "two" }],
+    ];
+    for (const criteria of invalid) expect(formatSelectorConjunction(criteria)).toBeNull();
   });
 });
 
@@ -172,6 +199,23 @@ describe("readPath and blockedContainerPath with a selector", () => {
     expect(blockedContainerPath({ providers: [{ id: "opencodex", name: 1 }] }, contribution(["providers", "[id=opencodex]", "name", "leaf"], "X")))
       .toEqual(["providers", "[id=opencodex]", "name"]);
   });
+
+  test("a formatted conjunction selects only the row matching every criterion", () => {
+    const modelId = "anthropic/claude-opus-5";
+    const selector = conjunction([
+      { field: "providerId", value: "opencodex" },
+      { field: "modelId", value: modelId },
+    ]);
+    const both = { providerId: "opencodex", modelId, owner: "both" };
+    const doc = {
+      rules: [
+        { providerId: "opencodex", modelId: "other", owner: "provider-only" },
+        { providerId: "other", modelId, owner: "model-only" },
+        both,
+      ],
+    };
+    expect(readPath(doc, ["rules", selector])).toEqual(both);
+  });
 });
 
 describe("plain-key paths are unchanged", () => {
@@ -271,6 +315,20 @@ describe("raycast writer round trip", () => {
     expect(readIntegrationState(input())).toMatchObject({ state: "unsafe", reason: "blocked-container" });
     expect(applyIntegration(input())).toMatchObject({ ok: false, reason: "unsafe" });
     expect(Bun.YAML.parse(readFileSync(configPath, "utf8"))).toEqual({ providers: { opencodex: {} } });
+  });
+
+  test("a persisted legacy selector keeps its comma-and-equals value", () => {
+    const configPath = installRaycast();
+    writeFileSync(configPath, Bun.YAML.stringify({ providers: [THEIRS] }));
+    expect(applyIntegration(input())).toMatchObject({ ok: true });
+
+    const legacyPath = ["providers", "[id=a,b=c]"];
+    store.putRecord({ ...store.readRecords().raycast!, fragmentPaths: [legacyPath] });
+    const persistedPath = store.readRecords().raycast!.fragmentPaths[0]!;
+    const legacyRow = { id: "a,b=c", owner: "legacy" };
+    const apparentConjunctionRow = { id: "a", b: "c", owner: "other" };
+
+    expect(readPath({ providers: [apparentConjunctionRow, legacyRow] }, persistedPath)).toEqual(legacyRow);
   });
 
   for (const recorded of [false, true]) {
