@@ -445,7 +445,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     jawcodeBundle: "moonshot",
     note: "Log in with your Kimi account",
     models: KIMI_CODING_MODELS,
-    defaultModel: "kimi-k2.7-code",
+    // 260921: kimi-k2.7-code was retired from the subscription endpoint (live /models lists
+    // only kimi-for-coding[-highspeed], k3, k3-256k). The kimi-for-coding alias is the
+    // stable ID and currently routes to K2.8 Preview.
+    defaultModel: "kimi-for-coding",
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
     // K3 accepts low/high/max; Codex aliases are normalized by the model-scoped wire map.
@@ -1258,4 +1261,3 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     note: "Serverless Inference subscription API. Live discovery exposes only kimi-k2-instruct because Vultr documents it as the sole tool-calling model.",
   },
 ];
-

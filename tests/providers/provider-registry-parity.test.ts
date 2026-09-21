@@ -967,12 +967,19 @@ describe("provider registry parity", () => {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
       for (const modelId of codingModels) {
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" ? 1_048_576 : 262_144);
+        // 260921: kimi-for-coding (K2.8 Preview) shares the verified 1M ceiling with k3[1m];
+        // all other ids stay at the 256K standard window.
+        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" || modelId === "kimi-for-coding" ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
         expect(entry?.[field]).toContain("kimi-k2.7-code");
-        expect(entry?.[field]).toContain("kimi-for-coding");
+        // kimi-for-coding left noReasoningModels when K2.8 added the adjustable ladder;
+        // every other parity list still carries it.
+        if (field !== "noReasoningModels") expect(entry?.[field]).toContain("kimi-for-coding");
       }
+      expect(entry?.noReasoningModels).not.toContain("kimi-for-coding");
+      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+      expect(entry?.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("max");
       expect(entry?.modelSuffixBracketStrip).toBe(true);
       expect(entry?.promptCacheKey).toBe(true);
       // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
@@ -1004,7 +1011,8 @@ describe("provider registry parity", () => {
       expect(entry?.noPenaltyModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3[1m]");
-      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual([]);
+      // 260921: K2.8 gave kimi-for-coding the same adjustable low/high/max ladder as k3.
+      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
     }
 
     const kimi = PROVIDER_REGISTRY.find(provider => provider.id === "kimi")!;

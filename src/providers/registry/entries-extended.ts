@@ -1008,7 +1008,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
-    dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
+    // 260921: kimi-k2.7-code was retired from the coding endpoint; the kimi-for-coding alias
+    // is the stable ID and currently routes to K2.8 Preview (same as the OAuth preset).
+    dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-for-coding",
     modelSuffixBracketStrip: true,
     // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
     promptCacheKey: true,
@@ -1362,4 +1364,3 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. v1 disables CLI tools (--tools \"\"): text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
   },
 ];
-
