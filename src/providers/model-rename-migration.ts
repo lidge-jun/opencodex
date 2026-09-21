@@ -188,7 +188,11 @@ function renameInList(value: unknown, from: string, to: string): string[] | null
 }
 
 function dropRenamedIdsFromList(value: unknown, from: string, to: string): string[] | null {
-  if (!Array.isArray(value) || !value.includes(from)) return null;
+  // The replacement id alone is enough to proceed: the pre-rename registry can have
+  // seeded `to` here while every retired id is already gone from the row. Leaving that
+  // stale classification in place would keep the picker disabled for a newly
+  // adjustable alias, so both ids are filtered whenever either one is present.
+  if (!Array.isArray(value) || (!value.includes(from) && !value.includes(to))) return null;
   return value.filter(entry => typeof entry === "string" && entry !== from && entry !== to);
 }
 

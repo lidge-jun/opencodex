@@ -226,6 +226,31 @@ describe("registry model rename migration (#1610)", () => {
     expect(prov.modelReasoningEffortMap?.["kimi-for-coding"]).toEqual({ medium: "low" });
   });
 
+  test("clears a stale no-reasoning classification saved under the live alias alone", () => {
+    // A config saved by the pre-K2.8 registry can carry kimi-for-coding in
+    // noReasoningModels even after every retired id is gone from the row - the old
+    // registry seeded the alias there. With no `from` left to rename, the stale
+    // classification would survive and keep the picker disabled; the drop must
+    // therefore trigger on the replacement id alone.
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-for-coding",
+          models: ["k3", "k3[1m]", "kimi-for-coding"],
+          noReasoningModels: ["kimi-for-coding"],
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(changed).toBe(true);
+    expect(prov.noReasoningModels).toEqual([]);
+  });
+
   test("leaves a kimi row repointed at a different gateway alone", () => {
     const custom = {
       providers: {
