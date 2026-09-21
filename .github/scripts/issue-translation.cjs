@@ -811,8 +811,8 @@ function sanitizeTranslationBody(raw, maxChars = 60000) {
     // "end!@octocat"-style mentions defused. \u0001 cannot appear in the
     // input (control chars were stripped above), so it is a safe sentinel.
     .replace(
-      /[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/g,
-      (email) => email.replace("@", "\u0001"),
+      /(?<=[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+/g,
+      (emailTail) => emailTail.replace("@", "\u0001"),
     )
     // Defuse pings at Markdown/punctuation boundaries — a colon is a boundary
     // too — but not emails, npm: scopes, or other mid-token at-signs.
