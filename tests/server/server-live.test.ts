@@ -1398,11 +1398,12 @@ test("frame diagnostics retain only metadata for text, binary, and bounded views
 // PRIVATE gate via createReadinessGate(); starting/failing a second server in the
 // same process can never reset or mutate the first server's gate.
 describe("GET /readyz", () => {
-  test("controlled startup sync drives the server gate to ready or failed", async () => {
+  test("startup sync drives the gate: ok=true is ready even with a warning, ok=false fails (#5181)", async () => {
     saveConfig(forwardConfig());
     const cases = [
       { outcome: { ok: true }, expectedStatus: "ready", expectedHttp: 200 },
-      { outcome: { ok: true, warning: "catalog sync blocked" }, expectedStatus: "failed", expectedHttp: 503 },
+      { outcome: { ok: true, warning: "catalog sync blocked" }, expectedStatus: "ready", expectedHttp: 200 },
+      { outcome: { ok: false }, expectedStatus: "failed", expectedHttp: 503 },
     ] as const;
 
     for (const { outcome, expectedStatus, expectedHttp } of cases) {

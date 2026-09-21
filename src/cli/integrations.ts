@@ -229,7 +229,13 @@ export async function handleClientIntegrationCommand(
           ? profiles.map(row => `${String(row.profileId)}  ${String(row.name ?? "Aside")}: ${row.enabled ? "on" : "off"} (${String(row.state)})${row.current ? " [current]" : ""}`)
           : [String((result as { error?: string }).error ?? "No Aside profiles found.")]
         : rows
-        ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}`)
+        /*
+         * `supersededBy` is named here and not only in the single-client view
+         * because this list is where a user looks to see that everything is
+         * connected, and "current" alone is exactly the reassurance that hid a
+         * client reading a file opencodex does not write.
+         */
+        ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}${row.supersededBy ? " (client reads another file)" : ""}`)
         : singleClientStatusLines(result));
       return;
     }

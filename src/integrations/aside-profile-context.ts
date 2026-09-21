@@ -2,6 +2,8 @@ import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { ClientPathError, type ExportModel } from "../clients/config-export";
 import { assertAsideProfileBoundary, guardAsideProfileIO, listAsideProfiles, type AsideProfile } from "../clients/aside-profiles";
+import { detachedConfigSnapshot } from "../config/admitted-identity";
+import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
 import { type IntegrationIO } from "./config-io";
 import type { JournalEntry } from "./journal";
@@ -46,6 +48,17 @@ export interface AsideProfileContext {
   defaultEnabled: boolean;
   models: () => Promise<readonly ExportModel[]>;
   scopes: Map<number, AsideProfileScope>;
+  /**
+   * The configuration every profile write in this action is built from, copied when the context
+   * was created.
+   *
+   * An Aside mutation checks its confirmation, then awaits the preference write, and only then
+   * builds each profile's write input. The preference write edits the live configuration itself,
+   * so reading it again afterwards guaranteed the document was serialized from a configuration
+   * the check never saw. This copy is taken before the check and carried through every write, so
+   * the two describe the same thing.
+   */
+  boundConfig: OcxConfig;
 }
 
 function storeUnsafe(): never {
@@ -142,10 +155,28 @@ export function createAsideProfileContext(input: AsideProfilesInput): AsideProfi
     ? matched?.id ?? null
     : profiles.find(profile => profile.configPath === newest?.configPath)?.id ?? null;
   let loaded: Promise<readonly ExportModel[]> | undefined;
+  const boundConfig = detachedConfigSnapshot(input.config);
+  if (boundConfig === null) {
+    throw new AsideProfileError("aside_profiles_unavailable", 409, "The proxy configuration could not be captured for this change");
+  }
   return {
     input: { ...input, env: { ...(input.env ?? process.env) } }, profiles, rootStore, legacyProfileId, scopes: new Map(),
     defaultEnabled: input.config.asideProfileSync?.allProfiles ?? Boolean(matched),
-    models: () => loaded ??= Promise.resolve().then(() => typeof input.models === "function" ? input.models() : input.models),
+    /*
+     * Resolved once and copied, so every profile in one action writes the same roster and a
+     * caller editing the model objects it passed cannot change what a checked plan described.
+     * The copy is taken here rather than at each write because the check reads it too.
+     */
+    models: () => loaded ??= Promise.resolve()
+      .then(() => typeof input.models === "function" ? input.models() : input.models)
+      .then(rows => {
+        const copied = copyPlainData([...rows]);
+        if (!copied.ok) {
+          throw new AsideProfileError("aside_profiles_unavailable", 409, "The model roster could not be captured for this change");
+        }
+        return copied.value;
+      }),
+    boundConfig,
   };
 }
 
@@ -160,7 +191,10 @@ export function selectAsideProfiles(ctx: AsideProfileContext, profileId?: number
 }
 
 export function asideProfileEnabled(ctx: AsideProfileContext, id: number): boolean {
-  return ctx.input.config.asideProfileSync?.profiles?.[String(id)] ?? ctx.defaultEnabled;
+  // The bound copy, like every other policy read in this context: the preference write inside an
+  // action edits the live configuration, and a decision taken afterwards would be answering from
+  // a policy the action itself installed.
+  return ctx.boundConfig.asideProfileSync?.profiles?.[String(id)] ?? ctx.defaultEnabled;
 }
 
 export function asideProfileScope(ctx: AsideProfileContext, profile: AsideProfile): AsideProfileScope {
@@ -207,7 +241,7 @@ export async function asideWriteInput(ctx: AsideProfileContext, scope: AsideProf
   const models = await ctx.models();
   scope.assertBoundary();
   return {
-    clientId: "aside", config: ctx.input.config, models, port: ctx.input.port,
+    clientId: "aside", config: ctx.boundConfig, models, port: ctx.input.port,
     env: ctx.input.env, home: ctx.input.home, store: scope.store, io: scope.io,
     resolvedPaths: { configPath: scope.profile.configPath, detectDir: scope.profile.detectDir },
   };

@@ -12,14 +12,15 @@ import type { KiroHistoryEntry } from "./wire";
 
 export function userContentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
-  return content.map(p => (p.type === "text" ? p.text : "")).filter(Boolean).join("\n");
+  // A document carries its own marker: dropping it built an empty user turn that Kiro rejects.
+  return content.map(p => (p.type === "text" || p.type === "document" ? p.text : "")).filter(Boolean).join("\n");
 }
 
 export function usageContentText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
   return content
     .map(p => {
-      if (p.type === "text") return p.text;
+      if (p.type === "text" || p.type === "document") return p.text;
       if (p.type === "image") return `[image:${p.detail ?? "auto"}]`;
       return "";
     })

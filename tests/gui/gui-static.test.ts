@@ -6,11 +6,24 @@ import { serveGuiFile } from "../../src/server/gui-static";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const temporaryDirectories: string[] = [];
+const previousGuiDist = process.env.OPENCODEX_GUI_DIST;
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     removeTreeWithRetry(directory);
   }
+  if (previousGuiDist === undefined) delete process.env.OPENCODEX_GUI_DIST;
+  else process.env.OPENCODEX_GUI_DIST = previousGuiDist;
+});
+
+test("serves the dashboard from OPENCODEX_GUI_DIST when no explicit root is supplied", async () => {
+  const guiDist = mkdtempSync(join(tmpdir(), "ocx-gui-static-override-"));
+  temporaryDirectories.push(guiDist);
+  writeFileSync(join(guiDist, "index.html"), "<!doctype html><title>standalone</title>");
+  process.env.OPENCODEX_GUI_DIST = guiDist;
+  const response = serveGuiFile("/");
+  expect(response).not.toBeNull();
+  expect(await response!.text()).toContain("standalone");
 });
 
 test("#2792 snapshots a static asset before server framing can outlive the file", async () => {

@@ -201,6 +201,7 @@ export function guardAsideProfileIO(profile: AsideProfile, io: IntegrationIO, pr
   const selected = { ...profile };
   const registered = registeredProfiles(selected, profiles).map(peer => ({ ...peer }));
   const captured = boundary(selected, registered, false);
+  const lstatProbe = io.lstatKind;
   function check(path: string, directory: boolean, mutation: boolean): void {
     if (path !== (directory ? selected.detectDir : selected.configPath)) {
       refuse("IO attempted to access a different account path.");
@@ -214,6 +215,9 @@ export function guardAsideProfileIO(profile: AsideProfile, io: IntegrationIO, pr
   return {
     readText: path => { check(path, false, false); return io.readText(path); },
     statKind: path => { check(path, path === selected.detectDir, false); return io.statKind(path); },
+    ...(lstatProbe
+      ? { lstatKind: (path: string) => { check(path, path === selected.detectDir, false); return lstatProbe(path); } }
+      : {}),
     writeText: (path, text) => { check(path, false, true); io.writeText(path, text); },
     removeFile: path => { check(path, false, true); io.removeFile(path); },
     mkdirp: path => { check(path, true, true); io.mkdirp(path); },

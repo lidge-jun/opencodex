@@ -15,6 +15,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
+import UsageCompanionPanel from "./usage-companion-panel";
 
 type Range = "all" | "30d" | "7d";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -67,6 +68,12 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheHitRate?: number | null;
+  /** Input tokens whose cache detail was observed; hit rate is not model-wide below inputTokens. */
+  cacheObservedInputTokens?: number;
   /** API list-price estimate for the priced portion of this row. */
   estimatedCostUsd?: number;
   /** Requests included in the API list-price estimate. */
@@ -128,6 +135,12 @@ type UsageCostRow = Pick<UsageModel, "estimatedCostUsd" | "pricedRequests" | "un
  * Newer proxies return the coverage fields even when every request is
  * unpriced; older proxies have none of them, so their cells stay unavailable
  * rather than making an unknown amount look free.
+ *
+ * The coverage caption is `usage-cost-note`, which the stylesheet makes a block so it always
+ * begins the line under the amount instead of trailing it and folding mid-phrase. Its leading
+ * space stays in the markup: a block box drops leading white space when it lays out, so the cell
+ * reads the same either way, and the space keeps the rendered text exactly what it was for
+ * anything reading the cell as one string.
  */
 function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale; t: TFn }) {
   const hasPriceData = row.estimatedCostUsd !== undefined
@@ -145,7 +158,7 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
       <>
         <span className="muted">—</span>
         {excludedRequests > 0 && (
-          <span className="muted text-caption"> {excludedCaption}</span>
+          <span className="muted text-caption usage-cost-note"> {excludedCaption}</span>
         )}
       </>
     );
@@ -154,10 +167,41 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
     <>
       <span className="mono">{formatUsdEstimate(row.estimatedCostUsd ?? 0, locale)}</span>
       {excludedRequests > 0 && (
-        <span className="muted text-caption"> {excludedCaption}</span>
+        <span className="muted text-caption usage-cost-note"> {excludedCaption}</span>
       )}
     </>
   );
+}
+
+function formatOptionalTokens(value: number | undefined, locale: Locale, unavailable: string): string {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? formatTokens(value, locale)
+    : unavailable;
+}
+
+function formatOptionalPct(value: number | null | undefined, unavailable: string): string {
+  return typeof value === "number" && Number.isFinite(value) ? formatPct(value) : unavailable;
+}
+
+/**
+ * Why a row's hit rate covers less than its input, or why it has none at all.
+ *
+ * The rate is an average over the input tokens whose cache detail was actually reported, so a
+ * provider that reports reads and never reports writes still has one. Only a row where nothing
+ * reported cache detail has nothing to average, and that is the row that shows an em dash.
+ */
+function cacheHitRateTitle(model: UsageModel, locale: Locale, t: TFn): string | undefined {
+  if (typeof model.cacheHitRate !== "number" || !Number.isFinite(model.cacheHitRate)) {
+    return t("usage.cacheHitRate.unmeasured");
+  }
+  const observed = model.cacheObservedInputTokens;
+  if (typeof observed !== "number" || !Number.isFinite(observed) || observed >= model.inputTokens) {
+    return undefined;
+  }
+  return t("usage.cacheHitRate.partial", {
+    measured: formatTokens(observed, locale),
+    total: formatTokens(model.inputTokens, locale),
+  });
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -695,6 +739,7 @@ function UsageModelsTable({
   const sectionLabel = t("usage.section.models");
   const titleId = "usage-models-title";
   const listPriceDisclaimerId = "usage-models-list-price-disclaimer";
+  const unavailable = t("usage.unavailable");
   const searchInput = (
     <input
       className="input"
@@ -706,30 +751,61 @@ function UsageModelsTable({
   );
   const table = (
     <div className="tbl-wrap">
-      <table className="tbl">
+      {/*
+        Identity, then the three figures a reader compares models on, then the detail behind
+        them. The pair in front is also the pair the stylesheet pins while the rest scrolls
+        sideways, so their position here is load-bearing rather than cosmetic.
+      */}
+      <table className="tbl usage-models-tbl">
         <thead>
           <tr>
             <th>{t("logs.col.model")}</th>
             <th>{t("logs.col.provider")}</th>
-            <th className="num">{t("usage.col.requests")}</th>
-            <th className="num">{t("usage.col.measured")}</th>
+            <th>{t("usage.col.share")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
             <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
-            <th>{t("usage.col.share")}</th>
+            <th className="num">{t("usage.col.requests")}</th>
+            <th className="num">{t("usage.col.measured")}</th>
+            <th className="num">{t("usage.col.inputTokens")}</th>
+            <th className="num">{t("usage.col.outputTokens")}</th>
+            <th className="num">{t("usage.col.cacheHits")}</th>
+            <th className="num">{t("usage.col.cacheWrites")}</th>
+            <th className="num">{t("usage.col.cacheHitRate")}</th>
           </tr>
         </thead>
         <tbody>
-          {models.map(model => (
-            <tr key={`${model.provider}/${model.model}`}>
-              <td className="mono">{modelLabel(model.model)}</td>
-              <td className="muted">{formatProviderDisplayName(model.provider, t)}</td>
-              <td className="num">{model.requests}</td>
-              <td className="num">{model.measuredRequests}</td>
-              <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
-              <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
-              <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
-            </tr>
-          ))}
+          {models.map(model => {
+            const providerName = formatProviderDisplayName(model.provider, t);
+            const cacheCoverage = cacheHitRateTitle(model, locale, t);
+            return (
+              <tr key={`${model.provider}/${model.model}`}>
+                {/* Both pinned columns are width-capped, so carry the full value in a tooltip. */}
+                <td className="mono" title={model.model}>{modelLabel(model.model)}</td>
+                <td className="muted" title={providerName}>{providerName}</td>
+                <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
+                <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+                <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
+                <td className="num">{model.requests}</td>
+                <td className="num">{model.measuredRequests}</td>
+                <td className="num mono">{formatTokens(model.inputTokens, locale)}</td>
+                <td className="num mono">{formatTokens(model.outputTokens, locale)}</td>
+                <td className="num mono">{formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale, unavailable)}</td>
+                <td className="num mono">{formatOptionalTokens(model.cacheCreationInputTokens, locale, unavailable)}</td>
+                {/*
+                  The summary already averages only the input tokens whose cache detail was
+                  reported, so whatever number it returns has a basis. Suppressing it unless that
+                  basis covered the row's whole input is what hid a measured hit rate behind an em
+                  dash for every provider that leaves some requests unreported; the coverage is a
+                  note on the cell now, not a gate.
+                */}
+                <td className="num mono" title={cacheCoverage}>
+                  <span className="usage-hit-rate">{formatOptionalPct(model.cacheHitRate, unavailable)}</span>
+                  {/* A `title` reaches a pointer and nothing else, so the sentence is also read. */}
+                  {cacheCoverage !== undefined && <span className="sr-only">{cacheCoverage}</span>}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <p id={listPriceDisclaimerId} className="muted text-caption">{t("usage.cost.disclaimer")}</p>
@@ -872,6 +948,7 @@ function UsageWorkspaceBody({
   range,
   locale,
   t,
+  apiBase,
 }: {
   data: UsageResponse | null;
   heatmap: ReturnType<typeof buildHeatmap>;
@@ -884,8 +961,10 @@ function UsageWorkspaceBody({
   range: Range | null;
   locale: Locale;
   t: TFn;
+  apiBase: string;
 }) {
   const empty = !!data && data.summary.requests === 0;
+  const [companionMetric, setCompanionMetric] = useState<string | null>(null);
   const sections = [
     {
       id: "overview",
@@ -919,6 +998,20 @@ function UsageWorkspaceBody({
       label: t("usage.section.coverage"),
       meta: data ? formatPct(data.summary.coverageRatio) : "—",
       body: data ? <UsageCoveragePanel summary={data.summary} t={t} workspace /> : null,
+    },
+    {
+      id: "companion",
+      label: t("usage.section.companion"),
+      meta: companionMetric
+        ? t(`usage.companion.menu${companionMetric[0]!.toUpperCase()}${companionMetric.slice(1)}` as never)
+        : "—",
+      body: (
+        <UsageCompanionPanel
+          apiBase={apiBase}
+          providers={data?.providers ?? []}
+          onSettingsLoaded={setCompanionMetric}
+        />
+      ),
     },
   ];
   return (
@@ -1190,6 +1283,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             range={customWindow ? null : range}
             locale={locale}
             t={t}
+            apiBase={apiBase}
           />
         </>
       )}

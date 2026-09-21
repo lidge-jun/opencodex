@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createServer } from "node:net";
 import {
   createReadinessGate,
   runStartupReadinessSync,
@@ -7,7 +8,9 @@ import {
   DEFAULT_PROBE_TIMEOUT_MS,
   findLiveProxy,
   isOpencodexHealthz,
+  isConnectionRefused,
   loopbackProbeHosts,
+  probeEndpointLiveness,
   probeHostname,
   probePortOwner,
   probeReadiness,
@@ -87,6 +90,96 @@ describe("probeHostname", () => {
     expect(probeHostname("::1")).toBe("[::1]");
     expect(probeHostname("[::1]")).toBe("[::1]");
     expect(probeHostname("2001:db8::5")).toBe("[2001:db8::5]");
+  });
+});
+
+describe("probeEndpointLiveness", () => {
+  test("classifies identity, foreign, non-200, refusal, timeout, and invalid ports", async () => {
+    const endpoint = { port: 10100, hostname: "127.0.0.1" };
+    const fakeFetch = (body: unknown, status = 200) => (async () => healthz(body, status)) as typeof fetch;
+    expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch(OURS) })).toBe("live");
+    expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch({ status: "ok" }) })).toBe("dead");
+    expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch(OURS, 503) })).toBe("unknown");
+    const refusedServer = createServer();
+    await new Promise<void>((resolve, reject) => {
+      refusedServer.once("error", reject);
+      refusedServer.listen(0, "127.0.0.1", () => resolve());
+    });
+    const refusedPort = (refusedServer.address() as { port: number }).port;
+    await new Promise<void>((resolve, reject) => {
+      refusedServer.close(error => error ? reject(error) : resolve());
+    });
+    expect(await probeEndpointLiveness({ port: refusedPort, hostname: "127.0.0.1" })).toBe("dead");
+    expect(await probeEndpointLiveness(endpoint, {
+      fetchFn: (async () => { throw new DOMException("aborted", "AbortError"); }) as typeof fetch,
+    })).toBe("unknown");
+    expect(await probeEndpointLiveness(endpoint, {
+      fetchFn: (async () => { throw new Error("connection reset"); }) as typeof fetch,
+    })).toBe("unknown");
+    expect(await probeEndpointLiveness({ port: 0 }, { fetchFn: fakeFetch(OURS) })).toBe("dead");
+  });
+
+  test("checks both loopback families sequentially", async () => {
+    const seen: string[] = [];
+    const fetchFn = (async (url: string) => {
+      seen.push(url);
+      if (url.startsWith("http://127.0.0.1:10100")) {
+        throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+      }
+      return healthz(OURS);
+    }) as typeof fetch;
+    expect(await probeEndpointLiveness({ port: 10100, hostname: "::" }, { fetchFn })).toBe("live");
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/healthz",
+      "http://[::1]:10100/healthz",
+    ]);
+
+    seen.length = 0;
+    const refused = (async (url: string) => {
+      seen.push(url);
+      throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    }) as typeof fetch;
+    expect(await probeEndpointLiveness({ port: 10100, hostname: "::" }, { fetchFn: refused })).toBe("dead");
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/healthz",
+      "http://[::1]:10100/healthz",
+    ]);
+
+    seen.length = 0;
+    const mixed = (async (url: string) => {
+      seen.push(url);
+      if (url.startsWith("http://127.0.0.1:10100")) {
+        throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+      }
+      throw new DOMException("timed out", "TimeoutError");
+    }) as typeof fetch;
+    expect(await probeEndpointLiveness({ port: 10100, hostname: "::" }, { fetchFn: mixed })).toBe("unknown");
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/healthz",
+      "http://[::1]:10100/healthz",
+    ]);
+  });
+});
+
+describe("isConnectionRefused", () => {
+  test("recognizes aggregate socket refusals", () => {
+    const refused = Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    expect(isConnectionRefused(new AggregateError([refused]))).toBe(true);
+    expect(isConnectionRefused(new AggregateError([
+      Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+    ]))).toBe(false);
+  });
+
+  test("a mixed aggregate is not proof of absence", () => {
+    // Happy-eyeballs style fan-out puts every address in one error. If one address refused and
+    // another never answered, the endpoint's state is unknown: the refusal speaks only for the
+    // address that produced it.
+    const refused = Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    const timedOut = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    expect(isConnectionRefused(new AggregateError([refused, timedOut]))).toBe(false);
+    expect(isConnectionRefused(new AggregateError([timedOut, refused]))).toBe(false);
+    expect(isConnectionRefused(new AggregateError([refused, refused]))).toBe(true);
+    expect(isConnectionRefused(new AggregateError([]))).toBe(false);
   });
 });
 
@@ -594,9 +687,32 @@ describe("runStartupReadinessSync", () => {
     expect(gate.getStatus()).toBe("failed");
   });
 
-  test("ok=true with nonempty warning → failed", async () => {
+  // #5181: a nonempty warning names a degradation of the LOCAL Codex home's artifacts that the
+  // sync itself continued past. Treating it as terminal permanently un-readied a proxy that was
+  // still serving every other provider, and in a single-replica Kubernetes deployment that
+  // removed the only Service endpoint. `ok` is the sync's verdict; `warning` is not.
+  test.each([
+    "catalog sync skipped: no Codex catalog source found; keeping Codex's native catalog.",
+    "1 combo omitted from the catalog because member capabilities are incomplete.",
+    "catalog sync skipped: refresh failed",
+    "Codex conversation-history relabel left to Codex's native writer: preflight refused.",
+  ])("ok=true with a local-artifact warning → ready (%s)", async warning => {
     const gate = createReadinessGate();
-    await runStartupReadinessSync(gate, async () => ({ ok: true, warning: "catalog sync skipped: no source" }));
+    await runStartupReadinessSync(gate, async () => ({ ok: true, warning }));
+    expect(gate.getStatus()).toBe("ready");
+  });
+
+  // The narrowing is to `warning` alone. A sync that reports the essential work unfinished is
+  // still terminal, warning or not, so a genuine startup failure cannot ride in as a degradation.
+  test("ok=false with a warning → still failed", async () => {
+    const gate = createReadinessGate();
+    await runStartupReadinessSync(gate, async () => ({ ok: false, warning: "catalog sync skipped: no source" }));
+    expect(gate.getStatus()).toBe("failed");
+  });
+
+  test("a result with no ok field at all → failed", async () => {
+    const gate = createReadinessGate();
+    await runStartupReadinessSync(gate, async () => ({ warning: "catalog sync skipped: no source" }));
     expect(gate.getStatus()).toBe("failed");
   });
 

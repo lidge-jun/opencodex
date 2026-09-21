@@ -12,7 +12,8 @@ import { commitProviderApiKeySelection } from "./api-key-selection";
 import type { ProviderApiKeySelection } from "../types/provider";
 import { routedProviderConfig } from "../router";
 import { getProviderRegistryEntry } from "./registry";
-import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
+import { normalizedBaseUrl } from "./quota/vendor-probes-key";
+import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
@@ -297,7 +298,7 @@ const OPENCODE_GO_RATE_LIMIT_RETRY = {
 } as const satisfies Required<RateLimitRetryPolicy>;
 
 /** True when the provider row points at the OpenCode Go destination. */
-function isOpenCodeGoDestination(
+export function isOpenCodeGoDestination(
   provider: Partial<Pick<OcxProviderConfig, "baseUrl" | "authMode">>,
 ): boolean {
   const raw = typeof provider.baseUrl === "string" ? provider.baseUrl : "";
@@ -305,11 +306,15 @@ function isOpenCodeGoDestination(
   // Endpoint identity, not adapter identity: the runtime adapter is already overridden
   // per model by the time the recovery loop runs (muse-spark rides `openai-responses`
   // while the preset declares `openai-chat`), so an adapter-strict lookup misses it.
-  const endpoint = raw.trim().replace(/\/+$/, "");
+  // Canonicalize with the shared quota-probe normalizer so host case and explicit
+  // default ports compare equal; userinfo, query, and fragment never match
+  // (follow-up to the review on #5067).
+  const endpoint = normalizedBaseUrl(raw.trim());
+  if (!endpoint) return false;
   const entry = getProviderRegistryEntry("opencode-go");
   if (!entry) return false;
   const candidates = [entry.baseUrl, ...(entry.destinationAliases ?? []).map(alias => alias.baseUrl)];
-  return candidates.some(url => url.trim().replace(/\/+$/, "") === endpoint);
+  return candidates.some(url => normalizedBaseUrl(url.trim()) === endpoint);
 }
 
 /**
@@ -320,6 +325,16 @@ const DEFAULT_TRANSIENT_RETRY = {
   enabled: true,
   attempts: 3,
 } as const satisfies Required<TransientRetryPolicy>;
+
+/**
+ * Default used when a provider opts in with a bare `retryOnReset: {}`: one replacement for
+ * the whole logical request. `replacements` counts duplicate inferences the operator accepts,
+ * not retries and not sends.
+ */
+const DEFAULT_RESET_REPLAY = {
+  enabled: true,
+  replacements: 1,
+} as const satisfies Required<ResetReplayPolicy>;
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
 const keyCooldowns = new Map<string, KeyCooldown>();
@@ -608,6 +623,26 @@ export function transientRetryPolicyFor(
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
+  };
+}
+
+/**
+ * Normalize a provider's `retryOnReset` policy, or return null when it is absent or explicitly
+ * disabled.
+ *
+ * No auth-mode gate: the canonical ChatGPT backend is `forward` auth and is the send this
+ * policy exists for. Whether a given REQUEST may be replaced is a per-body decision made in
+ * src/server/responses/reset-replay.ts, and how many replacements the request gets is the
+ * shared allowance on its execution budget. This function only reads the operator's intent.
+ */
+export function resetReplayPolicyFor(
+  provider: Pick<OcxProviderConfig, "retryOnReset">,
+): Required<ResetReplayPolicy> | null {
+  const policy = provider.retryOnReset;
+  if (!policy || policy.enabled === false) return null;
+  return {
+    enabled: policy.enabled ?? DEFAULT_RESET_REPLAY.enabled,
+    replacements: policy.replacements ?? DEFAULT_RESET_REPLAY.replacements,
   };
 }
 

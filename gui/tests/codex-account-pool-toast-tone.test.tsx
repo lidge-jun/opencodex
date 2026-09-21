@@ -6,18 +6,30 @@ import { formatAccountPriority } from "../src/account-priority";
 import CodexAccountPool from "../src/components/CodexAccountPool";
 import type { CodexAccountEntry, CodexAccountPoolController } from "../src/hooks/useCodexAccountPool";
 import { LanguageProvider } from "../src/i18n/provider";
+import { acceptActionDialog, actionDialogOpen } from "./helpers/action-dialog";
 
 /**
  * Stale toastError must not paint a successful redeem as notice-err (PR #475).
  */
 
-const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "HTMLElement",
+  "IS_REACT_ACT_ENVIRONMENT", "confirm", "alert", "prompt"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
 let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
-let originalConfirm: typeof window.confirm;
+/** Platform dialogs reached, which must stay empty: the app's webview draws none of them. */
+let touched: string[];
+
+/** Removal opens an in-page consent dialog now; answer it and let the write run. */
+async function consentToRemoval(): Promise<void> {
+  expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
+  await act(async () => {
+    acceptActionDialog(win.document as unknown as Document);
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+}
 let legacyApiPayload: unknown = null;
 let priorityWrites: { id: string; priority: number | null }[] = [];
 
@@ -70,6 +82,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     activeNeedsReauth: false,
     activePinnedId: null,
     refreshing: false,
+    refreshFailed: false,
     initialLoading: false,
     load: async () => true,
     switchAccount: async () => ({ ok: true, activeId: null }),
@@ -99,12 +112,17 @@ beforeEach(() => {
     window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator },
     localStorage: { configurable: true, value: win.localStorage },
+    HTMLElement: { configurable: true, value: win.HTMLElement },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
   originalFetch = globalThis.fetch;
-  originalConfirm = window.confirm;
-  window.confirm = () => true;
+  touched = [];
+  for (const name of ["confirm", "alert", "prompt"] as const) {
+    const trap = () => { touched.push(name); throw new Error(`${name}() must not be reached`); };
+    Object.defineProperty(globalThis, name, { configurable: true, value: trap });
+    Object.defineProperty(win, name, { configurable: true, value: trap });
+  }
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -145,7 +163,6 @@ afterEach(async () => {
     await act(async () => { current.unmount(); });
     root = null;
   }
-  window.confirm = originalConfirm;
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
@@ -437,6 +454,7 @@ test("a saved removal with pending catalog refresh renders a warning tone", asyn
     removeButton!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
     await new Promise(resolve => setTimeout(resolve, 20));
   });
+  await consentToRemoval();
 
   const warning = host.querySelector(".codex-auth-page-head__feedback.is-warn");
   expect(warning?.textContent).toContain("ocx sync");
@@ -486,7 +504,7 @@ test("successful redeem clears a stale error toast tone", async () => {
   );
   expect(removeBtn).toBeTruthy();
   await act(async () => { removeBtn!.dispatchEvent(new win.MouseEvent("click", { bubbles: true })); });
-  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  await consentToRemoval();
 
   const errNotice = host.querySelector(".codex-auth-page-head__feedback.is-err");
   expect(errNotice).toBeTruthy();
@@ -558,7 +576,7 @@ test("a pool card folds alias/id/remove behind a ⋯ disclosure and shows the or
   const remove = card.querySelector<HTMLButtonElement>('button[aria-label^="Remove"]')!;
   expect(remove).not.toBeNull();
   await act(async () => { remove.click(); });
-  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  await consentToRemoval();
   expect(removed).toEqual(["pool-1"]);
 });
 

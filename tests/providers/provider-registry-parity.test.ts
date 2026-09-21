@@ -46,7 +46,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
-  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn",
+  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun",
 ];
 
 describe("provider registry parity", () => {
@@ -191,15 +191,20 @@ describe("provider registry parity", () => {
       escapeBuiltinToolNames: true,
     });
     expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
-    // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT be listed.
+    // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT
+    // be listed. deepseek-v4.1-flash was removed on 2026-09-19 after it was probed natively
+    // multimodal on this gateway; its sibling deepseek-v4-flash still rejects image_url upstream.
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4.1-flash", "deepseek-v4-flash",
+      "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ]);
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("deepseek-v4.1-flash");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].modelInputModalities?.["deepseek-v4.1-flash"])
+      .toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
     // #1338 / #1415: the Zen gateway rejects json_schema on its DeepSeek routes. The three
     // presets that share that gateway carry the narrow opt-out as a registry-only seed, so
@@ -240,7 +245,11 @@ describe("provider registry parity", () => {
 
     const zenGo = PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go");
     expect(zenGo?.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
-    expect(zenGo?.noVisionModels).toContain("deepseek-v4.1-flash");
+    // Reclassified 2026-09-19: this route reads images natively on the Zen Go gateway, so it left
+    // the sidecar list and gained a positive image declaration. Its sibling stays behind.
+    expect(zenGo?.noVisionModels).not.toContain("deepseek-v4.1-flash");
+    expect(zenGo?.noVisionModels).toContain("deepseek-v4-flash");
+    expect(zenGo?.modelInputModalities?.["deepseek-v4.1-flash"]).toEqual(["text", "image"]);
     expect(Object.keys(zenGo?.modelReasoningEfforts ?? {})).toContain("deepseek-v4.1-flash");
     expect(zenGo?.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_048_576);
 
@@ -597,11 +606,15 @@ describe("provider registry parity", () => {
     for (const model of ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"]) {
       expect(isModelVisionSidecarConsumer(provider, model)).toBe(true);
     }
-    for (const id of ["opencode-go", "opencode-zen"]) {
-      const gateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === id)!);
-      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4.1-flash")).toBe(true);
-      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4-flash")).toBe(true);
-    }
+    // Only the Go tier was probed (2026-09-19) and only for deepseek-v4.1-flash. The sibling
+    // id on the same tier still rejects image_url, and the Zen tiers could not be measured at
+    // all (HTTP 402), so an unverified tier keeps its existing classification.
+    const goGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go")!);
+    expect(isModelVisionSidecarConsumer(goGateway, "deepseek-v4.1-flash")).toBe(false);
+    expect(isModelVisionSidecarConsumer(goGateway, "deepseek-v4-flash")).toBe(true);
+    const zenGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-zen")!);
+    expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4.1-flash")).toBe(true);
+    expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4-flash")).toBe(true);
     const free = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-free")!);
     expect(isModelVisionSidecarConsumer(free, "deepseek-v4-flash-free")).toBe(true);
     // Saved providers without explicit modality overrides inherit the fix during routing.
@@ -932,15 +945,12 @@ describe("provider registry parity", () => {
   });
 
   test("Kimi coding aliases preserve model context and capability parity", () => {
-    const codingModels = [
-      "k3",
-      "k3[1m]",
-      "kimi-k2.7-code",
-      "kimi-k2.7-code-highspeed",
-      "kimi-k2.6",
-      "kimi-k2.5",
-      "kimi-for-coding",
-    ];
+    // 260921: the picker AND every preset metadata list seed only ids the subscription
+    // endpoint still serves (live /coding/v1/models: kimi-for-coding[-highspeed], k3,
+    // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
+    // migration on every boot (#5066); saved rows still naming one are repaired by
+    // MODEL_RENAMES instead.
+    const codingModels = ["k3", "k3[1m]", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -953,13 +963,25 @@ describe("provider registry parity", () => {
     for (const providerId of ["kimi", "kimi-code"]) {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
+      // The whole point of the refresh: both presets default to the live alias. A
+      // registry rollback to the retired default would silently pass without this.
+      expect(entry?.defaultModel).toBe("kimi-for-coding");
+      expect(entry?.models).not.toContain("kimi-k2.7-code");
       for (const modelId of codingModels) {
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" ? 1_048_576 : 262_144);
+        // 260921: kimi-for-coding (K2.8 Preview) shares the verified 1M ceiling with k3[1m];
+        // all other ids stay at the 256K standard window.
+        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" || modelId === "kimi-for-coding" ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
-        expect(entry?.[field]).toContain("kimi-k2.7-code");
-        expect(entry?.[field]).toContain("kimi-for-coding");
+        // Every preset list is live-id only: kimi-for-coding must be there, the retired
+        // k2.x ids must not (a stale k2.7 row would leak the dead id back into the picker).
+        if (field !== "noReasoningModels") expect(entry?.[field]).toContain("kimi-for-coding");
+        expect(entry?.[field] ?? []).not.toContain("kimi-k2.7-code");
       }
+      // kimi-for-coding left noReasoningModels when K2.8 added the adjustable ladder.
+      expect(entry?.noReasoningModels ?? []).not.toContain("kimi-for-coding");
+      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+      expect(entry?.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("max");
       expect(entry?.modelSuffixBracketStrip).toBe(true);
       expect(entry?.promptCacheKey).toBe(true);
       // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
@@ -991,7 +1013,8 @@ describe("provider registry parity", () => {
       expect(entry?.noPenaltyModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3[1m]");
-      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual([]);
+      // 260921: K2.8 gave kimi-for-coding the same adjustable low/high/max ladder as k3.
+      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
     }
 
     const kimi = PROVIDER_REGISTRY.find(provider => provider.id === "kimi")!;

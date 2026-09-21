@@ -23,6 +23,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Сгенерированные credentials `ocx_…` для data-plane admission на не-loopback bind'ах. Они не авторизуют management API; доступ к management использует отдельный credential, описанный в [management reference](/ru/reference/management-api/). Управляются через дашборд. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in policy очистки архивированных сессий. Никогда не включается неявно. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Лимит в MiB для eviction-friendly app-owned log'ов, cache'ей, blob'ов и continuation payload'ов. Это не RSS-cap. Диапазон 64–4096. |
+| `metricsExport.enabled?` | `boolean` | `false` | Включает локальные для процесса агрегированные метрики запросов на аутентифицированном `GET /api/metrics`. Требуется перезапуск; в выключенном состоянии маршрут возвращает 404 и экспортёр не запускает никакой активности. |
 | `codexAutoStart?` | `boolean` | `true` | Разрешает shim'у Codex запускать `ocx ensure` перед стартом Codex. При false `ensure` становится no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает установленный shim после завершённого внешнего обновления Codex, которое заменило его. Для отключения через окружение: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Обратимый режим совместимости истории Codex App. Исходные metadata резервируются и восстанавливаются через `ocx stop` / `ocx restore`. |

@@ -72,10 +72,10 @@ import {
   VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
   ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES,
   KIMI_API_MODELS,
-  KIMI_CODING_MODELS,
   KIMI_THINKING_MODELS,
   KIMI_CODING_NO_REASONING_MODELS,
   KIMI_API_NO_REASONING_MODELS,
+  KIMI_CODING_LIVE_MODELS,
   KIMI_CODING_REASONING_EFFORTS,
   KIMI_CODING_DEFAULT_REASONING_EFFORTS,
   KIMI_CODING_REASONING_EFFORT_MAPS,
@@ -102,6 +102,11 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  STEPFUN_MODELS,
+  STEPFUN_MODEL_CONTEXT_WINDOWS,
+  STEPFUN_MODEL_INPUT_MODALITIES,
+  STEPFUN_NO_VISION_MODELS,
+  STEPFUN_REASONING_EFFORTS,
 } from "./model-seeds";
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
@@ -746,9 +751,22 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     id: "volcengine-coding-plan",
     label: "Volcengine Ark Coding Plan",
     baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
-    adapter: "openai-chat",
+    responsesPath: "/responses",
+    adapter: "openai-responses",
     authKind: "key",
+    supportsServiceTier: false,
     preserveCustomDestination: true,
+    // A row already saved on Chat keeps Chat. This is a `preserveCustomDestination` key entry,
+    // so `providerMatchesRegistryTransport` refuses the adapter mismatch and the request path
+    // returns the stored row untouched; the alias below still hands it this entry's metadata.
+    // Deliberately no startup config migration: the Z.AI one (`zai-responses-migration.ts`) is
+    // safe only because it rewrites rows the router already canonicalizes, and it gates on
+    // `providerMatchesRegistryTransport` to guarantee that. A Chat row here is NOT canonicalized,
+    // so migrating it would change a wire the operator is actually using, and a marker added
+    // now cannot tell the old default apart from a deliberate pre-upgrade Chat choice.
+    destinationAliases: [{ baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", adapter: "openai-chat" }],
+    // Validated Ark Coding Plan continuations reject replayed reasoning items.
+    dropResponsesReasoningItems: true,
     dashboardUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/overview",
     defaultModel: "ark-code-latest",
     models: VOLCENGINE_CODING_PLAN_MODELS,
@@ -798,6 +816,21 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: "qwen3.8-max",
     models: ALIBABA_TOKEN_PLAN_MODELS,
     liveModels: false,
+    // Alibaba documents an OpenAI-compatible Responses API on this same /compatible-mode/v1 base
+    // and ships an official Codex integration guide on wire_api = "responses" (#5097). The
+    // gateway serves the same models over both wires, and qwen3.8-flash, qwen3.7-plus and
+    // glm-5.3 carry live end-to-end evidence there (custom tools, reasoning replay, streaming,
+    // multi-turn continuation).
+    //
+    // That is deliberately NOT expressed as a modelWireDefaults pin. Pinning would move every
+    // existing Codex user of those models onto a different upstream with no config change, and
+    // one delta is unresolved: preserveReasoningContentModels below is read by the CHAT adapter,
+    // while the Responses serializer reads preserveResponsesReasoningContent, which this entry
+    // does not set. On the Responses wire those models would replay with blanked reasoning
+    // content -- less state than they carry today. Z.AI and DeepSeek set both flags together for
+    // exactly this reason. Until that flag is justified against this gateway, Responses stays a
+    // documented per-model modelAdapters opt-in;
+    // tests/providers/alibaba-token-plan-responses-optin.test.ts holds both halves.
     note: "Token Plan Personal Edition · China (Beijing)",
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
@@ -980,13 +1013,17 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
-    dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
+    // 260921: kimi-k2.7-code was retired from the coding endpoint; the kimi-for-coding alias
+    // is the stable ID and currently routes to K2.8 Preview (same as the OAuth preset).
+    dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-for-coding",
     modelSuffixBracketStrip: true,
     // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
     promptCacheKey: true,
     // Keep Responses tool-result adjacency aligned with the OAuth preset (#4726).
     requiresAdjacentResponsesToolResults: true,
-    models: KIMI_CODING_MODELS,
+    // 260921: same live-id picker as the OAuth preset — the retired k2.x ids are repaired
+    // in saved configs by MODEL_RENAMES, not offered on fresh installs.
+    models: KIMI_CODING_LIVE_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
     noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
@@ -1027,6 +1064,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
     // the same json_schema rejection (#1338 / #1415).
     noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
+    // Muse Spark on Zen can sit silent during prolonged reasoning and close without a protocol terminal.
+    modelResponsesTerminalRepair: {
+      "muse-spark-1.2-contributor-free": { graceMs: 5_000 },
+      "muse-spark-1.3-contributor-free": { graceMs: 5_000 },
+    },
   },
   { id: "vercel-ai-gateway", label: "Vercel AI Gateway", baseUrl: "https://ai-gateway.vercel.sh/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://vercel.com/dashboard" },
   {
@@ -1327,5 +1369,22 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
     noVisionModels: CODEBUDDY_CN_NO_VISION_MODELS,
     note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. v1 disables CLI tools (--tools \"\"): text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+  },
+  {
+    id: "stepfun",
+    label: "StepFun",
+    baseUrl: "https://api.stepfun.com/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://platform.stepfun.com",
+    defaultModel: "step-5-preview",
+    models: STEPFUN_MODELS,
+    liveModels: true,
+    preserveCustomDestination: true,
+    modelContextWindows: STEPFUN_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: STEPFUN_MODEL_INPUT_MODALITIES,
+    noVisionModels: STEPFUN_NO_VISION_MODELS,
+    reasoningEfforts: STEPFUN_REASONING_EFFORTS,
+    note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
   },
 ];

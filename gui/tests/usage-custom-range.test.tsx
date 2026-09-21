@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { en } from "../src/i18n/en";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Usage from "../src/pages/Usage";
 
@@ -80,6 +81,83 @@ function report(gate: RequestGate, marker: string, date = "2020-09-15") {
     providers: [], historyTruncated: false, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0,
   };
 }
+
+test("Usage model table renders cache breakdown and marks unavailable telemetry", async () => {
+  await mount();
+  const data = report(requests[0], "cache-model");
+  data.models = [
+    {
+      ...data.models[0]!,
+      model: "cache-model",
+      totalTokens: 1_120,
+      inputTokens: 1_000,
+      outputTokens: 120,
+      cachedInputTokens: 600,
+      cacheReadInputTokens: 600,
+      cacheCreationInputTokens: 100,
+      cacheHitRate: 0.6,
+      cacheObservedInputTokens: 1_000,
+    },
+    {
+      ...data.models[0]!,
+      model: "partial-cache-model",
+      totalTokens: 1_000,
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cachedInputTokens: 450,
+      cacheReadInputTokens: 450,
+      cacheCreationInputTokens: 0,
+      cacheHitRate: 0.9,
+      cacheObservedInputTokens: 500,
+    },
+    {
+      ...data.models[0]!,
+      model: "unknown-cache-model",
+      totalTokens: 110,
+      inputTokens: 100,
+      outputTokens: 10,
+    },
+  ];
+  await act(async () => { requests[0]!.resolve(Response.json(data)); });
+
+  const table = container.querySelector<HTMLElement>("#usage-section-models table");
+  expect(table).not.toBeNull();
+  // Header labels come from the catalog the page renders, so a copy change stays a
+  // one-place edit and this case keeps asserting the column ORDER it cares about --
+  // identity, then the three comparison figures, then the per-request detail with the
+  // five cache columns last.
+  expect([...table!.querySelectorAll("thead th")].map(cell => cell.textContent?.trim())).toEqual([
+    "logs.col.model", "logs.col.provider", "usage.col.share", "usage.col.tokens",
+    "usage.col.apiListPrice", "usage.col.requests", "usage.col.measured",
+    "usage.col.inputTokens", "usage.col.outputTokens", "usage.col.cacheHits",
+    "usage.col.cacheWrites", "usage.col.cacheHitRate",
+  ].map(key => en[key as keyof typeof en]));
+  const rows = table!.querySelectorAll("tbody tr");
+  expect(rows).toHaveLength(3);
+  const cells = (row: Element) => [...row.querySelectorAll("td")].map(cell => cell.textContent?.trim());
+  // The hit-rate cell carries the rate and, when coverage is partial or absent, the same
+  // sentence twice over: a `title` for a pointer and an `sr-only` span for everyone else.
+  const hitRateCell = (row: Element) => row.querySelectorAll("td")[11]!;
+  const hitRate = (row: Element) => hitRateCell(row).querySelector(".usage-hit-rate")?.textContent?.trim();
+  const coverageNote = (row: Element) => hitRateCell(row).querySelector(".sr-only")?.textContent ?? null;
+  expect(cells(rows[0]!).slice(7, 11)).toEqual(["1000", "120", "600", "100"]);
+  expect(hitRate(rows[0]!)).toBe("60%");
+  // A row whose cache detail covers its whole input needs no coverage caveat.
+  expect(hitRateCell(rows[0]!).getAttribute("title")).toBeNull();
+  expect(coverageNote(rows[0]!)).toBeNull();
+  // Half this row's input never reported cache detail. The rate is still an average over the
+  // half that did, so it is reported with its coverage rather than withheld.
+  const partialNote = en["usage.cacheHitRate.partial"].replace("{measured}", "500").replace("{total}", "1000");
+  expect(cells(rows[1]!).slice(9, 11)).toEqual(["450", "0"]);
+  expect(hitRate(rows[1]!)).toBe("90%");
+  expect(hitRateCell(rows[1]!).getAttribute("title")).toBe(partialNote);
+  expect(coverageNote(rows[1]!)).toBe(partialNote);
+  // Nothing in this row reported cache detail at all, which is the one case with no basis.
+  expect(cells(rows[2]!).slice(9, 11)).toEqual(["—", "—"]);
+  expect(hitRate(rows[2]!)).toBe("—");
+  expect(hitRateCell(rows[2]!).getAttribute("title")).toBe(en["usage.cacheHitRate.unmeasured"]);
+  expect(coverageNote(rows[2]!)).toBe(en["usage.cacheHitRate.unmeasured"]);
+});
 
 async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });

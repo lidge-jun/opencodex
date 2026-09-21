@@ -17,6 +17,7 @@ import {
   clampImageMaxRounds,
 } from "../../images";
 import type { ProviderAdapter } from "../../adapters/base";
+import type { OcxParsedRequest } from "../../types";
 import { rotateProviderTransportOn429, rateLimitRetryPolicyFor } from "../../providers/key-failover";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
@@ -155,6 +156,7 @@ export async function executeResponsesSidecars(
   const rotateSidecarProviderOn429 = async (
     retryAfter: string | null,
     responseHeaders?: Headers,
+    retryParsed?: OcxParsedRequest,
   ): Promise<ProviderAdapter | null> => {
     const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
@@ -196,7 +198,7 @@ export async function executeResponsesSidecars(
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         transportState.genericFailovers += 1;
-        if (!await applyFailoverSnapshot(snapshot)) {
+        if (!await applyFailoverSnapshot(snapshot, retryParsed)) {
           hop.permit?.release();
           return null;
         }
@@ -254,9 +256,22 @@ export async function executeResponsesSidecars(
       return null;
     }
     const rotatedAdapter = resolveSelectionAdapter(
-      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+      resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
       config.cacheRetention,
     );
+    // The sidecar loops build each attempt from an iteration-local shallow copy of parsed, so a
+    // rebind that lands only on the outer request never reaches the wire: the retry would pair
+    // the new bearer with the previous account's Kiro routing metadata and continuation identity.
+    // Rebind the exact request the rotated adapter will be built from (same pattern as the
+    // continuation loop's nextParsed); when the hook ran without one, the outer bind below stands.
+    if (retryParsed && retryParsed !== parsed) {
+      bindRouteReasoningReplayScope({
+        parsed: retryParsed,
+        providerName: route.providerName,
+        provider: route.provider,
+        adapterName: rotatedAdapter.name,
+      });
+    }
     bindRouteReasoningReplayScope({
       parsed,
       providerName: route.providerName,

@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
+import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
+import { configuredOutboundFetch } from "../lib/proxy-env";
 import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
@@ -156,9 +158,18 @@ export function resolveProviderTransport(
   // transient retries reuse one id so the upstream can dedupe them. A rotated key resolves a
   // fresh transport, which gets its own id.
   const requestId = configuredRequestId ?? randomUUID();
-  const baseFetch = provider.fetch ?? globalThis.fetch;
+  // Without a configured executor the default routes through `configuredOutboundFetch` rather
+  // than the bare global fetch, so a per-provider SOCKS5 route reaches the SOCKS transport.
+  // Bare Bun fetch ignores a socks5 value, which would have sent the request unproxied while
+  // the configuration named a proxy.
+  const baseFetch = provider.fetch
+    ?? markEgressTransparentExecutor(((input, init) => configuredOutboundFetch(input, init)) as typeof globalThis.fetch);
   const attemptFetch = ((input, init) =>
     baseFetch(input, withGeneratedRequestId(init, requestId, stableHeaders))) as typeof globalThis.fetch;
+  // This wrapper only adds a header and forwards the init, so it carries a request-scoped proxy
+  // option through to whatever it wraps — but only if what it wraps carries it too. A
+  // configured executor owns its own routing and is not assumed to.
+  if (isEgressTransparentExecutor(baseFetch)) markEgressTransparentExecutor(attemptFetch);
 
   return {
     ...provider,

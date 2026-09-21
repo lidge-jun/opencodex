@@ -110,6 +110,13 @@ function isAllowedEmail(file: string, email: string): boolean {
   }
   // URL-userinfo fixtures (https://user:pw@host/...) read as "pw@host" — not emails.
   if (file.startsWith("tests/") && email === ["pw", "chatgpt.com"].join("@")) return true;
+  // Retina asset names read as addresses: "128x128@2x.png" is local part "128x128", domain "2x",
+  // and the loose TLD rule accepts "png". The exemption is written against the asset-name grammar
+  // rather than against that shape, because a person's name in front of the same scale suffix is
+  // the same shape and is a mailbox. The part before the suffix has to be a pixel dimension,
+  // optionally prefixed the way an iconset member is, so a name someone could receive mail at
+  // does not match.
+  if (/^(?:[a-z]+_)?\d+x\d+@[23]x\.(?:png|jpe?g|gif|webp|tiff?)$/i.test(email)) return true;
   return file.startsWith("tests/") && email === "a@b.com";
 }
 

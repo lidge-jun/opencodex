@@ -29,6 +29,8 @@ import { stripGrokConfig } from "../grok/inject";
 import { handleRestartScopeAfterWrite, readRestartScope, type RestartScope } from "./restart-scope";
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { isJsonOption, takeFlag, terminalSafeError } from "./runtime-api";
+import { printStopSummary, type StopOutcome } from "./stop-report";
+import type { ResolveArgs } from "./resolve";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
 
@@ -44,8 +46,9 @@ export interface CliDispatchDeps {
   /** Spawn a detached proxy child (stdio ignore, unref'd, provenance env). */
   spawnDetached: (argv: readonly string[]) => void;
   handleStart: () => Promise<void>;
-  handleStop: () => Promise<boolean>;
+  handleStop: () => Promise<StopOutcome>;
   handleEnsure: (options?: { existingIsSuccess?: boolean }) => Promise<boolean>;
+  handleResolve: (args: ResolveArgs) => Promise<number>;
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: () => Promise<boolean | "skipped">;
@@ -98,10 +101,38 @@ const commandRunners: Record<string, CommandRunner> = {
   stop: async deps => {
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
     // re-start the proxy immediately, so warning there would contradict the next line.
-    if (await deps.handleStop()) {
-      console.log("⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').");
+    const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";
+    if (!takeFlag(deps.args.slice(1), "--json")) {
+      // handleStop returns the structured outcome now; an object is always truthy, so
+      // the warning must key on .ok — otherwise a failed stop would still claim downtime.
+      if ((await deps.handleStop()).ok) console.log(warning);
+      return Number(process.exitCode ?? 0);
     }
+    // --json is a reporting layer over the SAME stop path: the receipt, the drain, the
+    // respawn verification and the client-config restore run unchanged. Human output
+    // still prints, but on stderr, so stdout carries exactly one JSON summary document.
+    // The exit code (0/1/79/80) crosses the process boundary untouched — the shell reads
+    // it from the child, and the stop-contract codes must survive the JSON mode.
+    const humanLog = console.log;
+    console.log = console.error;
+    let outcome: StopOutcome | undefined;
+    try {
+      outcome = await deps.handleStop();
+      if (outcome.ok) console.log(warning);
+    } finally {
+      console.log = humanLog;
+    }
+    // A throw above propagates after the finally restores the console, so reaching here
+    // with an undefined outcome cannot happen; the guard keeps the assignment provable.
+    if (outcome) printStopSummary(outcome.summary);
     return Number(process.exitCode ?? 0);
+  },
+  resolve: async deps => {
+    // Same fail-closed shape as `ready`: parseCliHead pre-parsed the verb before any
+    // preflight side effect, so a missing resolveArgs means dispatch diverged. Refuse
+    // with code 64 and perform NO I/O.
+    if (!deps.head.resolveArgs) return 64;
+    return await deps.handleResolve(deps.head.resolveArgs);
   },
   restore: async deps => {
     const restoreArgs = deps.args.slice(1);
@@ -615,7 +646,11 @@ const commandRunners: Record<string, CommandRunner> = {
         const guiUrl = selectDefaultGuiUrl(config, live, deps.probeHostname);
         console.log(`Opening ${guiUrl}`);
         const { openUrl } = await import("../lib/open-url");
-        openUrl(guiUrl);
+        // Awaited so a launcher that never opened anything is said out loud (#5261). Still exit
+        // 0: the proxy is serving and the URL above is reachable, only the launch did not happen.
+        if ((await openUrl(guiUrl)).status === "failed") {
+          console.error("⚠️  No browser could be opened here; open the URL above yourself.");
+        }
         return 0;
       },
     });
@@ -781,6 +816,10 @@ const commandRunners: Record<string, CommandRunner> = {
   combo: async deps => {
     const { handleComboCommand } = await import("./combo");
     return await handleComboCommand(deps.args.slice(1));
+  },
+  companion: async deps => {
+    const { handleCompanionCommand } = await import("./companion");
+    return await handleCompanionCommand(deps.args.slice(1));
   },
   route: async deps => {
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {

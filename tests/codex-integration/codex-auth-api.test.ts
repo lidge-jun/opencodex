@@ -1,5 +1,6 @@
 import { registerWarmupRateLimitCases } from "../helpers/codex-warmup-rate-limit";
 import { registerResetCreditConsumeValidationTests } from "../helpers/reset-credit-consume-validation";
+import { registerPoolReauthCauseCases } from "../helpers/pool-reauth-cause";
 import * as usageHistoryModule from "../../src/usage/log";
 import { getAccountQuotaHistory } from "../../src/codex/quota";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -169,7 +170,7 @@ async function completeMockCodexOAuth(options: {
     done: true,
     loggedIn: true,
   } as ReturnType<typeof oauth.getLoginStatus>);
-  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+  const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
   // Mirrors the login-status poll delay in login-flow.ts; other timers are intentionally dropped.
   const CODEX_OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
   const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
@@ -2089,6 +2090,8 @@ describe("codex-auth API", () => {
     expect(config.codexAccounts?.find(account => account.id === "pool-plan-config-deleted")?.plan).toBe("plus");
     expect(existsSync(join(TEST_DIR, "config.json"))).toBe(false);
   });
+
+  registerPoolReauthCauseCases(makeConfig, seedPoolAccount);
 
   test("pool plan refresh batches multiple authoritative changes into one config save", async () => {
     const config = makeConfig();
@@ -4590,7 +4593,7 @@ describe("codex-auth API", () => {
       instructions: "Enter code: ABCD-EFGH",
       deviceCode: "ABCD-EFGH",
     }));
-    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     try {
       const req = new Request("http://localhost/api/codex-auth/login", {
         method: "POST",
@@ -4696,7 +4699,7 @@ describe("codex-auth API", () => {
       controller.onAuth({ url: "https://example.test/oauth" });
       throw new Error("late failure at /home/alice/.opencodex/auth.json.ocx-tmp sk-secret-provider-key");
     };
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
       delay?: number,
@@ -4744,7 +4747,7 @@ describe("codex-auth API", () => {
     const { OAuthMutationBusyError } = await import("../../src/oauth/store");
     const openUrlMod = await import("../../src/lib/open-url");
     const originalLogin = oauth.OAUTH_PROVIDERS.chatgpt.login;
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
     const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
       callback: (...args: unknown[]) => void,
       delay?: number,
@@ -4831,7 +4834,7 @@ describe("codex-auth API", () => {
         done: false,
         loggedIn: false,
       } as ReturnType<typeof oauth.getLoginStatus>);
-      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+      const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
       const req = new Request("http://localhost/api/codex-auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -5158,7 +5161,7 @@ describe("codex-auth API", () => {
       loggedIn: false,
       error: "test-stop",
     } as ReturnType<typeof oauth.getLoginStatus>);
-    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(() => {});
+    const openSpy = spyOn(openUrlMod, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
 
     try {
       const req = new Request("http://localhost/api/codex-auth/login", {
@@ -5337,14 +5340,17 @@ describe("codex-auth API", () => {
     if (restart) clearAccountNeedsReauth(accountId);
     const rows = await listCodexAuthAccounts(config, false);
     const authFailed = !replace && (status === 401 || status === 403);
+    // The stored verdict's own http status names the cause whether or not the in-memory
+    // mark still exists; a bare mark no longer flattens the projection to refresh_failed.
+    const expectedReason = status === 403 ? "forbidden" : "unauthorized";
     const row = rows.find(entry => entry.id === accountId);
     expect(row).toMatchObject({
       needsReauth: authFailed,
-      health: { status: authFailed ? "reauth_required" : "warning", reason: authFailed ? "refresh_failed" : "validation_pending" },
+      health: { status: authFailed ? "reauth_required" : "warning", reason: authFailed ? expectedReason : "validation_pending" },
     });
     // The reason travels with the state, so an operator reading the account surface can tell a
     // failed refresh from a pending validation without inferring it from `health` (#4212).
-    if (authFailed) expect(row).toMatchObject({ reauthReason: "refresh_failed" });
+    if (authFailed) expect(row).toMatchObject({ reauthReason: expectedReason });
     else expect(row).not.toHaveProperty("reauthReason");
     fail = false;
     await refresh();

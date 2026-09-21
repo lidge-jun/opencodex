@@ -87,8 +87,8 @@
   --radius-round: 50%;
   --radius-pill: 999px;
 
-  /* typography: product UI first, Korean-safe fallbacks, mono only for machine data */
-  --font-ui: "OpenAI Sans", "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  /* Keep product fonts first, then system UI fonts before Korean fallbacks that also cover Latin. */
+  --font-ui: "OpenAI Sans", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
   --font-code: ui-monospace, "SFMono-Regular", "Cascadia Code", "JetBrains Mono", "Noto Sans Mono CJK KR", Menlo, Consolas, monospace;
   --font: var(--font-ui);
   --mono: var(--font-code);

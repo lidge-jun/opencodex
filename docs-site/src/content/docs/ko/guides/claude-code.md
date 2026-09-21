@@ -118,6 +118,27 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 `claudeCode.nativePassthrough: false`로 끌 수 있고, `claudeCode.anthropicBaseUrl`로 다른 주소를
 지정할 수 있어요.
 
+## Claude Desktop 모드: 1P(기본값)와 게이트웨이
+
+Claude Desktop은 서로 배타적인 두 모드 중 하나로 OpenCodex를 사용해요. 대시보드의
+**Claude → Desktop → 연결 모드** 또는 `ocx claude desktop apply --first-party|--gateway`로 선택합니다.
+
+- **1P(퍼스트파티, 기본값)**: Desktop 자체는 건드리지 않아요. claude.ai 로그인, 채팅 탭, 커넥터,
+  원격 제어가 그대로 유지됩니다. OpenCodex는 `~/.claude/settings.json`의 `env`에
+  `HTTPS_PROXY=http://127.0.0.1:<공개 포트+100>`과 `NODE_EXTRA_CA_CERTS=~/.opencodex/claude-intercept/ca.pem`
+  두 값만 씁니다. Desktop이 Code 탭용으로 실행하는 Claude Code(서브에이전트 포함)와 터미널의
+  `claude` CLI만 이 값을 읽어 로컬 인터셉트 프록시를 거치고, `POST /v1/messages`·`count_tokens`만
+  OpenCodex가 처리하며 나머지 `api.anthropic.com` 경로는 그대로 Anthropic으로 전달돼요. CA는 OS
+  신뢰 저장소에 설치되지 않습니다.
+- **게이트웨이(3P)**: 기존 방식으로, 아래 프로필을 써서 앱 전체가 OpenCodex를 게이트웨이로
+  사용해요. `--gateway`(또는 기존 `--static`/`--hybrid`/`--discovery-only`)로 명시적으로 선택합니다.
+
+모드는 `claudeCode.desktopMode`에 저장돼요. 이미 게이트웨이 프로필을 적용한 설치는 업데이트 후에도
+게이트웨이를 유지하고, 새 설치만 1P가 기본이에요. 모드를 바꾸면 다른 모드의 설정(OpenCodex가 쓴
+값만)이 제거되며, 회사 프록시 같은 외부 `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` 값은 덮어쓰지 않고 적용을
+거부해요. 전환 후에는 Desktop을 완전히 종료하고 다시 열어 주세요. 자세한 내용과 Claude Code CLI
+호환성은 영어 문서를 참고하세요.
+
 ## 원격 허브에 연결된 Claude Desktop
 
 허브에 연결된 컴퓨터에서 `ocx claude desktop apply` 또는 `ocx claude desktop`을 실행하면
@@ -563,4 +584,4 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 
 `config.json`에서 `claudeCode.stabilizePromptCache`를 `true`로 설정하면 번역 경로의 시스템 지시 끝에 붙은 지원 대상 Claude 알림을 마지막 사용자 메시지로 옮깁니다. 기본값은 `false`입니다. 사용하는 클라이언트에서 이 역할 변경을 허용할 때만 켜세요. 코드 펜스 안의 예제와 일치하지 않는 원문은 보존하며, Anthropic 원본 전달 경로는 바꾸지 않습니다. 메타데이터가 없는 요청의 캐시 키는 정리된 지시문을 기준으로 계산합니다. 대화 식별자를 만들거나 상위 서비스의 캐시 적중을 보장하는 기능은 아닙니다.
 
-OpenCode Go의 `deepseek-v4.1-flash` Chat 경로에서는 변환된 타임라인 시스템 알림이 대기 중인 도구 결과 뒤에서 원래 위치와 system 역할을 자동으로 유지합니다. 따라서 새 알림을 추가해도 맨 앞의 시스템 프롬프트를 다시 쓰지 않습니다. `stabilizePromptCache` 설정과 관계없이 적용되며, 다른 모델과 대상의 변환 및 Anthropic 네이티브 전달은 기존 동작을 유지합니다. 캐시 재사용에는 안정적인 세션 식별자와 사용 가능한 상위 서비스 캐시가 여전히 필요합니다. 이전 지시나 도구의 변경, 대화 압축도 캐시 적중에 영향을 줄 수 있으며, 알림 순서를 유지하는 것만으로 재사용을 보장하지는 않습니다.
+변환된 모든 Chat 경로에서 타임라인 알림은 대기 중인 도구 결과 뒤, 대화 안의 원래 위치를 그대로 유지합니다. 덕분에 새 알림을 추가해도 맨 앞의 시스템 프롬프트를 다시 쓰지 않고, 대화 중간의 지시가 그 지시보다 앞선 턴으로 끌려가지도 않습니다. 그 자리가 어떤 역할을 싣는지는 따로 정합니다. 공급자가 `foldDeveloperRoleToSystem: false`를 기록하지 않는 한 알림은 `system`으로 보내며, 이 기록은 상위 서비스가 `developer` 역할을 받아들인다는 뜻이라 같은 위치에서 그대로 전달합니다. 받아들이지 않는 상위 서비스는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 목적지는 접는 쪽을 씁니다. `stabilizePromptCache` 설정과 관계없이 적용되며 Anthropic 네이티브 전달은 기존 동작을 유지합니다. 캐시 재사용에는 안정적인 세션 식별자와 사용 가능한 상위 서비스 캐시가 여전히 필요합니다. 이전 지시나 도구의 변경, 대화 압축도 캐시 적중에 영향을 줄 수 있으며, 알림 순서를 유지하는 것만으로 재사용을 보장하지는 않습니다.

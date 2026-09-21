@@ -300,36 +300,31 @@ describe("GET /api/system/memory", () => {
       return await res!.json() as { bunRuntimeSource?: unknown; bunRevision?: unknown };
     };
     try {
-      for (const source of ["override", "bundled", "process"]) {
-        process.env.OCX_BUN_RUNTIME_SOURCE = source;
-        // Source alone is not enough: the marker must name THIS executable.
-        expect((await read()).bunRuntimeSource).toBeUndefined();
-        process.env.OCX_BUN_RUNTIME_PATH = process.execPath;
-        expect((await read()).bunRuntimeSource).toBe(source);
-        delete process.env.OCX_BUN_RUNTIME_PATH;
-      }
-      // A mismatched recorded path describes another binary — stay absent.
-      process.env.OCX_BUN_RUNTIME_SOURCE = "override";
-      process.env.OCX_BUN_RUNTIME_PATH = "/usr/local/bin/definitely-not-this-bun";
-      expect((await read()).bunRuntimeSource).toBeUndefined();
-      delete process.env.OCX_BUN_RUNTIME_PATH;
-      delete process.env.OCX_BUN_RUNTIME_SOURCE;
-      // An unset or unrecognized marker must leave the field absent rather than
-      // shipping a value doctor would then have to distrust.
-      const unset = await read();
-      expect(unset.bunRuntimeSource).toBeUndefined();
-      expect(typeof unset.bunRevision).toBe("string");
+      // The env-marker matrix itself — every allowlisted source, the pair contract,
+      // a mismatched recorded path, and absent or unrecognized markers — is exercised
+      // directly against the serialization target in
+      // tests/ci-workflows/bun-runtime.test.ts ("reportedBunRuntimeSource (#848
+      // launch-time provenance)"), with assertions identical to the ones this test
+      // used to route through eight full memory snapshots (~600 ms each on the
+      // shared CI runners, over this test's own deadline twice in unrelated PRs).
+      // What only this test can still prove is the wiring: the route answers THIS
+      // field from THAT function. One read per wire shape is the whole cost of that.
+      process.env.OCX_BUN_RUNTIME_SOURCE = "bundled";
+      process.env.OCX_BUN_RUNTIME_PATH = process.execPath;
+      const reported = await read();
+      expect(reported.bunRuntimeSource).toBe("bundled");
+      expect(typeof reported.bunRevision).toBe("string");
 
-      process.env.OCX_BUN_RUNTIME_SOURCE = "system";
+      // Without the marker pair the field is absent, never a guessed value.
+      delete process.env.OCX_BUN_RUNTIME_SOURCE;
+      delete process.env.OCX_BUN_RUNTIME_PATH;
       expect((await read()).bunRuntimeSource).toBeUndefined();
     } finally {
       if (inherited === undefined) delete process.env.OCX_BUN_RUNTIME_SOURCE;
       else process.env.OCX_BUN_RUNTIME_SOURCE = inherited;
       delete process.env.OCX_BUN_RUNTIME_PATH;
     }
-    // The route costs ~600 ms per read on the shared CI runners, and this test makes
-    // eight of them — marginally over bun's 5 s default on a loaded box.
-  }, 20_000);
+  });
 
   test("GET system memory includes privacy-safe appOwnedBytes scalars", async () => {
     registerDefaultAppOwnedMemoryStores();

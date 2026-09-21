@@ -32,7 +32,7 @@ import {
 import {
   createAdapterTierMetadata,
 } from "../../providers/fastwire";
-import { mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
+import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
 import { scrubOcxCompactionItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored } from "./request-strips";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -42,6 +42,7 @@ import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-ca
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
+import { observeOutbound } from "../../usage/cache-diagnostic";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -296,6 +297,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (forward || stateless || pairedToolResults) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss, synthesizeMissingCallOutputs);
       }
+      if (provider.dropResponsesReasoningItems === true) {
+        outBody = dropResponsesReasoningInputItems(outBody);
+      }
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
@@ -404,14 +408,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
-      if (!forward) outBody = normalizeOpenCodeGoAdditionalTools(outBody, url);
+      if (!forward) {
+        outBody = normalizeOpenCodeGoAdditionalTools(outBody, url, parsed._replayPrefixLen);
+      }
       // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
       // let a noncanonical custom forward provider skip this rewrite while the server still routes
       // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
       // therefore be the last routed transform that may depend on those declarations. Structural
       // sanitizers below can still run after it.
       outBody = normalizeResponsesCodeMode(outBody, parsed, provider);
-      if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
+      if (parsed._compactionRequest === true && (!isCanonicalOpenAiForwardProvider(provider) || parsed._portableCompaction === true)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
       // Run after routed compaction so nested input_image parts are replaced before a malformed
@@ -496,6 +502,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
+      observeOutbound(parsed._rawBody, finalBody, headers);
       const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",

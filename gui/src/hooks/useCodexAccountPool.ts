@@ -97,6 +97,11 @@ export interface CodexAccountPoolController {
    * `ready` during a refresh so rows survive; this is what makes that wait visible.
    */
   refreshing: boolean;
+  /**
+   * The most recent account read failed. The rows it could not replace are still on screen, so
+   * this is the only thing that tells a surface they are no longer known to be current.
+   */
+  refreshFailed: boolean;
   /** True until the first load attempt settles, whether it succeeds or fails. */
   initialLoading: boolean;
   switchingId: string | null;
@@ -160,6 +165,13 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   );
   const [activeId, setActiveId] = useState<string | null>(() => seed?.activeId ?? null);
   const [loadState, setLoadState] = useState<CodexAccountLoadState>(() => (seed != null ? "ready" : "loading"));
+  // Deliberately beside `loadState` rather than inside it. `loadState` answers what the surface
+  // can draw, and a warm refresh failure keeps the rows drawable — folding the failure in would
+  // mean either flashing the cold skeleton over good data or, as before, saying nothing at all.
+  // Saying nothing is the defect: the rows on screen are the ones from before the refresh, so an
+  // account the user has just added is simply absent while the older ones look current (#5261).
+  // `refreshing` already set the precedent that a fact about the read lives next to loadState.
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState<string | null>(null);
@@ -277,6 +289,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
             hasLoadedRef.current = true;
             // Progressive: paint account/quota boxes as soon as /accounts returns.
             setLoadState("ready");
+            // Cleared here rather than at the settle below, because the rows it qualifies are
+            // painted here. Waiting for /active to finish would leave the just-replaced rows
+            // labelled as pre-refresh ones for as long as that read's budget allows.
+            setRefreshFailed(false);
           }
           return true;
         } catch {
@@ -329,9 +345,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         });
         return activeOk;
       }
-      // Cold failure only: after a successful load (including empty), keep rows and stay ready
-      // so a soft poll miss does not flash the skeleton / wipe the pool.
+      // A cold failure has nothing to show, so it replaces the surface. A warm one keeps its rows
+      // — flashing the skeleton on a soft poll miss is its own defect — and says so instead of
+      // continuing to present them as current.
       if (!hasLoadedRef.current) setLoadState("error");
+      setRefreshFailed(true);
       return false;
     } finally {
       bounded.clear();
@@ -623,6 +641,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     activeId,
     loadState,
     refreshing: inflightCount > 0,
+    refreshFailed,
     initialLoading: !firstAttemptSettled,
     switchingId,
     pauseUpdatingId,

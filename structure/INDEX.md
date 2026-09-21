@@ -82,6 +82,7 @@ Background service, docs, release, and design discipline.
 
 | Doc | Scope |
 | --- | --- |
+| [`desktop-shell.md`](desktop-shell.md) | Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence. |
 | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) | Service install/repair, platform launchers, tray, and sidecar processes. |
 | [`ops/docs-and-release.md`](ops/docs-and-release.md) | Docs site, workflow map, branch policy, release flow, and cross-platform CI. |
 | [`design-methodology.md`](design-methodology.md) | Stage ordering for new GUI, CLI, and user-facing surfaces. |
@@ -94,7 +95,9 @@ A source area can be described by more than one doc, because these docs are orga
 | Source path | Described by |
 | --- | --- |
 | `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `app/` | [`overview.md`](overview.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `desktop/` | [`desktop-shell.md`](desktop-shell.md) |
 | `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `gui/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`design-methodology.md`](design-methodology.md) |
 | `gui/src/pages/Credentials.tsx` | [`credential-runtime.md`](credential-runtime.md) |
@@ -115,6 +118,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
+| `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
 | `src/config.ts` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md) |
 | `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
@@ -138,6 +142,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/security/` | [`security-control.md`](security-control.md) |
 | `src/server/` | [`runtime.md`](runtime.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
+| `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/credential-routes.ts` | [`credential-runtime.md`](credential-runtime.md) |
 | `src/server/management/security-routes.ts` | [`security-control.md`](security-control.md) |
 | `src/server/management/skill-routes.ts` | [`skill-control.md`](skill-control.md) |
@@ -152,6 +157,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types.ts` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
 | `src/update/` | [`runtime.md`](runtime.md) |
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md) |
+| `src/usage/timeline.ts` | [`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/vision/` | [`runtime.md`](runtime.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md) |
 | `src/web-search/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md) |
 

@@ -1,4 +1,4 @@
-import { chmodSync, linkSync, mkdirSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
@@ -36,6 +36,38 @@ export interface CatalogBackupWriteIO {
 }
 
 let backupTempSequence = 0;
+
+/**
+ * Do the prepared bytes differ from what is already on disk at `prepared.path`?
+ *
+ * The single no-op rule for both files the catalog layer owns — the active catalog
+ * and Codex's models cache — so the two writers cannot drift apart. Every
+ * mtime-keyed reader has to treat a rewrite as a change: the app-server staleness
+ * classifier (#857) compares a file's mtime against each running Codex's start
+ * time, so rewriting identical bytes marks every already-running Codex as stale
+ * even though nothing changed. #1459 established this rule for the catalog; the
+ * cache is the second writer that has to apply it, because
+ * `refreshCodexModelCatalog` reports `cacheSynced` straight into the startup
+ * warning in `handleStart`.
+ *
+ * Deliberately a Buffer rather than a decoded string: `readFileSync(path, "utf8")`
+ * substitutes U+FFFD for every invalid byte, so a file holding a raw 0x80 decodes
+ * equal to prepared content holding a legitimately encoded U+FFFD. Comparing
+ * decoded strings would then classify a malformed file as identical, skip the
+ * atomic repair write, and leave the corruption on disk.
+ *
+ * An unreadable or absent file reports "differs", so the caller performs the real
+ * write; that also converges a file that does not exist yet.
+ */
+export function preparedBytesDifferFromDisk(prepared: PreparedCatalogFileWrite): boolean {
+  let onDisk: Buffer;
+  try {
+    onDisk = readFileSync(prepared.path);
+  } catch {
+    return true;
+  }
+  return !onDisk.equals(Buffer.from(prepared.content, "utf8"));
+}
 
 function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";

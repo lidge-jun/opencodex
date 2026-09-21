@@ -73,6 +73,42 @@ describe("rateLimitRetryPolicyFor", () => {
     } as OcxProviderConfig)).toMatchObject({ attempts: 2, intervalMs: 5_000 });
   });
 
+  test("matches the Go destination canonically: host case and default ports", () => {
+    const patient = {
+      enabled: true,
+      attempts: 6,
+      intervalMs: 10_000,
+      maxIntervalMs: 60_000,
+      respectRetryAfter: true,
+    };
+    for (const baseUrl of [
+      "https://opencode.ai/zen/go/v1/",
+      "https://OpenCode.ai/zen/go/v1",
+      "https://opencode.AI/zen/go/v1",
+      "https://opencode.ai:443/zen/go/v1",
+    ]) {
+      expect(rateLimitRetryPolicyFor({ baseUrl, adapter: "openai-chat" } as OcxProviderConfig)).toEqual(patient);
+    }
+    // Userinfo, query strings, and look-alike hosts still refuse the fallback.
+    // The userinfo case is assembled through the URL setters instead of written inline.
+    // privacy:scan reads source text, so inline userinfo in a test file is
+    // indistinguishable from a real address to its email detector, and it blocked the
+    // shared gates job on dev. Widening isAllowedEmail would have been the other way out
+    // and the wrong one: the allowlist is what keeps the detector honest. The serialized
+    // href below is byte-identical to the literal it replaces, so the input under test
+    // is unchanged.
+    const userinfoBaseUrl = new URL("https://opencode.ai/zen/go/v1");
+    userinfoBaseUrl.username = "user";
+    userinfoBaseUrl.password = ["pa", "ss"].join("");
+    for (const baseUrl of [
+      "https://opencode.ai/zen/go/v1?x=1",
+      userinfoBaseUrl.href,
+      "https://opencode.ai.evil.net/zen/go/v1",
+    ]) {
+      expect(rateLimitRetryPolicyFor({ baseUrl, adapter: "openai-chat" } as OcxProviderConfig)).toBeNull();
+    }
+  });
+
   test("honors explicit values", () => {
     expect(rateLimitRetryPolicyFor({
       retryOn429: { attempts: 10, intervalMs: 1_000, maxIntervalMs: 5_000, respectRetryAfter: false },

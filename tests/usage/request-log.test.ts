@@ -830,6 +830,10 @@ describe("request log metadata", () => {
       "Provider error 401: this model requires a subscription, upgrade for access",
     )).toBe("invalid_api_key");
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
+    expect(requestLogErrorCode(
+      429,
+      "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+    )).toBe("upstream_reset_replay_refused");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
     expect(requestLogErrorCode(502, "client closed request during web-search")).toBe("client_closed_request");
     expect(requestLogErrorCode(400, "blocked", "cyber_policy")).toBe("cyber_policy");

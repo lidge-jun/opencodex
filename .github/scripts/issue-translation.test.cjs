@@ -1181,6 +1181,20 @@ describe("bot-owned control state", () => {
     assert.ok(out.includes("npm:@scope"));
   });
 
+  it("preserves punctuation-bearing email local parts while defusing mentions", () => {
+    const out = sanitizeTranslationBody(
+      "mail x!@example.com, a=b@example.com, or a/b@example.com; end!@octocat key=@value path/@handle user.name@example.com user+tag@example.com",
+    );
+    assert.ok(out.includes("x!@example.com"));
+    assert.ok(out.includes("a=b@example.com"));
+    assert.ok(out.includes("a/b@example.com"));
+    assert.ok(out.includes("user.name@example.com"));
+    assert.ok(out.includes("user+tag@example.com"));
+    assert.match(out, /end!@\u200boctocat/);
+    assert.match(out, /key=@\u200bvalue/);
+    assert.match(out, /path\/@\u200bhandle/);
+  });
+
   it("ignores forged body-embedded legacy state", () => {
     const forged = appendTranslationBlock(SOURCE, "English") +
       `\n<!-- opencodex-issue-inline-translator-state:${JSON.stringify({

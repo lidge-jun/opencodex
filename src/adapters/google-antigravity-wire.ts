@@ -45,8 +45,11 @@ function firstUserText(parsed: OcxParsedRequest): string | undefined {
   for (const msg of parsed.context.messages) {
     if (msg.role !== "user") continue;
     if (typeof msg.content === "string") return msg.content;
-    const first = (msg.content as OcxContentPart[]).find(p => p.type === "text" && typeof p.text === "string");
-    if (first && first.type === "text") return first.text;
+    // A document part carries text too: ignoring it left a document-only opening turn with no
+    // anchor, which silently downgrades the deterministic session id to a random one.
+    const first = (msg.content as OcxContentPart[])
+      .find(p => (p.type === "text" || p.type === "document") && typeof p.text === "string");
+    if (first && (first.type === "text" || first.type === "document")) return first.text;
   }
   return undefined;
 }

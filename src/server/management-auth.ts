@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { adminApiTokenFilePath } from "../lib/admin-secrets";
+import { adminApiTokenFilePath, opencodeCatalogToken } from "../lib/admin-secrets";
 import {
   LOCAL_MANAGEMENT_CAPABILITY_HEADER,
   LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
@@ -297,6 +297,7 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
  */
 export type ManagementPrincipal =
   | "admin-token"
+  | "opencode-catalog-token"
   | "gui-session"
   | "gui-pair-capability"
   | "local-read-capability"
@@ -484,6 +485,16 @@ function requestManagementCredential(req: Request): string | null {
     || null;
 }
 
+function isOpencodeCatalogRequest(req: Request): boolean {
+  if (req.method !== "GET") return false;
+  try {
+    const url = new URL(req.url);
+    return url.pathname === "/api/models" && url.search === "";
+  } catch {
+    return false;
+  }
+}
+
 function resolveManagementAdmission(
   req: Request,
   state: ManagementAuthState,
@@ -500,6 +511,9 @@ function resolveManagementAdmission(
   else if (state.available) {
     const actual = requestManagementCredential(req);
     if (actual && equalSecret(actual, state.token)) principal = "admin-token";
+    else if (actual && isOpencodeCatalogRequest(req) && equalSecret(actual, opencodeCatalogToken(state.token))) {
+      principal = "opencode-catalog-token";
+    }
     else if (config && authorizeGuiSessionRequest(req, config, state).ok) principal = "gui-session";
   }
   if (principal) admittedManagementRequests.set(req, principal);

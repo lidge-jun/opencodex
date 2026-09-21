@@ -11,7 +11,8 @@ import { LIVE_AUDIO_MODEL, resolveAudioUpstream, type AudioUpstream } from "./au
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import {
   backendJsonBodyFromApiMultipart, buildLiveSidebandUpstreamWsUrl, forwardLiveUrl, keyedLiveUrl,
-  LIVE_CLIENT_PROTOCOL_HEADERS, LIVE_REQUEST_MAX_BYTES, LIVE_RESPONSE_MAX_BYTES, readBodyCapped,
+  LIVE_CLIENT_PROTOCOL_HEADERS, LIVE_REQUEST_MAX_BYTES, LIVE_RESPONSE_MAX_BYTES, liveSidebandModel,
+  readBodyCapped,
   type LiveSidebandTarget,
 } from "./live";
 import { LIVE_CALL_TTL_MS, LiveCallBindings, upstreamLiveCallId } from "./live-call-bindings";
@@ -115,6 +116,8 @@ export async function handleExternalLive(
       owner: options.client.owner, upstreamCallId: callId,
       joinStyle: frameless ? "frameless-path" : "realtime-query",
       providerName: relay.providerName,
+      // A join carries no model of its own; this is the one the call settled on.
+      model,
       accountId: context ? context.kind === "main" ? callerOwned ? undefined : MAIN_CODEX_ACCOUNT_ID : context.accountId : undefined,
       chatgptAccountId: new Headers(relay.headers).get("chatgpt-account-id") ?? undefined,
       keyedCredentialDigest: relay.keyed ? createHash("sha256").update(new Headers(relay.headers).get("authorization") ?? "").digest("hex") : undefined,
@@ -150,13 +153,16 @@ export async function resolveExternalLiveSocket(
   }
   let upstreamTarget = binding ? { style: binding.joinStyle, callId: binding.upstreamCallId } as LiveSidebandTarget : target;
   const frameless = upstreamTarget.style === "frameless-path" || upstreamTarget.style === "frameless-standalone";
-  let model = LIVE_AUDIO_MODEL;
   if (upstreamTarget.style === "frameless-standalone") {
     const query = new URLSearchParams(upstreamTarget.query);
     if (!query.has("model") || query.get("model") === "gpt-live-1") query.set("model", LIVE_AUDIO_MODEL);
-    model = query.get("model") ?? LIVE_AUDIO_MODEL;
     upstreamTarget = { ...upstreamTarget, query: query.toString() };
   }
+  // What this socket will actually run: the model a bound call settled on when
+  // this same key created it, or the one a standalone session forwards in its
+  // own query. Reading only the Frameless query left a Realtime standalone
+  // socket judged as the default while its query carried another model.
+  const model = binding?.model ?? liveSidebandModel(upstreamTarget) ?? LIVE_AUDIO_MODEL;
   const relay = await resolveAudioUpstream(client.headers, config, log, {
     admission: client.admission, model, lease: options.lease,
     signal: options.signal,

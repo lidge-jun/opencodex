@@ -55,7 +55,7 @@ import {
   deepseekThinkingEffortsFor,
   deepseekReasoningMapFor,
   KIMI_K3_STANDARD_CONTEXT_WINDOW,
-  KIMI_CODING_MODELS,
+  KIMI_CODING_LIVE_MODELS,
   KIMI_THINKING_MODELS,
   KIMI_CODING_NO_REASONING_MODELS,
   KIMI_CODING_K3_REASONING_EFFORTS,
@@ -444,8 +444,14 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
     note: "Log in with your Kimi account",
-    models: KIMI_CODING_MODELS,
-    defaultModel: "kimi-k2.7-code",
+    // 260921: the retired k2.x ids stay out of the picker — live /coding/v1/models lists
+    // only kimi-for-coding[-highspeed], k3, k3-256k. Saved rows still naming kimi-k2.7-code
+    // are repaired by MODEL_RENAMES in model-rename-migration.ts.
+    models: KIMI_CODING_LIVE_MODELS,
+    // 260921: kimi-k2.7-code was retired from the subscription endpoint (live /models lists
+    // only kimi-for-coding[-highspeed], k3, k3-256k). The kimi-for-coding alias is the
+    // stable ID and currently routes to K2.8 Preview.
+    defaultModel: "kimi-for-coding",
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
     // K3 accepts low/high/max; Codex aliases are normalized by the model-scoped wire map.
@@ -657,6 +663,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Zen Go can close a Chat stream after a fully assembled function call without sending
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
+    // Muse Spark on OpenCode Go can sit silent during prolonged reasoning and close without a protocol terminal.
+    modelResponsesTerminalRepair: {
+      "muse-spark-1.2-contributor": { graceMs: 5_000 },
+      "muse-spark-1.3-contributor": { graceMs: 5_000 },
+    },
     // Go rejects reasoning.encrypted_content with previous_response_id (#3838).
     // Use explicit replay history and the existing stateless Responses policy.
     statelessResponses: true,
@@ -701,17 +712,25 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       "glm-5.3-flash": ["text", "image"],
       // Experimental DeepSeek vision preview — expected to merge into deepseek-v4-flash later.
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
-      // This route is text-only upstream — it is already listed in this preset's
-      // noVisionModels, which routes images through the proxy's vision sidecar and
-      // makes the catalog advertise image input on its behalf. The positive
-      // text-only declaration is what reaches an EXISTING install: derive.ts fills
-      // noVisionModels all-or-nothing, so a config persisted before this id joined
-      // the list keeps a stale list, the sidecar predicate never matches, the row
-      // carries no modality at all, and any combo containing it collapses to
-      // ["text"] (#4505). modelInputModalities IS per-key filled, so this
-      // declaration lands on old configs. It states the route's real upstream
-      // capability and keeps the sidecar explicitly distinct from native vision.
-      "deepseek-v4.1-flash": ["text"],
+      // This route became natively multimodal; it is NOT a sidecar consumer.
+      //
+      // History: the id was declared text-only here and listed in this preset's
+      // noVisionModels, which routed its images through the vision sidecar (#4505).
+      // That classification came from jawcode metadata and went stale. Probed
+      // 2026-09-19 against https://opencode.ai/zen/go/v1/chat/completions with the
+      // headers this proxy sends: the route accepts an image_url part and the model
+      // reads it correctly (a four-band colour chart was described in the right
+      // order). Its sibling deepseek-v4-flash on the same gateway still answers
+      // HTTP 400 "Model only supports text input", which is what keeps the two
+      // distinct here rather than collapsing them.
+      //
+      // The declaration is what reaches an EXISTING install: derive.ts fills
+      // noVisionModels all-or-nothing, so a config persisted while the stale list
+      // was current keeps it forever, and modelInputModalities is filled per-key
+      // BENEATH the saved value. Both halves are repaired by
+      // stale-vision-classification-migration.ts; correcting the registry alone
+      // would fix new installs and leave existing ones stripping images.
+      "deepseek-v4.1-flash": ["text", "image"],
       // Muse Spark Contributor is natively multimodal on Zen Go: it accepts input_image
       // parts over /responses (probed 2026-08-26). Without this declaration the catalog
       // advertises it text-only and the Codex app blocks image attachments client-side with
@@ -765,7 +784,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Kimi K2.7 Code accepts text+image+video: do NOT list it here.
     noVisionModels: [
       "glm-5.3", "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4.1-flash", "deepseek-v4-flash",
+      // deepseek-v4.1-flash is deliberately absent: probed natively multimodal on this
+      // gateway 2026-09-19 (see the modelInputModalities note above). Its sibling
+      // deepseek-v4-flash stays listed — that route rejects image_url upstream.
+      "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",

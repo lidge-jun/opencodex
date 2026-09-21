@@ -103,6 +103,53 @@ Pour comprendre la liste de modèles et le comportement chiffré des tâches con
 | `GET /api/client-integrations/journal?client=...` | Lister les opérations de restauration, éventuellement pour un seul client. Chaque ligne contient le champ `deletable` calculé par le serveur. | 400 client invalide |
 | `DELETE /api/client-integrations/journal?opId=...` | Retirer une ancienne opération et supprimer son instantané si possible. La réponse contient `snapshotRemoved` ; `false` conserve le nettoyage pour une nouvelle tentative de maintenance. | 400 `opId` absent ; 404 opération absente ou déjà retirée ; 409 opération la plus récente du client |
 
+## Prévisualiser une modification d'intégration
+
+Une prévisualisation montre ce qu'une modification ferait sans la faire. Ces routes n'écrivent
+rien : ni instantané, ni enregistrement de propriété, ni ligne de journal, ni verrou, ni
+maintenance, ni récupération.
+
+| Méthode et chemin | Objet | Erreurs notables |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | Planifier `apply`, `overwrite` ou `disable` pour un client ; corps `{ "clientId": "...", "operation": "..." }` | 400 client ou opération invalide ; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Planifier une annulation ; corps `{ "opId": "...", "confirmDrift": false }` | 404 opération inconnue ; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Planifier la modification d'un seul profil Aside ; `restore` exige un `opId` | 400 corps invalide ou profil non précisé ; 404 profil ou opération inconnus; 409 `integration_preview_unavailable` |
+
+Un plan contient `version`, `clientId`, `operation`, `state`, `foreignEdit`, une liste `changes`
+de paires `kind` et `path`, une empreinte `fingerprint` opaque, `canApply`, `willChange`, ainsi
+que `refusalReason` et `profileId` facultatifs. Les chemins sont des chemins de schéma gérés ou
+les marqueurs fixes `$snapshot`, `$ownership` et `$journal` ; une position déterminée à
+l'exécution apparaît comme `*`. Aucune valeur de configuration, aucun emplacement de fichier et
+aucune identité d'élément sélectionné n'est renvoyé.
+
+`canApply` à vrai avec `willChange` à faux signifie que l'opération réussit sans rien changer
+dans le document client géré, par exemple appliquer ce qui est déjà appliqué.
+
+Une modification de profil Aside enregistre tout de même une chose dans ce cas : la confirmation
+enregistre la préférence de synchronisation du profil avant de toucher au moindre document client.
+Désactiver un profil dont le bloc géré est déjà absent enregistre donc la préférence et laisse le
+document et son historique intacts.
+
+`integration_preview_unavailable` indique qu'aucune liste de modèles utilisable n'est actuellement
+conservée : un proxy qui vient de démarrer est un cas, une liste abandonnée parce que la
+configuration ou le cache de fournisseurs a changé en est un autre. Lire
+`GET /api/client-integrations` en établit une lorsque la découverte réussit et que la
+configuration peut être identifiée ; c'est le remède habituel, pas une garantie.
+
+## Confirmer une modification prévisualisée
+
+Les routes de modification acceptent `operation` et `planFingerprint` à côté de leur corps
+habituel. Envoyez les deux ou aucun : une requête n'en portant qu'un est rejetée, tout comme une
+requête dont l'`operation` contredit la modification demandée. Une liaison Aside porte sur un seul
+profil, car une empreinte ne peut pas décrire plusieurs fichiers qui changent indépendamment.
+
+Le serveur replanifie avant d'écrire et renvoie `409 integration_preview_stale` avec un `plan`
+recalculé lorsque la confirmation ne décrit plus ce qui se produirait. Décidez de nouveau d'après
+ce plan ; la requête n'est pas réessayée automatiquement.
+
+Une empreinte est une vérification optimiste, jamais une autorisation. L'authentification de l'API
+d'administration et les règles de propriété décident seules si une modification peut avoir lieu.
+
 La suppression ajoute une pierre tombale au lieu de réécrire le journal. Le serveur protège
 l'opération la plus récente de chaque client afin de conserver le point d'annulation actuel.
 
@@ -145,6 +192,7 @@ Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de rech
 | `GET /api/debug/injection-logs` | Lire un nombre limité d'entrées de débogage de l'injection du guidage | — |
 | `GET /api/claude/inbound-debug` | Lire l'état et les entrées du débogage entrant | — |
 | `GET /api/usage` | Résumer l'utilisation par période et par interface cliente ; les réponses Codex comprennent aussi une ventilation `accounts` indexée par des libellés de journalisation stables ne contenant aucune donnée personnelle | Renvoie un résumé `error: "read_failed"` si le stockage ne peut pas être lu |
+| `GET /api/metrics` | Renvoyer les métriques texte Prometheus locales au processus : requêtes logiques, envois physiques, types de récupération, durée et TTFT. Les libellés sont limités au protocole, au résultat et à la classe de récupération ; aucun identifiant de requête ou d'identifiant secret n'est exporté. | 404 si `metricsExport.enabled` n'était pas vrai au démarrage ; l'authentification de gestion est obligatoire et les identifiants du plan de données ne donnent aucun accès |
 | `GET /api/storage` | Analyser l'utilisation du stockage Codex par catégorie | Renvoie une charge utile `error: "scan_failed"` en cas d'échec de l'analyse |
 | `POST /api/storage/cleanup/preview` | Prévisualiser le nettoyage des sessions archivées et renvoyer une empreinte contraignante | 400 `invalid_json` ou `invalid_percent` |
 | `POST /api/storage/cleanup` | Mettre en quarantaine ou supprimer définitivement l'ensemble archivé prévisualisé | 400 saisie invalide ; 409 état obsolète, occupé ou référencé ; 500 échec du système de fichiers ou de la base de données |

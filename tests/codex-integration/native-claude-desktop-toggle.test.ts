@@ -14,12 +14,16 @@ let root = "";
 let library = "";
 let previousHome: string | undefined;
 let previousLibrary: string | undefined;
+let previousClaudeConfigDir: string | undefined;
 
+// These tests pin the gateway (third-party profile) path; first-party is covered by
+// tests/claude-integration/claude-desktop-first-party.test.ts.
 function config(): OcxConfig {
   return {
     port: 10100,
     providers: {},
     defaultProvider: "openai",
+    claudeCode: { desktopMode: "gateway" },
   } as OcxConfig;
 }
 
@@ -84,8 +88,10 @@ beforeEach(() => {
   library = join(root, "desktop-library");
   previousHome = process.env.OPENCODEX_HOME;
   previousLibrary = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   process.env.OPENCODEX_HOME = root;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
+  process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
 });
 
@@ -94,6 +100,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousLibrary;
+  if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
   removeTreeWithRetry(root);
 });
 
@@ -237,7 +245,7 @@ test("auto-apply re-reads desired state after catalog fetch and skips a concurre
     assignments: {},
     defaults: { opus: null, fable: null, sonnet: null, haiku: null },
   };
-  const persisted = { ...config(), claudeCode: { desktopProfile: profile, injectAgents: false } };
+  const persisted = { ...config(), claudeCode: { desktopMode: "gateway" as const, desktopProfile: profile, injectAgents: false } };
   writeFileSync(join(root, "config.json"), JSON.stringify(persisted));
   writeFileSync(join(root, "config.json.bak"), JSON.stringify(persisted));
   writeFileSync(join(root, "config.json"), JSON.stringify(persisted));
@@ -302,7 +310,7 @@ test("explicit enable re-reads desired state after catalog fetch and skips a con
 });
 
 test("explicit enable honors the Claude Desktop native-model opt-out", async () => {
-  const persisted = { ...config(), claudeCode: { desktopNativeModels: false } };
+  const persisted = { ...config(), claudeCode: { desktopMode: "gateway" as const, desktopNativeModels: false } };
   writeFileSync(join(root, "config.json"), JSON.stringify(persisted));
   let nativeSlugs: string[] | undefined;
 

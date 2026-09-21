@@ -124,6 +124,51 @@ nonnegative integer account ID returned by the profile list; it is not a browser
 | `POST /api/client-integrations/aside/profiles/{profileId}/restore` | Undo an operation using `{ "opId": "..." }`; optional `confirmDrift: true` permits replacing later edits | 404 missing operation/profile; 409 busy, mismatch, or required drift confirmation; 410 expired snapshot; 500 save/write failure |
 | `POST /api/client-integrations/aside/sync` | Refresh enabled profiles through the server's mutation owner; body `{}` | 400 nonempty body/profile selector; 409 busy; 207 per-profile refusals |
 
+## Previewing an integration change
+
+A preview reports what a change would do without doing it. These routes write nothing: no
+snapshot, no ownership record, no journal row, no lock, and no maintenance or recovery.
+
+| Route | Purpose | Notable responses |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | Plan `apply`, `overwrite` or `disable` for one client; body `{ "clientId": "...", "operation": "..." }` | 400 invalid client or operation; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Plan an undo; body `{ "opId": "...", "confirmDrift": false }` | 404 unknown operation; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Plan one Aside profile's change, including `restore` with an `opId` | 400 invalid body or unscoped request; 404 unknown profile or operation, 409 `integration_preview_unavailable` |
+
+A plan carries `version`, `clientId`, `operation`, `state`, `foreignEdit`, a `changes` list of
+`kind` and `path` pairs, an opaque `fingerprint`, `canApply`, `willChange`, and an optional
+`refusalReason` and `profileId`. Paths are managed schema paths or the fixed `$snapshot`,
+`$ownership` and `$journal` markers; a position chosen at runtime appears as `*`. No
+configuration value, file location or selected member identity is returned.
+
+`canApply: true` with `willChange: false` means the operation succeeds and changes nothing in
+the managed client document, such as applying what is already applied.
+
+An Aside profile change still saves one thing in that case. Confirming it records the desired sync
+preference for that profile before any client document is touched, so disabling a profile whose
+managed block is already absent stores the preference and leaves the document and its history
+untouched.
+
+`integration_preview_unavailable` means no usable model roster is currently retained. A freshly
+started proxy is one way to be in that state; a roster retired because the configuration or the
+provider cache moved is another. Reading `GET /api/client-integrations` establishes one when
+discovery succeeds and the configuration can be identified, so it is the usual remedy rather than
+a guarantee.
+
+## Confirming a previewed change
+
+Mutation routes accept `operation` and `planFingerprint` alongside their existing body. Send both
+or neither: a request carrying one is rejected, as is one whose `operation` disagrees with the
+change being requested. Aside bindings apply to a single profile, because one fingerprint cannot
+describe several independently changing files.
+
+The server re-plans before writing anything and returns `409 integration_preview_stale` with a
+freshly computed `plan` when the confirmation no longer describes what would happen. Decide again
+against the new plan; the request is not retried automatically.
+
+A fingerprint is an optimistic check, never authorization. Management authentication and every
+ownership rule still decide whether a change may happen at all.
+
 Bulk PUT returns `{ ok, clientId, changed, state, message, results }`; each result identifies
 its `profileId` and reports the writer outcome. Sync returns `{ ok, clientId, results }`, with
 per-profile refresh outcomes. Both return HTTP 200 when all returned attempts succeed and
@@ -220,6 +265,7 @@ by the current window size.
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
 | `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/metrics` | Return process-local Prometheus text metrics for logical requests, physical sends, recovery kinds, duration, and TTFT. Labels are closed to protocol, result, and recovery class; request and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -229,6 +275,28 @@ by the current window size.
 | `GET, PUT /api/storage/cleanup-policy` | Read or update scheduled cleanup policy and job state | 400 invalid policy |
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
+
+`GET /api/metrics` returns `Content-Type: text/plain;version=0.0.4`. Counters and histograms
+reset when the process restarts; `opencodex_metrics_process_start_time_seconds` identifies that
+boundary. Histogram buckets are cumulative and end with `le="+Inf"`, equal to the family count.
+
+| Metric family | Labels | Meaning |
+| --- | --- | --- |
+| `opencodex_logical_requests_total` | `protocol`, `result` | One observation per finalized logical request. |
+| `opencodex_physical_sends_total` | `protocol` | Actual upstream sends summed from finalized attempts. |
+| `opencodex_recoveries_total` | `protocol`, `recovery` | Distinct recovery kinds observed per attempt, projected to a closed class. |
+| `opencodex_request_failures_total` | `protocol`, `cause` | Finalized requests that did not deliver an answer, by the cause the recorder derived. Counter only; no histogram carries a cause. |
+| `opencodex_request_duration_seconds` | `protocol`, `result` | Fixed-bucket duration histogram for finalized requests. |
+| `opencodex_ttft_seconds` | `protocol`, `result` | Fixed-bucket TTFT histogram for requests with observed first output. |
+| `opencodex_ttft_missing_total` | `protocol`, `result` | Complementary count for requests without observed TTFT. |
+| `opencodex_metrics_process_start_time_seconds` | none | Process-local reset boundary. |
+
+The `recovery` label takes one of a fixed set of classes: `transient`, `connection`, `credential`,
+`rate_limit`, `quota`, `policy`, `ciphertext`, `payload`, `empty_completion`, `effort_downgrade` and
+`other`. The set is closed, so no model, account, user or request identifier can ever appear in a
+series. `rate_limit`, `quota`, `policy` and `ciphertext` are separate because the operator response
+differs: wait out the limit, move to another account, change the prompt, or drop stale encrypted
+state. A rejected opaque reasoning blob counts as `ciphertext` rather than `payload`.
 
 If a scanned row exceeds the existing parser size limit, `GET /api/usage` and `GET /api/keys`
 keep the readable-row aggregates and add `usageIncomplete: true` with

@@ -78,6 +78,14 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
     warmed: true,
     why: "the first resetAt iteration loads src/codex/quota.ts and src/codex/main-account-cache.ts",
   },
+  "tests/codex-integration/codex-shim-ensure-failure.test.ts": {
+    warmed: false,
+    why:
+      "Its children are two throwaway /bin/sh scripts standing in for ensure and for the real Codex "
+      + "launcher, so the cold cost is shell and process startup rather than a repository module "
+      + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
+      + "module in the child: the point of the file is what the shell does with an exit status.",
+  },
   "tests/codex-integration/codex-shim.test.ts": {
     warmed: false,
     why:

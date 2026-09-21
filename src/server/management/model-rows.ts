@@ -9,6 +9,12 @@
  * Bodies are unchanged from their previous home; only `export` was added.
  */
 import type { CatalogModel } from "../../codex/catalog";
+import { observeModelCacheRevision } from "../../codex/model-cache";
+import {
+  captureExportConfigAdmission,
+  isExportConfigAdmissionCurrent,
+  type ExportConfigAdmission,
+} from "../../config/admitted-identity";
 import {
   catalogModelSlug,
   filterCatalogVisibleModels,
@@ -28,7 +34,7 @@ import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import type { OcxConfig } from "../../types";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
-import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 
@@ -77,14 +83,29 @@ export function effectiveManagementDisplayName(
  */
 export async function listManagementModelRows(
   config: OcxConfig,
-  options: { entitlementWaitMs?: number } = {},
+  options: {
+    entitlementWaitMs?: number;
+    models?: readonly CatalogModel[];
+    /** Filled with each provider's content revision as of the moment its rows were chosen. */
+    providerContentRevisions?: Map<string, string>;
+  } = {},
 ): Promise<ManagementModelRow[]> {
-  const [models] = await Promise.all([
-    fetchAllModels(config),
-    ensureCodexEntitlementFreshness(config, {
-      waitMs: options.entitlementWaitMs ?? 3_000,
-    }),
-  ]);
+  /*
+   * A supplied roster skips the gather, and that is the point rather than an optimization.
+   * `fetchAllModels` reaches providers and can persist an initial model selection, which a
+   * read-only caller must not do. Everything below this line is the projection — the disabled
+   * computation, native and account-bound rows, custom rows and the public list — so a caller
+   * that brings its own roster still sees exactly what a writer would, and the two cannot
+   * disagree about the roster for any reason except the roster itself.
+   */
+  const models = options.models === undefined
+    ? (await Promise.all([
+      fetchAllModels(config, options.providerContentRevisions),
+      ensureCodexEntitlementFreshness(config, {
+        waitMs: options.entitlementWaitMs ?? 3_000,
+      }),
+    ]))[0]
+    : [...options.models];
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
   // from the static supported set so a disabled model stays listed and re-enableable.
@@ -236,10 +257,201 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
  * tab is absent from `/v1/models` and exporting it would hand the client a
  * selector the proxy refuses to route.
  */
-export async function loadExportModels(config: OcxConfig): Promise<ExportModel[]> {
-  const rows = await listManagementModelRows(config);
+export async function loadExportModels(
+  config: OcxConfig,
+  models?: readonly CatalogModel[],
+): Promise<ExportModel[]> {
+  // Initial selection adopts into the live configuration and persists it, so it has to finish
+  // before anything is admitted. Admitting first would bind this roster to bytes the same load is
+  // about to rewrite, and finalizing against a detached copy would adopt the choices into the copy
+  // while leaving the live configuration pending.
+  if (models === undefined && pendingModelSelectionProviders(config).size > 0) {
+    const { resolvePendingInitialModelSelection } = await import("../../providers/initial-model-selection-runtime");
+    await resolvePendingInitialModelSelection(config);
+  }
+  // The configuration this pass will use from beginning to end, proved to be the one on disk.
+  // Without it there is nothing that may be retained, and the caller still gets its rows: only the
+  // preview authority is withheld.
+  const admission = captureExportConfigAdmission(config);
+  const admitted = admission?.config ?? config;
+  // The gather stamps each provider as it chooses its rows, so the roster and the revisions that
+  // vouch for it come from the same moment. Sampling afterwards would let a concurrent flight's
+  // publication be recorded against rows it never produced.
+  const gathered = new Map<string, string>();
+  // Gathering here rather than through the shared fetch is what keeps the detached copy out of the
+  // initial-selection finalizer: the projection below takes a roster, and that branch performs no
+  // discovery and no configuration write. The entitlement refresh keeps the budget it has always
+  // had, and runs alongside as it did inside the projection.
+  const roster = models === undefined
+    ? (await Promise.all([
+      (await import("../../codex/catalog")).gatherRoutedModels(admitted, { providerContentRevisions: gathered }),
+      ensureCodexEntitlementFreshness(admitted, { waitMs: 3_000 }),
+    ]))[0]
+    : models;
+  const rows = await listManagementModelRows(admitted, { models: roster });
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
-  const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), config));
-  return rows.filter(row => !row.disabled && (row.native || visibleRouted.has(row))).map(toExportModel);
+  const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), admitted));
+  const exported = rows.filter(row => !row.disabled && (row.native || visibleRouted.has(row))).map(toExportModel);
+  // Retain the FINAL projection, not an input to it. A preview that rebuilt from raw provider
+  // caches would miss static and forward providers, which never populate one, and would skip the
+  // retention, metadata, combo and filtering this function applies afterwards.
+  // A deep clone, not a frozen view of the caller's array. Freezing the array alone left the model
+  // objects shared, so a caller mutating one in place would have silently rewritten the roster a
+  // later preview plans against, and the fingerprint would have moved with it.
+  // Still the configuration these rows were chosen under, on disk and in hand alike. Revalidating
+  // rather than re-reading an identity is what makes this fail closed: a configuration that moved
+  // during the load leaves no snapshot rather than one recorded under a state its rows never had.
+  if (admission === null || !isExportConfigAdmissionCurrent(admission, config)) {
+    lastExportSnapshot = null;
+    return exported;
+  }
+  // Prefer the revisions the gather stamped; fall back to observing only when the roster was
+  // supplied and no gather happened, where there is nothing tighter to use.
+  const cacheStamp = gathered.size > 0 ? stampFrom(admitted, gathered) : modelCacheStamp(admitted);
+  const retained = lastExportSnapshot;
+  /*
+   * An identical roster keeps the identity it already had.
+   *
+   * The generation moved on every load, so an ordinary read that rebuilt the same rows, which the
+   * Integrations collection does, invalidated a confirmation an operator was in the middle of
+   * submitting. Nothing about the roster had changed; only the counter had. The rows themselves
+   * are compared rather than assumed equal from the configuration and the cache stamp, because a
+   * projection also reads entitlement state neither of those two describes.
+   */
+  const projection = Object.freeze(structuredClone(exported));
+  if (retained !== null
+    && retained.cacheStamp === cacheStamp
+    && isExportConfigAdmissionCurrent(retained.admission, config)
+    && JSON.stringify(retained.models) === JSON.stringify(projection)) {
+    return exported;
+  }
+  lastExportSnapshot = { admission, cacheStamp, generation: ++exportSnapshotGeneration, models: projection };
+  return exported;
+}
+
+/**
+ * The completed export roster from the last ordinary load, if it still describes this config.
+ *
+ * A preview may not gather, so it reads only what an authoritative load already finished. The
+ * admission it carries proved, when the roster was built, that the configuration in hand was the
+ * one on disk; a later read repeats that proof, so a rewritten file, an edited resident object or
+ * a mutated working copy each retire the snapshot rather than letting a preview plan against a
+ * configuration nobody has.
+ *
+ * A cold process has no snapshot and the caller answers a bounded refusal, and an ordinary load
+ * populates one: the Integrations collection read calls `loadExportModels`, so the page an
+ * operator opens before confirming anything is usually the page that fills this in. That is not a
+ * repair for every refusal. A configuration that disagrees with its file keeps refusing however
+ * many times the page is opened, because nothing here reloads or reconciles anything; once the
+ * two agree again the next ordinary read rebuilds the snapshot by itself.
+ */
+let lastExportSnapshot:
+  | { admission: ExportConfigAdmission; cacheStamp: string; generation: number; models: readonly ExportModel[] }
+  | null = null;
+let exportSnapshotGeneration = 0;
+
+/**
+ * A process-local prefix for the roster identity a caller carries between a preview and the
+ * mutation that confirms it.
+ *
+ * The identity used to be the configuration digest with a counter appended, which handed a
+ * dashboard an opaque-looking string that was in fact a fingerprint of the operator's
+ * configuration file. It only has to be unforgeable within this process and distinct across
+ * restarts, so it says nothing about the configuration at all.
+ */
+const rosterIdentityPrefix = `r${Math.trunc(Math.random() * 0xffffffff).toString(36)}`;
+
+function rosterIdentity(generation: number): string {
+  return `${rosterIdentityPrefix}:${generation}`;
+}
+
+/**
+ * Where the gathered half of the roster stands, observed without changing it.
+ *
+ * The config key cannot see a provider's models changing underneath an unchanged configuration,
+ * which is exactly what discovery does. This reads the cache's own generation for each configured
+ * provider through the passive observer, so a completed discovery retires the snapshot and a
+ * preview stops planning against a roster that no longer reflects the provider.
+ */
+function modelCacheStamp(config: OcxConfig): string {
+  return Object.keys(config.providers ?? {})
+    .sort()
+    .map(provider => `${provider}=${observeModelCacheRevision(provider)}`)
+    .join(",");
+}
+
+/**
+ * The same stamp shape, built from revisions the gather recorded rather than from observation.
+ *
+ * A provider the gather did not report falls back to observation so the stamp stays total; that
+ * happens for a provider configured after the rows were chosen, and it retires the snapshot on
+ * the next read rather than pretending the roster covered it.
+ */
+function stampFrom(config: OcxConfig, gathered: ReadonlyMap<string, string>): string {
+  return Object.keys(config.providers ?? {})
+    .sort()
+    .map(provider => `${provider}=${gathered.get(provider) ?? observeModelCacheRevision(provider)}`)
+    .join(",");
+}
+
+/**
+ * Opaque identity of the snapshot a caller is holding, or null when there is none for this config.
+ *
+ * A fingerprint check that rebuilt its own roster could validate against one snapshot while the
+ * mutation wrote from another, because an ordinary load can replace the snapshot at any moment and
+ * nothing about that is serialised against the writer lock. Carrying this identity alongside the
+ * captured roster lets a revalidation prove the snapshot it captured is still the current one
+ * without ever swapping the roster the mutation is about to use.
+ */
+export function exportSnapshotIdentity(config: OcxConfig): string | null {
+  const snapshot = lastExportSnapshot;
+  if (snapshot === null) return null;
+  if (!isExportConfigAdmissionCurrent(snapshot.admission, config)) return null;
+  if (snapshot.cacheStamp !== modelCacheStamp(config)) return null;
+  return rosterIdentity(snapshot.generation);
+}
+
+/** Test seam: a fresh process has no snapshot, and suites must be able to reproduce that. */
+export function resetExportSnapshotForTests(): void {
+  lastExportSnapshot = null;
+}
+
+/**
+ * The export roster for a read that must change nothing at all, or null when there is not one.
+ *
+ * Skipping the initial-selection finalizer was not enough. Discovery itself refreshes credentials
+ * and writes the provider model cache, so a preview that gathered would still be a write dressed
+ * as a read, and "the models list already does this" describes what a GET happens to do rather
+ * than what a preview is allowed to do.
+ *
+ * So this reads already-captured per-provider cache entries and never fetches. When no provider
+ * has a cached roster there is no honest snapshot to plan against, and the caller reports a
+ * bounded refusal rather than triggering a gather to manufacture one.
+ */
+export function previewExportSnapshot(
+  config: OcxConfig,
+): { models: readonly ExportModel[]; identity: string } | null {
+  // One synchronous read of one const. Taking the roster and its identity in two steps let a
+  // concurrent load publish a new snapshot between them, so a caller could hold one roster while
+  // believing it held the identity of another.
+  const snapshot = lastExportSnapshot;
+  if (snapshot === null) return null;
+  // The roster was built from a configuration proved to be the one on disk; this asks whether both
+  // are still that same configuration, and reads nothing but the file to answer.
+  if (!isExportConfigAdmissionCurrent(snapshot.admission, config)) return null;
+  // A completed discovery retires the snapshot: the configuration is unchanged, but the models it
+  // resolves to are not the ones this roster was built from.
+  if (snapshot.cacheStamp !== modelCacheStamp(config)) return null;
+  // Cloned on the way out as well as on the way in. The retained copy is the authority, and a
+  // reader holding its objects could edit the roster every later preview plans against without
+  // going anywhere near this module.
+  return {
+    models: structuredClone(snapshot.models) as readonly ExportModel[],
+    identity: rosterIdentity(snapshot.generation),
+  };
+}
+
+export function previewExportModels(config: OcxConfig): readonly ExportModel[] | null {
+  return previewExportSnapshot(config)?.models ?? null;
 }

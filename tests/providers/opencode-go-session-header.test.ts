@@ -594,7 +594,8 @@ describe("OpenCode Go affinity across the policy fallback retry (#4172)", () => 
   async function runPolicyFallback(req: Request): Promise<Request[]> {
     const seen: Request[] = [];
     let attempts = 0;
-    const runCore = (async (coreReq: Request, _config: unknown, logCtx: { routeDecision?: unknown }) => {
+    const runCore = (async (coreReq: Request, _config: unknown, logCtx: { routeDecision?: unknown }, options?: { onRequestBodyParsed?: (body: unknown) => void }) => {
+      options?.onRequestBodyParsed?.(await coreReq.json());
       seen.push(coreReq);
       logCtx.routeDecision = policyTrace;
       attempts += 1;

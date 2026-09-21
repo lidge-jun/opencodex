@@ -101,7 +101,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用独立的 Grok CLI 订阅网关。API 密钥覆盖模式使用 `https://api.x.ai/v1`，并可能注入 Priority Processing。优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 编程模型。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan 编程模型。默认使用稳定的 `kimi-for-coding` 别名（当前指向 K2.8 Preview）：100 万 token 上下文、可调 `low`/`high`/`max` 思考档（默认 `max`）、支持文本 + 图片输入。已下架的 `kimi-k2.x` 选择会在升级时自动迁移到该别名。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 订阅网关（与 Hermes Agent 使用同一后端）。通过设备授权登录 `portal.nousresearch.com`；access 令牌是每个请求的 inference JWT。付费 + `:free` 模型混合目录（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）会从已登录账户实时发现。Refresh 令牌是单次使用，每次刷新都会轮换。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
@@ -173,7 +173,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 94 个预设：78 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 96 个预设：80 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -246,7 +246,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
-火山方舟 Agent Plan 通过 `openai-responses` adapter 使用原生 Responses 端点。
+火山方舟 Coding Plan 和 Agent Plan 都通过 `openai-responses` adapter 使用原生 Responses 端点。在已验证的 Ark Coding Plan 工具调用 continuation 中，回放上一次 Responses 返回的 `reasoning` item 会触发 `400 InvalidParameter`，因此 Coding Plan 预设会在转发 continuation input 前移除这类 replayed reasoning item；这会丢失该轮的 reasoning 状态，可用 `dropResponsesReasoningItems: false` 关闭。已经保存为 `openai-chat` 的 Coding Plan 配置不会被改写，仍按 Chat 走；如需切换，请手动把 `adapter` 改为 `openai-responses` 并把 `responsesPath` 设为 `/responses`，或删除后重新添加该预设。显式的逐模型 `openai-chat` override 仍可使用。
 内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE
 流式输出。如果该模型已经完成全部输出项却缺少最终 Responses 事件，opencodex 会应用模型级
 5 秒宽限修复；不完整或格式异常的流会以 incomplete 结束，不会被误报为成功。

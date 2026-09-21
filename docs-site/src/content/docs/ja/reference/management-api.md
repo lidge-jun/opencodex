@@ -82,6 +82,49 @@ Authorization: Bearer <admin-token>
 | `GET /api/client-integrations/journal?client=...` | ロールバック操作を一覧表示します。任意でクライアントを指定でき、各行にはサーバー計算の `deletable` が含まれます。 | 400 無効なクライアント |
 | `DELETE /api/client-integrations/journal?opId=...` | 古いロールバック操作を廃止し、可能ならスナップショットも削除します。成功時の `snapshotRemoved` が `false` の場合、保守処理で再試行されます。 | 400 `opId` なし、404 存在しないか廃止済み、409 そのクライアントの最新操作 |
 
+## 統合変更のプレビュー
+
+プレビューは変更を適用せずに内容だけを示します。スナップショットも所有権記録もジャーナルも
+ロックも復旧も、いっさい書き込みません。
+
+| メソッドとパス | 目的 | 主なエラー |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | クライアント 1 つの `apply`、`overwrite`、`disable` を計画します。本文は `{ "clientId": "...", "operation": "..." }` | 400 不正なクライアントまたは操作、400 `invalid_aside_profile_path`、409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | 取り消しを計画します。本文は `{ "opId": "...", "confirmDrift": false }` | 404 該当操作なし、400 `invalid_aside_profile_path`、409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Aside プロファイル 1 つの変更を計画します。`restore` には `opId` が必要です | 400 不正な本文またはプロファイル未指定、404 該当プロファイルまたは操作なし、409 `integration_preview_unavailable` |
+
+計画には `version`、`clientId`、`operation`、`state`、`foreignEdit`、`kind` と `path` の組からなる
+`changes`、不透明な `fingerprint`、`canApply`、`willChange` が含まれ、`refusalReason` と
+`profileId` は任意です。パスは管理対象スキーマのパスか、`$snapshot`、`$ownership`、`$journal`
+の固定表記で、実行時に決まる位置は `*` になります。設定値やファイルの場所、選ばれた項目の
+名前は返しません。
+
+`canApply` が真で `willChange` が偽なら、操作は成功しますが管理対象のクライアント文書は何も
+変わりません。すでに適用済みのものを適用した場合などです。
+
+Aside プロファイルの変更はこの場合でも一つだけ保存します。確認を送ると、クライアント文書に触れる
+前にそのプロファイルの同期設定が記録されるため、管理ブロックがすでにないプロファイルを無効にすると
+設定だけが保存され、文書とその履歴はそのまま残ります。
+
+`integration_preview_unavailable` は今使えるモデル一覧がないという意味です。プロキシを起動した
+直後もそうですし、設定やプロバイダーキャッシュが変わって以前の一覧を破棄した場合もそうです。
+`GET /api/client-integrations` を読むと、取得に成功し設定を特定できたときに用意されるので、
+通常はこれで解決しますが、必ず用意されるとはかぎりません。
+
+## プレビューした変更の確定
+
+変更要求の本文に `operation` と `planFingerprint` を一緒に送ります。両方送るか両方省くかの
+どちらかで、片方だけ、または要求と異なる操作を書いた場合は拒否します。Aside はプロファイル
+1 つにしか結び付けられません。1 つのフィンガープリントで複数ファイルの変更は説明できないから
+です。
+
+サーバーは書き込む前に計画し直し、確認した内容がもう当てはまらなければ新しい計画を添えて
+`409 integration_preview_stale` を返します。自動で再試行はしないので、新しい計画を見て判断し
+直してください。
+
+フィンガープリントは楽観的な確認であって権限ではありません。変更してよいかどうかは管理 API の
+認証と所有権の規則が決めます。
+
 削除時はジャーナルを書き換えず、トゥームストーンを追記します。現在の取り消し地点を
 残すため、各クライアントの最新操作はサーバー側で保護されます。
 
@@ -124,6 +167,7 @@ Authorization: Bearer <admin-token>
 | `GET /api/debug/injection-logs` |制限付きガイダンス挿入デバッグ エントリを読み取る | — |
 | `GET /api/claude/inbound-debug` | Claude インバウンドのデバッグ状態とエントリを読む | — |
 | `GET /api/usage` |範囲とクライアント サーフェスごとの使用状況を要約する |ストレージを読み取れない場合は、`error: "read_failed"` 概要を返します。
+| `GET /api/metrics` | 論理リクエスト、物理送信、復旧種別、所要時間、TTFT のプロセスローカル Prometheus テキストメトリクスを返します。ラベルはプロトコル、結果、復旧クラスの閉じた集合のみで、リクエストや認証情報の識別子は出力しません。 | 起動時に `metricsExport.enabled` が true でなければ 404。通常の管理認証が必要で、データプレーン認証情報ではアクセスできません。 |
 | `GET /api/storage` |バケットごとの Codex ストレージ使用量をスキャン |スキャン失敗時に `error: "scan_failed"` ペイロードを返します。
 | `POST /api/storage/cleanup/preview` |アーカイブされたセッションのクリーンアップをプレビューし、バインディング ダイジェストを返します。 400 `invalid_json` または `invalid_percent` |
 | `POST /api/storage/cleanup` |プレビューされたアーカイブ セットを隔離または完全に削除します。 400 無効な入力。 409 古い/ビジー/参照状態。 500 ファイルシステム/データベース障害 |

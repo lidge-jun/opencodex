@@ -213,7 +213,7 @@ export function cursorRequestEmitsFastVariant(parsed: OcxParsedRequest): boolean
  * instead: current Cursor clients send the matching Grok base id plus `effort` and `fast` parameters.
  * A fully-qualified id (one that is not a known effort base) passes through unchanged.
  */
-function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: boolean): {
+function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: boolean, liveRosterScope?: string): {
   modelId: string;
   requestedModelParameters?: readonly CursorRequestedModelParameter[];
   routingLevel?: CursorRoutingLevel;
@@ -239,7 +239,7 @@ function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: bool
       ],
     };
   }
-  const resolved = resolveCursorSelection(id, reasoning, undefined, { fast });
+  const resolved = resolveCursorSelection(id, reasoning, undefined, { fast, liveRosterScope });
   return {
     ...selection,
     ...(resolved.maxMode ? { maxMode: true } : {}),
@@ -250,6 +250,9 @@ function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: bool
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {
   switch (part.type) {
     case "text":
+      return part.text;
+    case "document":
+      // Cursor has no document carrier; the marker keeps the turn from serializing to nothing.
       return part.text;
     case "thinking":
       return part.thinking;
@@ -407,6 +410,8 @@ export function cursorCoveredPrefixDigest(parsed: OcxParsedRequest, coveredMessa
 export interface CreateCursorRequestOptions {
   /** Force a brand-new Cursor conversation id even when remembered state exists. */
   forceFreshConversation?: boolean;
+  /** Credential-bound scope for live Cursor model spelling and Max-Mode evidence. */
+  liveRosterScope?: string;
 }
 
 function lookupPrefixSnapshot(
@@ -499,7 +504,12 @@ export function createCursorRequest(
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
-  const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning, cursorFastRequested(parsed));
+  const model = normalizeCursorModelId(
+    parsed.modelId,
+    parsed.options.reasoning,
+    cursorFastRequested(parsed),
+    options.liveRosterScope,
+  );
   const request: CursorRunRequest = {
     modelId: model.modelId,
     ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),

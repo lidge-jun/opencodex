@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { useT, type TKey } from "../../i18n/shared";
@@ -14,12 +14,18 @@ import { describeRefusal } from "./refusal-copy";
 import {
   loadIntegrationJournal,
   loadIntegrationState,
+  previewIntegrationMutation,
   toggleIntegration,
+  bindingFor,
+  IntegrationApiError,
   deleteJournalEntry,
+  isIntegrationPreviewUnavailable,
   isMissingJournalEntry,
   type FileIntegrationClientId,
   type IntegrationJournalRow,
   type IntegrationStatus,
+  type IntegrationMutationPlan,
+  type IntegrationPlanOperation,
 } from "./integration-api";
 
 export type { FileIntegrationClientId };
@@ -44,6 +50,22 @@ function overwriteCopy(reason: string | undefined, path: string): ConsequenceCop
     vars: { path },
   };
 }
+
+const APPLY_COPY: ConsequenceCopy = {
+  titleKey: "integrations.dialog.apply.title",
+  changesKey: "integrations.dialog.apply.changes",
+  breakageKey: "integrations.dialog.apply.breakage",
+  undoKey: "integrations.dialog.apply.undo",
+  confirmKey: "integrations.dialog.apply.confirm",
+};
+
+const DISABLE_COPY: ConsequenceCopy = {
+  titleKey: "integrations.dialog.disable.title",
+  changesKey: "integrations.dialog.disable.changes",
+  breakageKey: "integrations.dialog.disable.breakage",
+  undoKey: "integrations.dialog.disable.undo",
+  confirmKey: "integrations.dialog.disable.confirm",
+};
 
 const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.semantics.opencode",
@@ -101,8 +123,19 @@ export default function FileIntegrationPage({
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
   /* The row awaiting delete confirmation. */
   const [deleting, setDeleting] = useState<IntegrationJournalRow | null>(null);
-  /* Open only while the user is confirming an overwrite. */
-  const [overwriting, setOverwriting] = useState(false);
+  const [plannedMutation, setPlannedMutation] = useState<{
+    operation: Exclude<IntegrationPlanOperation, "restore">;
+    plan: IntegrationMutationPlan | null;
+    loading: boolean;
+    failure: string | null;
+  } | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewGenerationRef = useRef(0);
+
+  useEffect(() => () => {
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+  }, []);
 
   const fetchState = useCallback(
     (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal, profileId),
@@ -144,14 +177,54 @@ export default function FileIntegrationPage({
     void historyResource.refresh();
   };
 
-  const mutate = async (enabled: boolean) => {
+  const requestMutation = async (operation: Exclude<IntegrationPlanOperation, "restore">) => {
+    if (!status || pending || plannedMutation) return;
+    const controller = new AbortController();
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = controller;
+    setPlannedMutation({ operation, plan: null, loading: true, failure: null });
+    try {
+      const plan = await previewIntegrationMutation(apiBase, client, operation, controller.signal, profileId);
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      previewAbortRef.current = null;
+      setPlannedMutation({ operation, plan, loading: false, failure: null });
+    } catch (error) {
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      previewAbortRef.current = null;
+      if (isIntegrationPreviewUnavailable(error)) {
+        setPlannedMutation(null);
+        refresh();
+        return;
+      }
+      setPlannedMutation({ operation, plan: null, loading: false, failure: t("integrations.preview.failed") });
+    }
+  };
+
+  const closePlannedMutation = () => {
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    setPlannedMutation(null);
+  };
+
+  const mutate = async (plan: IntegrationMutationPlan) => {
     if (!status || pending) return;
     setPending(true);
     setFailure(null);
     try {
-      await toggleIntegration(apiBase, client, enabled, undefined, undefined, profileId);
+      await toggleIntegration(apiBase, client, {
+        enabled: plan.operation !== "disable",
+        overwriteConflict: plan.operation === "overwrite",
+        profileId,
+        binding: bindingFor(plan),
+      });
+      setPlannedMutation(null);
     } catch (error) {
-      setFailure(describeRefusal(t, error));
+      refresh();
+      if (error instanceof IntegrationApiError && error.stalePlan) throw error;
+      throw new Error(describeRefusal(t, error), { cause: error });
     } finally {
       refresh();
       setPending(false);
@@ -167,19 +240,6 @@ export default function FileIntegrationPage({
    * Errors are NOT swallowed here -- they propagate so ConsequenceDialog can
    * render them inside the dialog, where the user still has the cancel button.
    */
-  const overwrite = async () => {
-    if (!status) return;
-    setFailure(null);
-    try {
-      await toggleIntegration(apiBase, client, true, undefined, true, profileId);
-      refresh();
-    } catch (error) {
-      setFailure(describeRefusal(t, error));
-      refresh();
-      throw error;
-    }
-  };
-
   /*
    * The switch means exactly what its label says.
    *
@@ -189,7 +249,7 @@ export default function FileIntegrationPage({
    * to remove the block; updating a stale block is a separate action with its
    * own button below.
    */
-  const toggle = () => void mutate(!(status && (profileId !== undefined ? status.enabled : (status.state === "current" || status.state === "stale"))));
+  const toggle = () => void requestMutation(enabled ? "disable" : "apply");
 
   if (!status) {
     return (
@@ -241,7 +301,7 @@ export default function FileIntegrationPage({
         <button
           type="button"
           className="btn btn-ghost"
-          onClick={() => void mutate(true)}
+          onClick={() => void requestMutation("apply")}
           disabled={pending}
         >
           {t("integrations.action.refresh")}
@@ -259,7 +319,7 @@ export default function FileIntegrationPage({
         <button
           type="button"
           className="btn btn-danger"
-          onClick={() => setOverwriting(true)}
+          onClick={() => void requestMutation("overwrite")}
           disabled={pending}
         >
           {t("integrations.action.overwrite")}
@@ -270,6 +330,14 @@ export default function FileIntegrationPage({
       <p className="integration-path">{status.configPath}</p>
       {/* Only the raycast envelope carries this; the guard is the field, not the id. */}
       {status.raycast && <RaycastPlanNotice install={status.raycast} />}
+      {/*
+        A file the client no longer opens. The badge above stays truthful about
+        the file -- our block really is where we put it -- so this is the only
+        place that can say the client has stopped reading it.
+      */}
+      {status.supersededBy && (
+        <Notice tone="err">{t("integrations.status.supersededStore", { path: status.supersededBy })}</Notice>
+      )}
 
       {status.appliedAt && (
         <p className="integration-meta">
@@ -344,14 +412,16 @@ export default function FileIntegrationPage({
           }}
         />
       )}
-      {overwriting && (
+      {plannedMutation && (
         <ConsequenceDialog
-          copy={overwriteCopy(status.reason, status.configPath)}
-          onClose={() => setOverwriting(false)}
-          onConfirm={async () => {
-            await overwrite();
-            setOverwriting(false);
-          }}
+          copy={plannedMutation.operation === "overwrite"
+            ? overwriteCopy(status.reason, status.configPath)
+            : plannedMutation.operation === "disable" ? DISABLE_COPY : APPLY_COPY}
+          plan={plannedMutation.plan}
+          planLoading={plannedMutation.loading}
+          planFailure={plannedMutation.failure}
+          onClose={closePlannedMutation}
+          onConfirm={async plan => { if (plan) await mutate(plan); }}
         />
       )}
     </section>

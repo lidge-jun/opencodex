@@ -11,6 +11,7 @@ import {
 import {
   getGrokRemainingResets,
   decodeGetRemainingResetsResponse,
+  decodeVarint,
   encodeRedeemResetRequest,
   encodeVarint,
   GROK_GET_REMAINING_RESETS_ENDPOINT,
@@ -133,6 +134,78 @@ describe("grok reset coupons", () => {
     expect(tokens[0].tokenId).toBe("token_live_abc123");
     expect(tokens[0].validityStart).toBe(new Date(1726110000 * 1000).toISOString());
     expect(tokens[0].validityEnd).toBe(new Date(1728788400 * 1000).toISOString());
+  });
+
+  it("rejects oversized and truncated protobuf lengths", () => {
+    const oversizedLength = new Uint8Array([0x52, 0x80, 0x80, 0x80, 0x80, 0x08]);
+    expect(() => decodeGetRemainingResetsResponse(oversizedLength)).toThrow(
+      "Invalid protobuf length-delimited field",
+    );
+
+    expect(() => decodeVarint(new Uint8Array([0x80]), 0)).toThrow("Truncated protobuf varint");
+  });
+
+  it("rejects protobuf varints beyond the JavaScript safe integer range", () => {
+    const maxSafe = decodeVarint(encodeVarint(BigInt(Number.MAX_SAFE_INTEGER)), 0);
+    expect(maxSafe.value).toBe(Number.MAX_SAFE_INTEGER);
+
+    const unsafeVarint = encodeVarint(BigInt(Number.MAX_SAFE_INTEGER) + 1n);
+    expect(() => decodeVarint(unsafeVarint, 0)).toThrow(
+      "Protobuf varint exceeds JavaScript safe integer range",
+    );
+
+    const unsafeLength = new Uint8Array(1 + unsafeVarint.length);
+    unsafeLength[0] = 0x52; // field 10, wire type 2
+    unsafeLength.set(unsafeVarint, 1);
+    expect(() => decodeGetRemainingResetsResponse(unsafeLength)).toThrow(
+      "Protobuf varint exceeds JavaScript safe integer range",
+    );
+  });
+
+  it("rejects an overlong varint whose continuation bytes carry no payload", () => {
+    // The safe-integer guard cannot bound the length on its own: a continuation byte with no
+    // payload bits contributes a part of zero, which is a safe integer, so twenty 0x80 bytes
+    // followed by 0x00 decoded as a valid zero. An overlong zero length is what turns a
+    // malformed body into an empty coupon list reported as success.
+    const overlongZero = new Uint8Array([...new Array(20).fill(0x80), 0x00]);
+    expect(() => decodeVarint(overlongZero, 0)).toThrow("Overlong protobuf varint");
+
+    // The bound is a protocol limit, not a value limit: a ten-byte varint carrying real
+    // payload still fails for its value, which is the guard above it.
+    const tenBytePayload = new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
+    expect(() => decodeVarint(tenBytePayload, 0)).toThrow(
+      "Protobuf varint exceeds JavaScript safe integer range",
+    );
+
+    // A legal single-byte zero is unaffected.
+    expect(decodeVarint(new Uint8Array([0x00]), 0)).toEqual({ value: 0, bytesRead: 1 });
+  });
+
+  it("fails the read rather than returning coupons decoded from a malformed response", async () => {
+    // Field 10, wire type 2, declaring 127 bytes when none follow. This is the shape the
+    // bounds check exists for, asserted where the callers actually consume it: both routes in
+    // src/server/management/grok-coupon-routes.ts wrap getGrokRemainingResets in try/catch and
+    // answer 502, so the read must throw rather than hand them a tokenId recovered from a
+    // short subarray.
+    const malformed = new Uint8Array([0x52, 0x7f]);
+    const mockFetch: typeof globalThis.fetch = async () => {
+      const data = encodeGrpcWebEnvelope(malformed);
+      const trailer = new TextEncoder().encode("grpc-status:0\r\n");
+      const trailerEnvelope = new Uint8Array(5 + trailer.length);
+      trailerEnvelope[0] = 0x80;
+      new DataView(trailerEnvelope.buffer).setUint32(1, trailer.length, false);
+      trailerEnvelope.set(trailer, 5);
+      const body = new Uint8Array(data.length + trailerEnvelope.length);
+      body.set(data, 0);
+      body.set(trailerEnvelope, data.length);
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/grpc-web+proto" },
+      });
+    };
+
+    await expect(getGrokRemainingResets({ accessToken: "mock-access-token-12345", fetchFn: mockFetch }))
+      .rejects.toThrow("Invalid protobuf length-delimited field");
   });
 
   it("asserts auth headers and tokenAuth compatibility header on request", async () => {
