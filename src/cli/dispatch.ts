@@ -951,6 +951,22 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleZcodeCommand } = await import("./integrations");
     return await handleZcodeCommand(deps.args.slice(1));
   },
+  skill: async deps => {
+    const { runSkill } = await import("./skill");
+    return await runSkill(deps.args.slice(1));
+  },
+  security: async deps => {
+    const { runSecurity } = await import("./security");
+    return await runSecurity(deps.args.slice(1));
+  },
+  credentials: async deps => {
+    const { runCredentials } = await import("./credentials");
+    return await runCredentials(deps.args.slice(1));
+  },
+  social: async deps => {
+    const { runSocial } = await import("./social");
+    return await runSocial(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

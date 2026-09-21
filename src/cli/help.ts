@@ -86,6 +86,10 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config <sub>            Validated configuration show/get/set/import/export
+  ocx skill <command>         Universal Agent Skill Control Plane
+  ocx security <command>      Authorized Security Agent Control Plane
+  ocx credentials <command>   Provider Access Control Plane
+  ocx social <command>        Social Publishing Control Plane (alias: openpost)
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Read-only Compatibility Lab projection inspection
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)

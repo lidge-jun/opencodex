@@ -340,7 +340,12 @@ export function scanText(file: string, text: string): Finding[] {
     // is ordinary TypeScript, and three such lines are in `src/server/ports.ts` and
     // `src/server/port-reclaim.ts` today. `ProxyCommand` below does accept it, because
     // that word is not an identifier anyone writes in code.
-    /^[ \t]*HostName[ \t]+(\S+)(?:[ \t]+#[^\n]*)?[ \t]*$/gim,
+    //
+    // Case-sensitive on purpose: real ssh_config directives are spelled `HostName`,
+    // while lowercase `hostname` appears in ordinary code — including a SQL column
+    // declaration like `      hostname TEXT,` in the skill control plane's node
+    // table, which the `i` flag would misread as `HostName` + value `TEXT,`.
+    /^[ \t]*HostName[ \t]+(\S+)(?:[ \t]+#[^\n]*)?[ \t]*$/gm,
     match => isAllowedSshEndpoint(match[1] ?? ""),
   );
   addFindingsForPattern(

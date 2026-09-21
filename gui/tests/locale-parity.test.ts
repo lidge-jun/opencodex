@@ -191,6 +191,29 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // Control plane agent product names, protocol labels, and technical identifiers
+  "skills.editorDefaultMarkdown",
+  "skills.agent.codex",
+  "skills.agent.claudeCode",
+  "skills.agent.opencode",
+  "skills.agent.universal",
+  "skills.agent.openaiCodex",
+  "skills.vpsMain",
+  "skills.system",
+  "security.status.posting",
+  "security.status.ok",
+  "security.tab.mcp",
+  "security.col.id",
+  "security.col.sha256",
+  "security.reconLab",
+  "credentials.status.posting",
+  "credentials.status.ok",
+  "credentials.tab.oauth",
+  "credentials.col.id",
+  "credentials.col.oauth",
+  "social.col.id",
+  "social.status.posting",
+  "social.status.ok",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

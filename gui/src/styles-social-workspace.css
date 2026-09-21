@@ -1,0 +1,192 @@
+/* Phase 20.60 — Social Publishing Control Plane workspace */
+
+.social-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.social-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--border, #2a2d37);
+  padding-bottom: 16px;
+}
+
+.social-title-group h1 {
+  margin: 0 0 4px 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.social-subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary, #9ba3af);
+}
+
+.social-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border, #2a2d37);
+  padding-bottom: 8px;
+  overflow-x: auto;
+}
+
+.social-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-secondary, #9ba3af);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.social-tab:hover {
+  color: var(--text-primary, #ffffff);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+}
+
+.social-tab.active {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.35);
+  font-weight: 500;
+}
+
+.social-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.social-card {
+  background: var(--bg-surface, #1e2029);
+  border: 1px solid var(--border, #2a2d37);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.social-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #6b7280);
+}
+
+.social-card-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.social-table-container {
+  overflow-x: auto;
+  border: 1px solid var(--border, #2a2d37);
+  border-radius: 8px;
+  background: var(--bg-surface, #1e2029);
+}
+
+.social-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.social-table th,
+.social-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-light, #262933);
+}
+
+.social-table th {
+  background: var(--bg-table-head, #171922);
+  color: var(--text-secondary, #9ba3af);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.social-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.social-badge.ready,
+.social-badge.healthy,
+.social-badge.published,
+.social-badge.approved {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.social-badge.degraded,
+.social-badge.warning,
+.social-badge.scheduled {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.social-badge.requires_reauth,
+.social-badge.failed,
+.social-badge.rejected,
+.social-badge.unavailable {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.social-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.social-btn {
+  background: var(--bg-button, #2d313d);
+  border: 1px solid var(--border, #3f4454);
+  color: var(--text-primary, #ffffff);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.social-btn:hover {
+  background: var(--bg-button-hover, #3b4050);
+}
+
+.social-btn.primary {
+  background: #2563eb;
+  border-color: #3b82f6;
+}
+
+.social-btn.primary:hover {
+  background: #1d4ed8;
+}
+
+.social-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted, #6b7280);
+  font-size: 13px;
+}
+
