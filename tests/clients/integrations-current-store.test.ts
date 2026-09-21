@@ -10,7 +10,9 @@ import {
   buildZcodeStoreProviderRule,
   type ExportModel,
 } from "../../src/clients/config-export";
-import { previewIntegration } from "../../src/integrations/mutation-plan";
+import { formatSelectorConjunction } from "../../src/integrations/merge";
+import { DYNAMIC_SEGMENT, previewIntegration } from "../../src/integrations/mutation-plan";
+import { fingerprint } from "../../src/integrations/ownership";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { exportContextOf, readIntegrationState, readPath } from "../../src/integrations/state";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -62,11 +64,26 @@ const CONFIG: OcxConfig = {
 
 const spec = () => INTEGRATION_CLIENTS.zcode;
 
+function conjunction(criteria: Parameters<typeof formatSelectorConjunction>[0]): string {
+  const selector = formatSelectorConjunction(criteria);
+  if (selector === null) throw new Error("test fixture must be a valid conjunction");
+  return selector;
+}
+
+function withoutLastCriterion(selector: string): string {
+  const separator = selector.lastIndexOf(",");
+  if (separator < 0) throw new Error("test fixture must contain multiple criteria");
+  return `${selector.slice(0, separator)}${selector.slice(-1)}`;
+}
+
 /** The rule paths, spelled the way the contribution spells them. */
 const OUR_PROVIDER_RULE = [...ZCODE_STORE_PROVIDER_RULES_PATH, `[providerId=${OPENCODE_PROVIDER_ID}]`];
 const ourModelRule = (modelId: string) => [
   ...ZCODE_STORE_MODEL_RULES_PATH,
-  `[providerId=${OPENCODE_PROVIDER_ID},modelId=${modelId}]`,
+  conjunction([
+    { field: "providerId", value: OPENCODE_PROVIDER_ID },
+    { field: "modelId", value: modelId },
+  ]),
 ];
 
 beforeEach(() => {
@@ -151,6 +168,22 @@ describe("writing the provider store the client reads", () => {
     expect(readPath(readStore(), ourModelRule("xai/grok-4-2"))).toBeDefined();
   });
 
+  test("an unrepresentable model stays in the provider roster without a model-rule fragment", () => {
+    const unrepresentable: ExportModel = {
+      namespaced: "anthropic/model,variant",
+      provider: "anthropic",
+      id: "model,variant",
+      contextWindow: 128_000,
+    };
+    installWithStore();
+    expect(applyIntegration(input({ models: [...MODELS, unrepresentable] })).ok).toBe(true);
+
+    const provider = readPath(readStore(), OUR_PROVIDER_RULE) as { config: { personalModelIds: string[] } };
+    const rules = readPath(readStore(), ZCODE_STORE_MODEL_RULES_PATH) as Array<{ modelId: string }>;
+    expect(provider.config.personalModelIds).toContain(unrepresentable.namespaced);
+    expect(rules.map(rule => rule.modelId)).toEqual(MODELS.map(model => model.namespaced));
+  });
+
   test("disable leaves nothing this project put in the store, and keeps the file", () => {
     const theirProvider = { providerId: "their-provider", enabled: true, providerName: "Theirs", config: {} };
     const theirModel = {
@@ -179,7 +212,10 @@ describe("writing the provider store the client reads", () => {
     // not match, and the file itself is still the file the client reads.
     expect(readPath(readStore(), [...ZCODE_STORE_PROVIDER_RULES_PATH, "[providerId=their-provider]"]))
       .toEqual(theirProvider);
-    expect(readPath(readStore(), [...ZCODE_STORE_MODEL_RULES_PATH, "[providerId=their-provider,modelId=anthropic/claude-opus-4-8]"]))
+    expect(readPath(readStore(), [...ZCODE_STORE_MODEL_RULES_PATH, conjunction([
+      { field: "providerId", value: "their-provider" },
+      { field: "modelId", value: "anthropic/claude-opus-4-8" },
+    ])]))
       .toEqual(theirModel);
     expect(existsSync(storePath())).toBe(true);
     expect(readIntegrationState(input())).toMatchObject({ state: "absent" });
@@ -254,6 +290,65 @@ describe("writing the provider store the client reads", () => {
     // And now the same switch reaches the client.
     expect(applyIntegration(input()).ok).toBe(true);
     expect(readPath(readStore(), OUR_PROVIDER_RULE)).toBeDefined();
+  });
+
+  test("an unreadable recorded selector keeps a config-file operation on that file", () => {
+    mkdirSync(spec().detectDir(TEST_ENV, home), { recursive: true });
+    mkdirSync(dirname(configPath()), { recursive: true });
+    expect(applyIntegration(input()).ok).toBe(true);
+    const record = store.readRecords().zcode!;
+    const malformed = withoutLastCriterion(conjunction([
+      { field: "providerId", value: OPENCODE_PROVIDER_ID },
+      { field: "modelId", value: MODELS[0]!.namespaced },
+    ]));
+    store.putRecord({
+      ...record,
+      fragmentPaths: [[...ZCODE_STORE_MODEL_RULES_PATH, malformed]],
+    });
+    const currentStorePath = installWithStore();
+
+    expect(readIntegrationState(input())).toMatchObject({
+      state: "unsafe",
+      reason: "unparseable",
+      configPath: configPath(),
+      supersededBy: currentStorePath,
+    });
+    expect(readPath(readStore(), OUR_PROVIDER_RULE)).toBeUndefined();
+  });
+
+  test("restore preview treats an unreadable prior selector as an unknown replacement", () => {
+    const path = installWithStore();
+    expect(applyIntegration(input()).ok).toBe(true);
+    const priorRecord = store.readRecords().zcode!;
+    const malformed = withoutLastCriterion(conjunction([
+      { field: "providerId", value: OPENCODE_PROVIDER_ID },
+      { field: "modelId", value: MODELS[0]!.namespaced },
+    ]));
+    const before = readFileSync(path, "utf8");
+    const opId = "restore-malformed-selector";
+    store.appendJournal({
+      opId,
+      clientId: "zcode",
+      kind: "refresh",
+      at: "2026-09-21T00:00:00.000Z",
+      configPath: path,
+      snapshot: store.captureSnapshot("zcode", opId, before),
+      resultFingerprint: fingerprint(before),
+      resultAbsent: false,
+      priorRecord: {
+        ...priorRecord,
+        fragmentPaths: [[...ZCODE_STORE_MODEL_RULES_PATH, malformed]],
+      },
+    });
+
+    const plan = previewIntegration(input(), { operation: "restore", opId });
+
+    expect(plan.canApply).toBe(true);
+    expect(plan.refusalReason).toBeUndefined();
+    expect(plan.changes).toContainEqual({
+      kind: "replace",
+      path: `${ZCODE_STORE_MODEL_RULES_PATH.join(".")}.${DYNAMIC_SEGMENT}`,
+    });
   });
 
   test("an undo of a store apply puts the store back", () => {

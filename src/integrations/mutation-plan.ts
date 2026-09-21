@@ -33,6 +33,7 @@ import {
 import { declaredIntegrationTarget, resolveIntegrationTarget, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
+import { InvalidSelectorError } from "./merge";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 import type { OcxConfig } from "../types";
 import { matchesOperationResult, type JournalEntry } from "./journal";
@@ -440,7 +441,20 @@ function changesOf(input: PlanInput): readonly IntegrationPlanChange[] {
      */
     const documentKnown = input.parsed !== PARSE_FAILED;
     for (const [path, fragment] of prior) {
-      const absent = documentKnown && readPath(input.parsed, fragment) === undefined;
+      let absent = false;
+      if (documentKnown) {
+        try {
+          absent = readPath(input.parsed, fragment) === undefined;
+        } catch (error) {
+          /*
+           * Restore eligibility is byte-based and does not parse ownership paths.
+           * A malformed versioned selector therefore makes this ONE descriptive
+           * comparison unknown; it must not make preview execute a different
+           * selector, and it must not hide the backup behind an internal error.
+           */
+          if (!(error instanceof InvalidSelectorError)) throw error;
+        }
+      }
       changes.push({ kind: absent ? "add" : "replace", path });
     }
     for (const fragment of input.record?.fragmentPaths ?? []) {

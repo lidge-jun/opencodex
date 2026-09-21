@@ -7,22 +7,49 @@
     <style>
       :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
       body { display: grid; min-height: 100vh; place-items: center; margin: 0; background: #f5f5f7; color: #202124; }
-      main { width: min(34rem, calc(100vw - 3rem)); padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 8px 30px #0001; }
+      main { width: min(38rem, calc(100vw - 3rem)); padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 8px 30px #0001; }
       h1 { margin-top: 0; font-size: 1.4rem; }
-      #status { min-height: 2.5rem; color: #666; }
-      button { border: 0; border-radius: .5rem; padding: .6rem 1rem; background: #2563eb; color: white; cursor: pointer; }
+      #headline { margin: 0 0 .25rem; font-weight: 600; }
+      #detail { margin: 0; min-height: 1.4rem; color: #666; font-size: .9rem; }
+      #phases { margin: 1.25rem 0 0; padding: 0; list-style: none; display: grid; gap: .4rem; }
+      #phases li { display: flex; gap: .6rem; align-items: baseline; color: #8a8a8e; }
+      #phases li .mark { width: 1rem; text-align: center; }
+      #phases li[data-state="active"] { color: #202124; font-weight: 600; }
+      #phases li[data-state="done"] { color: #4b8b3b; }
+      #phases li[data-state="failed"] { color: #b3261e; font-weight: 600; }
+      #failure { margin-top: 1.25rem; display: grid; gap: .75rem; }
+      .actions { display: flex; gap: .6rem; align-items: center; }
+      button { border: 0; border-radius: .5rem; padding: .6rem 1rem; background: #2563eb; color: white; cursor: pointer; font: inherit; }
+      button.secondary { background: #e3e3e8; color: #202124; }
+      button[disabled] { opacity: .5; cursor: default; }
+      #copyState { color: #666; font-size: .85rem; }
+      textarea { width: 100%; box-sizing: border-box; min-height: 9rem; resize: vertical; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: .5rem; border: 1px solid #0002; padding: .6rem; background: #fafafa; color: inherit; }
       @media (prefers-color-scheme: dark) {
         body { background: #1c1c1e; color: #f5f5f7; }
         main { background: #2c2c2e; }
-        #status { color: #bbb; }
+        #detail, #copyState { color: #bbb; }
+        #phases li[data-state="active"] { color: #f5f5f7; }
+        #phases li[data-state="done"] { color: #8bd17c; }
+        #phases li[data-state="failed"] { color: #ff8a80; }
+        button.secondary { background: #3a3a3c; color: #f5f5f7; }
+        textarea { background: #1c1c1e; border-color: #ffffff22; }
       }
     </style>
   </head>
   <body>
     <main>
       <h1>OpenCodex</h1>
-      <p id="status">Connecting to the OpenCodex proxy…</p>
-      <button id="retry" type="button">Retry</button>
+      <p id="headline">Starting OpenCodex…</p>
+      <p id="detail"></p>
+      <ol id="phases"></ol>
+      <div id="failure" hidden>
+        <div class="actions">
+          <button id="retry" type="button">Retry</button>
+          <button id="copy" class="secondary" type="button">Copy diagnostic</button>
+          <span id="copyState"></span>
+        </div>
+        <textarea id="diagnostic" readonly spellcheck="false"></textarea>
+      </div>
     </main>
     <script src="./main.js"></script>
   </body>
