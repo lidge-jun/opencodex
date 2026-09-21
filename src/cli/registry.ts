@@ -29,7 +29,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "--socks5-off          Clear a saved SOCKS5 outbound proxy from config.proxy.",
     ],
   },
-  { name: "stop", usage: "ocx stop", summary: "Stop the proxy and restore native Codex config." },
+  {
+    name: "stop",
+    usage: "ocx stop [--json]",
+    summary: "Stop the proxy and restore native Codex config.",
+    details: [
+      "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
+      "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
+    ],
+  },
   {
     name: "restore",
     aliases: ["eject"],
@@ -547,6 +555,19 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "--timeout requires --wait and accepts a positive integer (1..300).",
       "--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.",
       "Invalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.",
+    ],
+  },
+  {
+    name: "resolve",
+    usage: "ocx resolve [--json]",
+    summary: "Emit the resolved config home, effective port, and identity-checked proxy liveness as one JSON document.",
+    details: [
+      "Machine surface for embedding shells: it replaces a second home/port/liveness implementation beside the CLI.",
+      "The port is the live listener's port when an opencodex proxy answers, otherwise the configured port (default 10100).",
+      "Liveness is three-valued: live, absent-proven (every recorded and configured endpoint definitively dead), or unknown — unknown exits 1 and never reads as absent.",
+      "--json emits one versioned document (schema ocx-resolve/1); the default prints two human lines.",
+      "Exit 0 carries a trustworthy verdict; exit 1 means the CLI could not resolve (invalid config or undecidable liveness) and callers must refuse to guess.",
+      "Any unknown argument exits 64 before preflight side effects.",
     ],
   },
   {

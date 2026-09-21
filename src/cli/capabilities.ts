@@ -212,6 +212,21 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Reads /healthz plus local config; drives no management API route."],
   },
   {
+    command: ["resolve"],
+    summary: "One JSON document naming the config home, the effective port, and the identity-checked proxy liveness verdict.",
+    // No management route, same split as status: discovery is the identity-checked
+    // /healthz probe inside findLiveProxy plus local config and the home from
+    // src/config/paths.ts.
+    routes: [],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the resolve document as JSON (the shell contract)." }],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess — unknown liveness never reads as absent.",
+      "Built for embedding shells (desktop app): the liveness budgets stay owned by src/server/proxy-liveness.ts.",
+    ],
+  },
+  {
     command: ["hub", "invite"],
     summary: "Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.",
     // Deliberately empty. The command DOES drive `POST /api/gui/pairing-grants` -- the attested

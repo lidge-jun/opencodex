@@ -48,6 +48,10 @@ describe("Codex shim CLI auto-restore policy", () => {
       expect(skipsCodexShimAutoRestore("system", args)).toBe(true);
     }
     expect(skipsCodexShimAutoRestore("system", ["system", "update", "check"])).toBe(false);
+    // resolve is read-only inspection for embedding shells: a lookup made to populate a
+    // consent surface must not trigger a shim repair side effect first.
+    expect(skipsCodexShimAutoRestore("resolve", ["resolve"])).toBe(true);
+    expect(skipsCodexShimAutoRestore("resolve", ["resolve", "--json"])).toBe(true);
     expect(skipsCodexShimAutoRestore("status", ["status"])).toBe(false);
   });
 

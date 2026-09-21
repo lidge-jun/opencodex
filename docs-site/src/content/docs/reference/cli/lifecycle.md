@@ -42,7 +42,7 @@ ocx start --port 10100 --socks5
 ocx start --socks5-off
 ```
 
-### `ocx stop`
+### `ocx stop [--json]`
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
@@ -64,6 +64,14 @@ keeps restoration with the stopping parent after the existing ownership and resp
 It does not enter the forced-stop fallback for a process already observed to have exited. A
 receipt-backed deferral still leaves final restoration and receipt cleanup with the parent;
 failure to restore shared client configuration keeps the stop failed and its receipt outstanding.
+
+`ocx stop --json` runs exactly the same stop path and prints one versioned summary document
+(`schema: "ocx-stop/1"`) on stdout, while the human progress lines move to stderr. The summary
+carries the outcome class (`stopped`, `not-running`, `history-incomplete`, `history-deferred`,
+or `failed`), the service and proxy classifications, whether the runtime is down, and a stable
+one-line message. Exit codes are identical with and without `--json`: 0 on success, 1 on failure,
+79 when only Codex history cleanup did not complete, and 80 when the shared teardown was deferred
+and is still owed.
 
 ### `ocx restart`
 
@@ -238,6 +246,23 @@ The CLI's own `--json` output is deliberately narrower than the HTTP body: it em
 `{ready, status, pid, port}`, where `status` is `ready`, `pending`, `failed`, or
 `unreachable`. Exit codes are 0 for ready; 1 for not-ready, pending, failed, timeout, or
 unreachable; and 64 for invalid arguments.
+
+### `ocx resolve [--json]`
+
+Resolve the runtime facts a shell needs without re-implementing them: the config home, the
+effective port, and the identity-checked liveness verdict. `--json` emits one versioned
+document (`schema: "ocx-resolve/1"`) with `cliVersion`, `configHome`, `port`
+(`effective`, `configured`, and `source`), and `liveness` (`status`, `pid`, `port`,
+`source`, plus `version`, `role`, and `hostname` when the live proxy reports them).
+Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
+definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
+that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
+authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
+the CLI could not resolve — including an invalid `config.json`, which is never repaired to
+defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
+is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 
 ### `ocx doctor`
 
