@@ -383,6 +383,32 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events[0]).toMatchObject({ type: "error", code: "tool_bridge_init_mismatch", retryable: false });
   });
 
+  test("a tool call that precedes the init handshake fails closed", async () => {
+    const p = parsed([tool("exec")]);
+    const bridge = buildCodeBuddyToolBridge(p);
+    const cliName = [...bridge.emittedNameMap.keys()][0]!;
+    // The call arrives before system/init acknowledged the bridge server, then the handshake and a
+    // clean stop follow. The later init frame must not retroactively legitimize the early call.
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        toolUseStart(cliName),
+        inputJsonDelta("{}"),
+        BLOCK_STOP,
+        INIT_OK,
+        MESSAGE_STOP,
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "tool_bridge_init_missing",
+      status: 502,
+      retryable: false,
+    });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
   test("a tool call outside the advertised catalog fails closed", async () => {
     const adapter = createCodeBuddyAdapter(provider(), {
       spawn: () => fakeChild(frameLines([

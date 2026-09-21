@@ -145,13 +145,21 @@ function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | und
   const cachedInputTokens = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
   const cacheCreationInputTokens =
     typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
-  if (inputTokens === 0 && outputTokens === 0 && cachedInputTokens === undefined) return undefined;
+  // A snapshot is zero-only when every counter is absent or zero. Testing only the cache-read
+  // field dropped a cache-creation-only snapshot (input/output 0 with, say, 200 cache-creation
+  // tokens), and a capture-only tool leg terminated at message_stop never sees a result frame
+  // that could carry those tokens instead, so the turn under-reported usage and cost.
+  const cacheReadTotal = cachedInputTokens ?? 0;
+  const cacheCreationTotal = cacheCreationInputTokens ?? 0;
+  if (inputTokens === 0 && outputTokens === 0 && cacheReadTotal === 0 && cacheCreationTotal === 0) {
+    return undefined;
+  }
   return {
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
-    ...(cachedInputTokens !== undefined ? { cachedInputTokens, cacheReadInputTokens: cachedInputTokens } : {}),
-    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(cacheReadTotal > 0 ? { cachedInputTokens: cacheReadTotal, cacheReadInputTokens: cacheReadTotal } : {}),
+    ...(cacheCreationTotal > 0 ? { cacheCreationInputTokens: cacheCreationTotal } : {}),
   };
 }
 

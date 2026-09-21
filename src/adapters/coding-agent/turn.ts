@@ -406,15 +406,15 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         }
         for (const event of mapStreamMessageToEvents(message, state)) {
           if (toolBridge && event.type === "tool_call_start") {
-            // The bridge server must be validated (system/init with exactly that server
-            // connected) before any tool call: a stream that emits tool calls first and a
-            // valid init later would otherwise forward tool lifecycle events to the client
-            // from an unvalidated bridge, and the delayed message_stop check could not
-            // reject it once the late init flipped the flag.
+            // The catalog is only advertised once the CLI has acknowledged the bridge server in
+            // its init handshake. A tool call that arrives before that acknowledgement means the
+            // model acted on a catalog this bridge never validated, so fail closed before the
+            // call is counted or renamed. Checking at arrival matters: a later init frame used to
+            // set initValidated and let an early call finish as a successful done(tool_use).
             if (!initValidated) {
               emitOnce({
                 type: "error",
-                message: "Coding-agent tool bridge init frame was not observed before the first tool call.",
+                message: "Coding-agent CLI called a tool before the tool bridge init handshake completed.",
                 status: 502,
                 errorType: "upstream_error",
                 code: "tool_bridge_init_missing",
@@ -543,18 +543,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           break;
         }
         if (toolBridge && !terminalEmitted && state.sawMessageStop && (state.completedToolCalls ?? 0) > 0) {
-          if (!initValidated) {
-            emitOnce({
-              type: "error",
-              message: "Coding-agent tool bridge init frame was not observed before the first tool call.",
-              status: 502,
-              errorType: "upstream_error",
-              code: "tool_bridge_init_missing",
-              retryable: false,
-            });
-            kill();
-            break;
-          }
+          // No init re-check here: a completed call implies a tool_call_start was mapped, and the
+          // arrival-time gate above already refuses any start that lands before the handshake.
           // The capture-only MCP handler never answers, so the CLI parks after message_stop.
           // The completed tool_use blocks are this turn's structured output: end the leg here
           // and terminate the tree; the client executes, and the next request continues.
