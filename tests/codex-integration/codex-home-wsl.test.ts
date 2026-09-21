@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { wslAutomountRoot, listWslWindowsCodexHomes } from "../../src/codex/home";
+import { defaultCodexHome, wslAutomountRoot, listWslWindowsCodexHomes } from "../../src/codex/home";
 import { isWindowsInteropDir } from "../../src/codex/shim";
 import { currentServiceHomes } from "../../src/service";
 
@@ -43,6 +43,25 @@ describe("wsl.conf automount root", () => {
     });
     expect(seen[0]).toBe("/win/c/Users");
     expect(homes).toEqual(["/win/c/Users/example/.codex"]);
+  });
+
+  test("defaultCodexHome keeps a fresh Linux home before config.toml exists", () => {
+    const usersRoot = ["/mnt/c", "Users"].join("/");
+    const linuxCodexHome = ["/home", "example", ".codex"].join("/");
+    const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
+
+    expect(defaultCodexHome({
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      platform: "linux",
+      homedir: () => "/home/example",
+      usersRoot,
+      existsSync: (path: string) => path === usersRoot
+        || path === linuxCodexHome
+        || path === `${windowsCodexHome}/config.toml`,
+      readdirSync: () => ["windows-user"],
+      statSync: (() => ({ isDirectory: () => true })) as never,
+      realpathSync: (path: string) => path,
+    })).toBe(linuxCodexHome);
   });
 
   test("service ownership uses the same discovered Windows Codex home as the runtime", () => {

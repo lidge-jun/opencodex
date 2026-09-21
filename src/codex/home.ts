@@ -136,7 +136,7 @@ export function defaultCodexHome(deps: CodexHomeDeps = {}): string {
   const home = (deps.homedir ?? homedir)();
   const defaultHome = join(home, ".codex");
   const exists = deps.existsSync ?? existsSync;
-  const detected = !exists(join(defaultHome, "config.toml")) ? findWslWindowsCodexHome(deps) : null;
+  const detected = !exists(defaultHome) ? findWslWindowsCodexHome(deps) : null;
   return detected ?? defaultHome;
 }
 
