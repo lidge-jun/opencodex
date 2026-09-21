@@ -49,10 +49,12 @@ export type SidecarOutcome = WebSearchResult & { error?: string };
  * The forward backend throttles burst sidecar traffic, and without a replay the 429 becomes a
  * failed tool result that poisons the query for the whole turn (see failedQueries in loop.ts).
  * 1 initial send + 2 replays; Retry-After is honored as a lower bound and capped by
- * RETRY_AFTER_CEILING_MS (an instruction past the ceiling ends with the 429 instead of
- * parking the search). Each wait releases the unread 429 body first so sockets do not
- * accumulate under a rate-limit storm. Abort or timeout ends the wait through the existing
- * catch, exactly like an abort during the SSE parse.
+ * RETRY_AFTER_CEILING_MS and the remaining sidecar deadline (an instruction past either
+ * ends with the 429 instead of parking the search). Each wait releases the unread 429 body first so sockets do not
+ * accumulate under a rate-limit storm. The release itself may take up to a second, so a
+ * deadline landing during release or backoff ends with the 429 already in hand rather than
+ * a timeout; a caller abort still ends the wait through the shared catch, exactly like an
+ * abort during the SSE parse.
  */
 const SIDECAR_429_MAX_ATTEMPTS = 3;
 const SIDECAR_429_BASE_DELAY_MS = 1_000;
@@ -98,9 +100,10 @@ export async function runWebSearch(
     stream: true,
   };
   const url = `${forwardProvider.baseUrl}/responses`;
+  // t0 precedes the deadline timer's start so the remaining-time check stays conservative.
+  const t0 = Date.now();
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
-  const t0 = Date.now();
   try {
     const sendOnce = () => fetchWithResetRetry(
       // Recovery nests INSIDE the version helper: applyUpstreamRecoveryInit then always receives a
@@ -129,10 +132,19 @@ export async function runWebSearch(
       });
       // A deadline, not a clamp: an instruction past the ceiling ends the search with the
       // 429 instead of parking it at a provider that already said it would refuse.
-      if (delay > RETRY_AFTER_CEILING_MS) break;
+      if (delay > RETRY_AFTER_CEILING_MS || delay >= settings.timeoutMs - (Date.now() - t0)) break;
       console.warn(`[web-search] sidecar HTTP 429 — retrying (${attempt + 2}/${SIDECAR_429_MAX_ATTEMPTS}) after ${delay}ms`);
-      await releaseResponseBodyBestEffort(res.body, linkedSignal.signal);
-      await sleepWithAbort(delay, linkedSignal.signal);
+      try {
+        await releaseResponseBodyBestEffort(res.body, linkedSignal.signal);
+        await sleepWithAbort(delay, linkedSignal.signal);
+      } catch (e) {
+        // The release above may consume up to 1s, so the sidecar deadline can land during
+        // cleanup or mid-backoff — before the replay is dispatched. The observed 429 is
+        // already in hand: end with it rather than laundering it into a timeout. A caller
+        // abort (or a non-deadline throw) still propagates to the shared catch below.
+        if (!linkedSignal.signal.aborted || linkedSignal.signal.reason === abortSignal?.reason) throw e;
+        break;
+      }
       res = await sendOnce();
     }
     // Attach the body guard before ANY branch reads it. The success path guarded itself below,

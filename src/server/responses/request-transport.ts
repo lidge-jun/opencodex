@@ -445,6 +445,11 @@ export async function prepareResponsesTransport(
           return response;
         }
         const nextAdapter = await refreshDispatchAdapter(requestParsed);
+        // Rebind before rebuilding: the rebuild's bridged-search restore and continuation
+        // restore key on the serving identity, which must be the refreshed route's, not the
+        // credential whose selection just lapsed.
+        bindRouteReasoningReplayScope({ parsed: requestParsed, providerName: route.providerName, provider: route.provider,
+          adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           headers: requestState.selectedForwardHeaders, translatorBudget,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
@@ -467,8 +472,6 @@ export async function prepareResponsesTransport(
         sameTargetToken = transportToken;
         destination = rebuilt.url;
         dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
-        bindRouteReasoningReplayScope({ parsed: requestParsed, providerName: route.providerName, provider: route.provider,
-          adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         // The next iteration validates synchronously and calls fetch in that same turn.
       }
       throw new Error("OAuth account selection changed repeatedly before dispatch");

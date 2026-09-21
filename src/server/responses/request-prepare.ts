@@ -20,6 +20,7 @@ import {
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
+import { contextPrincipalIdOf } from "../auth-cors";
 import {
   isShadowSourceModel,
   shadowSourceModelPrefix,
@@ -406,6 +407,11 @@ export async function prepareResponsesRequest(
     if (reasoningReplayConversationId) {
       parsed._reasoningReplayScope = { clientThreadId: reasoningReplayConversationId };
     }
+  }
+  if (parsed._reasoningReplayScope) {
+    const clientPrincipalId = contextPrincipalIdOf(options.admission)
+      ?? (options.admission?.kind === "loopback" ? "loopback" : undefined);
+    parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
   // absent or synthetically injected (session_id from prompt_cache_key).

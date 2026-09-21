@@ -30,6 +30,8 @@ export interface OcxReasoningReplayIdentity {
  * the holder, so late tool-call cache writes see the active physical identity.
  */
 export interface OcxReasoningReplayScopeRef {
+  /** Process-local caller principal; `loopback` denotes the trusted local-only admission lane. */
+  readonly clientPrincipalId?: string;
   /**
    * Conversation namespace for replay state. Historically this was always the Codex parent-thread
    * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
