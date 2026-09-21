@@ -73,6 +73,26 @@ main thread while holding the menu mutex, so the handles are copied out from und
 any setter is called. Holding it across a setter is a cycle, and the symptom would be an app that
 stops answering Quit.
 
+## Runtime ownership, from the app's side
+
+`desktop/src-tauri/src/identity.rs` holds this installation's own install id: an opaque value minted
+once into the app's config directory and never rewritten, exclusively so two launches racing each
+other answer to the same one. It exists because the recorded claim names the owning *installation*,
+so the app needs a value of its own to compare against; an id kept only in the shared record would
+be whoever wrote it last, and a reinstalled app could not tell its own prior consent from another
+installation's. The cost is that a reinstall which keeps the directory keeps its consent and one
+that loses it asks again.
+
+`desktop/src-tauri/src/ownership.rs` mirrors the claim, the three answers a read can give and the
+comparison, all of which are defined by
+[background-service runtime ownership](runtime.md#background-service-runtime-ownership) and not
+here. The shell does not read the record: resolving a claim means reading every state path and
+failing closed on an unreadable one, on a corrupt anchor and on paths that disagree, and a second
+weaker implementation of a question core already answers is the mistake this tree has made before.
+The bundled CLI answers it. Until that contract lands, `resolve` returns *unavailable*, which is
+not the same as "nobody owns it" — the question has not been put — so the shell attempts no takeover
+and records nothing, and the startup state and the diagnostic say which of the two it is.
+
 `desktop/src-tauri/src/first_run.rs` turns Start at Login on once per installation,
 before the tray is built so its checkbox reads the resulting state. A menu bar app
 that is not running has no menu bar item, so leaving autostart off by default left an
