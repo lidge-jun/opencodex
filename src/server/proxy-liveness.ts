@@ -87,6 +87,11 @@ export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"
   attempts: 3,
 };
 
+type LivenessFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface LiveProxy {
   pid: number | null;
   port: number;
@@ -156,21 +161,40 @@ export function isOpencodexHealthz(body: HealthzIdentity | null): boolean {
  * question open.
  */
 export function isConnectionRefused(error: unknown): boolean {
-  for (let current: unknown = error, depth = 0; depth < 4; depth++) {
-    if (current === null || (typeof current !== "object" && typeof current !== "function")) break;
-    const record = current as { code?: unknown; cause?: unknown };
+  const visit = (current: unknown, depth: number): boolean => {
+    if (depth >= 4) return false;
+    if (current === null || (typeof current !== "object" && typeof current !== "function")) return false;
+    const record = current as { code?: unknown; cause?: unknown; errors?: unknown };
     if (record.code === "ECONNREFUSED" || record.code === "ConnectionRefused") return true;
     if (typeof record.code === "string" && record.code.endsWith("ECONNREFUSED")) return true;
-    current = record.cause;
+    if (Array.isArray(record.errors) && record.errors.some(error => visit(error, depth + 1))) return true;
+    return visit(record.cause, depth + 1);
+  };
+  return visit(error, 0);
+}
+
+async function classifyHealthz(
+  url: string,
+  fetchFn: LivenessFetch,
+  timeoutMs: number,
+): Promise<EndpointLiveness> {
+  try {
+    const response = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (response.status !== 200) return "unknown";
+    const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
+    if (body === undefined) return "unknown";
+    return isOpencodexHealthz(body) ? "live" : "dead";
+  } catch (error) {
+    return isConnectionRefused(error) ? "dead" : "unknown";
   }
-  return false;
 }
 
 /**
  * Tri-state probe of one endpoint, the in-process counterpart of
  * `src/update/proxy-liveness-probe.mjs`. Only a connect-phase refusal or a clean 200 that is
  * not ours proves "dead"; a timeout, reset, non-200 or unreadable body leaves the question
- * open. Runs in-process because a compiled standalone binary cannot fork `execPath -e`.
+ * open. Loopback endpoints are checked on both IPv4 and IPv6 because a listener may bind only
+ * one family. Runs in-process because a compiled standalone binary cannot fork `execPath -e`.
  */
 export async function probeEndpointLiveness(
   endpoint: { port: number; hostname?: string },
@@ -179,18 +203,17 @@ export async function probeEndpointLiveness(
   if (!Number.isFinite(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535) return "dead";
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const timeoutMs = io.timeoutMs ?? 1500;
-  try {
-    const response = await fetchFn(
-      `http://${probeHostname(endpoint.hostname)}:${endpoint.port}/healthz`,
-      { signal: AbortSignal.timeout(timeoutMs) },
+  let sawUnknown = false;
+  for (const hostname of loopbackProbeHosts(endpoint.hostname)) {
+    const result = await classifyHealthz(
+      `http://${hostname}:${endpoint.port}/healthz`,
+      fetchFn,
+      timeoutMs,
     );
-    if (response.status !== 200) return "unknown";
-    const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
-    if (body === undefined) return "unknown";
-    return isOpencodexHealthz(body) ? "live" : "dead";
-  } catch (error) {
-    return isConnectionRefused(error) ? "dead" : "unknown";
+    if (result === "live") return "live";
+    if (result === "unknown") sawUnknown = true;
   }
+  return sawUnknown ? "unknown" : "dead";
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */

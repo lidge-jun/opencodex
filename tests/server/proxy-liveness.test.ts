@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createServer } from "node:net";
 import {
   createReadinessGate,
   runStartupReadinessSync,
@@ -7,6 +8,7 @@ import {
   DEFAULT_PROBE_TIMEOUT_MS,
   findLiveProxy,
   isOpencodexHealthz,
+  isConnectionRefused,
   loopbackProbeHosts,
   probeEndpointLiveness,
   probeHostname,
@@ -98,9 +100,16 @@ describe("probeEndpointLiveness", () => {
     expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch(OURS) })).toBe("live");
     expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch({ status: "ok" }) })).toBe("dead");
     expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch(OURS, 503) })).toBe("unknown");
-    expect(await probeEndpointLiveness(endpoint, {
-      fetchFn: (async () => { throw { code: "ECONNREFUSED" }; }) as typeof fetch,
-    })).toBe("dead");
+    const refusedServer = createServer();
+    await new Promise<void>((resolve, reject) => {
+      refusedServer.once("error", reject);
+      refusedServer.listen(0, "127.0.0.1", () => resolve());
+    });
+    const refusedPort = (refusedServer.address() as { port: number }).port;
+    await new Promise<void>((resolve, reject) => {
+      refusedServer.close(error => error ? reject(error) : resolve());
+    });
+    expect(await probeEndpointLiveness({ port: refusedPort, hostname: "127.0.0.1" })).toBe("dead");
     expect(await probeEndpointLiveness(endpoint, {
       fetchFn: (async () => { throw new DOMException("aborted", "AbortError"); }) as typeof fetch,
     })).toBe("unknown");
@@ -108,6 +117,57 @@ describe("probeEndpointLiveness", () => {
       fetchFn: (async () => { throw new Error("connection reset"); }) as typeof fetch,
     })).toBe("unknown");
     expect(await probeEndpointLiveness({ port: 0 }, { fetchFn: fakeFetch(OURS) })).toBe("dead");
+  });
+
+  test("checks both loopback families sequentially", async () => {
+    const seen: string[] = [];
+    const fetchFn = (async (url: string) => {
+      seen.push(url);
+      if (url.startsWith("http://127.0.0.1:10100")) {
+        throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+      }
+      return healthz(OURS);
+    }) as typeof fetch;
+    expect(await probeEndpointLiveness({ port: 10100, hostname: "::" }, { fetchFn })).toBe("live");
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/healthz",
+      "http://[::1]:10100/healthz",
+    ]);
+
+    seen.length = 0;
+    const refused = (async (url: string) => {
+      seen.push(url);
+      throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    }) as typeof fetch;
+    expect(await probeEndpointLiveness({ port: 10100, hostname: "::" }, { fetchFn: refused })).toBe("dead");
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/healthz",
+      "http://[::1]:10100/healthz",
+    ]);
+
+    seen.length = 0;
+    const mixed = (async (url: string) => {
+      seen.push(url);
+      if (url.startsWith("http://127.0.0.1:10100")) {
+        throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+      }
+      throw new DOMException("timed out", "TimeoutError");
+    }) as typeof fetch;
+    expect(await probeEndpointLiveness({ port: 10100, hostname: "::" }, { fetchFn: mixed })).toBe("unknown");
+    expect(seen).toEqual([
+      "http://127.0.0.1:10100/healthz",
+      "http://[::1]:10100/healthz",
+    ]);
+  });
+});
+
+describe("isConnectionRefused", () => {
+  test("recognizes aggregate socket refusals", () => {
+    const refused = Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    expect(isConnectionRefused(new AggregateError([refused]))).toBe(true);
+    expect(isConnectionRefused(new AggregateError([
+      Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+    ]))).toBe(false);
   });
 });
 
