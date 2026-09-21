@@ -136,6 +136,7 @@ import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
@@ -1310,10 +1311,11 @@ export async function preparePassthroughExchange(
         // No credential moved, so the reservation costs nothing.
         hop.permit?.release();
       } else {
-        // Rotation was available -- the roster cap above admitted it -- and the shared request
-        // budget refused. Recorded so a one-send log is not read as "nothing was eligible",
-        // which is the ambiguity this attribution exists to remove (#5044).
-        noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
+        // The activation quorum ignores cooldowns; prove that the selector has a live alternate
+        // before describing this as a recovery that only the shared request budget withheld.
+        if (hasEligibleGenericOAuthFailoverTarget(
+          route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
+        )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
       }
     }
 

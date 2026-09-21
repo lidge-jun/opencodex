@@ -186,6 +186,17 @@ export function eligibleFailoverAccounts(providerName: string, now = Date.now(),
     .map(account => account.id);
 }
 
+/** Whether reactive rotation has an alternate account it could select without mutating health. */
+export function hasEligibleGenericOAuthFailoverTarget(
+  providerName: string,
+  failedAccountId: string,
+  now = Date.now(),
+  requestedModelId?: string | null,
+): boolean {
+  const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+  return eligibleFailoverAccounts(providerName, now, family).some(id => id !== failedAccountId);
+}
+
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
 type ActiveGenericStrategy = "round-robin" | "fill-first";
 
