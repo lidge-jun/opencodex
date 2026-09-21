@@ -50,6 +50,12 @@ this wire projection does not change the usage ledger.
 
 Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged.
 
+## CLI resolve and stop contracts for embedding shells
+
+`ocx resolve` (`src/cli/resolve.ts`) is the machine surface a desktop shell asks instead of resolving the config home, the port, and liveness itself: the home comes from `src/config/paths.ts`, the effective port is the live listener's when the identity-checked `findLiveProxy` answers and the configured `config.port ?? 10100` otherwise, and the liveness verdict is that same module's output (pid, runtime-versus-config provenance, version, role). It adds no probing budget of its own — a second tuned budget is the duplicate-proxy defect class the liveness module's budgets exist to prevent. Exit 0 carries the verdict even when nothing is live; exit 1 means the CLI could not resolve and a caller must refuse to guess; arguments are pre-parsed in `src/cli/root.ts` and exit 64 before any preflight side effect, the same ordering `ocx ready` obeys.
+
+`ocx stop --json` is a reporting layer over the unchanged stop path. `src/cli/index.ts` threads a `StopRunRecord` through the existing receipt, drain, respawn-verification and restore flow, and `src/cli/stop-report.ts` maps the recorded facts plus the signals that already pick the exit code into one versioned document (`schema: "ocx-stop/1"`). With `--json` the human lines print on stderr and stdout carries only that document; exit codes 0/1/79/80 cross the process boundary unchanged.
+
 ## Native main reauth JSON output
 
 `src/cli/account-main.ts` emits one JSON object to stdout when `ocx account main reauth --device --no-wait --json` succeeds. The human-readable `follow up:` line is emitted only without `--json`; `flowId` remains available for status polling. `tests/cli/cli-native-profile.test.ts` parses the complete captured stdout and preserves coverage of the human follow-up.
