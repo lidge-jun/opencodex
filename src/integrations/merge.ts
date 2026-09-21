@@ -148,8 +148,12 @@ function selectElement(items: readonly unknown[], segment: PathSegment & { kind:
  */
 export function readPath(doc: unknown, path: readonly string[]): unknown {
   let cursor: unknown = doc;
-  for (const raw of path) {
-    const segment = parseSegment(raw);
+  // Validate the complete persisted grammar before document shape can short-circuit
+  // the walk. Otherwise an absent early key can hide a malformed later selector,
+  // making an unreadable ownership record look absent and move the operation to a
+  // different file.
+  const segments = path.map(parseSegment);
+  for (const segment of segments) {
     switch (segment.kind) {
       case "key":
         if (!isPlainRecord(cursor)) return undefined;
