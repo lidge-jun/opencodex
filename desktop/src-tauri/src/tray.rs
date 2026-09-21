@@ -153,7 +153,13 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 else {
                     return;
                 };
-                let _ = popup::show(app, endpoint, tauri::PhysicalPosition::new(0.0, 0.0));
+                // Anchor on the icon the user just clicked. A zero anchor clamps the popup into
+                // the top-left corner of the work area, which reads as a misplaced window rather
+                // than a menu, and on macOS the menu is now the ordinary way in rather than a
+                // fallback. Hosts that cannot report a rect still get the clamped corner, which
+                // is the best available answer there.
+                let anchor = tray_anchor(app);
+                let _ = popup::show(app, endpoint, anchor);
             }
             "open-dashboard" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -427,6 +433,34 @@ fn format_percent(value: Option<f64>) -> String {
 fn icon() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/tray/icon.png"))
         .expect("valid tray icon")
+}
+
+/// Centre of the tray icon in physical pixels, for anchoring the popup.
+///
+/// Returns the origin when the platform cannot report a rect. `popup::geometry` clamps that into
+/// the work area, so the window still appears; it simply cannot point at anything.
+fn tray_anchor(app: &AppHandle) -> tauri::PhysicalPosition<f64> {
+    app.tray_by_id("main")
+        .and_then(|tray| tray.rect().ok().flatten())
+        .map(|rect| {
+            let position: tauri::PhysicalPosition<f64> = match rect.position {
+                tauri::Position::Physical(value) => {
+                    tauri::PhysicalPosition::new(value.x as f64, value.y as f64)
+                }
+                tauri::Position::Logical(value) => tauri::PhysicalPosition::new(value.x, value.y),
+            };
+            let size: tauri::PhysicalSize<f64> = match rect.size {
+                tauri::Size::Physical(value) => {
+                    tauri::PhysicalSize::new(value.width as f64, value.height as f64)
+                }
+                tauri::Size::Logical(value) => tauri::PhysicalSize::new(value.width, value.height),
+            };
+            tauri::PhysicalPosition::new(
+                position.x + size.width / 2.0,
+                position.y + size.height / 2.0,
+            )
+        })
+        .unwrap_or_else(|| tauri::PhysicalPosition::new(0.0, 0.0))
 }
 
 #[cfg(test)]
