@@ -35,6 +35,35 @@ describe("compaction routing policy identity", () => {
     expect(compactionRoutingKeepsProviderIdentity(config, { sourceModel }, target)).toBe(false);
   });
 
+  test.each(["policy/primary--fast", "ocx/primary--fast"])(
+    "treats synthetic policy selector %s as cross-identity",
+    sourceModel => {
+      const config = policyConfig();
+      const target = routeConcreteModel(config, "openai-apikey/gpt-5.6-luna");
+
+      expect(compactionRoutingKeepsProviderIdentity(config, { sourceModel }, target)).toBe(false);
+    },
+  );
+
+  test("treats a stale policy alias as cross-identity after the profile is deleted", () => {
+    const config = policyConfig();
+    delete config.routingProfiles;
+    const target = routeConcreteModel(config, "openai-apikey/gpt-5.6-luna");
+
+    expect(compactionRoutingKeepsProviderIdentity(config, { sourceModel: "ocx/primary" }, target)).toBe(false);
+  });
+
+  test("fails closed for a selector that only resolves through the default provider", () => {
+    const config = policyConfig();
+    const target = routeConcreteModel(config, "openai-apikey/gpt-5.6-luna");
+
+    expect(compactionRoutingKeepsProviderIdentity(
+      config,
+      { sourceModel: "unconfigured-model" },
+      target,
+    )).toBe(false);
+  });
+
   test("retains identity for a concrete source on the target provider", () => {
     const config = policyConfig();
     const target = routeConcreteModel(config, "openai-apikey/gpt-5.6-luna");
@@ -42,6 +71,17 @@ describe("compaction routing policy identity", () => {
     expect(compactionRoutingKeepsProviderIdentity(
       config,
       { sourceModel: "openai-apikey/gpt-6-astra" },
+      target,
+    )).toBe(true);
+  });
+
+  test("retains identity for a concrete fast selector on the target provider", () => {
+    const config = policyConfig();
+    const target = routeConcreteModel(config, "openai-apikey/gpt-5.6-luna");
+
+    expect(compactionRoutingKeepsProviderIdentity(
+      config,
+      { sourceModel: "openai-apikey/gpt-6-astra--fast" },
       target,
     )).toBe(true);
   });
