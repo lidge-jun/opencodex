@@ -175,9 +175,12 @@ still cover the rule, which is a judgement only review makes.
   predefined Quit replaced because it raises no cancellable event. Every ending drains first — the
   tray's Quit, an update's coordinated restart, and a window close on a session with no tray all
   hold the exit, stop the app-owned runtime through the management stop, and treat only an observed
-  child exit or a refused connection as proof it stopped. No shell file kills the child, a runtime
-  this app did not start is never stopped, and a quit that lands while one is being started is
-  deferred until the child is owned and then drains it rather than being lost;
+  child exit or a refused connection as proof it stopped. Ownership is re-established from the pid
+  the endpoint reports rather than carried in a flag, a drain that does not complete is recorded as
+  failed rather than drained — which a quit tolerates and a coordinated restart refuses — and an
+  update installs only after the runtime it is replacing is confirmed stopped. No shell file kills
+  the child, a runtime this app did not start is never stopped, and a quit that lands while one is
+  being started or stopped is deferred rather than lost;
   see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-exit-ownership.test.ts`.
 - **INV-DESKTOP-02** — Tray availability is an answer from the session, not the tray backend's

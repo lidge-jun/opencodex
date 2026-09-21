@@ -23,7 +23,10 @@ The window is created and shown before anything is registered, resolved, probed 
 `desktop/src-tauri/src/startup.rs` runs the whole sequence inside it as named states —
 registering, resolving, probing, attaching or starting, waiting, then ready or failed — under one
 30-second deadline. Every probe beneath that deadline is bounded by the time left rather than by the
-HTTP client's own timeout, so the ceiling is the ceiling. The failure state carries a retry, the
+HTTP client's own timeout, so the ceiling is the ceiling, and the budget for finding an existing
+runtime is counted from when probing starts rather than from process start — counted from the start,
+a slow tray or session-bus registration would spend it and then present as nothing listening, which
+starts a second proxy beside the one already there. The failure state carries a retry, the
 child's exit code and a copyable diagnostic naming the state, the endpoint, the configuration home
 and the runtime's last output; `desktop/src-tauri/src/sidecar.rs` consumes the spawn event stream
 into that record instead of discarding it, which is what makes an immediate sidecar exit
@@ -46,15 +49,45 @@ is the quit. macOS needs one thing beyond the event loop: Tauri's default menu c
 Quit wired to Cocoa's `terminate:` and the pinned tao raises no cancellable event for it, so
 `desktop/src-tauri/src/menu.rs` rebuilds that menu with an ordinary item on the same accelerator.
 
-Every ending drains first. The app-owned runtime is asked to stop, and it counts as gone only when
-the child reports its own exit or the endpoint refuses a connection — a timeout or an unauthorized
-reply is not proof. Nothing kills the child; the CLI's stop restores client configuration and lets
-in-flight requests finish. A drain that has not completed within `DRAIN_DEADLINE` is reported and
-the exit still proceeds, which can leave the runtime running: refusing to quit when the user asked
-is the worse answer, and a standing runtime is recoverable with `ocx stop`. A runtime this app did
-not start is never stopped. A quit that arrives while the sequence is starting one is held: the
-coordinator reserves the spawn rather than holding its lock across process creation, and the quit is
-deferred until the child is owned and then drains it.
+Every ending drains first, and so does the tray's Stop, which is not an ending: all of them take the
+same phase, so Stop pressed twice, Stop then Quit, and Stop during an update are one execution over
+one child rather than several racing. Ownership is re-established at the start of each drain rather
+than read off a flag — the pid the endpoint reports has to be the child this app started — because
+between the spawn and now the child can have exited and a service can have taken the port back, and
+an owner's stop sent to that listener is a stop sent to somebody else's runtime. A listener that
+cannot be identified is left alone.
+
+A runtime counts as gone only when the child reports its own exit or the endpoint refuses a
+connection; a timeout or an unauthorized reply is not proof. Nothing kills the child; the CLI's stop
+restores client configuration and lets in-flight requests finish.
+
+A drain that does not complete within `DRAIN_DEADLINE` is **not** recorded as a drain. It becomes
+`DrainFailed`, and an unidentifiable runtime becomes `OwnershipUnknown`. A user's quit still
+proceeds from either — refusing to close when the user asked is the worse answer, and a standing
+runtime is recoverable with `ocx stop`. A coordinated restart does not: coming back onto a runtime
+that was never stopped puts the user on the old version while they believe they upgraded. A runtime
+this app did not start is never stopped. A quit that arrives while the sequence is starting one is
+held: the coordinator reserves the spawn rather than holding its lock across process creation, and
+the quit is deferred until the child is owned and then drains it.
+
+An in-app update downloads and signature-checks the package, confirms who owns the running runtime,
+drains it and confirms the child is gone, and only then installs. The order is not cosmetic: the
+pinned updater's Windows installer hands off to the installer process and ends this one, so a
+restart asked for after `install` is never reached, and the package would be replaced under a
+runtime still serving out of those files. A drain that did not complete refuses the install and
+leaves the update pending.
+
+The window may navigate to the `tauri://` scheme, to the loopback endpoint the sequence resolved,
+and on Windows to `tauri.localhost`, which is where the pinned Tauri serves the app itself because
+wry needs an http origin there. That is the one host and no port — not localhost generally, and not
+a widening of what the loopback dashboard may reach.
+
+`desktop/src-tauri/src/proxy.rs` is the local management client and has its own network policy,
+separate from the updater's download client. It refuses redirects and system proxies, and it will
+not send the management token until it has confirmed, from the unauthenticated health body, that the
+instance answering is the one the shell bound to: the marker, the pid, and the port it addressed.
+The binding carries a generation, so a request authorised under an earlier binding is not authorised
+after the shell rebinds.
 
 `desktop/src-tauri/src/tray_availability.rs` asks the session bus whether
 `org.kde.StatusNotifierWatcher` reports a host registered; macOS and Windows answer yes without a
