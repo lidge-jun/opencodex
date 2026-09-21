@@ -39,7 +39,12 @@ bun run build:local
 
 This asks for the host platform's installable bundles only (app and dmg on macOS, msi and nsis
 setup exe on Windows, AppImage and deb on Linux), so no updater archive is produced and none is
-expected to be signed. It prints the bundle paths and exits zero. The release path below is unchanged: a published
+expected to be signed. Each format is attempted in its own invocation: a format this machine
+cannot bundle (for example an AppImage when a linuxdeploy dependency is missing) fails on its own
+line without destroying the formats that do build, the failing format is retried once with
+`--verbose` so the bundler's own diagnostics are visible, and the summary prints every format's
+outcome beside the artifacts that were produced. The exit code is non-zero if any format failed.
+The release path below is unchanged: a published
 updater artifact still has to be signed.
 
 ## Release packaging and updates

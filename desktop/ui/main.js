@@ -16,6 +16,26 @@ const bridge = window.__TAURI__;
 const invoke = bridge && bridge.core && bridge.core.invoke;
 const listen = bridge && bridge.event && bridge.event.listen;
 
+// The shell owns the sequence and its deadline. The page has no deadline of its own: an invoke
+// whose command never answers returns a promise that neither settles nor rejects, and the page
+// then keeps its initial markup forever - the headline still says the run is starting, the
+// checklist is empty, and the only thing on screen is a Retry button with an empty diagnostic.
+// That is indistinguishable from a hung product. Bounding the handshake turns the silence into a
+// failure the page can report and the user can copy.
+const HANDSHAKE_DEADLINE_MS = 5000;
+
+function withDeadline(work, what) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('the shell did not answer ' + what + ' within ' + HANDSHAKE_DEADLINE_MS + ' ms'));
+    }, HANDSHAKE_DEADLINE_MS);
+    Promise.resolve(work).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
 const headline = document.querySelector("#headline");
 const detail = document.querySelector("#detail");
 const phaseList = document.querySelector("#phases");
@@ -120,12 +140,12 @@ async function start() {
     return;
   }
   try {
-    phases = (await invoke("startup_phases")).filter((phase) => !phase.terminal);
+    phases = (await withDeadline(invoke("startup_phases"), "startup_phases")).filter((phase) => !phase.terminal);
     render(null);
     // The listener goes on before the snapshot is read, so a transition landing between the two is
     // delivered rather than lost.
-    await listen("startup-phase", (event) => apply(event.payload));
-    apply(await invoke("startup_snapshot"));
+    await withDeadline(listen("startup-phase", (event) => apply(event.payload)), "the startup-phase subscription");
+    apply(await withDeadline(invoke("startup_snapshot"), "startup_snapshot"));
   } catch (error) {
     reportPageFailure("The startup surface could not reach the shell.", error);
   }

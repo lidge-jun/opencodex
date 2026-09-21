@@ -92,7 +92,7 @@ export function unknownServiceOwnerRefusal(reason: string, action = "repair"): s
   return `Background service ${action} stopped: ${reason}, so the runtime's recorded owner could `
     + "not be determined.\n"
     + "The service registration was left exactly as it is — not re-enabled, not rewritten and not restarted.\n"
-    + "Run 'ocx service install' to re-register the service and take the runtime back.";
+    + "Repair the service-state file or its permissions, then run 'ocx service install' to take the runtime back.";
 }
 
 async function assertSchedulerSnapshotBeforeStart(

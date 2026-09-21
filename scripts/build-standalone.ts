@@ -1,14 +1,7 @@
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-
-const targets = new Set([
-  "bun-darwin-arm64",
-  "bun-darwin-x64",
-  "bun-windows-x64",
-  "bun-linux-x64",
-  "bun-linux-arm64",
-]);
+import { isStandaloneTarget, standaloneExecutableName } from "./standalone-targets";
 
 function hostTarget(): string {
   const platform = process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "windows" : "linux";
@@ -22,7 +15,7 @@ function argumentValue(name: string): string | undefined {
 }
 
 const target = argumentValue("--target") ?? hostTarget();
-if (!targets.has(target)) {
+if (!isStandaloneTarget(target)) {
   throw new Error(`Unsupported standalone target: ${target}`);
 }
 
@@ -34,7 +27,7 @@ if (!existsSync(join(guiDist, "index.html"))) {
 
 const output = resolve(argumentValue("--out") ?? join(repoRoot, "dist", "standalone", target));
 mkdirSync(output, { recursive: true });
-const executable = join(output, target.startsWith("bun-windows-") ? "ocx.exe" : "ocx");
+const executable = join(output, standaloneExecutableName(target));
 const result = Bun.spawnSync([
   process.execPath,
   "build",

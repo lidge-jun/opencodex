@@ -142,6 +142,152 @@ describe("registry model rename migration (#1610)", () => {
       expect(entry?.models).not.toContain(rename.from);
     }
   });
+
+  test("repairs a saved kimi row still defaulting to the retired k2.7 id", () => {
+    // The shape a config saved under the pre-K2.8 registry carries: the picker list,
+    // the context-window record and the default all name kimi-k2.7-code, and the old
+    // registry already seeded kimi-for-coding rows next to them.
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.7-code",
+          models: ["k3", "k3[1m]", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+          modelContextWindows: { "kimi-k2.7-code": 262_144, "kimi-for-coding": 262_144 },
+          noReasoningModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-k2.7-code": [], "kimi-for-coding": [] },
+          modelDefaultReasoningEfforts: { k3: "max" },
+          modelReasoningEffortMap: { k3: { high: "high" } },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(changed).toBe(true);
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding"]);
+    expect(prov.modelContextWindows).toEqual({ "kimi-for-coding": 1_048_576 });
+    expect(prov.noReasoningModels).toEqual([]);
+    expect(prov.modelReasoningEfforts).toEqual({ "kimi-for-coding": ["low", "high", "max"] });
+    expect(prov.modelDefaultReasoningEfforts).toEqual({ k3: "max", "kimi-for-coding": "max" });
+    expect(prov.modelReasoningEffortMap?.["kimi-for-coding"]).toEqual({
+      none: "none", low: "low", medium: "high", high: "high", xhigh: "max", max: "max",
+    });
+  });
+
+  test("repairs the kimi-code key preset row the same way", () => {
+    const stale = {
+      providers: {
+        "kimi-code": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "key",
+          apiKey: "sk-test",
+          defaultModel: "kimi-k2.7-code",
+          models: ["k3", "k3[1m]", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers["kimi-code"]!;
+    expect(changed).toBe(true);
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding"]);
+  });
+
+  test("preserves explicit kimi-for-coding metadata while retiring old ids", () => {
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.6",
+          models: ["kimi-k2.6", "kimi-for-coding"],
+          modelContextWindows: { "kimi-k2.6": 262_144, "kimi-for-coding": 131_072 },
+          modelReasoningEfforts: { "kimi-k2.6": [], "kimi-for-coding": ["low"] },
+          modelDefaultReasoningEfforts: { "kimi-for-coding": "low" },
+          modelReasoningEffortMap: { "kimi-for-coding": { medium: "low" } },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["kimi-for-coding"]);
+    expect(prov.modelContextWindows?.["kimi-for-coding"]).toBe(131_072);
+    expect(prov.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low"]);
+    expect(prov.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("low");
+    expect(prov.modelReasoningEffortMap?.["kimi-for-coding"]).toEqual({ medium: "low" });
+  });
+
+  test("clears a stale no-reasoning classification saved under the live alias alone", () => {
+    // A config saved by the pre-K2.8 registry can carry kimi-for-coding in
+    // noReasoningModels even after every retired id is gone from the row - the old
+    // registry seeded the alias there. With no `from` left to rename, the stale
+    // classification would survive and keep the picker disabled; the drop must
+    // therefore trigger on the replacement id alone.
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-for-coding",
+          models: ["k3", "k3[1m]", "kimi-for-coding"],
+          noReasoningModels: ["kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-for-coding": [] },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(changed).toBe(true);
+    expect(prov.noReasoningModels).toEqual([]);
+    expect(prov.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+  });
+
+  test("preserves an explicit no-reasoning override on the live alias", () => {
+    const configured = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-for-coding",
+          models: ["k3", "k3[1m]", "kimi-for-coding"],
+          noReasoningModels: ["kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-for-coding": ["low"] },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(configured, MODEL_RENAMES);
+    expect(changed).toBe(false);
+    expect(config.providers.kimi?.noReasoningModels).toEqual(["kimi-for-coding"]);
+  });
+
+  test("leaves a kimi row repointed at a different gateway alone", () => {
+    const custom = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://my-proxy.internal/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.7-code",
+          models: ["kimi-k2.7-code"],
+        },
+      },
+    } as unknown as OcxConfig;
+    const { changed } = projectModelRenames(custom, MODEL_RENAMES);
+    expect(changed).toBe(false);
+  });
 });
 
 describe("model rename startup persistence", () => {

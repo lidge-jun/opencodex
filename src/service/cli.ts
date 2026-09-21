@@ -234,6 +234,15 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "install":
       assertServiceEnvironmentMatchesInstall();
       assertServiceAuthEnvironment();
+      // The install may advance provenance, but it may take back only the owner it observed
+      // before touching the registration. A desktop successor that claims ownership while
+      // the install is running must survive the late release below.
+      const ownershipBeforeInstall = resolveServiceOwnership();
+      if (ownershipBeforeInstall.kind === "unknown") {
+        console.error(`❌ ${unknownServiceOwnerRefusal(ownershipBeforeInstall.reason, "install")}`);
+        process.exitCode = 1;
+        break;
+      }
       // A manually started proxy can still own the configured port while the service
       // registration is absent or unloaded. Stop both the registered manager and any
       // tracked standalone listener before loading the freshly written service assets.
@@ -268,7 +277,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // incidentally — from a tray helper, from `ocx update`, from a doctor suggestion — and
       // undoing a takeover the user consented to must be something the user asked for.
       {
-        const released = releaseServiceOwner();
+        const released = releaseServiceOwner(ownershipBeforeInstall, { allowRevisionAdvance: true });
         if (released) {
           console.log(
             `ℹ️  The desktop app owned the background runtime (install ${released.installId}, `

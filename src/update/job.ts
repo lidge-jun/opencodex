@@ -26,7 +26,7 @@ import { listListenPids, reclaimListenPort, scanListenPids, type ListenPidScan }
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
 import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
-import { updateRestartVeto, type ServiceOwnershipResolution } from "./restart-ownership";
+import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import {
   type Channel,
   type Installer,
@@ -1970,15 +1970,12 @@ export async function runGuiUpdateWorker(
     }
 
     if (restart) {
-      // The package updater it just ran deliberately left a foreign-owned runtime alone, and
-      // restarting here would replace the app's sidecar with an npm proxy.
-      const veto = updateRestartVeto(io.resolveOwnershipFn);
-      if (veto) { updateJob(job, { status: "succeeded", restarted: false }, veto); return; }
-      job = updateJob(job, { status: "restarting" }, "Update installed. Restarting proxy...");
-      if (!(await finishGuiUpdateRestart(job, captured, check.installer, {
-        ...io.restartIo,
-        packageLauncherPathFn: () => activeLauncher,
-      }))) return;
+      const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async () => {
+        job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");
+        return finishGuiUpdateRestart(job!, captured, check.installer, { ...io.restartIo, packageLauncherPathFn: () => activeLauncher });
+      });
+      if (outcome.kind === "veto") { updateJob(job, { status: "succeeded", restarted: false }, outcome.notice); return; }
+      if (!outcome.value) return;
       updateJob(job, { status: "succeeded", restarted: true }, "Restart requested and proxy is healthy.");
       return;
     }

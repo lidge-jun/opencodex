@@ -91,24 +91,33 @@ Open **http://localhost:10100** and configure everything in the web dashboard �
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
 
-### macOS desktop app and widget
+<details>
+<summary><b>Desktop app and macOS widget — beta</b></summary>
 
-Download the desktop app for macOS, Windows, or Linux from the
-[latest releases](https://github.com/lidge-jun/opencodex/releases).
+A native shell around the same dashboard, plus a WidgetKit extension that shows proxy status,
+today's usage and provider quotas without opening a browser. The proxy is unchanged: the app
+finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays at
+**http://localhost:10100**.
 
-A native desktop app and WidgetKit extension for proxy status, usage, and provider
-quotas without opening the dashboard. The snapshot model lives in [`app/`](./app)
-(`MenuBarCore`). Download it from the
-[releases page](https://github.com/lidge-jun/opencodex/releases) or build it locally with
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
+It is beta. Builds are signed for integrity but not notarized, so macOS asks for a
+right-click → **Open** on first launch and Windows SmartScreen warns on the installer. The
+widget needs macOS 14 or newer; the snapshot model it renders lives in [`app/`](./app)
+(`MenuBarCore`).
 
-The first launch needs a right-click → Open, because the app is ad-hoc signed rather
-than notarized. See the [macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-for the full explanation.
+Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
+it locally with `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
 
-The app also includes a macOS 14+ widget for proxy status, today's usage, and quotas.
+Install locations, service files and everything else written to disk are listed in
+[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
+[Desktop App guide](https://lidge-jun.github.io/opencodex/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/) cover
+per-platform installation and the Gatekeeper prompt.
 
-It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+</details>
+
+### ChatGPT account pool
+
+opencodex can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
 the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
 threads normally retain affinity to the account that started them, so long SSH, tmux, or

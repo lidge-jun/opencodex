@@ -786,6 +786,58 @@ function catalogStatusFromProcesses(
   return { state: stale ? "stale" : "fresh", processes: withStarts, catalogMtimeMs };
 }
 
+interface ComputedCodexAppServerCatalogStatus {
+  status: CodexAppServerCatalogStatus;
+  processes: CodexAppServerProcess[];
+}
+
+/**
+ * Compute one catalog-state observation while retaining the command lines from the
+ * same process enumeration. The public collector deliberately exposes only the
+ * identity and timestamp projection; post-write warning code also needs the matched
+ * process records, and re-enumerating there creates a race between classification and
+ * reporting (as well as a second expensive Windows CIM walk).
+ */
+function computeCodexAppServerCatalogStatus(
+  io: CodexAppServerProcessIo,
+): ComputedCodexAppServerCatalogStatus {
+  const platform = io.platform ?? process.platform;
+  const getuid = io.getuid ?? (() => {
+    try {
+      return typeof process.getuid === "function" ? process.getuid() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  let snapshots: ProcessSnapshot[];
+  let enumerationFailed = false;
+  const enumerate = io.listSnapshots ?? (() => defaultListSnapshots(platform, getuid));
+  try {
+    snapshots = enumerate();
+  } catch {
+    // A failed process read is unknown, never proof that nothing is running.
+    snapshots = [];
+    enumerationFailed = true;
+  }
+  const processes = codexAppServerProcessesFromSnapshots(snapshots);
+  if (processes.length === 0) {
+    return {
+      processes,
+      status: enumerationFailed
+        ? { state: "unknown", processes: [], catalogMtimeMs: null }
+        : { state: "not_running", processes: [], catalogMtimeMs: null },
+    };
+  }
+  const catalogMtimeMs = (io.catalogMtimeMs ?? defaultCatalogMtimeMs)();
+  const starts = io.readStartMs
+    ? new Map(processes.map(proc => [proc.pid, io.readStartMs!(proc.pid)] as const))
+    : readProcessStartMsBatch(processes.map(proc => proc.pid), platform);
+  return {
+    processes,
+    status: catalogStatusFromProcesses(processes, catalogMtimeMs, starts),
+  };
+}
+
 // Short TTL: process listing + stat run once per window even under per-turn
 // guidance calls (#857).
 let catalogStateCache: { atMs: number; status: CodexAppServerCatalogStatus } | null = null;
@@ -889,41 +941,7 @@ export function collectCodexAppServerCatalogState(
     && now - catalogStateCache.atMs < catalogStateTtlMs(catalogStateCache.status.state)) {
     return catalogStateCache.status;
   }
-  const compute = (): CodexAppServerCatalogStatus => {
-    const platform = io.platform ?? process.platform;
-    const getuid = io.getuid ?? (() => {
-      try {
-        return typeof process.getuid === "function" ? process.getuid() : undefined;
-      } catch {
-        return undefined;
-      }
-    });
-    let snapshots: ProcessSnapshot[];
-    let enumerationFailed = false;
-    const enumerate = io.listSnapshots ?? (() => defaultListSnapshots(platform, getuid));
-    try {
-      snapshots = enumerate();
-    } catch {
-      // Enumeration failure must never read as "nothing running" — that would let
-      // positive model guidance through on guesswork (#857). The injected seam gets
-      // the same contract as the default path: whoever enumerates, a failure to read
-      // the process list is unknown, not an empty machine.
-      snapshots = [];
-      enumerationFailed = true;
-    }
-    const processes = codexAppServerProcessesFromSnapshots(snapshots);
-    if (processes.length === 0) {
-      return enumerationFailed
-        ? { state: "unknown", processes: [], catalogMtimeMs: null }
-        : { state: "not_running", processes: [], catalogMtimeMs: null };
-    }
-    const catalogMtimeMs = (io.catalogMtimeMs ?? defaultCatalogMtimeMs)();
-    const starts = io.readStartMs
-      ? new Map(processes.map(proc => [proc.pid, io.readStartMs!(proc.pid)] as const))
-      : readProcessStartMsBatch(processes.map(proc => proc.pid), platform);
-    return catalogStatusFromProcesses(processes, catalogMtimeMs, starts);
-  };
-  const status = compute();
+  const status = computeCodexAppServerCatalogStatus(io).status;
   if (fullyDefault) {
     catalogStateCache = { atMs: now, status };
   }
@@ -1228,15 +1246,29 @@ export function afterCatalogWriteHandleAppServers(
   options: AfterCatalogWriteAppServerOptions,
 ): AfterCatalogWriteAppServerResult {
   const excluded = new Set(options.excludePids ?? []);
+  const hint = STALE_CODEX_APP_SERVER_HINT;
+  if (!options.restart) {
+    // A running process is not necessarily stale. Classify the exact process
+    // enumeration that supplies the warning, and stay quiet when freshness cannot be
+    // established rather than presenting an unknown observation as a known mismatch.
+    const observed = computeCodexAppServerCatalogStatus(options.io ?? {});
+    const starts = new Map(observed.status.processes.map(process => [process.pid, process.startedAtMs]));
+    const catalogMtimeMs = observed.status.catalogMtimeMs;
+    const processes = observed.processes.filter(process => !excluded.has(process.pid));
+    const staleProcesses = catalogMtimeMs === null
+      ? []
+      : processes.filter(process => {
+        const startedAtMs = starts.get(process.pid);
+        return startedAtMs !== null && startedAtMs !== undefined && startedAtMs <= catalogMtimeMs;
+      });
+    if (staleProcesses.length === 0) return { processes, warned: false, hint };
+    options.log?.error(formatStaleCodexAppServerWarning(staleProcesses));
+    return { processes: staleProcesses, warned: true, hint };
+  }
   const processes = listCodexAppServerProcesses(options.io)
     .filter(process => !excluded.has(process.pid));
-  const hint = STALE_CODEX_APP_SERVER_HINT;
   if (processes.length === 0) {
     return { processes, warned: false, hint };
-  }
-  if (!options.restart) {
-    options.log?.error(formatStaleCodexAppServerWarning(processes));
-    return { processes, warned: true, hint };
   }
   options.log?.log(
     `Stopping Codex app-server process(es): ${processes.map(process => process.pid).join(", ")} `

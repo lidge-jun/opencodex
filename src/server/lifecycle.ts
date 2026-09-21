@@ -357,12 +357,12 @@ export function getServerListenPort(): number | undefined {
  *   caller sees the same result before a replacement binds the port. Swallowing it would let
  *   `drainAndShutdown` report success while a socket is still held.
  *
- * `always` runs after the listeners regardless of their outcome, and its own failure joins the
- * reported set rather than replacing it.
+ * `always` runs after the listeners regardless of their outcome and receives whether every
+ * listener stop succeeded. Its own failure joins the reported set rather than replacing it.
  */
 export async function runListenerShutdown(
   steps: Array<() => Promise<void>>,
-  always: () => Promise<void>,
+  always: (listenersStopped: boolean) => Promise<void>,
 ): Promise<void> {
   const failures: unknown[] = [];
   // Close admission and start connection-owner cleanup before waiting for any drain.
@@ -372,7 +372,7 @@ export async function runListenerShutdown(
     if (result.status === "rejected") failures.push(result.reason);
   }
   try {
-    await always();
+    await always(failures.length === 0);
   } catch (error) {
     failures.push(error);
   }
