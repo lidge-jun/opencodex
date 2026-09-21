@@ -611,11 +611,26 @@ describe("cursor spare envelope budget restores clipped invocation arguments", (
         return { contents: "A".repeat(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT + 1) };
       },
     };
-    const line = invokedLine(resultRoot(encode(writeFileHistory(args), "grok-4.6-high")));
+    // The refund pass must not allocate a full-size byte buffer while deciding whether the
+    // restoration fits. encode() calls with a string longer than the envelope mean someone
+    // reintroduced the unbounded fullBytes measurement this change removed.
+    let oversizedEncodes = 0;
+    const originalEncode = TextEncoder.prototype.encode;
+    TextEncoder.prototype.encode = function (input?: string) {
+      if (typeof input === "string" && input.length > CURSOR_EXTERNAL_ROOT_BYTE_LIMIT) oversizedEncodes++;
+      return originalEncode.call(this, input);
+    };
+    let line: string | undefined;
+    try {
+      line = invokedLine(resultRoot(encode(writeFileHistory(args), "grok-4.6-high")));
+    } finally {
+      TextEncoder.prototype.encode = originalEncode;
+    }
     expect(line).toEndWith("…[arguments truncated]");
     // Indexing and initial rendering account for three calls; the refund pass adds exactly one and
     // must reuse that serialization instead of calling the rendering helper for a fifth copy.
     expect(serializations).toBe(4);
+    expect(oversizedEncodes).toBe(0);
   });
 
   // The refund pass must be a no-op below the cap: a line that was never clipped has nothing to

@@ -1075,8 +1075,10 @@ function restoreClippedInvocationArguments(
     // The replacement must add at least the raw UTF-8 argument-byte delta. Reject an impossible
     // restoration with a bounded scan before building the widened string, JSON, and byte array.
     const clippedBytes = encoder.encode(clipped).byteLength;
+    // boundedUtf8ByteLength already gives up past clippedBytes + spare, so a returned number
+    // always fits; a second size comparison here can never fire.
     const fullBytes = boundedUtf8ByteLength(full, clippedBytes + spare);
-    if (fullBytes === undefined || fullBytes - clippedBytes > spare) continue;
+    if (fullBytes === undefined) continue;
     const name = namespacedToolName(call.namespace, call.name);
     // Anchored on the preceding newline. `toolResultToText` always emits the invocation after the
     // `[tool_result]`, `call_id:` and `name:` lines, so the real line is never first — and
