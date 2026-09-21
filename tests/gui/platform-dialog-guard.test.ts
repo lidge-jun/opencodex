@@ -113,4 +113,32 @@ describe("dashboard platform-dialog guard", () => {
     // A line continuation keeps the string open; the call after it is still code.
     expect(reported('const s = "continued\\\r\ntext"; alert(message);')).toEqual(["alert("]);
   });
+
+  /*
+   * Shapes a static review demonstrated the scanner missed. Every one is a real call that
+   * reaches the undrawable platform dialog, so each was a hole in the barrier rather than a
+   * stylistic gap.
+   */
+  test("the guard reads optional, wrapped and computed calls on a global receiver", () => {
+    const reported = (source: string) => findPlatformDialogCalls(source).map(call => call.form);
+
+    expect(reported('window.confirm?.("continue?");')).toEqual(["window.confirm?.("]);
+    expect(reported('(window.confirm)("continue?");')).toEqual(["window.confirm)("]);
+    expect(reported('((confirm))("continue?");')).toEqual(["confirm))("]);
+    // Quotes are what make computed access work, so it is matched before masking.
+    expect(reported('globalThis["alert"](message);')).toEqual(['globalThis["alert"](']);
+  });
+
+  test("a statement start is a call position whatever ended the previous line", () => {
+    const reported = (source: string) => findPlatformDialogCalls(source).map(call => call.form);
+
+    // Automatic semicolon insertion: `ready` ends its own statement, so this is a call and
+    // not a declaration the preceding word introduced.
+    expect(reported("ready\nalert(message);")).toEqual(["alert("]);
+    expect(reported('export default prompt("name");')).toEqual(["prompt("]);
+    // Postfix increment makes the next slash a division, not a regular expression.
+    expect(reported("const n = count++ / alert(message) / 2;")).toEqual(["alert("]);
+    // The declaration forms must still be left alone.
+    expect(reported("class S {\n  async confirm(): Promise<void> {}\n}")).toEqual([]);
+  });
 });

@@ -33,7 +33,7 @@ const GLOBAL_RECEIVERS = ["window", "globalThis", "self", "top", "parent"] as co
  */
 const CALL_POSITION_KEYWORDS = new Set([
   "return", "await", "void", "typeof", "delete", "yield", "new",
-  "case", "in", "of", "do", "else", "throw",
+  "case", "in", "of", "do", "else", "throw", "default", "export",
 ]);
 
 /**
@@ -116,6 +116,11 @@ export function maskNonCode(source: string): string {
   const opensValue = (): boolean => {
     if (previousWord) return VALUE_PRECEDING_KEYWORDS.has(previousWord);
     if (previousPunctuation === ">") return punctuationBefore === "=";
+    // `count++ / x` divides. Reading that slash as a regular expression masked the rest of
+    // the line, which is where the call would be.
+    if (previousPunctuation === "+" || previousPunctuation === "-") {
+      if (punctuationBefore === previousPunctuation) return false;
+    }
     return previousPunctuation === "" || REGEX_PRECEDING_PUNCTUATION.has(previousPunctuation);
   };
   const noteValue = (): void => { previousWord = ""; punctuationBefore = ""; previousPunctuation = "x"; };
@@ -223,28 +228,50 @@ export function findPlatformDialogCalls(source: string): PlatformDialogCall[] {
   const code = maskNonCode(source);
   const found: PlatformDialogCall[] = [];
 
+  // `window.confirm(`, `window?.confirm(`, `window.confirm?.(` and `(window.confirm)(`
+  // all reach the same undrawable dialog.
   const receiverPattern = new RegExp(
-    `\\b(?:${GLOBAL_RECEIVERS.join("|")})\\s*\\??\\s*\\.\\s*(?:${DIALOGS.join("|")})\\s*\\(`,
+    `(?<![A-Za-z0-9_$.])(?:${GLOBAL_RECEIVERS.join("|")})\\s*\\??\\s*\\.\\s*(?:${DIALOGS.join("|")})\\s*\\)*\\s*(?:\\?\\.)?\\s*\\(`,
     "g",
   );
   for (const match of code.matchAll(receiverPattern)) {
     found.push({ line: lineOf(code, match.index), form: match[0].replace(/\s+/g, "") });
   }
 
-  // `confirm(`, `confirm ?. (` and `(confirm)(` all reach the same global.
+  // The bare forms, including any number of wrapping parentheses and an optional call.
   const barePattern = new RegExp(
-    `(?<![A-Za-z0-9_$.])\\(?\\s*(?:${DIALOGS.join("|")})\\s*\\)?\\s*(?:\\?\\.)?\\s*\\(`,
+    `(?<![A-Za-z0-9_$.])(?:${DIALOGS.join("|")})\\s*\\)*\\s*(?:\\?\\.)?\\s*\\(`,
     "g",
   );
   for (const match of code.matchAll(barePattern)) {
-    // Skip a wrapping `(` so the preceding-token test sees the real context.
-    let before = match.index + (match[0].startsWith("(") ? 1 : 0);
-    while (before > 0 && /\s/.test(code[before - 1])) before -= 1;
+    // Step back over whitespace and any wrapping `(` so the preceding-token test sees the
+    // real context. A line break on the way means the call starts a statement, which is a
+    // call position whatever word ended the previous one.
+    let before = match.index;
+    let crossedLine = false;
+    while (before > 0 && (/\s/.test(code[before - 1]) || code[before - 1] === "(")) {
+      if (code[before - 1] === "\n") crossedLine = true;
+      before -= 1;
+    }
     // A member access reaches the receiver's own method, not the global.
     if (before > 0 && code[before - 1] === ".") continue;
     const preceding = identifierBefore(code, before);
-    if (preceding.length > 0 && !CALL_POSITION_KEYWORDS.has(preceding)) continue;
+    if (!crossedLine && preceding.length > 0 && !CALL_POSITION_KEYWORDS.has(preceding)) continue;
     found.push({ line: lineOf(code, match.index), form: match[0].replace(/\s+/g, "") });
+  }
+
+  /*
+   * Computed access is matched against the RAW source, because the quotes that make it work
+   * are exactly what the mask removes. A string that merely contains this shape is reported
+   * too, which is the safe direction: a false positive is one line to look at, a false
+   * negative is a guard that has quietly stopped guarding.
+   */
+  const computedPattern = new RegExp(
+    `(?<![A-Za-z0-9_$.])(?:${GLOBAL_RECEIVERS.join("|")})\\s*\\??\\s*\\[\\s*["'](?:${DIALOGS.join("|")})["']\\s*\\]\\s*(?:\\?\\.)?\\s*\\(`,
+    "g",
+  );
+  for (const match of source.matchAll(computedPattern)) {
+    found.push({ line: lineOf(source, match.index), form: match[0].replace(/\s+/g, "") });
   }
 
   return found.sort((a, b) => a.line - b.line);

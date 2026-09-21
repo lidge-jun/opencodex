@@ -12,7 +12,13 @@ import { confirmAction, requestTextValue } from "../src/action-dialogs";
  * looked correct. Every test here installs a throwing stub for all three: reaching one is a
  * failure, not a mock.
  */
-const globals = ["document", "window", "navigator", "localStorage", "HTMLElement", "confirm", "alert", "prompt"] as const;
+/*
+ * `HTMLElement` is deliberately absent. These helpers are reached from a dozen components,
+ * and an `instanceof HTMLElement` focus check bound every one of their callers to a realm
+ * that happens to expose the constructor — which most of this package's DOM tests do not.
+ * Leaving the global out is what keeps that from coming back.
+ */
+const globals = ["document", "window", "navigator", "localStorage", "confirm", "alert", "prompt"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
 let win: Window;
 let touched: string[];
@@ -35,7 +41,6 @@ beforeEach(() => {
     window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator },
     localStorage: { configurable: true, value: win.localStorage },
-    HTMLElement: { configurable: true, value: win.HTMLElement },
   });
   forbidPlatformDialogs();
 });
@@ -196,4 +201,57 @@ test("two dialogs opened in one document do not share element ids", async () => 
   expect(openDialog().getAttribute("aria-labelledby")).not.toBe(firstId);
   buttonLabelled("Cancel").click();
   await second;
+});
+
+test("navigating away is a refusal, and leaves no dialog behind", async () => {
+  /*
+   * The dialog is mounted on <body>, so it outlives the React subtree that opened it.
+   * Without this, Back/Forward while a consent dialog is open would leave it on screen and
+   * accepting it afterwards would resume a closed-over handler against a page the user had
+   * already left — removing an account from a surface they cannot see.
+   */
+  const answer = confirmAction({ message: "Remove the account?", tone: "danger" });
+  await settled();
+  expect(win.document.querySelector("dialog")).not.toBeNull();
+
+  win.dispatchEvent(new win.Event("popstate") as unknown as Event);
+  expect(await answer).toBe(false);
+  expect(win.document.querySelector("dialog")).toBeNull();
+});
+
+test("a hash change is the same refusal", async () => {
+  const answer = confirmAction({ message: "Revoke the device?", tone: "danger" });
+  await settled();
+  win.dispatchEvent(new win.Event("hashchange") as unknown as Event);
+  expect(await answer).toBe(false);
+});
+
+test("Escape is answered at the document when the dialog is not modal", async () => {
+  /*
+   * This DOM has no showModal, which is the branch that merely sets `open`. A listener on
+   * the dialog element would miss Escape as soon as focus sat anywhere else, so the
+   * listener lives on the document for exactly this case.
+   */
+  const answer = requestTextValue({ message: "Display name" });
+  await settled();
+  win.document.dispatchEvent(
+    new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event,
+  );
+  expect(await answer).toBeNull();
+  expect(win.document.querySelector("dialog")).toBeNull();
+});
+
+test("a settled dialog stops listening for navigation", async () => {
+  // The window listeners must come off in finish(), or every dialog ever opened would keep
+  // a closure alive and a later navigation would re-enter it.
+  const answer = confirmAction({ message: "Stop the proxy?" });
+  await settled();
+  buttonLabelled("Cancel").click();
+  expect(await answer).toBe(false);
+  // A navigation after settlement must be inert: no dialog, no second resolution, no throw.
+  win.dispatchEvent(new win.Event("popstate") as unknown as Event);
+  win.document.dispatchEvent(
+    new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event,
+  );
+  expect(win.document.querySelector("dialog")).toBeNull();
 });

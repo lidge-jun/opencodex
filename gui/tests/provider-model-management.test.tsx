@@ -13,8 +13,6 @@ const globals = ["document", "window", "navigator", "localStorage", "sessionStor
   "IS_REACT_ACT_ENVIRONMENT", "confirm", "alert", "prompt"] as const;
 const originalFetch = globalThis.fetch;
 let previous: Record<(typeof globals)[number], unknown>;
-/** How the next in-page consent dialog is answered. */
-let consent: "accept" | "dismiss";
 /** Platform dialogs reached, which must stay empty. */
 let touched: string[];
 let win: Window;
@@ -114,7 +112,7 @@ beforeEach(() => {
   }
   // The removal gate is an in-page dialog now. Every platform dialog is a trap: the app's
   // webview draws none of them, so reaching one is the defect this lane removed.
-  consent = "accept"; touched = [];
+  touched = [];
   for (const name of ["confirm", "alert", "prompt"] as const) {
     const trap = () => { touched.push(name); throw new Error(`${name}() must not be reached`); };
     Object.defineProperty(globalThis, name, { configurable: true, value: trap });
@@ -188,17 +186,17 @@ async function mount(name = "vendor") {
   await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Harness /></LanguageProvider>); });
 }
 /**
- * Clicks, then answers the in-page consent dialog when the control opens one. Removal used
+ * Clicks, then accepts the in-page consent dialog when the control opens one. Removal used
  * to be gated by `confirm()`, which this file stubbed to true — and which the desktop
- * webview answers false without drawing, so Delete and Hide did nothing there.
+ * webview answers false without drawing, so Delete and Hide did nothing there. The
+ * dismissal cases drive the dialog themselves, so they can assert it appeared at all.
  */
 async function click(button: HTMLButtonElement) {
   expect(button).toBeDefined();
   await act(async () => { button.click(); });
   if (!actionDialogOpen(win.document as unknown as Document)) return;
   await act(async () => {
-    if (consent === "accept") acceptActionDialog(win.document as unknown as Document);
-    else dismissActionDialog(win.document as unknown as Document);
+    acceptActionDialog(win.document as unknown as Document);
     await Promise.resolve();
   });
 }
@@ -254,8 +252,17 @@ test("same-label custom and account-native rows keep disjoint Delete/Hide identi
 for (const customRow of [true, false]) {
   test(`dismissing ${customRow ? "Delete" : "Hide"} sends no write and preserves the row`, async () => {
     if (customRow) addCustom(); else rows = [row("custom-model")];
-    consent = "dismiss"; await mount(); await waitFor(() => actionable().length === 1);
-    await click(action("vendor/custom-model", customRow ? "Delete" : "Hide")); expect(requests).toEqual([]); expect(ids()).toEqual(["custom-model"]);
+    await mount(); await waitFor(() => actionable().length === 1);
+    const button = action("vendor/custom-model", customRow ? "Delete" : "Hide");
+    await act(async () => { button.click(); });
+    /*
+     * The gate must actually appear. Answering through the shared `click` helper would let
+     * this case pass if the control became a no-op — which is precisely the defect this
+     * lane exists for, since inside the app every one of these buttons did nothing.
+     */
+    expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
+    await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+    expect(requests).toEqual([]); expect(ids()).toEqual(["custom-model"]);
   });
 }
 

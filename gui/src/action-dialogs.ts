@@ -102,6 +102,9 @@ function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => voi
   const finish = (value: T): void => {
     if (settled) return;
     settled = true;
+    window.removeEventListener("hashchange", dismissOnNavigation);
+    window.removeEventListener("popstate", dismissOnNavigation);
+    document.removeEventListener("keydown", dismissOnEscape);
     // The caller is answered whatever the teardown does. A dialog left connected is a
     // cosmetic fault; a promise that never settles hangs the handler that awaited it.
     try {
@@ -115,24 +118,49 @@ function openModal<T>(locale: Locale, cancelValue: T, resolve: (value: T) => voi
     }
   };
 
+  /*
+   * A dialog mounted on <body> outlives the React subtree that opened it. Navigating with
+   * Back/Forward while one is open would leave it on screen, and accepting it afterwards
+   * would resume a closed-over handler against a page the user has already left — removing
+   * an account or revoking a device from a surface they cannot see. Navigation is therefore
+   * a refusal, using the same two events the shell already treats as leaving a page.
+   */
+  function dismissOnNavigation(): void {
+    finish(cancelValue);
+  }
+
+  /*
+   * Escape at the document, not just at the dialog. With `showModal` the dialog reports its
+   * own "cancel" event and this never fires; without it the element is merely open, so a
+   * dialog-level listener would miss Escape as soon as focus sat anywhere else.
+   */
+  function dismissOnEscape(event: KeyboardEvent): void {
+    if (event.key === "Escape") finish(cancelValue);
+  }
+
   backdrop.addEventListener("click", () => finish(cancelValue));
   // A native <dialog> fires "cancel" on Escape and would close without an answer.
   dialog.addEventListener("cancel", (event) => {
     event.preventDefault();
     finish(cancelValue);
   });
+  window.addEventListener("hashchange", dismissOnNavigation);
+  window.addEventListener("popstate", dismissOnNavigation);
 
   dialog.append(backdrop, form);
   document.body.append(dialog);
   if (typeof dialog.showModal === "function") {
     dialog.showModal();
   } else {
-    // Without showModal the dialog is not modal and fires no "cancel" event, so Escape has
-    // to be handled directly or the only way out would be the two buttons.
+    /*
+     * This path exists for DOM implementations without `showModal` — this package's test
+     * DOM is one. It is not a modality boundary: setting `open` neither makes the rest of
+     * the document inert nor traps focus, and pretending otherwise would be worse than
+     * saying so. Every browser surface the dashboard ships to implements `showModal`, and
+     * takes the branch above. Escape is still answered, at the document.
+     */
     dialog.setAttribute("open", "");
-    dialog.addEventListener("keydown", (event) => {
-      if ((event as KeyboardEvent).key === "Escape") finish(cancelValue);
-    });
+    document.addEventListener("keydown", dismissOnEscape);
   }
 
   return { form, bodyId: `${id}-body`, finish };
