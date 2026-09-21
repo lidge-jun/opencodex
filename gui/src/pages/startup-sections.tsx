@@ -166,6 +166,17 @@ export function StartupTraySection({
 }) {
   const { t } = useI18n();
 
+  /**
+   * Uninstalling removes the tray helper, so it asks first. Written as a named async
+   * function rather than a promise chain inside the handler: a floating `.then` in a JSX
+   * handler has no rejection path, which is what `no-floating-then-in-jsx-handler` catches.
+   */
+  const requestTrayUninstall = async () => {
+    if (await confirmAction({ message: t("startup.tray.uninstall"), tone: "danger" })) {
+      onTrayAction("uninstall");
+    }
+  };
+
   return (
     <section className="panel startup-actions">
       <div className="panel-head">
@@ -197,10 +208,7 @@ export function StartupTraySection({
           <button type="button" className="btn btn-ghost" disabled={trayBusy} onClick={() => onTrayAction("stop")}>{t("startup.tray.stop")}</button>
         )}
         {!trayLoading && !trayError && tray && (tray.installed || tray.stale) && (
-          <button type="button" className="btn btn-danger" disabled={trayBusy} onClick={() => {
-            void confirmAction({ message: t("startup.tray.uninstall"), tone: "danger" })
-              .then(consented => { if (consented) onTrayAction("uninstall"); });
-          }}>{t("startup.tray.uninstall")}</button>
+          <button type="button" className="btn btn-danger" disabled={trayBusy} onClick={() => { void requestTrayUninstall(); }}>{t("startup.tray.uninstall")}</button>
         )}
       </div>
       {(trayError || tray?.stale) && (
