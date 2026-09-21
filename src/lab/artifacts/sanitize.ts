@@ -544,10 +544,15 @@ function scrubString(value: string): string {
       const token = tokens[i]!;
       const at = tail.indexOf(token, cursor);
       cursor = at + token.length;
-      if (isHostCandidate(token)) return redact(at, token);
+      // A sentence-final period travels with the token (`ECONNREFUSED redis.`):
+      // classify the name without it, and leave it outside the mask so the
+      // message still reads as a sentence.
+      const core = token.replace(/\.+$/, "");
+      if (!core) continue;
+      if (isHostCandidate(core)) return redact(at, core);
       const bareLicensed =
         destinationContext && (tokens.length === 1 || tokens[i - 1]?.toLowerCase() === "lookup");
-      if (bareLicensed && isHostCandidate(token, true)) return redact(at, token);
+      if (bareLicensed && isHostCandidate(core, true)) return redact(at, core);
     }
     return m;
   });
