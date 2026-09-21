@@ -40,7 +40,11 @@ describe("desktop startup surface", () => {
   });
 
   test("setup resolves nothing, registers nothing and starts nothing", () => {
-    const setup = lib.slice(lib.indexOf(".setup(|app|"));
+    const setup = lib.slice(
+      lib.indexOf(".setup(|app|"),
+      lib.indexOf(".build(tauri::generate_context!())"),
+    );
+    expect(setup.length).toBeGreaterThan(0);
     for (const call of [
       "block_on",
       "ensure_proxy",
@@ -49,6 +53,7 @@ describe("desktop startup surface", () => {
       "tray_availability::detect()",
       "tray::install",
       "first_run::",
+      "sidecar::",
     ]) {
       expect(setup).not.toContain(call);
     }
@@ -97,6 +102,10 @@ describe("desktop startup surface", () => {
     // under, which is how a stated ceiling becomes an unstated one.
     expect(startup).not.toContain("proxy.is_alive()");
     expect(startup).toContain("proxy.alive_within(deadline)");
+    // Registration waits on a session bus and on the main thread, and both can stall; neither is
+    // allowed to leave the page in a state whose retry could do nothing.
+    expect(startup).toContain("tokio::time::timeout_at(\n        deadline,");
+    expect(startup).toContain("tokio::time::timeout_at(deadline, receiver)");
     const proxy = code(PROXY);
     expect(proxy).toContain("timeout_at(deadline, self.is_alive())");
     expect(proxy).toContain("timeout_at(deadline, self.stop())");

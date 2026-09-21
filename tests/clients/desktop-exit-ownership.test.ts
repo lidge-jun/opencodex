@@ -32,11 +32,13 @@ function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\/[^\n]*/g, "");
 }
 
-/** Every Rust file in the shell, read from disk so a new module cannot opt itself out. */
-function shellSources(): string[] {
-  return readdirSync(repoPath(SRC))
-    .filter((entry) => entry.endsWith(".rs"))
-    .map((entry) => `${SRC}/${entry}`);
+/** Every Rust file in the shell, walked from disk so a new module cannot opt itself out. */
+function shellSources(directory: string = SRC): string[] {
+  return readdirSync(repoPath(directory), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) return shellSources(path);
+    return entry.name.endsWith(".rs") ? [path] : [];
+  });
 }
 
 describe("desktop exit ownership", () => {
@@ -104,33 +106,87 @@ describe("desktop exit ownership", () => {
     expect(body).toContain("inner.phase = ExitPhase::Draining");
   });
 
-  test("a runtime is not started once an exit is in flight", () => {
+  test("a quit that lands while a runtime is starting is deferred, not lost", () => {
     const exit = code(EXIT);
-    expect(exit).toContain("pub fn spawn_unless_ending");
-    expect(code(repoPath(`${SRC}/startup.rs`))).toContain("coordinator.spawn_unless_ending(");
+    // The lock is never held across process creation, so the main thread's exit handler cannot
+    // end up waiting on a spawn; the exit is held by the phase instead.
+    expect(exit).toContain("ExitPhase::Spawning");
+    expect(exit).toContain("ExitPhase::Spawning | ExitPhase::Draining => ExitDecision::Wait");
+    const claim = exit.slice(exit.indexOf("pub fn claim_drain"), exit.indexOf("pub fn finish_drain"));
+    expect(claim).toContain("ExitPhase::Spawning => {");
+    expect(claim).toContain("inner.deferred = true;");
+    const finish = exit.slice(exit.indexOf("pub fn finish_spawn"), exit.indexOf("impl Default for ExitCoordinator"));
+    expect(finish).toContain("inner.deferred");
+    expect(finish).toContain("inner.phase = ExitPhase::Draining;");
+    const startup = code(repoPath(`${SRC}/startup.rs`));
+    const spawn = startup.slice(startup.indexOf("fn spawn_runtime("));
+    expect(spawn).toContain("if !coordinator.begin_spawn() {");
+    expect(spawn).toContain("crate::exit::drain_now(app, reason)");
+    expect(spawn.indexOf("state.adopt(child)")).toBeLessThan(spawn.indexOf("coordinator.finish_spawn()"));
+  });
+
+  test("no tray setter is called while the tray mutex is held", () => {
+    const tray = code(repoPath(`${SRC}/tray.rs`));
+    // Those setters dispatch to the main thread and wait for it, and the tray is built on the main
+    // thread while holding this mutex, so the two together are a cycle.
+    expect(tray).toContain("fn menu_handles(app: &AppHandle) -> Option<TrayMenu>");
+    // Every setter is reached through the copy, never through a live guard: the nearest thing
+    // before it is the handle copy, not the lock.
+    const setters = [...tray.matchAll(/\.(?:set_enabled|set_text)\(/g)];
+    expect(setters.length).toBeGreaterThan(5);
+    for (const setter of setters) {
+      const before = tray.slice(0, setter.index);
+      expect(before.lastIndexOf("menu_handles(app)")).toBeGreaterThan(
+        before.lastIndexOf("menu.lock()"),
+      );
+    }
   });
 
   test("the exit is held until the drain reports", () => {
     const exit = code(EXIT);
+    const handler = exit.slice(
+      exit.indexOf("pub fn on_exit_requested"),
+      exit.indexOf("pub fn start_drain"),
+    );
+    expect(handler.length).toBeGreaterThan(0);
     for (const arm of [
       "ExitDecision::Hide =>",
       "ExitDecision::Wait =>",
       "ExitDecision::Drain(reason) =>",
-      "ExitDecision::Proceed =>",
     ]) {
-      expect(exit).toContain(arm);
+      const at = handler.indexOf(arm);
+      expect(at).toBeGreaterThan(-1);
+      expect(handler.slice(at, at + 160)).toContain("api.prevent_exit()");
     }
-    const proceed = exit.indexOf("ExitDecision::Proceed =>");
-    expect(exit.slice(proceed, proceed + 40)).not.toContain("prevent_exit");
+    const proceed = handler.indexOf("ExitDecision::Proceed =>");
+    expect(proceed).toBeGreaterThan(-1);
+    expect(handler.slice(proceed)).not.toContain("prevent_exit");
     expect(exit).toContain("coordinator.finish_drain()");
   });
 
-  test("closing the window only hides where there is a tray to come back from", () => {
+  test("closing the window takes the same decision the quit gesture does", () => {
     const window = code(WINDOW);
     const close = window.indexOf("CloseRequested");
+    expect(close).toBeGreaterThan(-1);
     const branch = window.slice(close, window.indexOf("});", close));
-    expect(branch).toContain("if exit::hides_to_tray(app) {");
-    expect(branch).toContain("exit::request(app, exit::ExitReason::UserQuit)");
+    expect(branch).toContain("api.prevent_close()");
+    expect(branch).toContain("exit::gesture(");
+    const exit = code(EXIT);
+    const gesture = exit.slice(exit.indexOf("pub fn gesture("));
+    const body = gesture.slice(0, gesture.indexOf("\n}"));
+    expect(body).toContain("ExitDecision::Hide => hide_windows(app)");
+    expect(body).toContain("ExitDecision::Drain(reason) => start_drain(app, reason)");
+  });
+
+  test("a drain never runs against a runtime this app did not start", () => {
+    const sidecar = code(repoPath(`${SRC}/sidecar.rs`));
+    const drain = sidecar.slice(
+      sidecar.indexOf("pub async fn drain("),
+      sidecar.indexOf("async fn gone("),
+    );
+    expect(drain).toContain("if !owned {");
+    expect(drain).toContain("return DrainOutcome::NotOwned;");
+    expect(drain.indexOf("if !owned {")).toBeLessThan(drain.indexOf("proxy.stop_within("));
   });
 
   test("only an observed exit or a refused connection proves the runtime stopped", () => {

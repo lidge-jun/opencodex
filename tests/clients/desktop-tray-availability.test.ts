@@ -58,15 +58,27 @@ describe("desktop tray availability", () => {
   });
 
   test("the verdict reaches the coordinator that decides what a close means", () => {
-    expect(startup).toContain("coordinator.set_tray(tray)");
+    expect(startup).toContain("coordinator.set_tray(verdict)");
     expect(code(EXIT)).toContain("pub fn set_tray(&self, tray: TrayAvailability)");
-    expect(code(EXIT)).toContain("pub fn hides_to_tray(app: &AppHandle) -> bool");
+    expect(code(repoPath(`${SRC}/window.rs`))).toContain("exit::gesture(");
+    expect(code(EXIT)).toContain("decide(inner.phase, inner.reason, inner.hides_to_tray)");
   });
 
-  test("no tray icon is claimed where none can be drawn", () => {
-    const install = startup.indexOf("crate::tray::install(&handle)");
-    expect(install).toBeGreaterThan(-1);
-    expect(startup.slice(0, install)).toContain("if tray.is_available() {");
+  test("a tray is only claimed once an icon exists to claim", () => {
+    // The verdict is published after the install, not before it: announcing a tray and then
+    // failing to build one would hide the window into nothing.
+    const verdict = startup.indexOf("let verdict = if tray.is_available() && install_tray(app, deadline).await");
+    const published = startup.indexOf("coordinator.set_tray(verdict)");
+    expect(verdict).toBeGreaterThan(-1);
+    expect(published).toBeGreaterThan(verdict);
+    expect(startup.slice(verdict, published)).toContain("TrayAvailability::Unavailable");
+  });
+
+  test("a retry does not register a second tray", () => {
+    const register = startup.slice(startup.indexOf("async fn register("), startup.indexOf("async fn install_tray("));
+    expect(register).toContain("startup.registration()");
+    expect(register.indexOf("return done;")).toBeLessThan(register.indexOf("install_tray(app, deadline)"));
+    expect(register).toContain("startup.remember_registration(login)");
   });
 
   test("tray availability decides the launch, not the origin of the launch", () => {
@@ -76,7 +88,7 @@ describe("desktop tray availability", () => {
     expect(body).toContain("!tray.is_available() || origin == LaunchOrigin::User");
     // The window is shown from inside the sequence, once the verdict is in, so a login launch on a
     // session with no tray is not left hidden with nothing to reopen it from.
-    expect(startup).toContain("if shows_window(LaunchOrigin::detect(), tray)");
+    expect(startup).toContain("if shows_window(LaunchOrigin::detect(), verdict)");
     expect(code(LIB)).toContain("startup::LaunchOrigin::detect() == startup::LaunchOrigin::User");
   });
 });
