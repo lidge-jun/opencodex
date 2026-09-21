@@ -862,7 +862,7 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
     const ownerBranch = transaction.slice(transaction.indexOf("decideStartWithLiveOwner({"));
     const stayOut = ownerBranch.match(/decision === "service-stay-out"[\s\S]{0,800}?StartCommandExit\(0\)/);
     expect(stayOut, "the service stay-out decision must return 0 when the port is already served").not.toBeNull();
-    const nonService = ownerBranch.match(/Proxy already running[\s\S]{0,300}?StartCommandExit\(1\)/);
+    const nonService = ownerBranch.match(/decision === "refuse"[\s\S]{0,500}?StartCommandExit\(1\)/);
     expect(nonService, "non-service refusal keeps the exit 1 conflict error").not.toBeNull();
   });
 
