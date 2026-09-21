@@ -1,9 +1,5 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { findCommand } from "./registry";
-
-const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
+import { packageVersion as readPackageVersion } from "../lib/package-version";
 
 /**
  * Version of the `ocx` bundle this process is running from.
@@ -13,9 +9,7 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
  * rather than throwing; callers must treat that as "cannot compare", not as a mismatch.
  */
 export function packageVersion(): string {
-  const raw = readFileSync(join(repoRoot, "package.json"), "utf8");
-  const parsed = JSON.parse(raw) as { version?: unknown };
-  return typeof parsed.version === "string" ? parsed.version : "unknown";
+  return readPackageVersion();
 }
 
 export function printVersion(): void {
@@ -32,6 +26,8 @@ Usage:
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
+  ocx restore --remove-codex-provider-table
+                              Also drop [model_providers.opencodex] that a paginated restore kept
   ocx recover-history --legacy-openai --yes
                                Force all user-message opencodex rows to OpenAI (legacy recovery)
   ocx recover-history --ocx-compaction <thread-id> --yes
@@ -89,6 +85,7 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config <sub>            Validated configuration show/get/set/import/export
+  ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Read-only Compatibility Lab projection inspection
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile

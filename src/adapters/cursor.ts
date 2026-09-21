@@ -61,6 +61,7 @@ import {
   CursorTransportDisabledError,
   type CursorTransportFactory,
 } from "./cursor/transport";
+import { cursorLiveRosterScope } from "./cursor/catalog";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 
@@ -172,9 +173,11 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         // Namespace thread→conversation derivation by the authenticated Cursor credential so
         // shared-proxy tenants with different Cursor accounts cannot collide on a parent thread id.
         // Prefer an already-set auth scope (e.g. Codex pool account) when present.
+        let liveRosterScope: string | undefined;
         if (!_parsed._cursorIdentityScope) {
           try {
             const token = resolveCursorToken(provider, incoming.headers);
+            liveRosterScope = cursorLiveRosterScope(provider.baseUrl, token);
             _parsed._cursorIdentityScope = createHash("sha256")
               .update("ocx:cursor:acct:")
               .update(token)
@@ -183,11 +186,17 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           } catch {
             /* Missing credential is handled by the live transport path below. */
           }
+        } else {
+          try {
+            liveRosterScope = cursorLiveRosterScope(provider.baseUrl, resolveCursorToken(provider, incoming.headers));
+          } catch {
+            /* Missing credential is handled by the live transport path below. */
+          }
         }
         const inheritedCheckpointRef = _parsed._providerContinuation?.cursor?.checkpointRef;
         const previousConversationId = _parsed._cursorConversationId;
         let request = {
-          ...createCursorRequest(_parsed),
+          ...createCursorRequest(_parsed, { liveRosterScope }),
           _cursorIdentityScope: _parsed._cursorIdentityScope?.trim() || "local",
         };
         requestSizeContext = cursorRequestSizeContext(request);
@@ -441,7 +450,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           lastTransport = undefined;
           _parsed._cursorConversationId = undefined;
           const next = {
-            ...createCursorRequest(_parsed, { forceFreshConversation: true }),
+            ...createCursorRequest(_parsed, { forceFreshConversation: true, liveRosterScope }),
             _cursorIdentityScope: _parsed._cursorIdentityScope?.trim() || "local",
           };
           rekeyContextUsage(failedConversationId, next.conversationId);

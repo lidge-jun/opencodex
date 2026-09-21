@@ -6,8 +6,8 @@
  * restore it via the command.
  */
 
-export type { ServiceBackend, ServiceInstallState, ServiceStateEvidence } from "./service/state";
-export { SERVICE_MANAGED_ENV, stableLauncherEntry, serviceLogPath, serviceStatePathsForOpenCodexHome, parseServiceInstallState, inspectServiceStateEvidence, currentServiceHomes, serviceHomeMatches, readServiceBackend, serviceReinstallArgs, serviceInstallArgs } from "./service/state";
+export type { ServiceBackend, ServiceInstallState, ServiceStateEvidence, ServiceOwner, ServiceOwnership, ServiceOwnershipResolution, ServiceStateSwapDeps } from "./service/state";
+export { SERVICE_MANAGED_ENV, stableLauncherEntry, serviceLogPath, serviceStatePathsForOpenCodexHome, parseServiceInstallState, parseServiceOwnership, inspectServiceStateEvidence, currentServiceHomes, serviceHomeMatches, readServiceBackend, serviceReinstallArgs, serviceInstallArgs, ServiceStateConflictError, swapServiceInstallState, serviceOwnership, resolveServiceOwnership, desktopOwnsService, ownershipGrantedTo, recordServiceOwner, releaseServiceOwner } from "./service/state";
 export type { ServiceApiTokenOrigin, ProvisionedServiceApiToken } from "./service/guards";
 export { ServiceOwnershipError, isServiceOwnershipError, serviceEnvironmentOwnedHere, assertServiceEnvironmentMatchesInstall, serviceRetryCommand, assertNotAdminToken, assertServiceAuthEnvironment, writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./service/guards";
 export { resolveServiceListenPort, installedServiceListenPort, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, confirmServiceServing, reportServiceServing, resolvedProxyEnv } from "./service/health";
@@ -21,7 +21,7 @@ export { buildWindowsServiceScript, buildWindowsSchtasksCreateArgs, buildWindows
 export type { WindowsSchedulerRegistrationStageDeps, FreshWindowsSchedulerRegistrationDeps, RemoveNativeWindowsServiceDeps } from "./service/windows-ops";
 export { windowsListenPort, winswListenPort, writeServiceDefinitionFile, definitionCarriesCredential, stageWindowsSchedulerRegistrationXml, stageElevatedSchedulerRegistration, describeElevatedRegistrationFailure, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, assertWindowsNativeServiceAccountSupported, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, classifyWindowsServiceStop } from "./service/windows-ops";
 export type { ServiceRepairVerb, RepairServiceDeps } from "./service/repair";
-export { repairService } from "./service/repair";
+export { repairService, foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./service/repair";
 export type { ServiceInstallPreparationDeps, FreshWindowsSchedulerInstallDeps, ServiceStopOutcome, ServiceUninstallOutcome } from "./service/orchestration";
 export { proxyStillLiveAfterStop, prepareServiceInstall, installServiceSafely, installFreshWindowsSchedulerSafely, installedServiceRespawnRisk, stopServiceIfInstalledDetailed, setUninstallServiceHooksForTests, uninstallServiceDetailed, uninstallServiceIfInstalled, isServiceInstalled, isServiceViable } from "./service/orchestration";
 export type { ServiceDiagnostic, WindowsTaskDiagnosticIdentityDeps, WindowsServiceDiagnosticInputs, LaunchdServiceDiagnosticInputs } from "./service/diagnostics";

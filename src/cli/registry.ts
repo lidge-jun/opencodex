@@ -35,12 +35,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     aliases: ["eject"],
     usage: "ocx restore [back]",
     summary: "Restore native Codex config without stopping the proxy; `restore back` re-points codex at the running proxy.",
+    details: [
+      "--remove-codex-provider-table  Also remove [model_providers.opencodex] when a paginated home made restore keep it. Conversations tagged opencodex stop opening.",
+    ],
   },
   {
     name: "eject",
     aliases: [],
     usage: "ocx eject [back]",
     summary: "Restore native Codex config without stopping the proxy; `eject back` re-points codex at the running proxy.",
+    details: [
+      "--remove-codex-provider-table  Also remove [model_providers.opencodex] when a paginated home made restore keep it. Conversations tagged opencodex stop opening.",
+    ],
   },
   {
     name: "recover-history",
@@ -94,9 +100,10 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "tray",
     usage: "ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]",
-    summary: "Install and control the Windows status tray icon.",
+    summary: "Install and control the Windows status tray icon (deprecated in favor of the desktop app).",
     details: [
       "The tray starts at Windows login and provides one-click proxy controls.",
+      "Deprecated: the OpenCodex desktop app provides the tray on Windows, macOS, and Linux; `ocx tray` remains for installs without the desktop app.",
       "Tray start/stop controls the icon only; use its menu to start or stop the proxy.",
       "--no-start (install only) installs the tray without launching it immediately.",
     ],
@@ -299,6 +306,16 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Alias of ocx models.",
   },
   {
+    name: "companion",
+    usage: "ocx companion <show|set|reset> ...",
+    summary: "Inspect and configure menu-bar and widget companion usage settings.",
+    details: [
+      "ocx companion and ocx companion show read settings; use --json for machine-readable output.",
+      "ocx companion set accepts one or more key=value assignments; values are parsed as JSON when possible.",
+      "ocx companion reset restores the default settings.",
+    ],
+  },
+  {
     name: "combo",
     usage: "ocx combo <list|show|set|remove> ...",
     summary: "Manage combo virtual models and routing strategies.",
@@ -480,6 +497,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "Alias of ocx integration client <sub> --client zcode.",
       "enable writes the managed provider.opencodex block into ~/.zcode/v2/config.json; disable removes only that block.",
+      "ZCode 3.14 moved its providers to ~/.zcode/v2/provider_config.json; where that file exists, enable is refused because the write cannot reach the client.",
       "ZCode reads its config at startup — restart ZCode after enable/disable.",
       "Select OpenCodex Proxy/<provider>/<model> from ZCode's model picker.",
     ],

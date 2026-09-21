@@ -30,9 +30,10 @@ OAuth refresh coordination follows the [refresh-lock identity contract](catalog.
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](providers/cursor.md#cursor-native-exec).
 
-Chat request serialization owns the destination-scoped
-[OpenCode Go instruction ordering](providers/chat-compat.md#opencode-go-chronological-instructions);
-it requires no runtime lifecycle change or new configuration option.
+Chat request serialization owns
+[chronological instruction ordering](providers/chat-compat.md#chronological-in-conversation-instructions)
+and the developer wire role; it requires no runtime lifecycle change, and its one
+configuration option is a per-provider role opt-out.
 
 Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
 
@@ -213,6 +214,27 @@ surface with a management credential.
 The hub-management socket is enabled only by `runtimeRole: "hub"` plus
 `hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except
 GUI, session bootstrap/exchange, and `/api/*`.
+
+### Claude intercept pair
+
+At the end of the startup transaction, `startServer` also starts the optional Claude intercept pair
+through `src/server/index/claude-intercept-lifecycle.ts` (fire-and-forget start, `ownsListener` for
+the ingress decision, `stop` joined into the listener shutdown) from `src/claude/intercept/runtime.ts`: a loopback HTTP CONNECT proxy (`src/claude/intercept/connect-proxy.ts`)
+and a loopback TLS listener (`src/claude/intercept/listener.ts`) that presents a leaf for
+`api.anthropic.com` signed by a per-install authority (`src/claude/intercept/local-ca.ts`, persisted
+under `<OPENCODEX_HOME>/claude-intercept/` with a 0600 key; never installed into an OS trust store).
+Claude Code reaches the pair through `HTTPS_PROXY` plus `NODE_EXTRA_CA_CERTS` in its settings env
+(`src/claude/intercept/settings.ts`), so no `ANTHROPIC_BASE_URL` rewrite is involved and the client
+still believes it talks to Anthropic. The proxy splices `CONNECT api.anthropic.com:443` onto the TLS
+listener, relays every other CONNECT target blind, and refuses plain proxied HTTP and loopback targets.
+The TLS listener rewrites `POST /v1/messages` and `POST /v1/messages/count_tokens` onto a loopback
+origin and dispatches them to the same route table under the `claude-intercept` ingress, which takes
+the loopback request policy; every other path on the intercepted host is relayed verbatim to the
+configured Anthropic upstream. The pair is on by default on a hub (`claudeCode.intercept.enabled`),
+its proxy port defaults to the public port + 100 (`claudeCode.intercept.port`), and a bind failure
+degrades to a startup warning rather than a startup failure; stop joins both sockets. A server asked
+for an ephemeral public port (`startServer(0)`, the shape every in-process test fixture uses) has no
+stable port to derive from, so the pair stays off unless `claudeCode.intercept.port` is explicit.
 
 Auxiliary listener bind failures carry the listener key and effective address through `AuxiliaryListenerBindError` in `src/server/ports.ts`. `src/cli/index.ts` reports them without retrying the public port. Startup still rolls back every earlier socket synchronously.
 
@@ -399,6 +421,8 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
 Cline CLI joins the existing export/client integration registries. Explicit CLI sync and POST /api/sync refresh its owned pair; unattended catalog refresh excludes it. See [Cline paired files](clients/integrations.md#cline-paired-files).
+Its paired-file writer uses the config atomic-write primitive that replaces the named entry without
+following a final symlink, so an exchange during a mutation cannot redirect the write.
 
 `claudeCode.stabilizePromptCache` is a default-off operator setting for
 [translated instruction stabilization](data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
@@ -491,3 +515,48 @@ Unicode pattern normalization uses [copy-on-write traversal](transports/byte-acc
 
 Codex compaction uses a request-local model override for the configured triggers; the
 [Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.
+
+## Background-service runtime ownership
+
+`src/service/state.ts` records who owns the running proxy in the shared service install
+state, beside the install provenance. The claim carries an `owner` (`cli` or `desktop`), an
+opaque `installId` naming the owning installation rather than the user or the machine, and a
+`consentGeneration`. An absent claim means the CLI install that registered the service owns
+the runtime, which is what every record written before the field existed says.
+
+Every write goes through `swapServiceInstallState`. It holds an `O_EXCL` lock beside the
+anchor record for the whole read-modify-write, re-reads the anchor immediately before
+committing and compares the committed bytes afterwards, and it runs the whole sequence again
+when another writer landed inside that window; `revision` is the compare-and-swap token. The
+lock excludes cooperating writers, and the revision check catches a writer that does not take
+it, such as an older `ocx` on the same machine. `writeServiceInstallState` rebuilds only the
+install provenance and carries the ownership claim across unchanged, which is what keeps an
+install, a repair, an update or a stop from dropping it.
+
+`resolveServiceOwnership` is how a claim is read for a decision. It reads every state path
+and answers `none`, `owned` or `unknown`; absence is the only thing that means no claim, so
+an unreadable path, a corrupt anchor record, or paths naming different owners all refuse
+rather than reading as CLI-owned. `consentGenerationCeiling` survives a release, so granting,
+releasing and granting again cannot reuse a number an app-local record may still hold.
+
+`recordServiceOwner` is idempotent on the same owner and install id, so a relaunch leaves the
+generation alone and a grant moves it exactly once.
+`ownershipGrantedTo(ownership, owner, installId)` is the comparison an installation applies
+to its own locally stored install id: true means this installation already holds consent,
+false against a recorded claim means a different installation owns the runtime and consent
+has to be asked again, and a null claim means the CLI install still owns it.
+
+The verbs that ACTIVATE the npm registration refuse on a foreign or unknown owner:
+`src/service/repair.ts` stops before it asserts, writes, stops or starts anything, and
+`ocx service start` reports the same refusal. `stop` and `uninstall` are not gated, because
+they deactivate. `src/update/runtime-ownership.mjs` vetoes both the pre-update stop and the
+post-update service refresh for all three update lanes — `src/update/index.ts`,
+`bin/ocx.mjs` and the dashboard worker in `src/update/job.ts` — and the two package updaters
+re-read the claim before any direct-start fallback, because an app can take the runtime during
+an install that takes minutes. The registration is never deleted; `ocx service install` is the
+one verb that releases the marker, and it does so only after the registration succeeded.
+
+The veto reads the recorded claim, not the live process. An app removed without releasing
+leaves a stale claim, and proving which runtime is answering needs the identity the bundled
+CLI's resolve contract will carry; until then the refusals name `ocx service install` as the
+way to clear it.

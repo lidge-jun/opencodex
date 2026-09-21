@@ -1,4 +1,5 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
+import { existsSync, readFileSync } from "node:fs";
 import { codexAutoStartEnabled, getConfigPath, readConfigDiagnostics } from "../config";
 import { getPidPath, readPid, readRuntimePort, type RuntimePortState } from "../config/process-state";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
@@ -7,6 +8,8 @@ import type { OcxConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
+import { missingOwnedCatalogPath } from "../codex/inject/config-toml";
+import { CODEX_CONFIG_PATH } from "../codex/paths";
 import { diagnoseCodexShim } from "../codex/shim";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
 import { packageVersion } from "./help";
@@ -499,6 +502,65 @@ export function unusedProxyWarningLines(input: {
   return [
     "⚠️  Codex routing is native — the running proxy is unused.",
     "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
+  ];
+}
+
+/**
+ * The mirror case: routing is ours and nothing is answering it.
+ *
+ * #5261: this state does not merely fail model calls. The root `openai_base_url` we inject
+ * is the base URL of Codex's own built-in openai provider, so with the proxy down a user can
+ * be stopped at Codex sign-in with no mention of opencodex anywhere on the screen. The
+ * injection is on disk and survives reboot, so it does not clear itself.
+ *
+ * The rest of the not-running report offers only ways to bring the proxy BACK, which is the
+ * wrong half of the choice for someone who wants their editor working again now. `ocx restore`
+ * needs no proxy, no management API and no network, so name it here — this report is the
+ * surface such a user is most likely to reach before the config file itself.
+ *
+ * Restricted to routing opencodex owns. `custom-local` is somebody else's gateway, and
+ * `ocx restore` would not remove it.
+ */
+export function deadProxyRoutingAdviceLines(input: {
+  proxyUp: boolean;
+  routingKind: StartupHealth["routingKind"];
+}): string[] {
+  if (input.proxyUp || input.routingKind !== "opencodex-local") return [];
+  return [
+    "Codex is still pointed at this proxy, so sign-in and model requests both fail while it is down.",
+    "To hand Codex back to its own account and endpoints without starting anything: ocx restore",
+  ];
+}
+
+/**
+ * Read the live Codex config and report an opencodex catalog pointer whose file is gone.
+ *
+ * Unreadable or absent config is reported as no finding rather than as a problem: this is a
+ * diagnostic line, and inventing one from missing evidence is worse than staying quiet.
+ */
+export function detectMissingCodexCatalogPath(): string | null {
+  try {
+    if (!existsSync(CODEX_CONFIG_PATH)) return null;
+    return missingOwnedCatalogPath(readFileSync(CODEX_CONFIG_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The one state in this report where Codex is broken independently of the proxy (#5261).
+ *
+ * A `model_catalog_json` naming a file that is gone stops Codex loading its configuration at
+ * all, so it presents as the same blank wall as dead routing while having a different cause and
+ * a different fix. Both are named, because restarting the proxy rewrites the catalog and
+ * restoring removes the pointer, and which one the user wants is their choice, not ours.
+ */
+export function missingCodexCatalogLines(missingCatalogPath: string | null): string[] {
+  if (!missingCatalogPath) return [];
+  return [
+    "⚠️  Codex is pointed at a model catalog that is no longer on disk, so Codex cannot load its config:",
+    `   ${missingCatalogPath}`,
+    "   Regenerate it with 'ocx start', or remove opencodex from Codex with 'ocx restore'.",
   ];
 }
 

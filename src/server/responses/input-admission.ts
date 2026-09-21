@@ -85,7 +85,17 @@ function imageTokens(imageUrl: string): number {
 function contentPartTokens(part: OcxContentPart, modelId: string): number {
   if (part.type === "image") return imageTokens(part.imageUrl);
   if (part.type === "video") return imageTokens(part.videoUrl);
+  // An inline document is a base64 payload, not a sentence: estimating it from its marker would
+  // admit a request whose real input is orders of magnitude larger. Counted arithmetically —
+  // rebuilding the data URL here would materialize a second request-sized string just to measure it.
+  if (part.type === "document") return base64PayloadTokens(part.data);
   return estimateTokens(part.text, modelId);
+}
+
+function base64PayloadTokens(base64: string): number {
+  if (base64.length === 0) return 0;
+  const decoded = Math.floor((base64.length * 3) / 4);
+  return Math.max(1, Math.ceil(decoded / IMAGE_BYTES_PER_TOKEN));
 }
 
 function contentTokens(content: string | readonly OcxContentPart[], modelId: string): number {

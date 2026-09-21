@@ -116,6 +116,88 @@ export function isReasoningBlobCallerMismatchMessage(message: string): boolean {
 }
 
 
+/**
+ * Longest embedded payload this will parse. The wrapper is a short error envelope; anything
+ * larger is not the shape being matched, and refusing to walk it keeps an upstream-controlled
+ * string from deciding how much work the classifier does.
+ */
+const LITELLM_EMBEDDED_PAYLOAD_LIMIT = 16_384;
+const LITELLM_WRAPPER_PREFIX = "litellm.BadRequestError:";
+const LITELLM_WRAPPER_MARKER = "OpenAIException - ";
+
+/**
+ * The JSON an OpenAI-compatible gateway embeds in its own error message, or undefined.
+ *
+ * Brace-aware rather than a regex because the embedded object legitimately contains braces and
+ * escaped quotes inside its message, and the gateway appends its own prose after the closing
+ * brace. Counting depth outside string literals is the only way to find the real end.
+ */
+function liteLlmEmbeddedErrorPayload(message: string): unknown {
+  if (!message.startsWith(LITELLM_WRAPPER_PREFIX)) return undefined;
+  const markerIndex = message.indexOf(LITELLM_WRAPPER_MARKER);
+  if (markerIndex < 0) return undefined;
+  const start = message.indexOf("{", markerIndex + LITELLM_WRAPPER_MARKER.length);
+  if (start < 0) return undefined;
+  const end = Math.min(message.length, start + LITELLM_EMBEDDED_PAYLOAD_LIMIT);
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < end; index += 1) {
+    const character = message[index]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') { inString = true; continue; }
+    if (character === "{") depth += 1;
+    else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try { return JSON.parse(message.slice(start, index + 1)) as unknown; } catch { return undefined; }
+      }
+    }
+  }
+  return undefined;
+}
+
+
+/** True for an error message that is a gateway envelope rather than an upstream's own wording. */
+function isLiteLlmEnvelopeMessage(message: string): boolean {
+  return message.startsWith(LITELLM_WRAPPER_PREFIX) && message.includes(LITELLM_WRAPPER_MARKER);
+}
+
+
+/**
+ * An OpenAI-compatible gateway relaying the one authoritative ciphertext rejection inside its
+ * own error string.
+ *
+ * Deliberately narrower than {@link isSelfIdentifiedOpaqueBlobRejection}. The embedded payload is
+ * matched against exactly one identity -- `invalid_request_error` carrying
+ * `invalid_encrypted_content` -- and the generic classifier is NOT re-run against it. Re-running
+ * it would let every other opaque identity arrive through the wrapper as well: the code-less
+ * unverifiable-ciphertext wording, the #4469 caller mismatch, and the two xAI decoder strings.
+ * Each of those was admitted on evidence from a specific upstream about how that upstream words
+ * its own rejection, and a gateway in between is not that evidence. Only the coded identity is
+ * unambiguous enough to survive relaying.
+ */
+export function isLiteLlmWrappedCiphertextRejection(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const outer = (payload as { error?: unknown }).error;
+  if (!outer || typeof outer !== "object" || Array.isArray(outer)) return false;
+  const message = (outer as { message?: unknown }).message;
+  if (typeof message !== "string") return false;
+  const embedded = liteLlmEmbeddedErrorPayload(message);
+  if (!embedded || typeof embedded !== "object" || Array.isArray(embedded)) return false;
+  const inner = (embedded as { error?: unknown }).error;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return false;
+  const { type, code } = inner as { type?: unknown; code?: unknown };
+  return type === "invalid_request_error" && code === "invalid_encrypted_content";
+}
+
+
 export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
   if (isEncryptedFunctionOutputRejection(bodyText)) return true;
   try {
@@ -132,6 +214,14 @@ export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
 
     if (record.error && typeof record.error === "object" && !Array.isArray(record.error)) {
       const error = record.error as { type?: unknown; code?: unknown; message?: unknown };
+      // A gateway envelope is decided ONLY by its embedded payload, before any wording check
+      // below runs. Those checks match anchored phrases anywhere in the message, and a gateway
+      // quotes the upstream's message inside its own -- so without this the relayed text would
+      // satisfy the caller-mismatch identity and gain a resend the strict wrapper check exists to
+      // withhold. Returning here rather than falling through is the point.
+      if (typeof error.message === "string" && isLiteLlmEnvelopeMessage(error.message)) {
+        return isLiteLlmWrappedCiphertextRejection(payload);
+      }
       if (error.type === "invalid_request_error") {
         if (error.code === "invalid_encrypted_content") return true;
         if (

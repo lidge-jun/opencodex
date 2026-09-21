@@ -192,6 +192,35 @@ async function resolveWireModelUid(
  */
 export const resolveWireModelUidForTests = resolveWireModelUid;
 
+const positiveTokenCount = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+
+/**
+ * Read a per-model token count for the exact UID selected for this turn.
+ *
+ * Tries the selected UID and then its collapsed base id, preferring the
+ * canonical spelling and accepting dotted or case-folded saved hints — the same
+ * normalization the inference request applies to the model id. Where several
+ * spellings match one id, the smallest wins: a ceiling stated twice is
+ * satisfied by the lower statement.
+ */
+function devinModelTokenHint(
+  record: Record<string, number> | undefined,
+  modelUid: string,
+): number | undefined {
+  if (!record) return undefined;
+  for (const id of [modelUid, collapseDevinModelUid(modelUid)]) {
+    const exact = Object.hasOwn(record, id) ? positiveTokenCount(record[id]) : undefined;
+    if (exact !== undefined) return exact;
+    const matches = Object.entries(record)
+      .filter(([key]) => normalizeDevinModelId(key).toLowerCase() === id.toLowerCase())
+      .map(([, value]) => positiveTokenCount(value))
+      .filter((value): value is number => value !== undefined);
+    if (matches.length > 0) return Math.min(...matches);
+  }
+  return undefined;
+}
+
 /**
  * Resolve the INPUT ceiling for the exact UID selected for this turn. Catalog
  * ClientModelConfig #18 and CompletionConfiguration #3 both carry input tokens;
@@ -204,33 +233,50 @@ function resolveDevinMaxInputTokens(
   modelUid: string,
   liveWindow?: number,
 ): number | undefined {
-  const positive = (value: unknown): number | undefined =>
-    typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-  const baseId = collapseDevinModelUid(modelUid);
-  const configured = (record: Record<string, number> | undefined): number | undefined => {
-    if (!record) return undefined;
-    for (const id of [modelUid, baseId]) {
-      // Prefer the canonical spelling; retain dotted/case-folded saved hints,
-      // matching the model-id normalization used for the inference request.
-      const exact = Object.hasOwn(record, id) ? positive(record[id]) : undefined;
-      if (exact !== undefined) return exact;
-      const matches = Object.entries(record)
-        .filter(([key]) => normalizeDevinModelId(key).toLowerCase() === id.toLowerCase())
-        .map(([, value]) => positive(value))
-        .filter((value): value is number => value !== undefined);
-      if (matches.length > 0) return Math.min(...matches);
-    }
-    return undefined;
-  };
-  const contextHint = configured(provider.modelContextWindows) ?? positive(provider.contextWindow);
-  const inputHint = configured(provider.modelMaxInputTokens);
-  const ceilings = [positive(liveWindow), contextHint, inputHint]
+  const contextHint = devinModelTokenHint(provider.modelContextWindows, modelUid)
+    ?? positiveTokenCount(provider.contextWindow);
+  const inputHint = devinModelTokenHint(provider.modelMaxInputTokens, modelUid);
+  const ceilings = [positiveTokenCount(liveWindow), contextHint, inputHint]
     .filter((value): value is number => value !== undefined);
   return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
 }
 
-/** Pure test seam; runtime uses the same resolver immediately before dispatch. */
+/**
+ * Resolve the OUTPUT ceiling for this turn, highest authority first:
+ *
+ * 1. the caller's explicit `max_output_tokens`, forwarded unchanged — an
+ *    explicit cap is a request, so a small one is never widened into a
+ *    configured larger one;
+ * 2. the configured per-model cap (`modelMaxOutputTokens`), read through the
+ *    same UID-aware hint lookup the input ceiling uses;
+ * 3. the provider-wide `defaultMaxOutputTokens`;
+ * 4. undefined, which leaves the cloud-direct encoder's own 8192 fallback in
+ *    place for a provider that configured nothing.
+ *
+ * This is NOT the history ceiling, and the two must not collapse into one
+ * number. CompletionConfiguration #2 is the output cap and #3 is the context
+ * window, so feeding a context window into this resolver would ask Cognition to
+ * generate a whole window's worth of output. Nothing here reads
+ * `contextWindow` or `modelContextWindows` for that reason.
+ *
+ * Step 1 keeps the caller's raw value rather than `positiveTokenCount`: the
+ * inbound parser owns what a caller may send, and re-filtering here would
+ * silently promote a rejected value to a configured cap the caller never asked
+ * for.
+ */
+function resolveDevinMaxOutputTokens(
+  provider: OcxProviderConfig,
+  modelUid: string,
+  requested: number | undefined,
+): number | undefined {
+  if (typeof requested === "number") return requested;
+  return devinModelTokenHint(provider.modelMaxOutputTokens, modelUid)
+    ?? positiveTokenCount(provider.defaultMaxOutputTokens);
+}
+
+/** Pure test seams; runtime uses the same resolvers immediately before dispatch. */
 export const resolveDevinMaxInputTokensForTests = resolveDevinMaxInputTokens;
+export const resolveDevinMaxOutputTokensForTests = resolveDevinMaxOutputTokens;
 
 export class DevinMissingCredentialError extends Error {
   constructor() {
@@ -284,6 +330,9 @@ function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): st
   const out: ContentPart[] = [];
   for (const part of content) {
     if (part.type === "text" && part.text) {
+      out.push({ type: "text", text: part.text });
+    } else if (part.type === "document") {
+      // No Devin document field; the marker keeps the turn from disappearing entirely.
       out.push({ type: "text", text: part.text });
     } else if (part.type === "image") {
       const m = part.imageUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -590,6 +639,9 @@ export function createDevinAdapter(
         const maxInputTokens = resolveDevinMaxInputTokens(
           provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
         );
+        const maxOutputTokens = resolveDevinMaxOutputTokens(
+          provider, modelUid, parsed.options.maxOutputTokens,
+        );
         // The reset-retry wrapper waits out a 429 that states its own recovery
         // delay ("limit will reset in 35 seconds") and replays the identical
         // request — but only while zero events have been yielded, so a
@@ -606,7 +658,7 @@ export function createDevinAdapter(
           // input hint used to force every model through the 128k default.
           completionOpts: {
             ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
-            ...(typeof parsed.options.maxOutputTokens === "number" ? { maxOutputTokens: parsed.options.maxOutputTokens } : {}),
+            ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
             ...(typeof parsed.options.topP === "number" ? { topP: parsed.options.topP } : {}),
           },

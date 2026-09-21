@@ -330,6 +330,14 @@ export default function FileIntegrationPage({
       <p className="integration-path">{status.configPath}</p>
       {/* Only the raycast envelope carries this; the guard is the field, not the id. */}
       {status.raycast && <RaycastPlanNotice install={status.raycast} />}
+      {/*
+        A file the client no longer opens. The badge above stays truthful about
+        the file -- our block really is where we put it -- so this is the only
+        place that can say the client has stopped reading it.
+      */}
+      {status.supersededBy && (
+        <Notice tone="err">{t("integrations.status.supersededStore", { path: status.supersededBy })}</Notice>
+      )}
 
       {status.appliedAt && (
         <p className="integration-meta">

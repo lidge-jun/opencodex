@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { claimOwnedServiceHome } from "../helpers/owned-service-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
 
 /**
  * Regression: `ocx start` + Ctrl-C must NOT orphan the Bun proxy.
@@ -152,7 +153,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         }
         expect(existsSync(join(home, "ocx.pid"))).toBe(true);
         const injected = readFileSync(codexConfig, "utf8");
-        expect(injected).toContain("# Auto-injected by opencodex");
+        expect(injected).toContain(OCX_ROUTING_MARKER_LINE);
         expect(injected).toContain(`openai_base_url = "http://127.0.0.1:${port}/v1"`);
         expect(injected).not.toContain("model_providers.opencodex");
 

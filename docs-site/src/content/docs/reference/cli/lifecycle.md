@@ -611,6 +611,8 @@ file is not part of the injected `env_key` contract; the launching process must 
 Install and control the Windows status tray icon. It starts at Windows login and provides one-click
 proxy controls. `start` and `stop` control the icon only; use its menu to control the proxy.
 `--no-start` applies to `install` and installs the tray without launching it immediately.
+Deprecated: the OpenCodex desktop app provides the tray on Windows, macOS, and Linux; `ocx tray`
+remains for installs without the desktop app.
 
 ## Dashboard
 

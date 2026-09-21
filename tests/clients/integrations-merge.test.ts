@@ -38,14 +38,33 @@ function contribution(path: readonly string[], value: unknown = OURS): ManagedCo
 
 describe("parseSegment", () => {
   test("a selector splits into field and value; anything else is a key", () => {
-    expect(parseSegment("[id=opencodex]")).toEqual({ kind: "select", field: "id", value: "opencodex" });
+    expect(parseSegment("[id=opencodex]"))
+      .toEqual({ kind: "select", criteria: [{ field: "id", value: "opencodex" }] });
     expect(parseSegment("[model_id=anthropic/claude-opus-5]"))
-      .toEqual({ kind: "select", field: "model_id", value: "anthropic/claude-opus-5" });
+      .toEqual({ kind: "select", criteria: [{ field: "model_id", value: "anthropic/claude-opus-5" }] });
     expect(parseSegment("providers")).toEqual({ kind: "key", key: "providers" });
     // Near misses stay keys: a client whose map literally has such a key keeps working.
     expect(parseSegment("[id=]")).toEqual({ kind: "key", key: "[id=]" });
     expect(parseSegment("[=x]")).toEqual({ kind: "key", key: "[=x]" });
     expect(parseSegment("[id=x")).toEqual({ kind: "key", key: "[id=x" });
+  });
+
+  test("a conjunction names every field, and one comma alone still does not", () => {
+    expect(parseSegment("[providerId=opencodex,modelId=anthropic/claude-opus-5]")).toEqual({
+      kind: "select",
+      criteria: [
+        { field: "providerId", value: "opencodex" },
+        { field: "modelId", value: "anthropic/claude-opus-5" },
+      ],
+    });
+    /*
+     * The old grammar let a single value contain a comma, and ownership records
+     * on disk are written in that grammar. Only a string whose every part is
+     * `field=value` becomes a conjunction, so an existing recorded path keeps
+     * addressing the element it always addressed.
+     */
+    expect(parseSegment("[name=Acme, Inc.]"))
+      .toEqual({ kind: "select", criteria: [{ field: "name", value: "Acme, Inc." }] });
   });
 });
 

@@ -16,6 +16,12 @@ find instead of asking for ChatGPT auth, and the request reaches no other backen
 fails answers with its own diagnostic. The fallback never runs while a forward candidate exists,
 so the verbatim relay stays the path for a ChatGPT deployment.
 
+A configured key's scope covers both branches, each against what it actually reaches. An
+account-qualified selector is judged against its resolved route; an unqualified one against the
+account the upstream resolved and the model the body names; the fallback against the configured
+backend and the model that backend runs, with Exa named by its backend because it has no provider
+entry. `tests/server/api-key-scope-alpha-search.test.ts` covers the two unrouted branches.
+
 ## Standalone Search and exact account selectors
 
 `POST /v1/alpha/search` retains the selected model in its request body. When that value is an

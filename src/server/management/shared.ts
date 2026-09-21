@@ -35,12 +35,13 @@ import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
-import { readUsageEntries } from "../../usage/log";
+import { isKnownRequestFailureCause, isKnownRequestFailureStage, readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { cacheObservationFromUsage, parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
+import { resendPermission } from "../../lib/request-failure-model";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
 import {
   clearDebugSettings,
@@ -210,12 +211,27 @@ export function costResult(entry: MetricSource): CostResult {
  * a Logs-page metric, and widening a separate endpoint's response shape is not this change's
  * business. Flipping it on later is one argument.
  */
+
+/**
+ * Whether this proxy could have sent the row again, derived at READ time from the stage and
+ * cause the recorder stored.
+ *
+ * Deliberately not persisted. The verdict is a function of two tables that this build owns, and
+ * a row written months ago must not be able to assert a permission the current tables would
+ * refuse -- the whole point of INV-RESEND-01 is that the refusal rules are one statement, and a
+ * stored verdict would be a second one with no way to correct it.
+ */
+function resendVerdict(row: { failureStage?: string; failureCause?: string }): { resendPermission?: string } {
+  if (!isKnownRequestFailureStage(row.failureStage) || !isKnownRequestFailureCause(row.failureCause)) return {};
+  return { resendPermission: resendPermission(row.failureStage, row.failureCause) };
+}
 export function requestLogDto(
   entry: RequestLogEntry,
   { includeDecodeRate = true }: { includeDecodeRate?: boolean } = {},
 ): Record<string, unknown> {
   return {
     ...entry,
+    ...resendVerdict(entry),
     displayMetrics: {
       tokPerSecond: tokPerSecondResult(entry),
       // The parent uses the REQUEST's own TTFT. A combo parent must not borrow an attempt's,
@@ -227,6 +243,7 @@ export function requestLogDto(
       ? {
         attempts: entry.attempts.map(attempt => ({
           ...attempt,
+          ...resendVerdict(attempt),
           displayMetrics: {
             tokPerSecond: tokPerSecondResult(attempt),
             // Each attempt measures its own attempt-relative TTFT.

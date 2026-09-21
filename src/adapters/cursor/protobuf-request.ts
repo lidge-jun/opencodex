@@ -741,7 +741,7 @@ function contentText(message: OcxMessage): string {
   if (typeof message.content === "string") return message.content;
   return message.content
     .map(part => {
-      if (part.type === "text") return part.text;
+      if (part.type === "text" || part.type === "document") return part.text;
       if (part.type === "thinking") return part.thinking;
       if (part.type === "image") return undefined;
       return undefined;
@@ -754,7 +754,7 @@ function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
     .map(part => {
-      if (part.type === "text") return part.text;
+      if (part.type === "text" || part.type === "document") return part.text;
       if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
       return undefined;
     })
@@ -767,7 +767,7 @@ function historyContentText(message: OcxMessage): string {
   if (message.role === "toolResult" || typeof message.content === "string") return contentText(message);
   return message.content
     .map(part => {
-      if (part.type === "text") return part.text;
+      if (part.type === "text" || part.type === "document") return part.text;
       if (part.type === "thinking") return part.thinking;
       if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
       return undefined;
@@ -836,6 +836,9 @@ function decodeResultParts(message: OcxToolResultMessage): DecodedResultPart[] |
   return content.map((part): DecodedResultPart => {
     if (part.type === "text") return { kind: "text", text: part.text };
     if (part.type === "video") return { kind: "text", text: "[video]" };
+    // Without this the document falls through to decodeInlineImage(part.imageUrl) below and is
+    // treated as an image it is not.
+    if (part.type === "document") return { kind: "text", text: part.text };
     const decoded = decodeInlineImage(part.imageUrl);
     return decoded ? { kind: "image", ...decoded } : { kind: "undecodable" };
   });

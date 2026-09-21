@@ -90,6 +90,24 @@ Use `ocx service` to run it in the background.
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
+
+### macOS desktop app and widget
+
+Download the desktop app for macOS, Windows, or Linux from the
+[latest releases](https://github.com/lidge-jun/opencodex/releases).
+
+A native desktop app and WidgetKit extension for proxy status, usage, and provider
+quotas without opening the dashboard. The snapshot model lives in [`app/`](./app)
+(`MenuBarCore`). Download it from the
+[releases page](https://github.com/lidge-jun/opencodex/releases) or build it locally with
+`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
+
+The first launch needs a right-click → Open, because the app is ad-hoc signed rather
+than notarized. See the [macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
+for the full explanation.
+
+The app also includes a macOS 14+ widget for proxy status, today's usage, and quotas.
+
 It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
 the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex

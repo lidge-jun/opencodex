@@ -69,11 +69,6 @@ import { runDevinProviderMergeStartupMigration } from "../providers/devin-provid
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
-import {
-  MAX_CONFIGURABLE_INBOUND_BODY_BYTES,
-  MIN_CONFIGURABLE_INBOUND_BODY_BYTES,
-  resolveInboundBodyLimitBytes,
-} from "./request-decompress";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 export {
   clearThreadAccountMap,
@@ -116,6 +111,7 @@ import {
   type RequestLogEntry,
 } from "./request-log";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
+import { setUsageLedgerRetention } from "./usage-ledger-retention";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
@@ -203,7 +199,8 @@ import {
 } from "../lib/package-tree-integrity";
 import { detectInstall } from "../update/index";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
-import { inspectStartupOwnership, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
+import { createClaudeInterceptLifecycle } from "./index/claude-intercept-lifecycle";
+import { inspectStartupOwnership, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
@@ -307,6 +304,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   enforceAppOwnedMemoryBudget();
   // Observe-only mode still journals physical sends, so every server owns before configuring.
   spendLedgerLifecycle.configure(config.spend);
+  // After ownership: a second server on the same home is refused above, so the process running
+  // this line is the only one appending to usage.jsonl and the only one that may compact it.
+  setUsageLedgerRetention(config.usageLedgerMaxBytes);
   registerCodexCooldownRecoveryProbeWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
@@ -627,26 +627,13 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   let server: Server<WsData>;
   let loopbackServer: Server<WsData> | null = null;
   let managementIngressServer: Server<WsData> | null = null;
-
-  // Resolved once, before any listener binds. The clamp is silent inside the resolver so it
-  // stays pure and per-request cheap; the operator is told here instead, once, because a
-  // config value that was quietly reduced is exactly the thing they would otherwise debug
-  // against the wrong limit.
-  const inboundBodyLimitBytes = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
-  const requestedInboundBodyLimit = config.maxInboundBodyBytes;
-  if (requestedInboundBodyLimit !== undefined
-    && requestedInboundBodyLimit > 0
-    && requestedInboundBodyLimit !== inboundBodyLimitBytes) {
-    console.warn(
-      `[server] maxInboundBodyBytes=${requestedInboundBodyLimit} is outside the supported range `
-      + `[${MIN_CONFIGURABLE_INBOUND_BODY_BYTES}, ${MAX_CONFIGURABLE_INBOUND_BODY_BYTES}]; `
-      + `using ${inboundBodyLimitBytes} bytes.`,
-    );
-  }
+  const claudeIntercept = createClaudeInterceptLifecycle<WsData>();
+  const inboundBodyLimitBytes = resolveInboundBodyLimitWithWarning(config);
 
   function ingressForServer(requestServer: Server<WsData>): ServerIngress {
     if (requestServer === loopbackServer) return "unauthenticated-loopback";
     if (requestServer === managementIngressServer) return "hub-management";
+    if (claudeIntercept.ownsListener(requestServer)) return "claude-intercept";
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
@@ -748,6 +735,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
         throw new AuxiliaryListenerBindError("hub.managementIngress", managementIngressPort, "127.0.0.1", error);
       }
     }
+    claudeIntercept.start({
+      config, publicPort: server.port ?? listenPort, requestedPort: listenPort, maxRequestBodySize: inboundBodyLimitBytes,
+      dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer),
+    });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
     userCostOverlayReconciler?.stop();
@@ -776,6 +767,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
           ...(managementIngressRef
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
+          () => claudeIntercept.stop(),
           async () => { await remoteWorkspaceShutdown?.(); },
           async () => {
             try {

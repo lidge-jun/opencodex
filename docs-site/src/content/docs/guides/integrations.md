@@ -375,6 +375,32 @@ catalogs are refused; the existing explicit overwrite and drift-confirmation con
 available. Fully quit and reopen Aside to load changed model files.
 
 
+## ZCode 3.14 and later
+
+ZCode 3.14 moved its custom providers to `~/.zcode/v2/provider_config.json` and left
+`~/.zcode/v2/config.json` reachable only through a one-shot import that runs when the new file is
+missing. ZCode creates the new file the first time it runs, so on any install that has ever been
+launched the import is already spent and a write to `config.json` reaches nothing.
+
+opencodex writes `provider_config.json` directly where it can. Enabling the integration adds the
+`opencodex` provider rule to that file, a catalog refresh updates it, and disabling removes exactly
+what opencodex put there. Every other rule in the file is left alone, including a rule another
+provider keeps for a model id that also appears under ours. A rule carrying the `opencodex` id that
+opencodex did not write is a conflict rather than something to take over; resolve it in ZCode, or
+use the explicit overwrite.
+
+Two situations still refuse rather than write. A block opencodex applied before ZCode moved its
+store keeps the integration on `config.json`: disable it there first, then enable it again to write
+the new store. And a `provider_config.json` whose `schemaVersion` is not one opencodex has observed
+is reported rather than merged into, because that file holds every provider ZCode has and asserting
+a shape into it would trade a silent no-op for a silent loss. Status names the file ZCode reads
+whenever the integration is not writing it.
+
+In that second case, add the provider in ZCode's own settings: base URL
+`http://127.0.0.1:10100/v1` (adjust the port to your bind), any non-empty key, and the model ids
+from `ocx export --client zcode`. Deleting `provider_config.json` to re-trigger ZCode's import is
+not supported — it discards every provider ZCode keeps there.
+
 ## Cline CLI
 
 This integration targets Cline's current CLI/shared SDK provider store, whose native schema has

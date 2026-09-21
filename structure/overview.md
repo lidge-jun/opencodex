@@ -33,6 +33,14 @@ native Anthropic passthrough branch that forwards without translation. The Live/
 different in kind — it resolves an OpenAI/ChatGPT relay and forwards to it directly, without the
 adapter bridge.
 
+`app/` contains the native macOS WidgetKit extension bundled into the Tauri desktop app.
+`MenuBarCore` is its snapshot model/formatting layer; the desktop shell writes the
+privacy-safe snapshot that the widget reads without network access. It is a client of
+the management API, not part of the proxy — it adds no endpoint and changes no routing.
+Treat it the way you treat `gui/`: it may consume what `src/` already exposes,
+and a change that requires a new endpoint is a change to the proxy first.
+Its persisted display contract is owned by `src/companion/`.
+
 The default install keeps native OpenAI/ChatGPT passthrough working through one option-aware
 `openai` provider. Pool is the default and selects across main plus added accounts; Direct uses only
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two
@@ -130,6 +138,38 @@ still cover the rule, which is a judgement only review makes.
   there, reported as an unidentified holder otherwise. A configured `port: 0` still asks the OS for a
   port, and an explicit `--port` still waits for its pin instead of hopping.
   Enforced by `tests/cli/cli-dispatch.test.ts`.
+- **INV-RESEND-01** — One vocabulary states how far a failed request got, why it failed, and whether
+  it may be sent again. The rosters are declared in the import-free `src/usage/telemetry-contract.ts`
+  so the dashboard can name their members, and `src/lib/request-failure-model.ts` re-exports them and
+  owns the decision. Once the caller has observed output or an externally visible effect, no cause
+  automatically permits a resend, and a cause whose upstream execution state is unknown is not made
+  replayable by having budget left. A refusal names which of the three refusals it is. The decision is
+  derived from per-stage and per-cause facts rather than written out as a stage-by-cause matrix, so a
+  new member cannot leave a stale cell.
+  Enforced by `tests/lib/failure-stage-model.test.ts`.
+- **INV-ATTRIBUTION-01** — `src/lib/request-failure-attribution.ts` derives the persisted failure
+  stage and cause from closed recorder facts only, never from `errorCode` or `upstreamError`, which
+  are assembled partly from upstream text. An unknown upstream execution state is attributed to a
+  cause that refuses an automatic resend rather than to one that permits it, and the resend verdict
+  the pair implies is computed at read time and never persisted.
+  Enforced by `tests/lib/failure-attribution.test.ts`.
+- **INV-RESEND-02** — One logical request holds one operator-granted replacement for an ambiguous
+  failure, however many stages ask for it. `src/lib/request-resend-gate.ts` is the only place
+  that override is applied, it claims the grant at the moment it authorises rather than earlier,
+  and a stage the caller observed something at refuses without spending it. The grant never
+  widens a send budget: an authorised replacement still has to fit the allowance the leg already
+  had. The ceiling is the request's, not the asking leg's: a leg reads its number from the
+  provider row it is currently running against, rotation, refresh, transport resolution and each
+  combo target reassign that row, so the request keeps the smallest ceiling any leg presented and
+  a more permissive row arriving later buys nothing.
+  Enforced by `tests/lib/ambiguous-resend-gate.test.ts`.
+- **INV-CHAT-01** — One developer-role policy governs the translated Chat wire and every document
+  that describes it. `foldDeveloperRoleToSystem` unset and `true` send `system`, `false` sends
+  `developer`, and the message never leaves the slot it arrived in. The documented sentence is
+  built from the role the adapter serializes rather than written out again, and the translated
+  pages are compared against their English source, so a changed default fails a check instead of
+  leaving two documents to disagree; see [`chat-compat.md`](providers/chat-compat.md).
+  Enforced by `tests/ci-workflows/docs-developer-role-policy.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

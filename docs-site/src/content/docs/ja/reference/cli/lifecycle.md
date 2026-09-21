@@ -272,6 +272,7 @@ OpenCodex の更新後、既存の Windows シムにこの動作を適用する�
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Windows ステータス トレイ アイコンをインストールして制御します。 Windows ログイン時に開始され、ワンクリックでプロキシ コントロールを提供します。 `start` および `stop` はアイコンのみを制御します。そのメニューを使用してプロキシを制御します。 `--no-start` は `install` に適用され、トレイをすぐに起動せずにインストールします。
+非推奨: OpenCodex デスクトップアプリは Windows、macOS、Linux のトレイを提供します。`ocx tray` はデスクトップアプリを使わないインストール向けに残っています。
 
 ## ダッシュボード
 

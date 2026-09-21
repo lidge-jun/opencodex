@@ -1,8 +1,9 @@
 /** Strict terminal reconstruction selected by the Grok compatibility marker. */
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { MAX_COMPLETED_OUTPUT_ITEMS, MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES } from "./relay";
-import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 import { isPlainObject, jsonBlock, type RetainedOutputItem } from "./responses-snapshot-codec";
+import { requestToolScope, type RequestToolScope } from "./responses-request-tool-scope";
 
 type SparseTerminalOpenItem = {
   type: string;
@@ -15,6 +16,20 @@ type SparseTerminalCompletedItem = RetainedOutputItem & {
 };
 
 const MAX_GROK_OPEN_ITEM_IDENTITY_BYTES = MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES;
+
+/** Terminal event this repair publishes when it refused to reconstruct a call faithfully. */
+export const GROK_REFUSED_TERMINAL_EVENT_TYPE = "response.incomplete";
+
+/** `incomplete_details.reason` carried by that terminal. */
+export const GROK_FORBIDDEN_TOOL_CALL_REASON = "forbidden_tool_call";
+
+/** An upstream-supplied name reaches the terminal message; keep it bounded. */
+const MAX_REPORTED_TOOL_NAME_CHARS = 100;
+
+export function forbiddenToolCallMessage(name: string): string {
+  return `routed provider called "${name.slice(0, MAX_REPORTED_TOOL_NAME_CHARS)}", `
+    + "which this request's tool selection excludes; the reconstructed output omits that call";
+}
 
 const GROK_TERMINAL_OUTPUT_ITEM_TYPES = new Set([
   "message",
@@ -168,6 +183,45 @@ function plausibleGrokOpenItem(
 }
 
 /**
+ * Publish the refusal on the terminal itself rather than as a silent omission.
+ *
+ * The ordinary reconstruction replaces only the data payload's `output`, so its event name still
+ * describes the payload. A refusal does not: the turn no longer completed the way the upstream
+ * said it did, so the event line moves with the status instead of leaving a client to read a
+ * clean finish off an unchanged `event: response.completed`.
+ */
+function refusedTerminalBlock(
+  block: string,
+  parsed: Record<string, unknown>,
+  response: Record<string, unknown>,
+  output: readonly Record<string, unknown>[],
+  refusedName: string | undefined,
+): string {
+  const payload = JSON.stringify({
+    ...parsed,
+    type: GROK_REFUSED_TERMINAL_EVENT_TYPE,
+    response: {
+      ...response,
+      status: "incomplete",
+      output,
+      incomplete_details: {
+        reason: GROK_FORBIDDEN_TOOL_CALL_REASON,
+        ...(refusedName === undefined ? {} : { message: forbiddenToolCallMessage(refusedName) }),
+      },
+    },
+  });
+  const rewritten = replaceSseDataPayload(block, payload);
+  const newline = block.includes("\r\n") ? "\r\n" : "\n";
+  let eventRewritten = false;
+  const lines = rewritten.split(/\r?\n/).map(line => {
+    if (eventRewritten || !line.startsWith("event:")) return line;
+    eventRewritten = true;
+    return `event: ${GROK_REFUSED_TERMINAL_EVENT_TYPE}`;
+  });
+  return lines.join(newline);
+}
+
+/**
  * Narrow client repair for grok-build's Responses consumer.
  *
  * grok-build streams text deltas but builds its durable Assistant item only
@@ -176,12 +230,22 @@ function plausibleGrokOpenItem(
  * empty output. Reconstruct only from real, unique, contiguous, bounded done
  * events whose raw semantics are already valid. Any ambiguity stays byte-level
  * fail-closed; the provider-opt-in snapshot repair above is unchanged.
+ *
+ * The terminal this publishes is one the upstream never sent, so it carries only what the final
+ * outbound request still authorized. A client call outside that request's tool selection is left
+ * out and the terminal says so explicitly. The declaration guard downstream answers the other
+ * half of the question — whether a name was declared at all — and keeps policing the raw stream,
+ * which this rewrite never edits.
  */
 export function createGrokResponsesSparseTerminalBlockRewrite(
   budget?: TranslatorBudget,
+  outboundRequestBody?: unknown,
 ): SseBlockRewrite {
+  const toolScope: RequestToolScope | undefined = requestToolScope(outboundRequestBody);
   const openItems = new Map<number, SparseTerminalOpenItem>();
   const completedItems = new Map<number, SparseTerminalCompletedItem>();
+  const withheldIndices = new Set<number>();
+  let withheldToolName: string | undefined;
   let aggregateItemBytes = 0;
   let aggregateOpenItemBytes = 0;
   let tainted = false;
@@ -194,6 +258,8 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
     }
     openItems.clear();
     completedItems.clear();
+    withheldIndices.clear();
+    withheldToolName = undefined;
     aggregateItemBytes = 0;
     aggregateOpenItemBytes = 0;
     hasVisibleOutput = false;
@@ -217,7 +283,7 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
     if (tainted) return;
     const sourceBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
     if (sourceBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES
-      || completedItems.size >= MAX_COMPLETED_OUTPUT_ITEMS
+      || completedItems.size + withheldIndices.size >= MAX_COMPLETED_OUTPUT_ITEMS
       || aggregateItemBytes + sourceBytes > MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES) {
       taintAndRelease();
       return;
@@ -226,6 +292,24 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
     completedItems.set(index, { item, sourceBytes, visibleToGrok });
     aggregateItemBytes += sourceBytes;
     hasVisibleOutput = hasVisibleOutput || visibleToGrok;
+  };
+
+  /**
+   * Record the position of a call this request forbade without retaining the item.
+   *
+   * Only the offending item is dropped. Tainting here instead would discard the assistant text
+   * that arrived in the same turn and leave the client the empty terminal this repair exists to
+   * fix, which punishes the caller for the provider's overreach. The index is kept so the
+   * contiguity proof below still covers the whole output.
+   */
+  const withholdForbiddenCall = (index: number, name: string): void => {
+    if (tainted) return;
+    if (completedItems.size + withheldIndices.size >= MAX_COMPLETED_OUTPUT_ITEMS) {
+      taintAndRelease();
+      return;
+    }
+    withheldIndices.add(index);
+    withheldToolName ??= name.slice(0, MAX_REPORTED_TOOL_NAME_CHARS);
   };
 
   const closeOpenItem = (index: number): void => {
@@ -265,6 +349,7 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
       const open = isPlainObject(parsed.item) ? plausibleGrokOpenItem(parsed.item) : null;
       if (outputIndex === undefined || !open
         || openItems.has(outputIndex) || completedItems.has(outputIndex)
+        || withheldIndices.has(outputIndex)
         || openItems.size >= MAX_COMPLETED_OUTPUT_ITEMS) {
         taintAndRelease();
       } else if (!tainted) {
@@ -284,7 +369,8 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
     if (type === "response.output_item.done") {
       const item = isPlainObject(parsed.item) ? parsed.item : null;
       const proof = item ? trustedGrokCompletedItem(item) : null;
-      if (outputIndex === undefined || !proof || completedItems.has(outputIndex)) {
+      if (outputIndex === undefined || !proof
+        || completedItems.has(outputIndex) || withheldIndices.has(outputIndex)) {
         taintAndRelease();
         return [block];
       }
@@ -295,7 +381,12 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
         return [block];
       }
       closeOpenItem(outputIndex);
-      retainCompletedItem(outputIndex, item!, proof.visibleToGrok);
+      const forbidden = toolScope?.forbiddenClientToolCallName(item!);
+      if (forbidden === undefined) {
+        retainCompletedItem(outputIndex, item!, proof.visibleToGrok);
+      } else {
+        withholdForbiddenCall(outputIndex, forbidden);
+      }
       return [block];
     }
 
@@ -312,14 +403,18 @@ export function createGrokResponsesSparseTerminalBlockRewrite(
       const outputIsAuthoritative = Array.isArray(output) && output.length > 0;
       const outputIsSparse = !("output" in response)
         || (Array.isArray(output) && output.length === 0);
+      // A withheld call is a reason to publish on its own: the refusal has to reach the client
+      // even when nothing visible survived it, or the turn ends as an ordinary empty finish.
+      const refused = withheldIndices.size > 0;
       if (!outputIsAuthoritative && outputIsSparse && terminalStatusConsistent
-        && completedItems.size > 0 && openItems.size === 0 && hasVisibleOutput) {
+        && openItems.size === 0 && (hasVisibleOutput || refused)) {
         const ordered = [...completedItems.entries()].sort(([left], [right]) => left - right);
-        if (ordered.every(([index], position) => index === position)) {
-          out = jsonBlock({
-            ...parsed,
-            response: { ...response, output: ordered.map(([, retained]) => retained.item) },
-          });
+        const positions = [...completedItems.keys(), ...withheldIndices].sort((left, right) => left - right);
+        if (positions.length > 0 && positions.every((index, position) => index === position)) {
+          const rebuilt = ordered.map(([, retained]) => retained.item);
+          out = refused
+            ? refusedTerminalBlock(block, parsed, response, rebuilt, withheldToolName)
+            : jsonBlock({ ...parsed, response: { ...response, output: rebuilt } });
         }
       }
     }

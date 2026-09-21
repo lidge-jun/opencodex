@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { collectStartupHealth, deriveStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../../src/codex/autostart-health";
+import { collectStartupHealth, deriveStartupHealth, formatStartupRoutingDetail, injectedRoutingRestartWarningLines, startupHealthSummary } from "../../src/codex/autostart-health";
 import { unusedProxyWarningLines } from "../../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../../src/codex/inject";
 import { isCodexClientProcess, listCodexClientProcesses } from "../../src/codex/native-profile-processes";
@@ -395,6 +395,37 @@ describe("routing visibility (#2411)", () => {
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-remote" })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "custom-local" })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "unknown" })).toEqual([]);
+  });
+
+  // #5261: setup writes routing that outlives the session and then ends on a success line.
+  // The warning reuses the health model rather than re-deriving the condition, so it cannot
+  // disagree with what status and doctor say about the same install.
+  test("injectedRoutingRestartWarningLines speaks exactly when the install is restart-unsafe", () => {
+    const atRisk = deriveStartupHealth(base);
+    expect(atRisk.status).toBe("at-risk");
+    const lines = injectedRoutingRestartWarningLines(atRisk);
+    expect(lines.length).toBeGreaterThan(0);
+    const joined = lines.join(" ");
+    expect(joined).toContain("survives a restart");
+    expect(joined).toContain(startupHealthSummary(atRisk));
+    // The way out that does not require the proxy to come back first.
+    expect(joined).toContain("ocx restore");
+
+    // A CLI-only shim still leaves Codex Desktop uncovered, which is the reported shape.
+    const shimmed = deriveStartupHealth({ ...base, shimInstalled: true, shimHealthy: true });
+    expect(shimmed.status).toBe("at-risk");
+    expect(injectedRoutingRestartWarningLines(shimmed).length).toBeGreaterThan(0);
+    // ...and the warning must stay true in that case: a healthy shim DOES restart the proxy, for
+    // CLI launches. Claiming nothing will would contradict the summary line printed beneath it.
+    expect(injectedRoutingRestartWarningLines(shimmed).join(" ")).not.toContain("nothing here will restart");
+    expect(injectedRoutingRestartWarningLines(shimmed).join(" ")).toContain(startupHealthSummary(shimmed));
+
+    // Native routing has no opencodex restart dependency, so there is nothing to warn about.
+    expect(injectedRoutingRestartWarningLines(deriveStartupHealth({ ...base, routingKind: "native" }))).toEqual([]);
+    // Neither does a viable service, which is the state the warning is steering toward.
+    const served = deriveStartupHealth({ ...base, serviceInstalled: true, serviceViable: true, serviceEnabled: true, serviceRunning: true });
+    expect(served.status).toBe("protected");
+    expect(injectedRoutingRestartWarningLines(served)).toEqual([]);
   });
 });
 

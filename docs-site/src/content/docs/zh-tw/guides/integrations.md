@@ -165,6 +165,27 @@ OAuth 或 API key，並拒絕 `--api-key`、`--base-url` 與 `--region` 覆寫�
 
 客戶端細節是針對各專案自己的設定格式驗證過的；檢查了什麼、何時檢查，請見 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` 中的研究筆記。
 
+## ZCode 3.14 以後
+
+ZCode 3.14 把自訂供應商移到 `~/.zcode/v2/provider_config.json`，而本整合原本寫入的
+`~/.zcode/v2/config.json` 只剩下一次性匯入會讀取，而那次匯入只在新檔案不存在時執行。ZCode 首次啟動
+就會建立新檔案，因此只要曾經啟動過的安裝，匯入早已用掉，之後寫入 `config.json` 不會被任何東西讀到。
+
+在可行的情況下，opencodex 現在直接寫入 `provider_config.json`。啟用整合會把 `opencodex` 供應商規則
+加進該檔案，目錄重新整理會更新它，停用則精確移除 opencodex 放進去的內容。檔案中其他規則一律保持原樣，
+包含其他供應商為某個同樣出現在我們這裡的模型 ID 所保留的規則。帶有 `opencodex` ID 但不是 opencodex
+寫入的規則屬於衝突，而不是可以接管的東西：請在 ZCode 中處理，或使用明確的覆寫。
+
+仍有兩種情況會拒絕而不寫入。ZCode 搬移儲存位置之前由 opencodex 寫入的區塊，會讓整合留在
+`config.json`：請先在那裡停用，再重新啟用以寫入新的儲存檔。至於 `schemaVersion` 不是 opencodex
+曾觀察過的 `provider_config.json`，則只會被回報而不會合併：該檔案存放 ZCode 的所有供應商，對它斷言
+一種結構等於把靜默的無效果換成靜默的資料遺失。只要整合不是在寫那個檔案，狀態頁就會指出 ZCode 實際
+讀取的檔案。
+
+在第二種情況下，請在 ZCode 自己的設定中新增供應商：base URL 為 `http://127.0.0.1:10100/v1`
+（請依實際繫結調整連接埠）、任意非空白金鑰，以及 `ocx export --client zcode` 列出的模型 ID。不支援
+刪除 `provider_config.json` 來重新觸發 ZCode 的匯入：那會丟掉 ZCode 存放在其中的所有供應商。
+
 ## Cline CLI
 
 Cline CLI 使用 providers.json 與 models.json。修改或同步前請結束 Cline，完成後重新啟動。復原會還原兩個原始檔案，預設供應商保持不變。此整合不會遷移舊版 VS Code 擴充功能的儲存資料。

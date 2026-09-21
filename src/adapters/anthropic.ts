@@ -39,6 +39,16 @@ function toAnthropicContentPart(p: OcxContentPart): unknown {
       : { type: "image", source: { type: "url", url: p.imageUrl } };
   }
   if (p.type === "video") return { type: "text", text: "[video]" };
+  // The block the caller sent, rebuilt. A Messages-to-Messages route used to reduce it to its
+  // title before any adapter ran, so the model was told a document existed rather than given
+  // one, and the answer came back looking the same (#5212).
+  if (p.type === "document") {
+    return {
+      type: "document",
+      source: { type: "base64", media_type: p.mediaType, data: p.data },
+      ...(p.filename !== undefined ? { title: p.filename } : {}),
+    };
+  }
   return { type: "text", text: p.text };
 }
 
@@ -857,6 +867,12 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
     name: toolNames.toWire(namespacedToolName(t.namespace, t.name)),
     description: t.description,
     input_schema: normalizeAnthropicInputSchema(t.parameters),
+    // Anthropic is the target that DEFINES both of these, and both were dropped while the
+    // OpenAI Chat adapter already forwarded strict (#5210). Only an explicit `true` is
+    // emitted: the Messages inbound records an absent strict as `false`, so a false here
+    // cannot be distinguished from silence and must not become an opt-out on the wire.
+    ...(t.strict === true ? { strict: true } : {}),
+    ...(t.allowedCallers !== undefined ? { allowed_callers: [...t.allowedCallers] } : {}),
   }));
   return converted;
 }

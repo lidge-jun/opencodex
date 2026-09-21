@@ -52,7 +52,7 @@ import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
-import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
+import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
@@ -289,15 +289,19 @@ export async function fetchProviderModelsWithAuth(
   }
   if (prov.adapter === "devin") {
     if (!apiKey) return observed(configured, "degraded");
-    const cachedDevin = getFreshCached(name, ttlMs);
+    // Devin's usable-model list is entitlement-specific. Bind cache reads/writes to an
+    // irreversible credential fingerprint so a credential switch cannot observe another
+    // account's roster or stale fallback (the Qoder precedent above).
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const cachedDevin = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedDevin) {
       return observed(
         withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedDevin)),
         "authoritative",
       );
     }
-    if (isModelsFetchCoolingDown(name)) {
-      const cooling = getStaleCached(name);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity)) {
+      const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
           cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
@@ -339,17 +343,17 @@ export async function fetchProviderModelsWithAuth(
         } as CatalogModel;
       });
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
     }
-    const stale = getStaleCached(name);
+    const stale = getStaleCached(name, authorityIdentity);
     return observed(
       withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale) : configured),
       "degraded",
@@ -361,15 +365,19 @@ export async function fetchProviderModelsWithAuth(
     // variants this PLAN can use. Keep the base-model UX (the request builder appends the effort
     // suffix) but filter the static seed to the bases the account actually has — so models not on the
     // plan (e.g. claude-fable-5) drop out instead of failing ERROR_BAD_MODEL_NAME. Fall back to the seed.
-    const cachedCursor = getFreshCached(name, ttlMs);
+    // The roster is entitlement-specific, so the cache entry is bound to an irreversible
+    // credential fingerprint: a credential switch must not observe the previous account's
+    // plan roster, its stale fallback, or its failure cooldown suppression.
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const cachedCursor = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedCursor) {
       return observed(
         withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias)),
         "authoritative",
       );
     }
-    if (isModelsFetchCoolingDown(name)) {
-      const cooling = getStaleCached(name);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity)) {
+      const cooling = getStaleCached(name, authorityIdentity);
       return observed(
         withConfiguredRetention(
           cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,
@@ -394,27 +402,28 @@ export async function fetchProviderModelsWithAuth(
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
       const forCache = withConfiguredRetention(result, { retainComboTargets: false });
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       // Publish roster-derived state only for a discovery the cache accepted: a stale
       // in-flight capture (generation revoked by a credential/config change) must not
       // overwrite the spelling or Max-Mode evidence of the newer one.
-      recordLiveCursorClaudeModels(liveResult.models);
+      const liveRosterScope = { provider: name, key: cursorLiveRosterScope(prov.baseUrl, apiKey) };
+      recordLiveCursorClaudeModels(liveResult.models, liveRosterScope);
       // Live Max-Mode evidence feeds the umbrella resolver's ultra gate
       // (devlog 260828_cursor_umbrella_catalog; union with static evidence).
-      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? []);
+      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? [], liveRosterScope);
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(
         `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
       );
     }
-    const staleCursor = getStaleCached(name);
+    const staleCursor = getStaleCached(name, authorityIdentity);
     return observed(
       withConfiguredRetention(
         staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold, captured.effectiveAlias) : configured,

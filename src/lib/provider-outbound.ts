@@ -7,12 +7,13 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
+import { configuredOutboundFetch, effectiveProxyFor, noProxyMatches, normalizeProxyHostname, schemeMatchedProxyFor } from "./proxy-env";
+import { InvalidProviderEgressError, resolveProviderEgress } from "./provider-egress";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
 type ProviderPostInit = ProviderGetInit & { body: string };
-type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
+type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork" | "proxy" | "noProxy"> & {
   fetch?: typeof globalThis.fetch;
 };
 export interface ProviderOutboundDependencies {
@@ -165,6 +166,17 @@ async function providerOutboundRequest(
   // throw inside discovery and fail the provider for a reason nothing in its configuration
   // explains; the built-in transport is what a configured value means.
   if (typeof provider.fetch === "function") {
+    // A caller-owned executor decides its own transport, so a provider egress route cannot be
+    // applied to it. Refusing is the only honest answer: running the executor anyway would send
+    // the request by whatever route that executor picked while the configuration says otherwise.
+    if (resolveProviderEgress({ providerName: name, provider, url }).kind !== "inherit") {
+      throw new InvalidProviderEgressError(
+        "proxy",
+        "a caller-supplied fetch executor owns its own routing, so this route cannot be applied",
+        `providers.${name}.proxy cannot be applied to a caller-supplied fetch executor; `
+        + "remove the provider egress override or the custom executor",
+      );
+    }
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
     // the built-in transport. Main-request migration must define that executor contract first.
@@ -186,13 +198,39 @@ async function providerOutboundRequest(
     return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
   const parsed = postUrl ?? new URL(url);
-  const proxyConfigured = outboundProxyConfigured();
-  // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
-  // below reason about the same value. `null` here means "no proxy fetch would actually use",
-  // even if some other proxy variable is set.
-  const effectiveProxy = effectiveProxyFor(parsed);
+  // The provider's own route, decided against this request URL. `inherit` leaves every value
+  // below exactly as the global decision computed it.
+  const egress = resolveProviderEgress({ providerName: name, provider, url: parsed });
+  const providerProxy = egress.kind === "proxy" ? egress.proxyUrl : null;
+  // Snapshot the proxy fetch would actually use once, before the DNS await, so admission
+  // and transport below reason about the same value. `null` here means "no proxy fetch
+  // would actually use", even if some other proxy variable is set.
+  const globalProxy = effectiveProxyFor(parsed);
+  // The request leaves the DNS-pinned transport only when a proxy will actually carry it:
+  // a proxy variable fetch would use for this URL that NO_PROXY does not exempt.
+  // A scheme-mismatched or unusable variable, a NO_PROXY match, or an ALL_PROXY
+  // this target's scheme cannot use must not downgrade pinning or admit
+  // proxy-only DNS answers.
+  //
+  // A provider route replaces that decision outright rather than combining with it. An
+  // explicit provider proxy applies even where global NO_PROXY exempts the host, because the
+  // operator named this proxy for this provider; `providers.<name>.noProxy` is the exemption
+  // that belongs to that choice, and `resolveProviderEgress` has already applied it. A
+  // provider pinned to `direct` keeps the DNS-pinned transport, which reaches the peer
+  // through no proxy at all — the one route on this path that needs nothing from Bun.
+  const proxyApplies = egress.kind === "inherit"
+    ? globalProxy !== null && !noProxyMatches(parsed)
+    : providerProxy !== null;
   const isCanonicalUrl = dependencies.isCanonicalUrl ?? (() => false);
-  const allowMihomoIpv6FakeIp = (effectiveProxy !== null && !noProxyMatches(parsed))
+  // The IPv6 fake-IP gate keeps its stricter documented condition — a
+  // scheme-matched variable or a SOCKS5 ALL_PROXY, never a non-SOCKS
+  // ALL_PROXY — even when proxyApplies admits one for the transport
+  // decision, because admission binds the fetch to this value explicitly.
+  // An explicit provider proxy is exactly such a binding: the fetch below is pinned to it.
+  const bindingProxy = egress.kind === "inherit"
+    ? schemeMatchedProxyFor(parsed)
+    : providerProxy;
+  const allowMihomoIpv6FakeIp = (bindingProxy !== null && (providerProxy !== null || !noProxyMatches(parsed)))
     || transparentFakeIpException(url, parsed, isCanonicalUrl, name);
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
@@ -216,7 +254,7 @@ async function providerOutboundRequest(
       // proof is on the final request URL — not the provider name — because an
       // OAuth/forward name matches any baseUrl by design while the bearer is
       // pinned to the registry destination independently.
-      allowBenchmarkAddresses: (proxyConfigured && !noProxyMatches(parsed))
+      allowBenchmarkAddresses: proxyApplies
         || transparentFakeIpException(url, parsed, isCanonicalUrl, name),
       // Mihomo IPv6 fake-IP (fdfe:dcba:9876::/48) answers are admitted either when bound
       // to a scheme-matched proxy (#3462) or under the TUN transparency exception for a
@@ -229,21 +267,28 @@ async function providerOutboundRequest(
     if (!dnsResolutionFailed) {
       throw new ProviderOutboundPolicyError(error instanceof Error ? error.message : "provider destination was blocked");
     }
-    if (!proxyConfigured) throw error;
+    if (!proxyApplies) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
-    return configuredOutboundFetch(url, { ...init, method, redirect: "manual" });
+    // An explicit provider proxy stays pinned through the degradation too; re-inferring the
+    // route from the environment here would quietly move the request to a different exit.
+    return configuredOutboundFetch(url, {
+      ...init, method, redirect: "manual",
+      ...(providerProxy ? { proxy: providerProxy } : {}),
+    });
   }
   // A canonical TUN exception with no scheme-matched proxy must retain the
   // validated address, even when an unrelated HTTP_PROXY/ALL_PROXY is present.
-  if (proxyConfigured && !resolved.privateNetwork && (effectiveProxy !== null || !allowMihomoIpv6FakeIp)) {
+  if (proxyApplies && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
     // When the Mihomo exception could have admitted an answer, pin the transport to the
     // proxy the admission assumed instead of letting fetch re-infer it from the environment.
-    const proxy = (allowMihomoIpv6FakeIp && effectiveProxy) ? effectiveProxy : undefined;
+    // An explicit provider proxy is always pinned, for the same reason and unconditionally:
+    // the operator named the exit for this provider, so the environment must not re-decide it.
+    const proxy = providerProxy ?? ((allowMihomoIpv6FakeIp && bindingProxy) ? bindingProxy : undefined);
     return configuredOutboundFetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
-  if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
+  if (proxyApplies && resolved.privateNetwork) {
     const hostname = normalizeProxyHostname(parsed.hostname);
     throw new Error(
       `provider URL resolves to a private-network destination; add ${hostname} to NO_PROXY before using allowPrivateNetwork with an outbound proxy`,

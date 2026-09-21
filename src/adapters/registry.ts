@@ -181,8 +181,9 @@ export function createRegisteredAdapter(
   const definition = getAdapterDefinition(provider.adapter);
   if (!definition) throw new Error(`Unknown adapter: ${provider.adapter}`);
   const adapter = definition.create(provider, context);
-  if (effectiveAdapterContract(provider.adapter).wire !== "openai-responses") {
-    withInputMediaGuard(adapter);
+  const wire = effectiveAdapterContract(provider.adapter).wire;
+  if (wire !== "openai-responses") {
+    withInputMediaGuard(adapter, wire);
   }
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {

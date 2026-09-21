@@ -615,7 +615,11 @@ const commandRunners: Record<string, CommandRunner> = {
         const guiUrl = selectDefaultGuiUrl(config, live, deps.probeHostname);
         console.log(`Opening ${guiUrl}`);
         const { openUrl } = await import("../lib/open-url");
-        openUrl(guiUrl);
+        // Awaited so a launcher that never opened anything is said out loud (#5261). Still exit
+        // 0: the proxy is serving and the URL above is reachable, only the launch did not happen.
+        if ((await openUrl(guiUrl)).status === "failed") {
+          console.error("⚠️  No browser could be opened here; open the URL above yourself.");
+        }
         return 0;
       },
     });
@@ -781,6 +785,10 @@ const commandRunners: Record<string, CommandRunner> = {
   combo: async deps => {
     const { handleComboCommand } = await import("./combo");
     return await handleComboCommand(deps.args.slice(1));
+  },
+  companion: async deps => {
+    const { handleCompanionCommand } = await import("./companion");
+    return await handleCompanionCommand(deps.args.slice(1));
   },
   route: async deps => {
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
