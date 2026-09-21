@@ -586,6 +586,20 @@ describe("operator-granted replacement of an ambiguous reset", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  test("a transient response after a replacement settles as the refusal", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([
+      bunResetError(), new Response("busy", { status: 502 }), new Response("duplicate"),
+    ]);
+    const response = await fetchWithTransientRetry(mock.doFetch, {
+      attempts: 3, claimAmbiguousResend: () => true,
+    });
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(mock.calls).toHaveLength(2);
+  });
+
   test("the transient layer carries the grant into its inner reset layer", async () => {
     silenceWarn();
     const reports: number[] = [];
