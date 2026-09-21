@@ -97,7 +97,9 @@ describe("desktop startup surface", () => {
   test("one deadline covers the whole sequence and bounds every probe under it", () => {
     expect(startup).toContain("pub const DEADLINE: Duration");
     expect(startup).toContain("let deadline = started + DEADLINE;");
-    expect(startup).toContain("(started + ATTACH_BUDGET).min(deadline)");
+    expect(startup).toContain("let probing_from = Instant::now();");
+    expect(startup).toContain("(probing_from + ATTACH_BUDGET).min(deadline)");
+    expect(startup).not.toContain("(started + ATTACH_BUDGET)");
     // A probe bounded only by the client's own timeout overruns whatever budget it was started
     // under, which is how a stated ceiling becomes an unstated one.
     expect(startup).not.toContain("proxy.is_alive()");

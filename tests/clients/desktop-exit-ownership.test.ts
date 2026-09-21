@@ -83,17 +83,64 @@ describe("desktop exit ownership", () => {
     expect(exit).toContain("ExitReason::CoordinatedRestart");
     expect(exit).toContain("tauri::RESTART_EXIT_CODE");
     const updater = code(UPDATER);
-    expect(updater).toContain("exit::request_restart(app)");
+    expect(updater).toContain("crate::exit::prepare_restart(app).await");
     expect(updater).not.toContain("app.restart()");
+  });
+
+  test("an update stops the runtime before it replaces anything", () => {
+    const updater = code(UPDATER);
+    const install = updater.slice(updater.indexOf("pub async fn install("));
+    const body = install.slice(0, install.indexOf("\n}"));
+    const downloaded = body.indexOf(".download(");
+    const prepared = body.indexOf("crate::exit::prepare_restart(app).await");
+    const installed = body.indexOf("update.install(package)");
+    expect(downloaded).toBeGreaterThan(-1);
+    expect(prepared).toBeGreaterThan(downloaded);
+    expect(installed).toBeGreaterThan(prepared);
+    // The combined call is the shape that cannot drain first.
+    expect(body).not.toContain("download_and_install");
+    // A drain that did not complete refuses the install rather than proceeding.
+    expect(body.slice(prepared, installed)).toContain("if readiness != RestartReadiness::Ready {");
+    expect(body.slice(prepared, installed)).toContain("return Err(");
   });
 
   test("an update restart drains through the same path a quit does", () => {
     const exit = code(EXIT);
-    const restart = exit.indexOf("pub fn request_restart");
-    expect(restart).toBeGreaterThan(-1);
-    const body = exit.slice(restart, exit.indexOf("\n}", restart));
-    expect(body).toContain("start_drain(app, ExitReason::CoordinatedRestart)");
-    expect(exit).toContain("sidecar::drain(&proxy, owned, &watch)");
+    const prepare = exit.indexOf("pub async fn prepare_restart");
+    expect(prepare).toBeGreaterThan(-1);
+    const body = exit.slice(prepare, exit.indexOf("pub fn complete_restart", prepare));
+    expect(body).toContain("claim_drain(ExitReason::CoordinatedRestart)");
+    expect(body).toContain("drain_current(app).await");
+    expect(body).toContain("coordinator.finish_drain(verdict)");
+    expect(exit).toContain("sidecar::drain(&proxy, true, &watch)");
+  });
+
+  test("a failed drain is not recorded as a drain, and a restart refuses it", () => {
+    const exit = code(EXIT);
+    const record = exit.slice(exit.indexOf("pub fn finish_drain("));
+    const body = record.slice(0, record.indexOf("\n    }"));
+    expect(body).toContain("DrainVerdict::Drained => ExitPhase::Drained");
+    expect(body).toContain("DrainVerdict::Failed => ExitPhase::DrainFailed");
+    expect(body).toContain("DrainVerdict::OwnershipUnknown => ExitPhase::OwnershipUnknown");
+    const rule = exit.slice(exit.indexOf("pub fn decide("), exit.indexOf("struct Inner {"));
+    expect(rule).toContain("ExitPhase::DrainFailed | ExitPhase::OwnershipUnknown => match reason");
+    expect(rule).toContain("Some(ExitReason::CoordinatedRestart) => ExitDecision::Refuse");
+    // A quit still closes the app on one, which is the trade that is defensible.
+    expect(rule).toContain("_ => ExitDecision::Proceed");
+  });
+
+  test("stop, quit and update are one execution over one child", () => {
+    const tray = code(TRAY);
+    expect(tray).toContain("exit::request_stop(app)");
+    expect(tray).not.toContain("sidecar::drain");
+    const exit = code(EXIT);
+    const stop = exit.slice(exit.indexOf("pub fn request_stop("));
+    const body = stop.slice(0, stop.indexOf("\n}"));
+    expect(body).toContain("coordinator.begin_stop()");
+    expect(body).toContain("drain_current(&app).await");
+    // A quit that landed during the stop is handed back and run, not dropped.
+    expect(body).toContain("coordinator.finish_stop()");
+    expect(body).toContain("drain_now(&app, reason)");
   });
 
   test("the reason and the drain are claimed in one step", () => {
@@ -107,7 +154,10 @@ describe("desktop exit ownership", () => {
     expect(body).toContain("match inner.phase {");
     const idle = body.indexOf("ExitPhase::Idle => {");
     expect(idle).toBeGreaterThan(-1);
-    const arm = body.slice(idle, body.indexOf("ExitPhase::Spawning => {", idle));
+    const arm = body.slice(
+      idle,
+      body.indexOf("ExitPhase::Spawning | ExitPhase::Stopping => {", idle),
+    );
     expect(arm).toContain("inner.reason.get_or_insert(fallback)");
     expect(arm).toContain("inner.phase = ExitPhase::Draining;");
     // Nothing else in the file moves the phase to draining.
@@ -119,11 +169,16 @@ describe("desktop exit ownership", () => {
     // The lock is never held across process creation, so the main thread's exit handler cannot
     // end up waiting on a spawn; the exit is held by the phase instead.
     expect(exit).toContain("ExitPhase::Spawning");
-    expect(exit).toContain("ExitPhase::Spawning | ExitPhase::Draining => ExitDecision::Wait");
+    expect(exit).toContain(
+      "ExitPhase::Spawning | ExitPhase::Stopping | ExitPhase::Draining => ExitDecision::Wait",
+    );
     const claim = exit.slice(exit.indexOf("pub fn claim_drain"), exit.indexOf("pub fn finish_drain"));
-    expect(claim).toContain("ExitPhase::Spawning => {");
+    expect(claim).toContain("ExitPhase::Spawning | ExitPhase::Stopping => {");
     expect(claim).toContain("inner.deferred = true;");
-    const finish = exit.slice(exit.indexOf("pub fn finish_spawn"), exit.indexOf("impl Default for ExitCoordinator"));
+    const finish = exit.slice(
+      exit.indexOf("fn finish(&self, phase: ExitPhase)"),
+      exit.indexOf("impl Default for ExitCoordinator"),
+    );
     expect(finish).toContain("inner.deferred");
     expect(finish).toContain("inner.phase = ExitPhase::Draining;");
     const startup = code(repoPath(`${SRC}/startup.rs`));
