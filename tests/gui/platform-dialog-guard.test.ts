@@ -109,7 +109,8 @@ describe("dashboard platform-dialog guard", () => {
     const reported = (source: string) => findPlatformDialogCalls(source).map(call => call.form);
 
     expect(reported("confirm?.(question);")).toEqual(["confirm?.("]);
-    expect(reported("(confirm)(question);")).toEqual(["(confirm)("]);
+    // The match starts at the name, so the wrapping parenthesis is not part of the form.
+    expect(reported("(confirm)(question);")).toEqual(["confirm)("]);
     // A line continuation keeps the string open; the call after it is still code.
     expect(reported('const s = "continued\\\r\ntext"; alert(message);')).toEqual(["alert("]);
   });

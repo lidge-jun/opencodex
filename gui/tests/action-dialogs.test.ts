@@ -228,17 +228,25 @@ test("a hash change is the same refusal", async () => {
 
 test("Escape is answered at the document when the dialog is not modal", async () => {
   /*
-   * This DOM has no showModal, which is the branch that merely sets `open`. A listener on
+   * Forces the branch that merely sets `open`, because this DOM does implement
+   * `showModal` and would otherwise never reach it. That branch is not modal: a listener on
    * the dialog element would miss Escape as soon as focus sat anywhere else, so the
    * listener lives on the document for exactly this case.
    */
-  const answer = requestTextValue({ message: "Display name" });
-  await settled();
-  win.document.dispatchEvent(
-    new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event,
-  );
-  expect(await answer).toBeNull();
-  expect(win.document.querySelector("dialog")).toBeNull();
+  const dialogPrototype = win.HTMLDialogElement.prototype as unknown as { showModal?: unknown };
+  const nativeShowModal = dialogPrototype.showModal;
+  delete dialogPrototype.showModal;
+  try {
+    const answer = requestTextValue({ message: "Display name" });
+    await settled();
+    win.document.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event,
+    );
+    expect(await answer).toBeNull();
+    expect(win.document.querySelector("dialog")).toBeNull();
+  } finally {
+    if (nativeShowModal !== undefined) dialogPrototype.showModal = nativeShowModal;
+  }
 });
 
 test("a settled dialog stops listening for navigation", async () => {
