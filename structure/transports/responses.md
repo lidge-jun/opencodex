@@ -121,7 +121,7 @@ discarded to manufacture a bare name.
 
 Function-call wrappers around freeform bodies are restored by
 `src/responses/apply-patch-envelope.ts`. The declared `input` field is authoritative. For bare
-`exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
+`exec` and `apply_patch` (including their `default.`-prefixed provider aliases), one tool-specific alternate field or one complete outer Markdown fence
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
 
