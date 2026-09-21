@@ -480,6 +480,13 @@ export async function preparePassthroughExchange(
         || clientDeclaredNamelessCallTypes.size > 0
         || clientExplicitWireToolCatalog
       ) && route.provider.authMode !== "forward";
+      options.nativeControl?.configureToolAuthorization?.(
+        undeclaredToolGuardActive,
+        declaredWireToolNames,
+        declaredBareWireToolNames,
+        declaredNamelessClientCallTypes,
+        providerExecutedCallTypes,
+      );
     };
     refreshUndeclaredToolGuard(request);
     // A refused turn must not seed `previous_response_id` replay. The inspection branch reads the

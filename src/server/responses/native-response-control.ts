@@ -1,6 +1,7 @@
 import type { OcxProviderConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { NativeSteeringReplayObserver } from "./native-steering-replay";
+import type { ProviderExecutedCallType } from "../responses-undeclared-tool-guard";
 
 import { isInjectionRequest } from "./native-injection-protocol";
 
@@ -10,6 +11,7 @@ export interface NativeResponseControl {
   relayActive: boolean;
   normalizeContinuation?: (frame: Record<string, unknown>) => Record<string, unknown>;
   replayFactory?: () => NativeSteeringReplayObserver;
+  configureToolAuthorization?: (active: boolean, names: ReadonlySet<string>, bareNames: ReadonlySet<string>, namelessCallTypes: ReadonlySet<string>, providerExecuted: ReadonlySet<ProviderExecutedCallType>) => void;
   readonly attached: boolean;
   readonly ended: boolean;
   attach(send: (frame: Record<string, unknown>) => void, fail: (error: Error) => void): () => void;

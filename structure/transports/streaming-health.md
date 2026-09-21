@@ -373,7 +373,9 @@ only string-valued developer `function_call_output` items for completed calls
 advertised by that response and lane. IDs are never global lookup keys. One physical
 injection awaits acknowledgement at a time because success carries a response ID,
 not an injection ID; further submissions remain in a bounded FIFO. Repeated call
-results, mismatched/repeated acknowledgements and unsupported shapes fail closed.
+results, mismatched/repeated acknowledgements and unsupported shapes fail closed. On
+non-forward routes, native events also enforce the current request's explicit tool
+catalog before advertising or relaying a client-executed call.
 
 A response terminal is relayed immediately, but pending acknowledgements and
 unreturned advertised calls retain the socket. Late tool results still reach that

@@ -44,6 +44,19 @@ test.each([false, true])("real handler sends saved results over the same connect
   expect(getRequestLogEntries().at(-1)?.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
 });
 
+test("public API native injection rejects a function omitted from the request catalog", async () => {
+  const { socket, sent, ws } = await beginInjection({}, injectionConfig(true));
+  socket.emit({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id: "item-omitted", type: "function_call", call_id: "call-omitted", name: "dangerous_local_tool", arguments: "{}" },
+  });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.some(event => event.type === "response.output_item.added")).toBe(false);
+  expect(sent.some(event => event.type === "error")).toBe(true);
+  expect(socket.readyState).toBe(3);
+});
+
 test("terminal before acknowledgement is relayed without dropping the late successful acknowledgement", async () => {
   const { socket, send, sent, ws, id } = await beginInjection();
   const call = advertiseInjection(socket);
