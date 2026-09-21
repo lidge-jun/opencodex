@@ -10,6 +10,7 @@ import {
   resolveClaudeDesktopMode,
 } from "../../src/claude/desktop-first-party";
 import { parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
+import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config";
 import { ensureClaudeDesktopMatchesDesired } from "../../src/cli/ensure-desired-integrations";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
@@ -241,6 +242,38 @@ test("ensure warns instead of touching a gateway profile that contradicts an exp
   };
   ensureClaudeDesktopMatchesDesired(deps as unknown as Parameters<typeof ensureClaudeDesktopMatchesDesired>[0]);
   expect(logs.some(line => line.includes("gateway profile is still applied"))).toBe(true);
+});
+
+test("first-party apply rebases the Claude hand-edit guard after its scoped mode save", async () => {
+  // First-party apply ends at the mode-marker write — no profile-marker save
+  // follows — so unless that write adopts its committed subtree, live diverges
+  // from the armed baseline and the next whole-config save stomps a hand edit.
+  const snapshot = config({ claudeCode: { authMode: "subscription" } });
+  writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
+  armClaudeCodeBaseline(snapshot);
+
+  const applied = await dispatch("/api/claude-desktop/apply", { method: "POST" }, snapshot);
+  expect(applied.status).toBe(200);
+  expect(applied.body).toMatchObject({ mode: "first-party", saved: true });
+
+  const handEdited = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  handEdited.claudeCode = {
+    ...handEdited.claudeCode,
+    authMode: "proxy",
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+  };
+  writeFileSync(join(root, "config.json"), JSON.stringify(handEdited));
+
+  snapshot.disabledModels = ["unrelated/model"];
+  saveConfigPreservingClaudeCode(snapshot);
+
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  expect(saved.claudeCode).toMatchObject({
+    authMode: "proxy",
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+    desktopMode: "first-party",
+  });
+  expect(saved.disabledModels).toEqual(["unrelated/model"]);
 });
 
 test("ensure reconciles first-party env: refreshes when ON and stale, removes when OFF", () => {
