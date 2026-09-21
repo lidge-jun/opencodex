@@ -118,7 +118,9 @@ mod tests {
     fn the_app_origin_is_allowed_by_both_spellings_on_every_platform() {
         // The custom scheme everywhere, and the http spelling WebView2 needs on Windows. The
         // second is not gated on the platform: the origin is the app's wherever it is served.
-        assert!(is_app_origin(&url("tauri://localhost/index.html?port=10100")));
+        assert!(is_app_origin(&url(
+            "tauri://localhost/index.html?port=10100"
+        )));
         assert!(is_app_origin(&url(
             "http://tauri.localhost/index.html?port=10100"
         )));

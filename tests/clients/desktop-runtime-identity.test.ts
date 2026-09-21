@@ -122,14 +122,18 @@ describe("desktop runtime identity", () => {
     expect(callers).toHaveLength(2);
   });
 
-  test("the Windows app origin is allowed, and nothing wider", () => {
+  test("the app's own origin is allowed by both spellings, and nothing wider", () => {
     const window = code(WINDOW);
-    const rule = window.slice(window.indexOf("pub fn app_origin_allowed("));
+    const rule = window.slice(window.indexOf("fn is_app_origin("));
     const body = rule.slice(0, rule.indexOf("\n}"));
+    // The custom scheme everywhere, and the http spelling WebView2 needs on Windows.
+    expect(body).toContain('"tauri" => true');
     expect(body).toContain('url.host_str() == Some("tauri.localhost")');
+    // Not https, which is not the scheme the pinned Tauri serves the app over, and not a port,
+    // which would mean something else is answering.
     expect(body).toContain("url.port().is_none()");
-    expect(body).toContain("windows");
-    expect(window).toContain('app_origin_allowed(url, cfg!(target_os = "windows"))');
+    expect(body).not.toContain('"https"');
+    expect(window).toContain("if is_app_origin(url) {");
     // Not localhost generally, and not a remote IPC widening.
     expect(window).not.toContain('Some("localhost")');
     expect(readFileSync(repoPath("desktop/src-tauri/capabilities/default.json"), "utf8")).not.toContain(
