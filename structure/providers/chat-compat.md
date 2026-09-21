@@ -365,6 +365,10 @@ the desktop thinking band shows the "Thinking…" placeholder, and raw text appe
 which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
 grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
 
+For models that require a reasoning placeholder, a preserved thinking-only assistant turn with no
+plaintext receives that placeholder even when it has no tool call. Otherwise the Chat serializer
+drops the turn and strict DeepSeek continuations can reject the following request (#5421).
+
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential
 identity. API-key material is represented only by a process-keyed HMAC; OAuth replay is bound to the
