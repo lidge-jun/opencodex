@@ -32,6 +32,8 @@ export interface HealthzIdentity {
   guiPairCapability?: unknown;
 }
 
+export type EndpointLiveness = "live" | "dead" | "unknown";
+
 export interface LivenessIo {
   fetchFn?: typeof fetch;
   readPidFn?: () => number | null;
@@ -146,6 +148,49 @@ export function isOpencodexHealthz(body: HealthzIdentity | null): boolean {
   if (body.service === "opencodex") return true;
   if (body.service !== undefined) return false;
   return body.status === "ok" && typeof body.version === "string" && typeof body.uptime === "number";
+}
+
+/**
+ * "Nothing is listening" is narrower than "the probe failed". Only a connect-phase refusal
+ * proves the endpoint is free; a timeout, reset, or other transport failure leaves the
+ * question open.
+ */
+export function isConnectionRefused(error: unknown): boolean {
+  for (let current: unknown = error, depth = 0; depth < 4; depth++) {
+    if (current === null || (typeof current !== "object" && typeof current !== "function")) break;
+    const record = current as { code?: unknown; cause?: unknown };
+    if (record.code === "ECONNREFUSED" || record.code === "ConnectionRefused") return true;
+    if (typeof record.code === "string" && record.code.endsWith("ECONNREFUSED")) return true;
+    current = record.cause;
+  }
+  return false;
+}
+
+/**
+ * Tri-state probe of one endpoint, the in-process counterpart of
+ * `src/update/proxy-liveness-probe.mjs`. Only a connect-phase refusal or a clean 200 that is
+ * not ours proves "dead"; a timeout, reset, non-200 or unreadable body leaves the question
+ * open. Runs in-process because a compiled standalone binary cannot fork `execPath -e`.
+ */
+export async function probeEndpointLiveness(
+  endpoint: { port: number; hostname?: string },
+  io: Pick<LivenessIo, "fetchFn" | "timeoutMs"> = {},
+): Promise<EndpointLiveness> {
+  if (!Number.isFinite(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535) return "dead";
+  const fetchFn = io.fetchFn ?? directLocalHttpFetch;
+  const timeoutMs = io.timeoutMs ?? 1500;
+  try {
+    const response = await fetchFn(
+      `http://${probeHostname(endpoint.hostname)}:${endpoint.port}/healthz`,
+      { signal: AbortSignal.timeout(timeoutMs) },
+    );
+    if (response.status !== 200) return "unknown";
+    const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
+    if (body === undefined) return "unknown";
+    return isOpencodexHealthz(body) ? "live" : "dead";
+  } catch (error) {
+    return isConnectionRefused(error) ? "dead" : "unknown";
+  }
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */

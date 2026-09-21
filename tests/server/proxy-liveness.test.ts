@@ -8,6 +8,7 @@ import {
   findLiveProxy,
   isOpencodexHealthz,
   loopbackProbeHosts,
+  probeEndpointLiveness,
   probeHostname,
   probePortOwner,
   probeReadiness,
@@ -87,6 +88,26 @@ describe("probeHostname", () => {
     expect(probeHostname("::1")).toBe("[::1]");
     expect(probeHostname("[::1]")).toBe("[::1]");
     expect(probeHostname("2001:db8::5")).toBe("[2001:db8::5]");
+  });
+});
+
+describe("probeEndpointLiveness", () => {
+  test("classifies identity, foreign, non-200, refusal, timeout, and invalid ports", async () => {
+    const endpoint = { port: 10100, hostname: "127.0.0.1" };
+    const fakeFetch = (body: unknown, status = 200) => (async () => healthz(body, status)) as typeof fetch;
+    expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch(OURS) })).toBe("live");
+    expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch({ status: "ok" }) })).toBe("dead");
+    expect(await probeEndpointLiveness(endpoint, { fetchFn: fakeFetch(OURS, 503) })).toBe("unknown");
+    expect(await probeEndpointLiveness(endpoint, {
+      fetchFn: (async () => { throw { code: "ECONNREFUSED" }; }) as typeof fetch,
+    })).toBe("dead");
+    expect(await probeEndpointLiveness(endpoint, {
+      fetchFn: (async () => { throw new DOMException("aborted", "AbortError"); }) as typeof fetch,
+    })).toBe("unknown");
+    expect(await probeEndpointLiveness(endpoint, {
+      fetchFn: (async () => { throw new Error("connection reset"); }) as typeof fetch,
+    })).toBe("unknown");
+    expect(await probeEndpointLiveness({ port: 0 }, { fetchFn: fakeFetch(OURS) })).toBe("dead");
   });
 });
 
