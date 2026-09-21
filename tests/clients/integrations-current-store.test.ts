@@ -11,7 +11,8 @@ import {
   type ExportModel,
 } from "../../src/clients/config-export";
 import { formatSelectorConjunction } from "../../src/integrations/merge";
-import { previewIntegration } from "../../src/integrations/mutation-plan";
+import { DYNAMIC_SEGMENT, previewIntegration } from "../../src/integrations/mutation-plan";
+import { fingerprint } from "../../src/integrations/ownership";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { exportContextOf, readIntegrationState, readPath } from "../../src/integrations/state";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
@@ -300,7 +301,10 @@ describe("writing the provider store the client reads", () => {
       { field: "providerId", value: OPENCODE_PROVIDER_ID },
       { field: "modelId", value: MODELS[0]!.namespaced },
     ]));
-    store.putRecord({ ...record, fragmentPaths: [[malformed]] });
+    store.putRecord({
+      ...record,
+      fragmentPaths: [[...ZCODE_STORE_MODEL_RULES_PATH, malformed]],
+    });
     const currentStorePath = installWithStore();
 
     expect(readIntegrationState(input())).toMatchObject({
@@ -310,6 +314,41 @@ describe("writing the provider store the client reads", () => {
       supersededBy: currentStorePath,
     });
     expect(readPath(readStore(), OUR_PROVIDER_RULE)).toBeUndefined();
+  });
+
+  test("restore preview treats an unreadable prior selector as an unknown replacement", () => {
+    const path = installWithStore();
+    expect(applyIntegration(input()).ok).toBe(true);
+    const priorRecord = store.readRecords().zcode!;
+    const malformed = withoutLastCriterion(conjunction([
+      { field: "providerId", value: OPENCODE_PROVIDER_ID },
+      { field: "modelId", value: MODELS[0]!.namespaced },
+    ]));
+    const before = readFileSync(path, "utf8");
+    const opId = "restore-malformed-selector";
+    store.appendJournal({
+      opId,
+      clientId: "zcode",
+      kind: "refresh",
+      at: "2026-09-21T00:00:00.000Z",
+      configPath: path,
+      snapshot: store.captureSnapshot("zcode", opId, before),
+      resultFingerprint: fingerprint(before),
+      resultAbsent: false,
+      priorRecord: {
+        ...priorRecord,
+        fragmentPaths: [[...ZCODE_STORE_MODEL_RULES_PATH, malformed]],
+      },
+    });
+
+    const plan = previewIntegration(input(), { operation: "restore", opId });
+
+    expect(plan.canApply).toBe(true);
+    expect(plan.refusalReason).toBeUndefined();
+    expect(plan.changes).toContainEqual({
+      kind: "replace",
+      path: `${ZCODE_STORE_MODEL_RULES_PATH.join(".")}.${DYNAMIC_SEGMENT}`,
+    });
   });
 
   test("an undo of a store apply puts the store back", () => {
