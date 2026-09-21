@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
-import { parseServiceInstallStateRecord, selectAuthoritativeServiceState } from "../../src/service/state-record.mjs";
+import { parseInstallStateRecord, selectAuthoritativeServiceState } from "../../src/service/install-state-contract.mjs";
 
 describe("the runtime-ownership veto", () => {
   test("a desktop owner stops both the stop and the service refresh, and says so", () => {
@@ -54,8 +54,8 @@ describe("the Node and Bun paths share one full-record authority", () => {
   });
 
   test("a complete record is required before ownership is projected", () => {
-    expect(parseServiceInstallStateRecord(state(1))?.ownership?.installId).toBe("desktop-a");
-    expect(parseServiceInstallStateRecord({ ownership: state(1).ownership })).toBeNull();
+    expect(parseInstallStateRecord(state(1))?.ownership?.installId).toBe("desktop-a");
+    expect(parseInstallStateRecord({ ownership: state(1).ownership })).toBeNull();
   });
 
   test("the default-home authority wins over an older active-home mirror", () => {
@@ -111,6 +111,24 @@ describe("both updaters consult the shared rule", () => {
       expect(source).toContain("planUpdateRuntimeHandling({");
       expect(source).not.toMatch(/owner\s*!==\s*"cli"/);
     }
+  });
+
+  /**
+   * The launcher's own reader is what made the two lanes disagree, so its absence is the
+   * property worth pinning: no JSON.parse of the state record, no claim validation, and the
+   * contract module imported instead.
+   */
+  test("the launcher reads the record only through the shared contract", () => {
+    expect(launcher).toContain('from "../src/service/install-state-contract.mjs"');
+    expect(launcher).toContain("selectAuthoritativeServiceState(");
+    expect(launcher).toContain("serviceStateFilesFor(");
+    expect(launcher).not.toContain("parsed.ownership");
+    expect(launcher).not.toContain("consentGeneration");
+    // The authoritative reader delegates to the same module rather than keeping a twin.
+    const state = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
+    expect(state).toContain('from "./install-state-contract.mjs"');
+    expect(state).toContain("return parseInstallStateRecord(value)");
+    expect(state).toContain("selectAuthoritativeServiceState(");
   });
 });
 

@@ -31,7 +31,13 @@ const platformFiles: Record<string, string> = {
   "darwin-aarch64": "macos.app.tar.gz",
   "darwin-x86_64": "macos.app.tar.gz",
   "windows-x86_64": "windows-x64.msi",
+  // The AppImage is the plugin's default Linux target: it keeps the plain os-arch key so
+  // AppImage installs from releases before the deb target existed keep resolving updates.
   "linux-x86_64": "linux-x86_64.AppImage",
+  // A deb install cannot apply an AppImage payload (the updater validates the downloaded
+  // bytes as a real .deb before installing), so it must resolve a distinct key. The shell
+  // selects this key from the bundle type embedded at packaging time; see updater.rs.
+  "linux-x86_64-deb": "linux-amd64.deb",
 };
 
 export function buildUpdaterManifest(options: UpdaterManifestOptions): UpdaterManifest {

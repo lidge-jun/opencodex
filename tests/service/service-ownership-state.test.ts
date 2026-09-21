@@ -593,4 +593,5 @@ describe("the anchor lock", () => {
     });
     expect(existsSync(`${lockPath}/v1-888-${successorInstance}-${successorToken}.json`)).toBe(true);
   });
+
 });

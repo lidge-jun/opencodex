@@ -88,11 +88,9 @@ export function serviceStateFingerprint(value) {
 /**
  * Select one authoritative generation from mirrored state.
  *
- * A partial two-path commit is recoverable: the valid record with the highest revision wins
- * and the next writer republishes it to every mirror. Same-revision disagreement is not
- * ordered evidence and therefore fails closed. Invalid mirrors are recoverable only while
- * another valid generation exists; unreadable paths remain unknown because their generation
- * cannot be observed at all.
+ * The final path is authoritative. A lower-revision mirror is repairable; a same-or-newer
+ * disagreement is unordered evidence and fails closed. Before the authority exists, one valid
+ * active-home record is imported exactly once as migration input.
  */
 export function selectAuthoritativeServiceState(evidence) {
   const authority = evidence.at(-1);

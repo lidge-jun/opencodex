@@ -37,8 +37,9 @@ misleading on a workstation.
 bun run build:local
 ```
 
-This asks for the app and dmg only, so no updater archive is produced and none is expected to be
-signed. It prints the bundle path and exits zero. The release path below is unchanged: a published
+This asks for the host platform's installable bundles only (app and dmg on macOS, msi and nsis
+setup exe on Windows, AppImage and deb on Linux), so no updater archive is produced and none is
+expected to be signed. It prints the bundle paths and exits zero. The release path below is unchanged: a published
 updater artifact still has to be signed.
 
 ## Release packaging and updates

@@ -5,8 +5,42 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 pub struct PendingUpdate(pub Mutex<Option<Update>>);
 
+/// The manifest key a Linux install must resolve, or None to keep the updater's default
+/// os-arch key (linux-x86_64, windows-x86_64, darwin-*).
+///
+/// A deb install cannot apply the AppImage payload: the updater validates the downloaded
+/// bytes as a real .deb before installing through package-manager elevation, so it must
+/// resolve the deb's own manifest key. The bundle type is patched into the binary at
+/// packaging time, so the answer is embedded per artifact, not detected at runtime. The
+/// AppImage keeps the default key, which is also what installs from releases before the
+/// deb target existed already resolve.
+#[cfg(any(target_os = "linux", test))]
+pub fn linux_updater_target(
+    bundle: Option<tauri_utils::config::BundleType>,
+) -> Option<&'static str> {
+    match bundle {
+        Some(tauri_utils::config::BundleType::Deb) => Some("linux-x86_64-deb"),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn configured_updater_target() -> Option<&'static str> {
+    linux_updater_target(tauri_utils::platform::bundle_type())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configured_updater_target() -> Option<&'static str> {
+    None
+}
+
 pub async fn check(app: &AppHandle) -> Result<Option<Update>, String> {
-    app.updater()
+    let mut builder = app.updater_builder();
+    if let Some(target) = configured_updater_target() {
+        builder = builder.target(target);
+    }
+    builder
+        .build()
         .map_err(|error| error.to_string())?
         .check()
         .await
@@ -62,10 +96,30 @@ pub async fn check_and_show(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::update_label;
+    use super::{linux_updater_target, update_label};
+    use tauri_utils::config::BundleType;
 
     #[test]
     fn formats_update_menu_label() {
         assert_eq!(update_label("2.62.0"), "Install update v2.62.0");
+    }
+
+    #[test]
+    fn deb_installs_resolve_their_own_updater_key() {
+        assert_eq!(
+            linux_updater_target(Some(BundleType::Deb)),
+            Some("linux-x86_64-deb")
+        );
+    }
+
+    #[test]
+    fn appimage_installs_keep_the_default_updater_key() {
+        assert_eq!(linux_updater_target(Some(BundleType::AppImage)), None);
+    }
+
+    #[test]
+    fn unbundled_builds_keep_the_default_updater_key() {
+        // Dev builds and any format without a patcher entry resolve the default key.
+        assert_eq!(linux_updater_target(None), None);
     }
 }

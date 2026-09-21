@@ -8,7 +8,7 @@ import type {
 import {
   SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
   SERVICE_OWNERSHIP_PROTOCOL_VERSION,
-} from "./state-record.mjs";
+} from "./install-state-contract.mjs";
 
 export type ManagingCliRole = "service-registration" | "path";
 

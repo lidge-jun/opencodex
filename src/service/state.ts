@@ -1,4 +1,4 @@
-import { accessSync, constants as fsConstants, existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
@@ -10,15 +10,15 @@ import { WINSW_SHA256, WINSW_VERSION } from "../lib/winsw";
 import { isProtectedHomeUnderTest, isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { isStandaloneBinary } from "../lib/standalone";
 import {
-  inspectServiceStateRecords,
-  parseServiceInstallStateRecord,
-  parseServiceOwnershipRecord,
+  inspectInstallStateBytes,
+  parseInstallStateRecord,
+  parseOwnershipClaim,
   SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
   SERVICE_OWNERSHIP_PROTOCOL_VERSION,
   selectAuthoritativeServiceState,
   serviceStateFingerprint,
-  serviceStatePathsForHomes,
-} from "./state-record.mjs";
+  serviceStateFilesFor,
+} from "./install-state-contract.mjs";
 import type { ServiceStateRecordEvidence } from "./state-record.mjs";
 import { assertServiceStateLocksOwned, withServiceStateLocks, type ServiceStateLockHooks } from "./state-lock";
 import { withOwnershipMutationLease, type OwnershipMutationLeaseOptions } from "./ownership-mutation-lease.mjs";
@@ -154,7 +154,7 @@ function defaultOpenCodexHome(): string {
 }
 
 export function serviceStatePathsForOpenCodexHome(opencodexHome: string): string[] {
-  return serviceStatePathsForHomes(opencodexHome, defaultOpenCodexHome());
+  return serviceStateFilesFor(opencodexHome, defaultOpenCodexHome());
 }
 
 export function serviceStatePaths(): string[] {
@@ -322,11 +322,17 @@ export interface ServiceOwnership {
  * which is the same lost-field failure this whole record exists to stop.
  */
 export function parseServiceOwnership(value: unknown): ServiceOwnership | null {
-  return parseServiceOwnershipRecord(value) as ServiceOwnership | null;
+  return parseOwnershipClaim(value) as ServiceOwnership | null;
 }
 
+/**
+ * The record contract lives in `install-state-contract.mjs` so the Node launcher validates
+ * exactly what this reader validates. It used to keep a weaker copy, and a record that fails
+ * this contract while merely lacking an `ownership` field read there as "nobody owns the
+ * runtime" — which is permission to stop a foreign runtime and reactivate the npm service.
+ */
 export function parseServiceInstallState(value: unknown): ServiceInstallState | null {
-  return parseServiceInstallStateRecord(value) as ServiceInstallState | null;
+  return parseInstallStateRecord(value) as ServiceInstallState | null;
 }
 
 /**
@@ -837,7 +843,9 @@ export type ServiceStateEvidence =
 export function inspectServiceStateEvidence(
   paths: readonly string[] = serviceStatePaths(),
 ): readonly ServiceStateEvidence[] {
-  return inspectServiceStateRecords(paths) as readonly ServiceStateEvidence[];
+  return paths.map(path => (
+    inspectInstallStateBytes(path, at => readFileSync(at, "utf8")) as ServiceStateEvidence
+  ));
 }
 
 /** The homes this process is actually using, for comparison against a claim. */

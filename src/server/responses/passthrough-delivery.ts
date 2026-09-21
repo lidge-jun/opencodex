@@ -93,6 +93,7 @@ import { createResponsesFieldBackfillBlockRewrite } from "./responses-field-back
 import { createResponsesFunctionToolRepairBlockRewrite } from "../responses-function-tool-repair";
 import {
   createUndeclaredToolCallGuardBlockRewrite,
+  currentTurnWireToolCatalogBody,
   undeclaredToolCallNameInResponse,
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
@@ -515,7 +516,19 @@ export async function deliverPassthroughResponse(
           ? createGrokResponsesTimestampBlockRewrite()
           : undefined,
         grokClientCompatibilityEnabled
-          ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget, nativeExchange.outboundRequestBody)
+          ? createGrokResponsesSparseTerminalBlockRewrite(
+            translatorBudget,
+            nativeExchange.outboundRequestBody,
+            {
+              clientToolAuthorizationBody: currentTurnWireToolCatalogBody(
+                parsed._rawBody,
+                parsed._replayPrefixLen ?? 0,
+              ),
+              routedNamespaceToolAliases: responseEffects.routedNamespaceToolAliases,
+              routedMuseToolNameAliases: responseEffects.routedMuseToolNameAliases,
+              convertedRoutedCustomToolNames: routedCustomToolNames,
+            },
+          )
           : undefined,
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)

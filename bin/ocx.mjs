@@ -14,10 +14,10 @@ import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
 import { planUpdateRuntimeHandling } from "../src/update/runtime-ownership.mjs";
 import {
-  inspectServiceStateRecords,
+  inspectInstallStateBytes,
   selectAuthoritativeServiceState,
-  serviceStatePathsForHomes,
-} from "../src/service/state-record.mjs";
+  serviceStateFilesFor,
+} from "../src/service/install-state-contract.mjs";
 import { acquireOwnershipMutationLease } from "../src/service/ownership-mutation-lease.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
@@ -263,7 +263,7 @@ function runPackageManagerSelfUpdate(manager) {
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must refresh and restart it afterwards.
-  const allServiceStatePaths = serviceStatePathsForHomes(configDir(), join(homedir(), ".opencodex"));
+  const allServiceStatePaths = serviceStateFilesFor(configDir(), join(homedir(), ".opencodex"));
   // The test guard's legacy path is the developer's real home. Production always reads the
   // same active-home + default-home observations as the Bun resolver.
   const serviceStatePaths = process.env.OCX_TEST_HOME_GUARD === "1"
@@ -272,7 +272,9 @@ function runPackageManagerSelfUpdate(manager) {
   const serviceWasInstalled = serviceStatePaths.some(path => existsSync(path));
   // What this update may do to the runtime. The same rule the Bun updater applies, from the
   // same module: a desktop takeover vetoes both the stop and the service refresh below.
-  const readServiceState = () => selectAuthoritativeServiceState(inspectServiceStateRecords(serviceStatePaths));
+  const readServiceState = () => selectAuthoritativeServiceState(
+    serviceStatePaths.map(path => inspectInstallStateBytes(path, at => readFileSync(at, "utf8"))),
+  );
   const readOwnership = () => {
     const selected = readServiceState();
     if (selected.kind === "unknown") return { ownership: null, ownershipUnknown: true, subjectToken: "unknown" };
