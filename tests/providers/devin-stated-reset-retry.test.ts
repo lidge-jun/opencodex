@@ -186,6 +186,20 @@ describe("streamChatEventsWithResetRetry", () => {
     expect(calls).toBe(1);
   });
 
+  test("a zero wait allowance surfaces a stated reset without sleeping", async () => {
+    let calls = 0;
+    const stream = () => {
+      calls += 1;
+      return exhausting("Your limit will reset in 21 minutes")();
+    };
+    await expect(drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async () => { throw new Error("sleep must not run"); },
+      maxWaitMs: 0,
+    }))).rejects.toThrow("21 minutes");
+    expect(calls).toBe(1);
+  });
+
   test("a 21-minute stated window replays under the default ceiling", async () => {
     // Observed upstream windows reach ~21 minutes; the default ceiling is 30.
     const waits: number[] = [];

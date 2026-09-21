@@ -642,10 +642,9 @@ export function createDevinAdapter(
         const maxOutputTokens = resolveDevinMaxOutputTokens(
           provider, modelUid, parsed.options.maxOutputTokens,
         );
-        // The reset-retry wrapper waits out a 429 that states its own recovery
-        // delay ("limit will reset in 35 seconds") and replays the identical
-        // request — but only while zero events have been yielded, so a
-        // post-output failure still takes the terminal path untouched.
+        // An admitted HTTP turn owns globally shared capacity until this call
+        // emits. Never retain that capacity while waiting out a provider 429;
+        // surface its parsed Retry-After so the client can retry later instead.
         for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
@@ -664,6 +663,7 @@ export function createDevinAdapter(
           },
           signal: incoming.abortSignal,
         }, {
+          maxWaitMs: 0,
           execution: {
             executor: incoming.providerFetch,
             sendBudget: incoming.sendBudget,
