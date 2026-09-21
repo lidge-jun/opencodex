@@ -229,7 +229,7 @@ describe("desktop exit ownership", () => {
     const proceed = handler.indexOf("ExitDecision::Proceed =>");
     expect(proceed).toBeGreaterThan(-1);
     expect(handler.slice(proceed)).not.toContain("prevent_exit");
-    expect(exit).toContain("coordinator.finish_drain()");
+    expect(exit).toContain("coordinator.finish_drain(verdict)");
   });
 
   test("closing the window takes the same decision the quit gesture does", () => {
