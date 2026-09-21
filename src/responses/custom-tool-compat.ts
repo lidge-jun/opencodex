@@ -303,15 +303,17 @@ function rewriteHistoricalCustomItems(
   const calls = new Map<string, { name: string; namespace?: string }>();
   for (const item of body.input) {
     if (!isPlainObject(item)) continue;
-    if (
-      (item.type !== "custom_tool_call" && item.type !== "function_call")
-      || typeof item.call_id !== "string"
-      || item.call_id.length === 0
-    ) continue;
+    if (item.type !== "custom_tool_call" && item.type !== "function_call") continue;
+    if (typeof item.call_id !== "string" || item.call_id.length === 0) {
+      if (item.type === "custom_tool_call") {
+        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call.call_id");
+      }
+      continue;
+    }
     const identity = historicalCallIdentity(item);
     if (!identity) {
       if (item.type === "custom_tool_call") {
-        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call");
+        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call.name");
       }
       continue;
     }
@@ -326,15 +328,21 @@ function rewriteHistoricalCustomItems(
   const input = body.input.map(item => {
     if (!isPlainObject(item)) return item;
     if (item.type === "custom_tool_call") {
-      if (typeof item.name !== "string" || item.name.length === 0 || typeof item.input !== "string") {
-        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call");
+      if (typeof item.call_id !== "string" || item.call_id.length === 0) {
+        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call.call_id");
+      }
+      if (typeof item.name !== "string" || item.name.length === 0) {
+        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call.name");
+      }
+      if (typeof item.input !== "string") {
+        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call.input");
       }
       const wireName = customToolWireName(
         typeof item.namespace === "string" ? item.namespace : undefined,
         item.name,
       );
       if (declaredFunctionWireNames.has(wireName)) {
-        throw new RoutedCustomToolCompatError("historical_item", "custom_tool_call");
+        throw new RoutedCustomToolCompatError("historical_collision", "declared_function_name");
       }
       const { input: rawInput, id: _id, ...rest } = item;
       changed = true;
