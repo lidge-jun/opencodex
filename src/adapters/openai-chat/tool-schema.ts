@@ -380,7 +380,7 @@ function normalizeMoonshotSchemaNode(
         }
         merged[key] = normalized;
       }
-      return merged;
+      return normalizeMoonshotSchemaNode(merged, root, state, depth + 1);
     }
 
     // Unresolvable pointer: a remote ref, a malformed path, or a non-object target. Dropping
@@ -397,6 +397,28 @@ function normalizeMoonshotSchemaNode(
       ? value
       : normalizeMoonshotSchemaNode(value, root, state, depth + 1);
   }
+
+  // Moonshot MFJS requirements:
+  // 1. Stamp "object" if properties or allOf are present without type, so Moonshot's validator
+  //    recognizes the schema as a valid termination condition for recursive refs.
+  // 2. Infer scalar types for bare const and enum keywords.
+  if (out.type === undefined) {
+    if (out.properties !== undefined || Array.isArray(out.allOf)) {
+      out.type = "object";
+    } else if (out.const !== undefined) {
+      const t = typeof out.const;
+      if (t === "string" || t === "number" || t === "boolean") {
+        out.type = t;
+      }
+    } else if (Array.isArray(out.enum) && out.enum.length > 0) {
+      if (out.enum.every(x => typeof x === "string")) {
+        out.type = "string";
+      } else if (out.enum.every(x => typeof x === "number")) {
+        out.type = "number";
+      }
+    }
+  }
+
   return out;
 }
 

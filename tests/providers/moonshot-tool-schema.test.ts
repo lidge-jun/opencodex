@@ -447,4 +447,67 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     expect(parameters?.$defs).toEqual(CODEX_STYLE_SCHEMA.$defs as Record<string, unknown>);
     expect(siblingRefPaths(parameters).length).toBeGreaterThan(0);
   });
+
+  test("infers object type for allOf/properties and scalar types for const/enum", async () => {
+    const parameters = await emittedParameters("https://api.kimi.com/coding/v1", {
+      name: "inference_tool",
+      parameters: {
+        type: "object",
+        properties: {
+          leaf: {
+            allOf: [{ properties: { id: { type: "integer" } } }],
+          },
+          status: { const: "ACTIVE" },
+          count: { const: 42 },
+          flag: { const: true },
+          color: { enum: ["red", "blue"] },
+        },
+      },
+    });
+
+    const props = parameters?.properties as Record<string, Record<string, unknown>>;
+    expect(props.leaf.type).toBe("object");
+    expect(props.status.type).toBe("string");
+    expect(props.count.type).toBe("number");
+    expect(props.flag.type).toBe("boolean");
+    expect(props.color.type).toBe("string");
+  });
+
+  test("re-normalizes composed properties when sibling narrows a referenced property", async () => {
+    // When Base defines `op: { $ref: "#/$defs/Op" }` and a sibling node narrows it with
+    // `properties: { op: { const: "AND" } }`, `composeProperties` merges them. The merged
+    // property must re-normalize rather than emitting a `$ref` beside `const`.
+    const parameters = await emittedParameters("https://api.kimi.com/coding/v1", {
+      name: "ast_tool",
+      parameters: {
+        type: "object",
+        $defs: {
+          Op: { type: "string", enum: ["AND", "OR"] },
+          Base: {
+            type: "object",
+            properties: {
+              op: { $ref: "#/$defs/Op" },
+              left: { type: "string" },
+            },
+          },
+        },
+        properties: {
+          andNode: {
+            $ref: "#/$defs/Base",
+            properties: {
+              op: { const: "AND" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(siblingRefPaths(parameters)).toEqual([]);
+    const andNode = (parameters?.properties as Record<string, Record<string, unknown>>).andNode;
+    const op = (andNode.properties as Record<string, Record<string, unknown>>).op;
+    expect(op.$ref).toBeUndefined();
+    expect(op.const).toBe("AND");
+    expect(op.type).toBe("string");
+  });
 });
+
