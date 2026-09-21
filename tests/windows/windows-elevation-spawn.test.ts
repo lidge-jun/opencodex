@@ -86,6 +86,7 @@ describe("elevated Task Scheduler payload staging", () => {
         expect(onDisk.equals(Buffer.from(value, "utf16le"))).toBe(true);
         expect(onDisk[0]).not.toBe(0xff);
         expect(payload.sha256).toBe(createHash("sha256").update(onDisk).digest("hex"));
+        expect(payload.byteLength).toBe(onDisk.length);
         expect(payload.sha256).toMatch(/^[0-9a-f]{64}$/);
       }
       expect(staged.xml.sha256).not.toBe(staged.expectedExisting!.sha256);
@@ -300,7 +301,7 @@ describe("runWindowsElevated spawn contract", () => {
 
     await expect(runWindowsElevatedScheduledTaskRegistration(
       "opencodex-proxy",
-      { path: "C:\\Temp\\opencodex-service-stage-aaaaaa\\register.xml", sha256: "0".repeat(64) },
+      { path: "C:\\Temp\\opencodex-service-stage-aaaaaa\\register.xml", byteLength: 42, sha256: "0".repeat(64) },
     )).resolves.toBe(0);
 
     const startProcessIndex = commandScript.indexOf("Start-Process");
@@ -308,7 +309,7 @@ describe("runWindowsElevated spawn contract", () => {
     const argumentListIndex = commandScript.indexOf(" -ArgumentList ");
     const verbIndex = commandScript.indexOf(" -Verb RunAs ");
     const waitIndex = commandScript.indexOf(" -Wait");
-    const firstTerminator = commandScript.indexOf(";");
+    const firstTerminator = commandScript.indexOf(";", startProcessIndex);
 
     expect(startProcessIndex).toBeGreaterThanOrEqual(0);
     expect(filePathIndex).toBeGreaterThan(startProcessIndex);
@@ -321,7 +322,7 @@ describe("runWindowsElevated spawn contract", () => {
     expect(commandScript).not.toMatch(/-ArgumentList\s+'[^']*';\s+-Verb RunAs/);
   });
 
-  test("scheduled-task registration passes staged paths and digests, never inline payloads", async () => {
+  test("scheduled-task registration locks staged paths before elevation and bounds reads", async () => {
     let commandScript = "";
     setWindowsElevationSpawnForTests(((
       _cmd: string,
@@ -344,7 +345,7 @@ describe("runWindowsElevated spawn contract", () => {
 
     const xml = "<Task><Description>fixed-definition</Description></Task>";
     const stageDir = "C:\\Temp\\opencodex-service-stage-aaaaaa";
-    const staged = { path: stageDir + "\\register.xml", sha256: "a".repeat(64) };
+    const staged = { path: stageDir + "\\register.xml", byteLength: 108, sha256: "a".repeat(64) };
     await expect(runWindowsElevatedScheduledTaskRegistration("opencodex-proxy", staged)).resolves.toBe(0);
     const match = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(commandScript);
     expect(match).not.toBeNull();
@@ -367,7 +368,12 @@ describe("runWindowsElevated spawn contract", () => {
     // then rereading would leave the swap window this check exists to close.
     expect(elevatedScript).toContain(staged.path);
     expect(elevatedScript).toContain(staged.sha256);
-    expect(elevatedScript).toContain("[IO.File]::ReadAllBytes($path)");
+    expect(commandScript.indexOf("Lock-OcxStage")).toBeLessThan(commandScript.indexOf("Start-Process"));
+    expect(commandScript).toContain("GetFileInformationByHandleEx");
+    expect(commandScript).toContain("0x00200000");
+    expect(commandScript).toContain("0x400");
+    expect(elevatedScript).toContain("$stream.Length -ne $expectedLength");
+    expect(elevatedScript).toContain("[byte[]]::new($expectedLength)");
     expect(elevatedScript).toContain("$sha.ComputeHash($bytes)");
     expect(elevatedScript).toContain("Task Scheduler staged payload failed its integrity check.");
     // #4692 follow-up: the one failure this staging design introduces has to be readable.
@@ -393,13 +399,13 @@ describe("runWindowsElevated spawn contract", () => {
     // pinned here is independence, not one lucky measurement: the same staging shape must
     // produce the same command length no matter how large the definition behind it is.
     const smallLength = commandScript.length;
-    const largeStaged = { path: stageDir + "\\register.xml", sha256: "b".repeat(64) };
+    const largeStaged = { path: stageDir + "\\register.xml", byteLength: 20_000, sha256: "b".repeat(64) };
     await expect(runWindowsElevatedScheduledTaskRegistration("opencodex-proxy", largeStaged)).resolves.toBe(0);
-    expect(commandScript.length).toBe(smallLength);
+    expect(commandScript.length).toBeLessThanOrEqual(smallLength + 8);
     expect(commandScript.length).toBeLessThan(8192);
 
     const predecessor = "<Task><Description>captured-predecessor</Description></Task>";
-    const stagedPredecessor = { path: stageDir + "\\expected.xml", sha256: "c".repeat(64) };
+    const stagedPredecessor = { path: stageDir + "\\expected.xml", byteLength: 126, sha256: "c".repeat(64) };
     await expect(
       runWindowsElevatedScheduledTaskRegistration("opencodex-proxy", staged, true, stagedPredecessor),
     ).resolves.toBe(0);
@@ -427,7 +433,7 @@ describe("runWindowsElevated spawn contract", () => {
     // overwriting a registration somebody else changed while the prompt was open.
     expect(() => runWindowsElevatedScheduledTaskRegistration(
       "opencodex-proxy",
-      { path: "C:\\Temp\\opencodex-service-stage-aaaaaa\\register.xml", sha256: "a".repeat(64) },
+      { path: "C:\\Temp\\opencodex-service-stage-aaaaaa\\register.xml", byteLength: 42, sha256: "a".repeat(64) },
       true,
     )).toThrow("requires a captured existing definition");
   });
