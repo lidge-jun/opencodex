@@ -3075,6 +3075,6 @@ export const de: Record<TKey, string> = {
   "remote.event.tool": "Remote-Werkzeug",
   "remote.event.error": "Fehler",
   "integrations.tab.factoryDroid": "Factory Droid",
-  "integrations.semantics.factoryDroid": "Verwaltet aktive OpenCodex-Modelle in der settings.json von Factory Droid. Synchronisieren ändert nur OpenCodex-Einträge, Deaktivieren entfernt sie und Rückgängig stellt die vorige Datei wieder her.",
+  "integrations.semantics.factoryDroid": "Verwaltet aktive OpenCodex-Modelle in der settings.json von Factory Droid. Synchronisieren ändert nur OpenCodex-Einträge; beim Deaktivieren werden sie entfernt, und mit „Rückgängig“ wird die vorherige Datei wiederhergestellt.",
   "api.clientConfig.clientFactoryDroid": "Factory Droid",
 };
