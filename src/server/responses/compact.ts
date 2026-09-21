@@ -51,6 +51,7 @@ import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSide
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
+  callerCodexWorkspaceAccountId,
   createCodexReserveDispatchGuard,
   unwrapUpstreamRetryEvidenceError,
   CodexMainProfileDrainingError,
@@ -186,6 +187,7 @@ import {
   handleResponses,
   preAuthUpstreamHostCircuitKey,
   poolCredentialRefreshIncompleteResponse,
+  shouldRetryCodexScopedQuotaOnAlternate,
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
@@ -1213,7 +1215,24 @@ export async function handleResponsesCompact(
         recordCompactPoolOutcome(outcomeCtx, 499);
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
-      if (alternate) {
+      // The same scope binding the regular path applies: an organization-scoped
+      // exhaustion refuses every credential in that workspace, so a proven
+      // same-workspace alternate pays a cold prompt prefix for no new capacity.
+      // Suppression is not silence — the buffered recorder below still attributes
+      // the 429/402 to the account that produced it.
+      const sharedWorkspaceScope = alternate != null
+        && !await shouldRetryCodexScopedQuotaOnAlternate(
+          upstream,
+          authCtx.chatgptAccountId,
+          alternate.authCtx.kind === "pool" || alternate.authCtx.kind === "main-pool"
+            ? alternate.authCtx.chatgptAccountId
+            : callerCodexWorkspaceAccountId(req.headers),
+          req.signal,
+        );
+      if (alternate && sharedWorkspaceScope) {
+        releaseCodexAuthContextProbeLease(alternate.authCtx);
+      }
+      if (alternate && !sharedWorkspaceScope) {
         // Same order the regular path uses (core.ts:349-357): a 429/402 carries the
         // quota snapshot that produced it, so refresh A's cache before recording its
         // rejection. Skipping this leaves quota-strategy routing and the dashboard

@@ -41,6 +41,7 @@ import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import {
+  callerCodexWorkspaceAccountId,
   codexProbeLeaseId,
   codexTransientProbeGrant,
   codexProbeQuotaScope,
@@ -542,6 +543,22 @@ export async function retryCodexPoolOnAlternateAccount(
       writerGeneration: firstAuthCtx.writerGeneration,
     });
   };
+  // A body-confirmed quota response may arrive under HTTP 5xx. A path that returns the
+  // first response without a move must still record the NORMALIZED outcome: the ordinary
+  // terminal recorder sees only that wire status and would misclassify it as transient,
+  // leaving the exhausted account immediately selectable next turn.
+  const recordWrappedQuotaOutcome = (): void => {
+    if (outcomeStatus === firstResponse.status || (outcomeStatus !== 429 && outcomeStatus !== 402)) return;
+    recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+      ...codexQuotaOutcomeMeta(firstResponse),
+      threadId: firstAuthCtx.affinityKey,
+      modelId: route.modelId,
+      probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      transientProbe: codexTransientProbeGrant(firstAuthCtx),
+      writerGeneration: firstAuthCtx.writerGeneration,
+    });
+  };
   if (outcomeStatus === 400 && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)) {
     invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
     let refreshed;
@@ -638,20 +655,7 @@ export async function retryCodexPoolOnAlternateAccount(
     && retryAuthCtx?.kind !== "main-pool"
     && retryAuthCtx?.kind !== "main"
   ) {
-    // A body-confirmed quota response may arrive under HTTP 5xx. Without an alternate,
-    // the ordinary terminal recorder sees only that wire status and would misclassify it
-    // as transient, leaving the exhausted account immediately selectable next turn.
-    if (outcomeStatus !== firstResponse.status && (outcomeStatus === 429 || outcomeStatus === 402)) {
-      recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
-        ...codexQuotaOutcomeMeta(firstResponse),
-        threadId: firstAuthCtx.affinityKey,
-        modelId: route.modelId,
-        probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-        probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
-        transientProbe: codexTransientProbeGrant(firstAuthCtx),
-        writerGeneration: firstAuthCtx.writerGeneration,
-      });
-    }
+    recordWrappedQuotaOutcome();
     // No usable alternate was resolved, so the reserved move never becomes a send.
     accountMovePermit?.release();
     recordUnmovedTransientOutcome();
@@ -665,10 +669,15 @@ export async function retryCodexPoolOnAlternateAccount(
       firstAuthCtx.chatgptAccountId,
       retryAuthCtx.kind === "pool" || retryAuthCtx.kind === "main-pool"
         ? retryAuthCtx.chatgptAccountId
-        : undefined,
+        // A request-owned `main` alternate has no stored account id; its workspace
+        // identity is what the caller's own credential materializes upstream.
+        : callerCodexWorkspaceAccountId(callerAuthHeaders),
       options.abortSignal,
     )
   ) {
+    // Suppressing the move is not suppressing the evidence: a same-workspace refusal
+    // still records its normalized quota outcome on the account that produced it.
+    recordWrappedQuotaOutcome();
     accountMovePermit?.release();
     releaseCodexAuthContextProbeLease(retryAuthCtx);
     return { kind: "no-alternate" };

@@ -443,12 +443,17 @@ least two accounts exist and an alternate account is not currently cooled.
 
 `shouldRetryCodexPoolAccountQuota` admits that rotation when the 429 or 402 body names an
 organization- or project-scoped exhaustion because the response does not identify the refusing
-scope. After resolving an alternate, the rotation path uses `codexScopedExhaustionCode` from
-`src/codex/quota-rejection.ts` to withhold organization-level retries only when both credentials
-have the same known workspace account id. Project exhaustion remains retryable because no project
-identity is available. Credentials in distinct or unknown workspaces therefore retain failover,
-while a proven same-workspace move cannot pay a second cold prompt prefix for no new capacity.
-Withholding the move does not withhold the accounting: `src/server/responses/passthrough-delivery.ts` applies the
+scope. After resolving an alternate — on `/v1/responses` and on the single bounded send the
+native `/responses/compact` path resolves — the rotation path uses `codexScopedExhaustionCode`
+from `src/codex/quota-rejection.ts` to withhold organization-level retries only when both
+credentials have the same known workspace account id. A stored Pool or main-pool alternate
+supplies that id directly; a request-owned `main` alternate is bound by the caller credential's
+own `chatgpt-account-id` via `callerCodexWorkspaceAccountId`. Project exhaustion remains
+retryable because no project identity is available. Credentials in distinct or unknown
+workspaces therefore retain failover, while a proven same-workspace move cannot pay a second
+cold prompt prefix for no new capacity. A suppressed move still records the normalized 429/402
+on the refused account, so a 5xx-wrapped quota body cools it rather than letting its wire
+status record as transient. `src/server/responses/passthrough-delivery.ts` applies the
 response's quota headers to the serving account and records the 429 outcome on the ordinary
 delivery path, so the account still earns its cooldown and leaves the selection pool. The gate
 fails closed — an empty, truncated, unparseable, duplicate-keyed or aborted body keeps the broad

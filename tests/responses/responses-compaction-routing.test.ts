@@ -1330,6 +1330,46 @@ describe("compact alternate-account attempt (#913)", () => {
         expect(getCodexUpstreamHealth("pool-b")).toBeNull();
       });
     });
+
+    test(`a same-workspace alternate is withheld for a scoped ${rejection} refusal`, async () => {
+      await withPoolEnv(`ocx-compact-same-scope-${rejection}-`, async config => {
+        // pool-b shares pool-a's workspace: an organization-scoped exhaustion binds
+        // every credential in that workspace, so the alternate send cannot pay.
+        saveCodexAccountCredential("pool-b", {
+          accessToken: "pool-b-access-token",
+          refreshToken: "pool-b-refresh-token",
+          expiresAt: Date.now() + 300_000,
+          chatgptAccountId: "pool_acc_a",
+        });
+        const bearers: string[] = [];
+        const accountIds: string[] = [];
+        const body = JSON.stringify({
+          error: {
+            code: "organization_spend_limit_exceeded",
+            message: "The usage limit has been reached",
+          },
+        });
+        globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          bearers.push(headers.get("authorization") ?? "");
+          accountIds.push(headers.get("chatgpt-account-id") ?? "");
+          return new Response(body, {
+            status: rejection,
+            headers: { "content-type": "application/json", "retry-after": "42" },
+          });
+        }) as typeof fetch;
+
+        const res = await handleResponsesCompact(
+          compactionRequest(baseCompactionBody({})),
+          config,
+          { model: "", provider: "" },
+        );
+
+        expect(bearers).toEqual(["Bearer pool-a-access-token"]);
+        expect(accountIds).toEqual(["pool_acc_a"]);
+        expect(res.status).toBe(rejection);
+      });
+    });
   }
 
   test("a native-main drain starting between attempts preserves the first rejection", async () => {

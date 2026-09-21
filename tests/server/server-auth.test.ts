@@ -3290,6 +3290,101 @@ describe("server local API auth", () => {
     { timeout: SERVER_BUDGET_MS },
   );
 
+  test.each([429, 402] as const)(
+    "a same-workspace caller main is bound by its workspace id and never sees a %i scoped refusal",
+    async rejection => {
+      // The alternate resolved here is the request's own main credential: it has no
+      // stored account id, so the scope gate can only bind it by the workspace id the
+      // caller credential would materialize upstream.
+      const model = "gpt-daybreak-blue-latest";
+      const harness = await startPoolRetryHarness(() => new Response(
+        JSON.stringify({
+          error: {
+            code: "organization_spend_limit_exceeded",
+            message: "The usage limit has been reached",
+          },
+        }),
+        { status: rejection, headers: { "content-type": "application/json", "retry-after": "60" } },
+      ), {
+        secondAccount: false,
+        modelRosterByAccount: { "acct-pool-a": [model] },
+      });
+      try {
+        const response = await harness.request({
+          model,
+          headers: { "chatgpt-account-id": "acct-pool-a" },
+        });
+        expect(response.status).toBe(rejection);
+        expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    },
+    { timeout: SERVER_BUDGET_MS },
+  );
+
+  test("a same-workspace caller main is also bound by the bearer token's account claim", async () => {
+    const model = "gpt-daybreak-blue-latest";
+    const harness = await startPoolRetryHarness(() => new Response(
+      JSON.stringify({
+        error: {
+          code: "organization_spend_limit_exceeded",
+          message: "The usage limit has been reached",
+        },
+      }),
+      { status: 429, headers: { "content-type": "application/json", "retry-after": "60" } },
+    ), {
+      secondAccount: false,
+      modelRosterByAccount: { "acct-pool-a": [model] },
+    });
+    try {
+      const response = await harness.request({
+        model,
+        headers: {
+          authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-pool-a" })}`,
+        },
+      });
+      expect(response.status).toBe(429);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("a suppressed 5xx-wrapped scoped refusal still records its normalized quota outcome", async () => {
+    // ChatGPT sometimes wraps quota exhaustion in a generic 5xx. Suppressing the
+    // same-workspace alternate must still record the normalized 429 on the refused
+    // account — otherwise it earns only a transient failure and stays selectable.
+    const harness = await startPoolRetryHarness(() => new Response(
+      JSON.stringify({
+        error: {
+          code: "organization_spend_limit_exceeded",
+          message: "The usage limit has been reached",
+        },
+      }),
+      // No Retry-After: the send layer honours it as a real wait, so the cooldown must
+      // come from the normalized quota record's default, not the wire header.
+      { status: 502, headers: { "content-type": "application/json" } },
+    ));
+    try {
+      // pool-b shares pool-a's workspace, so the resolved alternate is suppressed.
+      saveCodexAccountCredential("pool-b", {
+        accessToken: "pool-b-token",
+        refreshToken: "pool-b-refresh",
+        expiresAt: Date.now() + 10 * 60_000,
+        chatgptAccountId: "acct-pool-a",
+      });
+      const response = await harness.request();
+      expect(response.status).toBe(502);
+      expect(harness.dispatches).not.toContain("acct-pool-b");
+      const health = getCodexUpstreamHealth("pool-a");
+      expect(health).toMatchObject({ cooldownSource: "default" });
+      expect(health?.cooldownUntil).toBeGreaterThan(Date.now());
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
   test("#584: Retry-After cools the first account even when its account retry fails", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
       ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {
