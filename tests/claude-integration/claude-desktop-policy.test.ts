@@ -161,7 +161,7 @@ test("the execFile translation classifies exit codes, timeouts, and spawn failur
   expect(classifyExecFileProbeResult(probeError("ETIMEDOUT"), undefined))
     .toEqual({ status: null, stdout: "", timedOut: true, spawnFailed: false });
   expect(classifyExecFileProbeResult(Object.assign(new Error("killed"), { killed: true }), undefined))
-    .toEqual({ status: null, stdout: "", timedOut: true, spawnFailed: true });
+    .toEqual({ status: null, stdout: "", timedOut: true, spawnFailed: false });
 });
 
 test("the asynchronous probe confirms a missing key through its readable parent", async () => {

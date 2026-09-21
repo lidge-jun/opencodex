@@ -62,7 +62,10 @@ const defaultPolicyProbeRunner: ClaudeDesktopPolicyProbeRunner = (file, args) =>
 /**
  * Translates an `execFile` callback into the probe contract. Exit codes arrive
  * as numeric `error.code`; spawn failures carry a string errno; a timeout kill
- * surfaces as `killed`/`SIGTERM` rather than `ETIMEDOUT`.
+ * surfaces as `killed`/`SIGTERM` rather than `ETIMEDOUT`. A killed child is a
+ * TIMEOUT, never a spawn failure — the process started fine and ran out of time,
+ * so `spawnFailed` stays false or diagnostics conflate "did not start" with
+ * "ran too long".
  */
 export function classifyExecFileProbeResult(
   error: (Error & { readonly code?: number | string; readonly killed?: boolean }) | null,
@@ -73,7 +76,7 @@ export function classifyExecFileProbeResult(
     status: error === null ? 0 : typeof errorCode === "number" ? errorCode : null,
     stdout: stdout === undefined ? "" : decodeWindowsTextBytes(stdout),
     timedOut: errorCode === "ETIMEDOUT" || error?.killed === true,
-    spawnFailed: error !== null && typeof errorCode !== "number" && errorCode !== "ETIMEDOUT",
+    spawnFailed: error !== null && error.killed !== true && typeof errorCode !== "number" && errorCode !== "ETIMEDOUT",
   };
 }
 

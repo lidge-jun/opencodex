@@ -1167,10 +1167,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);
       const modeSaved = await persistDesktopModeField(config, "gateway");
       const modeWarning = modeSaved.ok ? undefined : `Claude Desktop was applied, but the gateway mode marker was not saved (${modeSaved.reason}).`;
-      const { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
-      const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)({
-        platform: deps.platform ?? process.platform,
-      });
+      const { claudeDesktopPolicyWarning, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
+      // Same cached-async probe as the status route: a synchronous registry query
+      // here could block the apply request for the full probe timeout on Windows.
+      const policyState = deps.probeClaudeDesktopPolicy
+        ? deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
+        : await getCachedClaudeDesktopPolicy({ platform: deps.platform ?? process.platform });
       const policyWarning = claudeDesktopPolicyWarning(policyState);
       // Persist applied fingerprint + timestamp so GUI can show saved-vs-applied state.
       if (result.fingerprint) {
