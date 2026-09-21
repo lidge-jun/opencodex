@@ -427,6 +427,8 @@ Native Responses participates in the same pre-stream OAuth HTTP-429 account rota
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
 the complete credential/transport/replay identity, and attributes usage to the serving account.
 Single-account installs do not retry; a missing alternate credential preserves the original error.
+Send-budget refusal is attributed as a withheld rotation only when a non-mutating, model-family-aware
+eligibility check confirms that an alternate account is not currently cooled.
 
 `shouldRetryCodexPoolAccountQuota` withholds that rotation when the 429 or 402 body names an
 organization- or project-scoped exhaustion (`codexScopedExhaustionCode` in

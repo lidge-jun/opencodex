@@ -7,6 +7,7 @@ import {
   clearGenericFailoverHealth,
   eligibleFailoverAccounts,
   genericFailoverRetryAfterSeconds,
+  hasEligibleGenericOAuthFailoverTarget,
   hasFailoverAccountQuorum,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
@@ -241,6 +242,10 @@ describe("#2568 generic OAuth account failover", () => {
     const ids = await seed(2);
     const cfg = config();
     expect(rotateGenericOAuthAccountOn429(cfg, "xai", ids[0]!, "120")).toBe(ids[1]);
+    // The durable roster quorum remains active, but the only alternate is cooled. A denied
+    // request budget must not describe this state as an otherwise available rotation.
+    expect(isGenericOAuthFailoverEnabled(cfg, "xai")).toBe(true);
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[1]!)).toBe(false);
     expect(rotateGenericOAuthAccountOn429(cfg, "xai", ids[1]!, "30")).toBeNull();
     const retryAfter = genericFailoverRetryAfterSeconds("xai");
     // The earliest window wins: a client must not be told to wait for the longest cooldown.
@@ -281,6 +286,12 @@ describe("#2568 generic OAuth account failover", () => {
  */
 describe("sidecar on429 wiring", () => {
   const coreSource = readResponsesCoreSource();
+
+  test("budget-withheld attribution proves a cooldown-eligible generic OAuth target", () => {
+    // Continuation, native passthrough and run-turn each have their own budget-denial branch.
+    // A durable two-account quorum is insufficient because it intentionally ignores cooldowns.
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(3);
+  });
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
     const hooks = coreSource.match(/^\s*on429: (\w+),$/gm)?.map(line => line.trim()) ?? [];
