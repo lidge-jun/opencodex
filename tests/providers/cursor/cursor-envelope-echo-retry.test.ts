@@ -96,7 +96,8 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
       observer.feed("Leading text about progress.\n");
       observer.feed(RUN03_SPECIMEN);
       const findings = observer.findings();
-      expect(findings).toHaveLength(1);
+      expect(findings).toHaveLength(2);
+      expect(findings[0]!.marker).toBe("[Tool Result]");
       expect(findings[0]!.callIdCorrupt).toBe(true);
     });
 
@@ -105,8 +106,8 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
       observer.feed("Leading text.\n");
       observer.feed("[Tool Result]\n[tool_result]\ncall_id: call-1\nfc_63367283-2aec-9a25_1\noutput:\nok\n");
       const findings = observer.findings();
-      expect(findings).toHaveLength(1);
-      expect(findings[0]!.callIdCorrupt).toBe(false);
+      expect(findings).toHaveLength(2);
+      expect(findings.every(finding => !finding.callIdCorrupt)).toBe(true);
     });
 
     test("a marker fragmented across delta boundaries still fires", () => {
@@ -117,6 +118,15 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
       expect(findings).toHaveLength(1);
       expect(findings[0]!.marker).toBe("[Tool Result]");
       expect(findings[0]!.callIdCorrupt).toBe(true);
+    });
+
+    test("closely spaced markers retain independent corruption findings", () => {
+      const observer = new CursorMidstreamEchoObserver();
+      observer.feed("lead\n[Tool Result]\nfc_63367283 mar-broken_0\n[Tool Error]\nclean\n");
+      expect(observer.findings()).toEqual([
+        { marker: "[Tool Result]", offset: 5, callIdCorrupt: true },
+        { marker: "[Tool Error]", offset: 44, callIdCorrupt: false },
+      ]);
     });
 
     test("a mid-line marker mention does not fire", () => {
@@ -311,6 +321,133 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(attempt).toBe(1);
     const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
     expect(text).toBe("[note] leading bracket but not an envelope");
+  });
+
+  test("reasoning-only quarantine is capped and disarms before unbounded retention", async () => {
+    let attempt = 0;
+    const factory = () => ({
+      async *run() {
+        attempt += 1;
+        for (let i = 0; i < 100; i += 1) {
+          yield { type: "thinking", thinking: "x".repeat(128) } satisfies CursorServerMessage;
+        }
+        // Once the aggregate hold cap flushes, later marker-like text is ordinary output rather
+        // than evidence for a retry whose preceding reasoning has already reached the client.
+        yield { type: "text", text: ECHO_TEXT } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const adapter = createCursorAdapter(
+      { ...provider, apiKey: "cursor-token" },
+      { createTransport: factory as never },
+    );
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(
+      toolResultBody("cursor/kimi-k3"),
+      { headers: new Headers() },
+      event => events.push(event),
+    );
+
+    expect(attempt).toBe(1);
+    expect(events.filter(event => event.type === "thinking_delta")).toHaveLength(100);
+    expect(events.filter(event => event.type === "text_delta")).not.toHaveLength(0);
+  });
+
+  test("an oversized first text delta is still classified by the echo sniffer", async () => {
+    // One text delta larger than the aggregate hold cap whose leading bytes are the
+    // echoed envelope marker.
+    let attempt = 0;
+    const runRequests: CursorRunRequest[] = [];
+    const oversizedFactory = () => ({
+      async *run(request: CursorRunRequest) {
+        runRequests.push(request);
+        attempt += 1;
+        if (attempt === 1) {
+          yield { type: "text", text: ECHO_TEXT + "x".repeat(32 * 1024) } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+          return;
+        }
+        yield { type: "text", text: "STATE A17" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: oversizedFactory as never });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(toolResultBody("cursor/kimi-k3"), { headers: new Headers() }, event => events.push(event));
+    expect(attempt).toBe(2);
+    const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
+    expect(text).toBe("STATE A17");
+  });
+
+  test("an oversized first text delta is still classified by the routing sniffer", async () => {
+    let attempt = 0;
+    const factory = () => ({
+      async *run() {
+        attempt += 1;
+        if (attempt === 1) {
+          // Routing claim padded past the 8 KiB aggregate cap in a single delta.
+          yield {
+            type: "text",
+            text: "네이티브 셸은 차단됐으니 exec_command 경로로 읽겠습니다. " + "x".repeat(32 * 1024),
+          } satisfies CursorServerMessage;
+          yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+          return;
+        }
+        yield { type: "text", text: "READ_OK" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const body = {
+      modelId: "cursor/kimi-k3-1m",
+      context: {
+        messages: [{ role: "user", content: "Read the file and report its first line.", timestamp: 1 }],
+        tools: [{
+          name: "exec",
+          description: "Run JavaScript code to orchestrate nested tool calls.",
+          parameters: {},
+          freeform: true,
+        }],
+      },
+      stream: false,
+      options: {},
+      _cursorConversationId: "cursor_routing_oversized",
+      _cursorIdentityScope: "acct-routing-commentary",
+    } as OcxParsedRequest;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+    expect(attempt).toBe(2);
+    const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
+    expect(text).toBe("READ_OK");
+  });
+
+  test("a single reasoning frame larger than the cap flushes without unbounded retention", async () => {
+    let attempt = 0;
+    const bigThinking = "y".repeat(64 * 1024);
+    const factory = () => ({
+      async *run() {
+        attempt += 1;
+        yield { type: "thinking", thinking: bigThinking } satisfies CursorServerMessage;
+        yield { type: "text", text: "post-thought answer" } satisfies CursorServerMessage;
+        yield { type: "done", usage: { inputTokens: 1, outputTokens: 1 } } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    });
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, { createTransport: factory as never });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(
+      toolResultBody("cursor/kimi-k3"),
+      { headers: new Headers() },
+      event => events.push(event),
+    );
+    expect(attempt).toBe(1);
+    const thinking = events.filter(e => e.type === "thinking_delta").map(e => (e as { thinking: string }).thinking).join("");
+    expect(thinking).toBe(bigThinking);
+    const text = events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("");
+    expect(text).toBe("post-thought answer");
   });
 
   test("plain user turns (no trailing toolResult) never arm the sniffer", async () => {
