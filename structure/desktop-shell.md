@@ -22,16 +22,24 @@ declares no `remote` entry, and Tauri checks the ACL for any invoke from a non-l
 The window is created and shown before anything is registered, resolved, probed or started, and
 `desktop/src-tauri/src/startup.rs` runs the whole sequence inside it as named states —
 registering, resolving, probing, attaching or starting, waiting, then ready or failed — under one
-30-second deadline. Every probe beneath that deadline is bounded by the time left rather than by the
-HTTP client's own timeout, so the ceiling is the ceiling, and the budget for finding an existing
-runtime is counted from when probing starts rather than from process start — counted from the start,
-a slow tray or session-bus registration would spend it and then present as nothing listening, which
-starts a second proxy beside the one already there. The failure state carries a retry, the
+30-second deadline. Every call beneath that deadline is bounded by the time left rather than by its
+own timeout, so the ceiling is the ceiling. The failure state carries a retry, the
 child's exit code and a copyable diagnostic naming the state, the endpoint, the configuration home
 and the runtime's last output; `desktop/src-tauri/src/sidecar.rs` consumes the spawn event stream
 into that record instead of discarding it, which is what makes an immediate sidecar exit
 distinguishable from a slow start. The page asks for the state list and the run's progress rather
 than reconstructing either, because the early states finish faster than a listener can attach.
+
+The shell resolves nothing itself. Resolving runs the bundled `ocx resolve --json` and reads one
+`ocx-resolve/1` document: the configuration home, the effective port, and a liveness verdict with
+three answers rather than two. `live` means attach as a guest; `absent-proven` means every
+recorded and configured endpoint was definitively dead, and **only that authorises starting a
+runtime**. Everything else is unknown — a non-zero exit, a timeout, output that will not parse, a
+schema this shell does not know, a missing binary — and unknown fails the state with a diagnostic
+and a retry. It is never read as absence, because that reading is what put a second proxy next to
+the one already running. This replaces a file that read `runtime-port.json`, fell back to 10100 and
+started there, so a user with a configured `config.port` was started on a port they had not
+chosen; the probe budgets that decision needs live in the CLI, where they were tuned.
 
 Registering runs first, before the runtime is touched. A login launch starts hidden, so a tray
 installed only after a successful start would leave a failed start with no window and no icon. The
@@ -58,8 +66,15 @@ an owner's stop sent to that listener is a stop sent to somebody else's runtime.
 cannot be identified is left alone.
 
 A runtime counts as gone only when the child reports its own exit or the endpoint refuses a
-connection; a timeout or an unauthorized reply is not proof. Nothing kills the child; the CLI's stop
-restores client configuration and lets in-flight requests finish.
+connection; a timeout or an unauthorized reply is not proof. The stop itself is the bundled
+`ocx stop --json`, not a management call from inside this process: the CLI's stop owns the
+receipt-backed teardown, the drain, the Windows respawn verification and the client-configuration
+restore, and an in-process endpoint cannot own its own teardown because launchd and systemd can
+terminate the request handler during self-unload. The shell reads that run's `ocx-stop/1` summary
+rather than inferring it, and treats a stop as done only when the CLI reported exit 0 **and** that
+no proxy of this home is left running. A service that failed while the proxy happened to stop
+satisfies the second and not the first, and it is exactly the case that may respawn the runtime a
+moment later. Nothing kills the child.
 
 A drain that does not complete within `DRAIN_DEADLINE` is **not** recorded as a drain. It becomes
 `DrainFailed`, and an unidentifiable runtime becomes `OwnershipUnknown`. A user's quit still

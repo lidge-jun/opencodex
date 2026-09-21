@@ -175,7 +175,8 @@ still cover the rule, which is a judgement only review makes.
   predefined Quit replaced because it raises no cancellable event. Every ending drains first — the
   tray's Quit, an update's coordinated restart, and a window close on a session with no tray all
   hold the exit, stop the app-owned runtime through the management stop, and treat only an observed
-  child exit or a refused connection as proof it stopped. Ownership is re-established from the pid
+  child exit or a refused connection as proof it stopped. The stop is the bundled `ocx stop --json`,
+  accepted only on exit 0 with the runtime reported down. Ownership is re-established from the pid
   the endpoint reports rather than carried in a flag, a drain that does not complete is recorded as
   failed rather than drained — which a quit tolerates and a coordinated restart refuses — and an
   update installs only after the runtime it is replacing is confirmed stopped. No shell file kills
