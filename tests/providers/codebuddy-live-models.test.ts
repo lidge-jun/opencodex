@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   fetchCodeBuddyModels,
   parseCodeBuddyHelpRoster,
@@ -7,7 +8,7 @@ import {
 } from "../../src/adapters/codebuddy/live-models";
 import { CODEBUDDY_CN_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
 import { gatherRoutedModels, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
-import { clearModelCache } from "../../src/codex/model-cache";
+import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import type { OcxConfig } from "../../src/types";
 
 // The binary-discovery cache is module-level; reset it so one test's injected binary
@@ -115,6 +116,33 @@ describe("CodeBuddy catalog cache isolation", () => {
       },
     } as unknown as OcxConfig;
   }
+
+  test("a fetch-failure cooldown for one key does not suppress another key's discovery", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let keyBFetches = 0;
+      setFetchCodeBuddyModelsForTests((_profile, apiKey) => {
+        if (apiKey === "cb-key-a") return { ok: false, error: "process", detail: "denied" };
+        keyBFetches += 1;
+        return { ok: true, models: ["roster-b-model"] };
+      });
+
+      // Seed a stale (TTL-expired) roster for key B so the cooldown branch is reachable.
+      const identityB = createHash("sha256").update("cb-key-b").digest("hex");
+      setCached("codebuddy-cn", [{ id: "roster-b-old", provider: "codebuddy-cn" }], Date.now() - 3_600_000, undefined, identityB);
+
+      // Key A fails discovery: the cooldown must be recorded against A's fingerprint only.
+      const withA = await gatherRoutedModels(codeBuddyConfig("cb-key-a"));
+      expect(withA.filter(m => m.provider === "codebuddy-cn").map(m => m.id)).not.toContain("roster-b-model");
+
+      // Key B still has its own stale roster, but A's cooldown is not B's: discovery must run.
+      const withB = await gatherRoutedModels(codeBuddyConfig("cb-key-b"));
+      expect(keyBFetches).toBe(1);
+      expect(withB.filter(m => m.provider === "codebuddy-cn").map(m => m.id)).toContain("roster-b-model");
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   test("a second account never receives the first account's fresh or stale roster", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});

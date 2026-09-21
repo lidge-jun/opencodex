@@ -253,9 +253,10 @@ export async function fetchProviderModelsWithAuth(
     const resolvedProfile = resolveProfileByBaseUrl(CODEBUDDY_PROFILES, prov.baseUrl);
     if (!resolvedProfile) return observed(configured, "degraded");
     const profile = resolvedProfile as CodeBuddyProfile;
-    // The CLI gates its public --help model roster per signed-in account, so bind cache
-    // reads/writes to an irreversible key fingerprint: an account switch cannot observe
-    // another account's roster even if a caller bypasses the normal config mutation path.
+    // Cache reads/writes are provider/key-fingerprint-scoped: an irreversible fingerprint of
+    // the configured key means a key switch never reuses the roster cached for the previous
+    // key. The --help roster itself reflects the CLI's signed-in account, which the
+    // fingerprint cannot observe, so the cache scope is the key, not the account.
     const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
     const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {
@@ -264,7 +265,7 @@ export async function fetchProviderModelsWithAuth(
       ), "authoritative");
     }
     const scopedStale = getStaleCached(name, authorityIdentity);
-    if (isModelsFetchCoolingDown(name) && scopedStale) {
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && scopedStale) {
       return observed(withConfiguredRetention(
         applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
       ), "degraded");
@@ -284,7 +285,7 @@ export async function fetchProviderModelsWithAuth(
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
     if (isCurrentCacheGeneration()) {
-      markModelsFetchFailure(name);
+      markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(`[opencodex] CodeBuddy model discovery for "${name}" failed [${live.error}]${live.detail ? ": " + live.detail : ""}; using stale/static catalog degradation.`);
     }
