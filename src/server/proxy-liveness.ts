@@ -61,7 +61,8 @@ export interface LivenessIo {
 }
 
 /**
- * Operator override for the per-probe fetch ceilings below: integer milliseconds > 0.
+ * Operator override for the per-probe fetch ceilings below: integer milliseconds in
+ * (0, 2147483647].
  *
  * For hosts where a security layer (content filter / EDR network extension) adds a
  * fixed per-connection cost to loopback TCP — measured at ~1s per connect on an
@@ -70,14 +71,25 @@ export interface LivenessIo {
  * `ocx status`, `ocx account *`, `ocx login codex`, `ocx ready`) then reports the
  * proxy as unreachable while direct `curl /healthz` succeeds. Setting
  * OCX_PROBE_TIMEOUT_MS=5000 restores correct verdicts on such hosts without
- * changing behavior anywhere else. Parsed once at module load; malformed values
- * are ignored so a typo can only fall back to the defaults, never break startup.
+ * changing behavior anywhere else.
+ *
+ * Raises-only: the stop/start-ownership budgets keep their 1500ms floor, because a
+ * value below it would shorten the very budgets that exist to catch a just-bound
+ * or shadowed proxy (#764, #5004) — an override may lengthen a ceiling, never
+ * shorten it below its shipped default. Values above the signed-32-bit ceiling are
+ * ignored: AbortSignal.timeout() only accepts that range, and an out-of-range
+ * delay throws in Bun, which the probe path would misread as a dead proxy — the
+ * exact failure this override exists to fix. Parsed once at module load; malformed
+ * values are ignored so a typo can only fall back to the defaults, never break
+ * startup.
  */
+export const MAX_PROBE_TIMEOUT_MS = 2_147_483_647;
+
 export function parseProbeTimeoutOverrideMs(raw: string | undefined): number | undefined {
   const trimmed = raw?.trim();
   if (!trimmed || !/^\d+$/.test(trimmed)) return undefined;
   const n = Number(trimmed);
-  return n > 0 ? n : undefined;
+  return n > 0 && n <= MAX_PROBE_TIMEOUT_MS ? n : undefined;
 }
 
 const probeTimeoutOverrideMs = parseProbeTimeoutOverrideMs(process.env.OCX_PROBE_TIMEOUT_MS);
@@ -87,7 +99,7 @@ export const DEFAULT_PROBE_TIMEOUT_MS = probeTimeoutOverrideMs ?? 750;
 
 /** Default probe options for service stop / orphan cleanup — a just-bound proxy can miss a single 750ms probe. */
 export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: probeTimeoutOverrideMs ?? 1500,
+  timeoutMs: Math.max(probeTimeoutOverrideMs ?? 0, 1500),
   attempts: 3,
 };
 
@@ -103,7 +115,7 @@ export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> =
  * the stop path already uses for the mirror-image decision.
  */
 export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: probeTimeoutOverrideMs ?? 1500,
+  timeoutMs: Math.max(probeTimeoutOverrideMs ?? 0, 1500),
   attempts: 3,
 };
 

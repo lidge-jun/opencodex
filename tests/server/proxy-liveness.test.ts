@@ -1067,9 +1067,18 @@ describe("parseProbeTimeoutOverrideMs", () => {
     expect(parseProbeTimeoutOverrideMs("0")).toBeUndefined();
   });
 
-  test("defaults stay untouched when no override parses", () => {
-    expect(DEFAULT_PROBE_TIMEOUT_MS).toBeGreaterThan(0);
-    expect(SERVICE_STOP_LIVENESS.timeoutMs).toBeGreaterThanOrEqual(DEFAULT_PROBE_TIMEOUT_MS);
-    expect(START_OWNERSHIP_LIVENESS.timeoutMs).toBeGreaterThanOrEqual(DEFAULT_PROBE_TIMEOUT_MS);
+  test("accepts values up to the signed-32-bit ceiling and rejects anything larger", () => {
+    expect(parseProbeTimeoutOverrideMs("2147483647")).toBe(2_147_483_647);
+    expect(parseProbeTimeoutOverrideMs("2147483648")).toBeUndefined();
+    expect(parseProbeTimeoutOverrideMs("99999999999999999999")).toBeUndefined();
+  });
+
+  test("defaults are exactly the shipped ceilings when no override is present", () => {
+    // Exact values, deliberately: a leftover OCX_PROBE_TIMEOUT_MS from another test
+    // file in this shared module registry would pin the constants to it, and a
+    // range check here would let that leak through silently.
+    expect(DEFAULT_PROBE_TIMEOUT_MS).toBe(750);
+    expect(SERVICE_STOP_LIVENESS.timeoutMs).toBe(1500);
+    expect(START_OWNERSHIP_LIVENESS.timeoutMs).toBe(1500);
   });
 });
