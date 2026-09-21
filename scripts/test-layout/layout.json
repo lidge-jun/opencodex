@@ -843,11 +843,13 @@
     "injection-model-api.test.ts": "codex-integration",
     "input-admission.test.ts": "server",
     "install-scripts.test.ts": "ci-workflows",
+    "integrations-current-store.test.ts": "clients",
     "integrations-invariants.test.ts": "gui",
     "integrations-journal.test.ts": "clients",
     "integrations-merge.test.ts": "clients",
     "integrations-serialize.test.ts": "clients",
     "integrations-state.test.ts": "clients",
+    "integrations-superseded-store.test.ts": "clients",
     "integrations-writer-frozen-config.test.ts": "clients",
     "integrations-writer.test.ts": "clients",
     "interactive-confirm.test.ts": "cli",
@@ -1229,6 +1231,7 @@
     "remote-workspace-protocol.test.ts": "clients",
     "remote-workspace-rpc-framing.test.ts": "clients",
     "remove-tree-helper.test.ts": "lib",
+    "replay-refusal-parity.test.ts": "server",
     "repo-hygiene.test.ts": "ci-workflows",
     "request-decompress.test.ts": "usage",
     "request-evidence.test.ts": "usage",
@@ -1629,7 +1632,9 @@
     "management-provider-reset-replay.test.ts": "server",
     "responses-reset-replay.test.ts": "responses",
     "ambiguous-resend-gate.test.ts": "lib",
-    "docs-developer-role-policy.test.ts": "ci-workflows"
+    "docs-developer-role-policy.test.ts": "ci-workflows",
+    "ambiguous-resend-composition.test.ts": "lib",
+    "chat-inbound-developer-position.test.ts": "responses"
   },
   "migrated": [
     "adapters",

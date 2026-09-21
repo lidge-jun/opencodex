@@ -908,6 +908,16 @@ counter rather than holding a second. A replacement never widens a send budget: 
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through.
 
+The number of replacements is the request's as well. A leg reads it from `route.provider`, which
+credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
+request, so the grant is held to the smallest ceiling any leg has presented rather than to
+whatever the asking leg presents. Otherwise a request that had already spent the one replacement a
+strict row granted bought a second duplicate inference as soon as a more permissive row asked, and
+how many times one turn could be re-sent depended on the order the rows happened to ask in. A
+derived scope draws on the same grant even when its parent is a hand-built view rather than a
+factory budget: the claim is public on the parent, so unlike a pending external booking there is
+nothing private that forces a second counter.
+
 A committed or futile failure refuses without touching the grant, so a turn that already emitted
 output cannot drain the replacement a later ambiguous reset would have been entitled to. The
 cause is derived from the `AttemptRecoveryKind` the send will be recorded as, which is what
@@ -1378,6 +1388,33 @@ answers with an empty string for anything not display-safe and an empty body is 
 the default fires on; and `src/server/chat-native.ts` restores the code its own classifier overwrote —
 429 maps to `rate_limit_error`, which already carries a code, so the branch that copies an
 upstream code could never reach it — and suppresses the same synthetic wait.
+
+**The verdict is a property of the response, and every surface states it the same way.** The
+translated Chat wrapper in `src/server/chat-completions.ts` was the fourth writer and the one
+that had none of this: it preserved the cyber-policy code and `model_not_found`, took the
+upstream code only when `classifyError` had produced none, and then attached the retryable-429
+default. A refusal therefore left the Chat bridge as an ordinary rate limit carrying an
+instruction to send the turn again. It now reads the same two things the native surface reads —
+`isReplayRefusalResponse` on the response it still holds, and `isReplayRefusalCode` on a body
+that came through an intermediate formatter — and never the status, which a refusal and a real
+rate limit share. The failed-envelope path in the same function restates it too, so a refusal
+arriving as `status: "failed"` is not reported as the 502 a Codex client retries four times.
+Because a re-wrap is where the in-process marker is lost, `retainReplayRefusal` and
+`carryReplayRefusal` in `src/lib/upstream-retry.ts` are what each formatter calls:
+`src/bridge/errors.ts`, `src/server/responses/passthrough-error.ts`, both Chat wrappers, and the
+deferred-logging re-wrap in `src/server/relay.ts`.
+
+**Dropping `Retry-After` is necessary and not sufficient.** The status stays 429 because Codex
+stops there and a 5xx invites four more sends, but the Stainless-generated clients — `openai`
+and `anthropic`, Python and Node — decide from a status table that includes 429 and compute
+their own backoff when no wait is named, so a bare 429 is still resent by most callers of this
+proxy. Every surface therefore also emits `x-should-retry: false`, the one signal those clients
+read before that table. The refusal is the only code that gets it: the WebSocket post-send
+verdicts are genuine upstream observations and keep their existing 502/504 contract. The
+acceptance evidence is a count, not a shape — `tests/server/replay-refusal-parity.test.ts` runs
+the proxy over a socket, drives all three surfaces with a client that implements the published
+SDK rule, and asserts one physical upstream send per logical request, with a rate-limit control
+that shows the same client resending.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.

@@ -64,10 +64,14 @@ arrives, the proxy cannot tell whether the model already processed the request, 
 to send it again and answers HTTP 429 with `upstream_reset_replay_refused`. The status is
 deliberate: a 5xx here is an instruction to most clients, including Codex, to send the whole
 turn again, which is the duplicate the refusal exists to prevent. No `Retry-After` is
-attached, and the proxy performs no key rotation, account failover or same-target replay on
-it, nor does it record the refusal as rate-limit or quota evidence against the credential it
-was holding. Tool-call side requests such as vision and web search are replayed normally, because
-repeating them cannot duplicate a turn.
+attached, and the response carries `x-should-retry: false`, which the official OpenAI and
+Anthropic SDKs read before their own status rules — without it those clients retry a 429 on
+their own schedule and resend the turn anyway. The answer is identical on `/v1/responses` and
+on `/v1/chat/completions`, whether the request is forwarded natively or translated. The proxy
+performs no key rotation, account failover or same-target replay on it, nor does it record the
+refusal as rate-limit or quota evidence against the credential it was holding. Tool-call side
+requests such as vision and web search are replayed normally, because repeating them cannot
+duplicate a turn.
 
 A native Responses provider can opt into replacing that send with
 [`retryOnReset`](providers.md#provider-entries-ocxproviderconfig). The same grant covers the

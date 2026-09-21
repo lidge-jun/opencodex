@@ -98,6 +98,55 @@ export function isReplayRefusalCode(code: unknown): boolean {
 /** Client-facing status for {@link UPSTREAM_RESET_REPLAY_REFUSED_CODE}. */
 export const REPLAY_REFUSED_STATUS = 429;
 
+/**
+ * The header every surface attaches to a replay refusal, and its only accepted value.
+ *
+ * Dropping `Retry-After` is necessary and not sufficient. The Stainless-generated clients --
+ * `openai` and `anthropic` for both Python and Node, which is what most callers of this proxy
+ * actually are -- decide from a status table (408, 409, 429 and every 5xx) and compute their own
+ * backoff when no wait is named, so a 429 with no header is still resent. `x-should-retry` is
+ * the one signal each of them reads BEFORE that table, and `"false"` is the exact string they
+ * compare against.
+ */
+export const REPLAY_REFUSAL_NO_RETRY_HEADER = "x-should-retry";
+export const REPLAY_REFUSAL_NO_RETRY_VALUE = "false";
+
+/** Spreadable form for the surfaces that build their headers as an object literal. */
+export const REPLAY_REFUSAL_CLIENT_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  [REPLAY_REFUSAL_NO_RETRY_HEADER]: REPLAY_REFUSAL_NO_RETRY_VALUE,
+});
+
+/**
+ * Apply the one client-facing retry policy a refusal carries: no wait, and no automatic resend.
+ *
+ * Kept as a single function rather than two rules each surface repeats, because the two halves
+ * are only correct together -- a surface that removed the wait but not the suppression still
+ * hands a retrying client a turn it may already have run.
+ */
+export function applyReplayRefusalClientHeaders(headers: Headers): void {
+  headers.delete("retry-after");
+  headers.set(REPLAY_REFUSAL_NO_RETRY_HEADER, REPLAY_REFUSAL_NO_RETRY_VALUE);
+}
+
+/**
+ * Mark a response that re-wraps a refusal as the same refusal.
+ *
+ * The verdict has to be a property of the result the surfaces pass around, because the thing it
+ * would otherwise be read from is the status, and 429 is exactly what a refusal and a real rate
+ * limit have in common. Every formatter between the helper that made the refusal and the client
+ * builds a new Response, so each of them restates the verdict rather than dropping it.
+ */
+export function retainReplayRefusal<T extends Response>(response: T): T {
+  markResponseNonReplayable(response);
+  markReplayRefusalResponse(response);
+  return response;
+}
+
+/** Carry the verdict from a response onto the one that replaces it. */
+export function carryReplayRefusal<T extends Response>(source: Response, rewrapped: T): T {
+  return isReplayRefusalResponse(source) ? retainReplayRefusal(rewrapped) : rewrapped;
+}
+
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
@@ -521,10 +570,11 @@ export function replayRefusalResponse(): Response {
     type: "upstream_error",
     code: UPSTREAM_RESET_REPLAY_REFUSED_CODE,
     message: "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
-  } }), { status: REPLAY_REFUSED_STATUS, headers: { "content-type": "application/json" } });
-  markResponseNonReplayable(response);
-  markReplayRefusalResponse(response);
-  return response;
+  } }), {
+    status: REPLAY_REFUSED_STATUS,
+    headers: { "content-type": "application/json", ...REPLAY_REFUSAL_CLIENT_HEADERS },
+  });
+  return retainReplayRefusal(response);
 }
 
 /**

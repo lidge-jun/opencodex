@@ -22,6 +22,15 @@ import {
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
+import {
+  applyReplayRefusalClientHeaders,
+  isReplayRefusalCode,
+  isReplayRefusalResponse,
+  REPLAY_REFUSAL_CLIENT_HEADERS,
+  REPLAY_REFUSED_STATUS,
+  retainReplayRefusal,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+} from "../lib/upstream-retry";
 import { estimateTokens } from "../lib/token-estimate";
 import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
@@ -419,9 +428,19 @@ async function handleChatCompletionsWithBudget(
           : "invalid_request_error"),
       message,
     );
+    // The same verdict the native Chat surface reads, from the same two places: the response
+    // this wrapper still holds, and the code a body kept through an intermediate formatter.
+    // Not the status -- a refusal and a real rate limit are both 429, which is the whole
+    // reason this surface used to report one as the other.
+    const replayRefusal = isReplayRefusalResponse(upstream) || isReplayRefusalCode(upstreamCode);
     if (isCyberPolicyCode(upstreamCode) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(upstreamType);
+    } else if (replayRefusal) {
+      // 429 classifies as a rate limit, which already carries a code, so the empty-code branch
+      // below could never restore this one -- the translated client was told the provider
+      // throttled the turn, and handed a two-second wait to send it again.
+      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     } else if (upstreamCode === "model_not_found") {
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
@@ -429,8 +448,10 @@ async function handleChatCompletionsWithBudget(
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
-    const status = isCyberPolicyCode(classified.code) ? 400 : upstream.status;
-    const retryAfter = isCyberPolicyCode(classified.code)
+    const status = isCyberPolicyCode(classified.code) ? 400
+      : replayRefusal ? REPLAY_REFUSED_STATUS
+      : upstream.status;
+    const retryAfter = isCyberPolicyCode(classified.code) || replayRefusal
       ? undefined
       : resolveClientRetryAfter({
         status: upstream.status,
@@ -449,9 +470,12 @@ async function handleChatCompletionsWithBudget(
       headers: {
         "Content-Type": "application/json",
         ...(retryAfter ? { "Retry-After": retryAfter } : {}),
+        ...(replayRefusal ? REPLAY_REFUSAL_CLIENT_HEADERS : {}),
       },
     });
+    if (replayRefusal) retainReplayRefusal(rewritten);
     return logIds
+      // Deferred logging re-wraps this response and carries the verdict with it.
       ? responseWithDeferredRequestLog(rewritten, logIds.requestId, logIds.start, logCtx)
       : rewritten;
   }
@@ -518,10 +542,24 @@ async function handleChatCompletionsWithBudget(
     } else if (isCyberPolicyCode(error?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
       classified.code = CYBER_POLICY_ERROR_CODE;
       classified.type = cyberPolicyErrorType(error?.type);
+    } else if (isReplayRefusalCode(error?.code)) {
+      // The refusal can also arrive as a failed Responses envelope rather than a non-2xx.
+      // Reporting that as the 502 below would invite the four resends the refusal prevents.
+      classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
     } else if (error?.code === "model_not_found") {
       // Same deliberate preserve as the non-OK path: structured code beats generic classify.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
+    }
+    if (isReplayRefusalCode(classified.code)) {
+      const refusal = chatCompletionsErrorResponse(
+        REPLAY_REFUSED_STATUS, message, classified.type, classified.code,
+      );
+      const headers = new Headers(refusal.headers);
+      applyReplayRefusalClientHeaders(headers);
+      return finishJson(retainReplayRefusal(
+        new Response(refusal.body, { status: refusal.status, headers }),
+      ));
     }
     return finishJson(chatCompletionsErrorResponse(
       classified.code === "translation_buffer_limit"

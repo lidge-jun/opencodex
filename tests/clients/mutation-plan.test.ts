@@ -5,6 +5,7 @@ import { dirname, join, relative } from "node:path";
 import {
   MANAGED_PATH_TEMPLATES,
   PLAN_CHANGE_LIMIT,
+  PLAN_UNBOUND_FINGERPRINT,
   buildMutationPlan,
   canonicalSchemaPath,
   orderPlanChanges,
@@ -88,6 +89,7 @@ const BASE: PlanFingerprintInput = {
   detectDir: "/home/example/.cline",
   installKind: "dir",
   admissionBlocked: false,
+  ineffectiveWrite: null,
   before: "{}",
   contribution: CONTRIBUTION,
   record: RECORD,
@@ -180,7 +182,11 @@ describe("integration mutation plan projection", () => {
 describe("integration plan fingerprint", () => {
   test("is stable for the same inputs and carries its version", () => {
     expect(planFingerprint(BASE)).toBe(planFingerprint({ ...BASE }));
-    expect(planFingerprint(BASE).startsWith("p1:")).toBe(true);
+    // Derived from the one exported value that carries the version, so a bump
+    // cannot leave this case asserting the previous vocabulary.
+    const version = PLAN_UNBOUND_FINGERPRINT.split(":")[0]!;
+    expect(version).not.toBe("");
+    expect(planFingerprint(BASE).startsWith(`${version}:`)).toBe(true);
   });
 
   test("every authority input changes it", () => {
@@ -196,6 +202,13 @@ describe("integration plan fingerprint", () => {
       { ...BASE, installKind: "missing" },
       { ...BASE, installKind: "file" },
       { ...BASE, admissionBlocked: true },
+      // A client that creates its new provider store while a confirmation is
+      // outstanding changes whether the write can reach it at all, and leaves
+      // the file, the record and the contribution untouched while doing it.
+      { ...BASE, ineffectiveWrite: "unestablished-schema\u0000/home/example/.client/store.json" },
+      // The same location with a different reason is a different answer: a store
+      // whose schema stops being one we recognise moves nothing on disk.
+      { ...BASE, ineffectiveWrite: "owned-config-file\u0000/home/example/.client/store.json" },
       // Different bytes, and absent distinguished from empty: restoring over a missing file and
       // over an empty one are different operations.
       { ...BASE, before: "{ }" },
@@ -281,6 +294,8 @@ describe("integration mutation plan", () => {
     // Installation outranks a conflict the file would otherwise report.
     expect(buildMutationPlan({ ...conflicted, installKind: "missing" }).refusalReason).toBe("not_installed");
     expect(buildMutationPlan({ ...conflicted, admissionBlocked: true }).refusalReason).toBe("non_loopback");
+    expect(buildMutationPlan({ ...conflicted, ineffectiveWrite: "owned-config-file\u0000/store.json" }).refusalReason)
+      .toBe("superseded_store");
     // And a conflict outranks the classifier's unsafe, which apply reports last.
     expect(buildMutationPlan(conflicted).refusalReason).toBe("conflict");
     expect(buildMutationPlan({ ...PLAN_BASE, classified: { state: "unsafe", reason: "blocked-container" } }).refusalReason)
@@ -296,6 +311,9 @@ describe("integration mutation plan", () => {
     // client is installed now, and it emits nothing admission policy could object to.
     expect(buildMutationPlan({ ...disable, installKind: "missing" }).canApply).toBe(true);
     expect(buildMutationPlan({ ...disable, admissionBlocked: true }).canApply).toBe(true);
+    // Removing bytes this project wrote to this file stays possible after the
+    // client stops reading it; refusing would strand the block forever.
+    expect(buildMutationPlan({ ...disable, ineffectiveWrite: "owned-config-file\u0000/store.json" }).canApply).toBe(true);
     expect(buildMutationPlan({ ...disable, classified: { state: "conflict", reason: "foreign-edit" } }).refusalReason)
       .toBe("conflict");
   });
