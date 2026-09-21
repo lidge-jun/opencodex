@@ -828,7 +828,7 @@ describe("GitHub Actions hardening", () => {
         };
         publish?: {
           "runs-on"?: string;
-          needs?: string;
+          needs?: string[];
           permissions?: Record<string, string>;
         };
       };
@@ -843,7 +843,9 @@ describe("GitHub Actions hardening", () => {
       contents: "read",
     });
     
-    expect(release.jobs?.publish?.needs).toBe("validate-dispatch");
+    // Publication is the irreversible public act, so it waits for both packaging jobs;
+    // the full ordering contract is in tests/ci-workflows/release-pipeline-contract.test.ts.
+    expect(release.jobs?.publish?.needs).toEqual(["validate-dispatch", "package-standalone", "package-desktop"]);
     expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
