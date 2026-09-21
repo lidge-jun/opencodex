@@ -12,7 +12,12 @@
  * that is the request the destination answered. A catalog that ends up empty there authorizes no
  * client call whatever the selector still says.
  */
-import { dottedToolName, namespacedToolName } from "../types";
+import type { MuseToolNameAliases } from "../responses/muse-tool-name-alias";
+import { museWireNameForOriginal } from "../responses/muse-tool-name-alias";
+import type {
+  RoutedNamespaceToolAliases,
+  RoutedNamespaceToolIdentity,
+} from "../responses/namespace-tool-compat";
 import {
   CLIENT_EXECUTED_CALL_TYPES,
   collectDeclaredWireToolNames,
@@ -20,33 +25,111 @@ import {
 } from "./responses-undeclared-tool-guard";
 import { isPlainObject } from "./responses-snapshot-codec";
 
-/** Every spelling one call item can be named by, so a selector match is not defeated by flattening. */
-function callNameSpellings(item: Record<string, unknown>): readonly string[] {
-  const name = typeof item.name === "string" ? item.name : "";
-  if (name.length === 0) return [];
-  const namespace = typeof item.namespace === "string" && item.namespace.length > 0
-    ? item.namespace
-    : undefined;
-  if (!namespace) return [name];
-  return [name, namespacedToolName(namespace, name), dottedToolName(namespace, name)];
+type ToolKind = "function" | "custom";
+const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
+
+type ToolIdentity = Readonly<{
+  kind: ToolKind;
+  name: string;
+  namespace?: string;
+}>;
+
+export type RequestToolScopeCorrespondence = Readonly<{
+  clientToolAuthorizationBody?: unknown;
+  routedNamespaceToolAliases?: RoutedNamespaceToolAliases;
+  routedMuseToolNameAliases?: MuseToolNameAliases;
+  convertedRoutedCustomToolNames?: ReadonlySet<string>;
+}>;
+
+function identityKey(identity: ToolIdentity): string {
+  return JSON.stringify([identity.kind, identity.namespace ?? null, identity.name]);
 }
 
-/** The names one `tool_choice` entry selects; empty when the entry names no client tool. */
-function selectorNameSpellings(selector: unknown): readonly string[] {
-  if (!isPlainObject(selector)) return [];
-  const name = typeof selector.name === "string" ? selector.name : "";
-  if (name.length === 0) return [];
-  const namespace = typeof selector.namespace === "string" && selector.namespace.length > 0
-    ? selector.namespace
+function clientNamespace(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value !== BUILTIN_FUNCTIONS_NAMESPACE
+    ? value
     : undefined;
-  if (!namespace) return [name];
-  return [name, namespacedToolName(namespace, name), dottedToolName(namespace, name)];
+}
+
+function selectorIdentity(selector: unknown): ToolIdentity | undefined {
+  if (!isPlainObject(selector)) return undefined;
+  if (selector.type !== "function" && selector.type !== "custom") return undefined;
+  if (typeof selector.name !== "string" || selector.name.length === 0) return undefined;
+  if ("namespace" in selector && typeof selector.namespace !== "string") return undefined;
+  const namespace = clientNamespace(selector.namespace);
+  return { kind: selector.type, name: selector.name, ...(namespace ? { namespace } : {}) };
+}
+
+function callIdentity(item: Record<string, unknown>): ToolIdentity | undefined {
+  const kind = item.type === "function_call"
+    ? "function"
+    : item.type === "custom_tool_call"
+      ? "custom"
+      : undefined;
+  if (!kind || typeof item.name !== "string" || item.name.length === 0) return undefined;
+  const namespace = clientNamespace(item.namespace);
+  return { kind, name: item.name, ...(namespace ? { namespace } : {}) };
+}
+
+function sameRestoredIdentity(left: ToolIdentity, right: RoutedNamespaceToolIdentity): boolean {
+  return left.namespace === right.namespace
+    && left.name === right.name
+    && left.kind === right.kind;
+}
+
+/**
+ * Exact identities this restored call could have used on the final outbound wire.
+ *
+ * Namespace spellings come only from namespace-tool-compat's request-scoped, ambiguity-checked
+ * aliases. Muse aliases then compose over those wire names. A kind change is admitted only when
+ * the request recorded that exact custom identity as converted to a function.
+ */
+function outboundCallIdentities(
+  item: Record<string, unknown>,
+  correspondence: RequestToolScopeCorrespondence,
+): ReadonlySet<string> {
+  const restored = callIdentity(item);
+  if (!restored) return new Set();
+  const keys = new Set<string>([identityKey(restored)]);
+  const museAliases = correspondence.routedMuseToolNameAliases ?? new Map();
+  const convertedCustom = correspondence.convertedRoutedCustomToolNames ?? new Set();
+  const originalSelection = isPlainObject(correspondence.clientToolAuthorizationBody)
+    ? toolSelection(correspondence.clientToolAuthorizationBody)
+    : UNRESTRICTED;
+  const originalSelectionAllowsRestored = originalSelection.kind === "allow"
+    && originalSelection.identities.has(identityKey(restored));
+
+  const addWireIdentity = (
+    preMuseName: string,
+    clientKind: ToolKind,
+    conversionIdentityVerified: boolean,
+  ): void => {
+    const name = museWireNameForOriginal(preMuseName, museAliases);
+    if (name === undefined) return;
+    const kind = clientKind === "custom"
+      && convertedCustom.has(preMuseName)
+      && conversionIdentityVerified
+      ? "function"
+      : clientKind;
+    keys.add(identityKey({ kind, name }));
+  };
+
+  if (restored.namespace === undefined) {
+    addWireIdentity(restored.name, restored.kind, originalSelectionAllowsRestored);
+  }
+  for (const [wireName, identity] of correspondence.routedNamespaceToolAliases ?? new Map()) {
+    // namespace-tool-compat emits only aliases authorized under the outbound selector's kind,
+    // then restores `custom` provenance from the request's conversion set. That exact alias edge is
+    // already the proof that this custom-to-function transition belongs to this identity.
+    if (sameRestoredIdentity(restored, identity)) addWireIdentity(wireName, identity.kind, true);
+  }
+  return keys;
 }
 
 type ToolSelection =
   | { readonly kind: "unrestricted" }
   | { readonly kind: "deny_all" }
-  | { readonly kind: "allow"; readonly names: ReadonlySet<string> };
+  | { readonly kind: "allow"; readonly identities: ReadonlySet<string> };
 
 const UNRESTRICTED: ToolSelection = { kind: "unrestricted" };
 
@@ -63,18 +146,22 @@ function toolSelection(body: Record<string, unknown>): ToolSelection {
   if (choice === "none") return { kind: "deny_all" };
   if (!isPlainObject(choice)) return UNRESTRICTED;
   if (choice.type === "allowed_tools") {
-    if (!Array.isArray(choice.tools)) return UNRESTRICTED;
-    const names = new Set<string>();
+    const identities = new Set<string>();
+    if (!Array.isArray(choice.tools)) return { kind: "allow", identities };
     for (const entry of choice.tools) {
-      for (const spelling of selectorNameSpellings(entry)) names.add(spelling);
+      const identity = selectorIdentity(entry);
+      if (identity) identities.add(identityKey(identity));
     }
     // An allow-list carrying no client tool — emptied by normalization, or hosted entries only —
     // still bounds this turn: it allows no client call.
-    return { kind: "allow", names };
+    return { kind: "allow", identities };
   }
   if (choice.type === "function" || choice.type === "custom") {
-    const names = new Set(selectorNameSpellings(choice));
-    return names.size > 0 ? { kind: "allow", names } : UNRESTRICTED;
+    const identity = selectorIdentity(choice);
+    return {
+      kind: "allow",
+      identities: new Set(identity ? [identityKey(identity)] : []),
+    };
   }
   return UNRESTRICTED;
 }
@@ -93,7 +180,10 @@ export type RequestToolScope = {
  * Returning undefined for an unrestricted request keeps every ordinary turn on the path it
  * already had: a caller that selected nothing gets no new refusal.
  */
-export function requestToolScope(body: unknown): RequestToolScope | undefined {
+export function requestToolScope(
+  body: unknown,
+  correspondence: RequestToolScopeCorrespondence = {},
+): RequestToolScope | undefined {
   if (!isPlainObject(body)) return undefined;
   const selection = toolSelection(body);
   // A readable catalog that declares no client-executable name is authoritative, exactly as it is
@@ -108,12 +198,15 @@ export function requestToolScope(body: unknown): RequestToolScope | undefined {
       if (typeof item.type !== "string" || !CLIENT_EXECUTED_CALL_TYPES.has(item.type)) {
         return undefined;
       }
-      const spellings = callNameSpellings(item);
-      const reported = spellings[0];
+      const restored = callIdentity(item);
+      const reported = restored?.name;
       if (reported === undefined) return undefined;
       if (catalogDeniesClientCalls || selection.kind === "deny_all") return reported;
       if (selection.kind === "allow") {
-        return spellings.some(spelling => selection.names.has(spelling)) ? undefined : reported;
+        const candidates = outboundCallIdentities(item, correspondence);
+        return [...candidates].some(candidate => selection.identities.has(candidate))
+          ? undefined
+          : reported;
       }
       return undefined;
     },

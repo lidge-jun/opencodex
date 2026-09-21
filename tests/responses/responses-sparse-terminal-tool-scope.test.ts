@@ -5,6 +5,9 @@ import {
   GROK_FORBIDDEN_TOOL_CALL_REASON,
   GROK_REFUSED_TERMINAL_EVENT_TYPE,
 } from "../../src/server/grok-responses-snapshot-repair";
+import { rewriteRoutedCustomToolsForUpstream } from "../../src/responses/custom-tool-compat";
+import { rewriteRoutedNamespaceToolsForUpstream } from "../../src/responses/namespace-tool-compat";
+import type { RequestToolScopeCorrespondence } from "../../src/server/responses-request-tool-scope";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 function dataBlock(payload: unknown): string {
@@ -56,10 +59,12 @@ const SPARSE_TERMINAL = {
 function relay(
   outboundBody: unknown,
   items: readonly { index: number; item: Record<string, unknown> }[],
+  correspondence?: RequestToolScopeCorrespondence,
 ): { terminal: string; forwarded: string[] } {
   const rewrite = createGrokResponsesSparseTerminalBlockRewrite(
     createTestTranslatorBudget(),
     outboundBody,
+    correspondence,
   );
   const forwarded: string[] = [];
   for (const { index, item } of items) {
@@ -164,15 +169,99 @@ describe("Grok sparse terminal reconstruction honours the request's tool selecti
   test("a namespaced call matches the selector under either flattened spelling", () => {
     const namespaced: Record<string, unknown> = { ...CALL_ITEM, name: "search", namespace: "docs" };
     for (const selected of ["docs__search", "docs.search"]) {
+      const rewritten = rewriteRoutedNamespaceToolsForUpstream({
+        model: "grok-4.6",
+        tools: [{ type: "namespace", name: "docs", tools: [{ type: "function", name: "search" }] }],
+        tool_choice: { type: "function", name: selected },
+      });
+      const { terminal } = relay(
+        rewritten.body,
+        ordered(namespaced),
+        { routedNamespaceToolAliases: rewritten.aliases },
+      );
+      expect(responseOf(terminal).output).toEqual([namespaced]);
+    }
+  });
+
+  test("a qualified selector never admits another namespace with the same basename", () => {
+    const rewritten = rewriteRoutedNamespaceToolsForUpstream({
+      model: "grok-4.6",
+      tools: [
+        { type: "namespace", name: "alpha", tools: [{ type: "function", name: "lookup" }] },
+        { type: "namespace", name: "beta", tools: [{ type: "function", name: "lookup" }] },
+      ],
+      tool_choice: { type: "function", name: "lookup", namespace: "alpha" },
+    });
+    const alpha = { ...CALL_ITEM, name: "lookup", namespace: "alpha" };
+    const beta = { ...CALL_ITEM, name: "lookup", namespace: "beta" };
+    const correspondence = { routedNamespaceToolAliases: rewritten.aliases };
+
+    expect(responseOf(relay(rewritten.body, ordered(alpha), correspondence).terminal).output)
+      .toEqual([alpha]);
+    expect(payloadOf(relay(rewritten.body, ordered(beta), correspondence).terminal).type)
+      .toBe(GROK_REFUSED_TERMINAL_EVENT_TYPE);
+  });
+
+  test("same-named function and custom identities do not match by coincidence", () => {
+    const clientBody = {
+      model: "grok-4.6",
+      tools: [{ type: "function", name: "lookup" }, { type: "custom", name: "lookup" }],
+      tool_choice: { type: "function", name: "lookup" },
+    };
+    const converted = rewriteRoutedCustomToolsForUpstream(clientBody, false);
+    const custom = {
+      type: "custom_tool_call",
+      id: "ctc_1",
+      call_id: "call_1",
+      name: "lookup",
+      input: "query",
+    };
+
+    expect(payloadOf(relay(converted.body, ordered(custom), {
+      clientToolAuthorizationBody: clientBody,
+      convertedRoutedCustomToolNames: converted.names,
+    }).terminal).type)
+      .toBe(GROK_REFUSED_TERMINAL_EVENT_TYPE);
+  });
+
+  test("a request-verified custom-to-function conversion remains authorized", () => {
+    const clientBody = {
+      model: "grok-4.6",
+      tools: [{ type: "custom", name: "shell", description: "run", format: { type: "text" } }],
+      tool_choice: { type: "custom", name: "shell" },
+    };
+    const converted = rewriteRoutedCustomToolsForUpstream(clientBody, false);
+    const namespaced = rewriteRoutedNamespaceToolsForUpstream(converted.body, converted.names);
+    const custom = {
+      type: "custom_tool_call",
+      id: "ctc_1",
+      call_id: "call_1",
+      name: "shell",
+      input: "echo ok",
+    };
+
+    const { terminal } = relay(namespaced.body, ordered(custom, MESSAGE_ITEM), {
+      clientToolAuthorizationBody: clientBody,
+      routedNamespaceToolAliases: namespaced.aliases,
+      convertedRoutedCustomToolNames: converted.names,
+    });
+    expect(responseOf(terminal).output).toEqual([custom, MESSAGE_ITEM]);
+  });
+
+  test("malformed narrowing selectors fail closed instead of becoming unrestricted", () => {
+    for (const toolChoice of [
+      { type: "function", name: "apply_patch", namespace: 42 },
+      { type: "allowed_tools", mode: "auto", tools: "apply_patch" },
+    ]) {
       const { terminal } = relay(
         {
           model: "grok-4.6",
-          tools: [{ type: "namespace", name: "docs", tools: [{ type: "function", name: "search" }] }],
-          tool_choice: { type: "function", name: selected },
+          tools: [{ type: "function", name: "apply_patch" }],
+          tool_choice: toolChoice,
         },
-        ordered(namespaced),
+        ordered(CALL_ITEM),
       );
-      expect(responseOf(terminal).output).toEqual([namespaced]);
+      expect(payloadOf(terminal).type).toBe(GROK_REFUSED_TERMINAL_EVENT_TYPE);
     }
   });
 
