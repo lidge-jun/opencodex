@@ -225,6 +225,9 @@ export async function requestMuseDeviceAuthorization(
     signal: request,
   });
   if (!response.ok) {
+    // The error body is never parsed, but it still has to be released: an unread
+    // response body keeps the underlying connection occupied.
+    void response.body?.cancel().catch(() => undefined);
     throw new MuseDeviceLoginError(
       "device-authorization",
       `Muse Code device authorization request failed: HTTP ${response.status}`,
@@ -381,7 +384,9 @@ export async function mintMuseApiKey(
     );
   }
   if (!response.ok) {
-    // Status only. The body of this endpoint can carry the key itself.
+    // Status only. The body of this endpoint can carry the key itself, so it is
+    // never parsed — but it is still cancelled so the connection is released.
+    void response.body?.cancel().catch(() => undefined);
     throw new MuseDeviceLoginError(
       "mint-http",
       `Muse Code key exchange failed: HTTP ${response.status}`,

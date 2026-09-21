@@ -230,6 +230,9 @@ describe("muse device poll", () => {
     const auth = await requestMuseDeviceAuthorization(h.deps);
     const error = await caught(() => pollMuseDeviceToken(auth, h.deps));
     expect(error.kind).toBe("device-token");
+    // A 200 without access_token also ends as device-token, so kind alone cannot tell
+    // the limit fired; the message names the bound.
+    expect(error.message).toContain("65536-byte limit");
     expect(h.calls.token).toBe(1);
   });
 
