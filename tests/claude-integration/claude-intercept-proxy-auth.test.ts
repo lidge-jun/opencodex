@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -37,6 +37,26 @@ test("a committed token beats a concurrent creator's generated one", () => {
   writeFileSync(claudeInterceptProxyTokenPath(configDir), "committed-token\n");
   expect(ensureClaudeInterceptProxyToken(configDir)).toBe("committed-token");
 });
+
+test("an unreadable token path reads as null instead of throwing", () => {
+  // A directory (or otherwise unreadable entry) at the token path must degrade to
+  // "no credential" for read-only status routes rather than erroring the request.
+  const configDir = dir();
+  mkdirSync(claudeInterceptProxyTokenPath(configDir), { recursive: true });
+  expect(readClaudeInterceptProxyToken(configDir)).toBeNull();
+});
+
+test.skipIf(process.platform === "win32")(
+  "an existing token with broad permissions is re-pinned owner-only",
+  () => {
+    const configDir = dir();
+    mkdirSync(join(configDir, "claude-intercept"), { recursive: true });
+    const path = claudeInterceptProxyTokenPath(configDir);
+    writeFileSync(path, "restored-token\n", { mode: 0o644 });
+    expect(ensureClaudeInterceptProxyToken(configDir)).toBe("restored-token");
+    expect(statSync(path).mode & 0o077).toBe(0);
+  },
+);
 
 test("an empty token file is treated as missing and republished", () => {
   const configDir = dir();

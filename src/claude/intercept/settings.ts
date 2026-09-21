@@ -1,5 +1,6 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFile } from "../../config/atomic-write";
 import { claudeConfigDir } from "../auth-detect";
 
 /**
@@ -111,10 +112,9 @@ export function inspectClaudeInterceptSettings(
 
 function writeSettings(path: string, doc: SettingsDoc): void {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  // The managed env embeds the proxy token, so the file must stay owner-only:
+  // atomicWriteFile applies the real NTFS ACL on Windows where chmod is a no-op.
+  atomicWriteFile(path, `${JSON.stringify(doc, null, 2)}\n`);
 }
 
 export type ClaudeInterceptSettingsWrite =
