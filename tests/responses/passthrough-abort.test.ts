@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 import { repoRoot } from "../helpers/repo-root";
 import { relayResponsesSseWithTerminalRepair, type ResponsesTerminalRepairScheduler } from "../../src/server/responses-terminal-repair";
 import { createPassthroughWebSearchBridgeStream, type PassthroughWebSearchBridgePlan } from "../../src/web-search/passthrough-bridge";
+import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
+import { routedProviderConfig } from "../../src/router";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const root = pathToFileURL(repoRoot() + "/");
@@ -735,6 +737,20 @@ describe("terminal repair ahead of the passthrough web-search bridge", () => {
     ))]);
   }
 
+  /** Complete answer output, no terminal event, and the continuation remains open. */
+  function terminallessAnswerLeg(): ReadableStream<Uint8Array> {
+    const text = [
+      frame("response.created", { response: { id: "resp_2", status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: { ...answer, content: [] } }),
+      frame("response.output_item.done", { output_index: 0, item: { ...answer, status: "completed" } }),
+    ].join("\n\n") + "\n\n";
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+      },
+    });
+  }
+
   test("a terminal-less first search leg reaches the bridge once repaired", async () => {
     const scheduler = new ManualScheduler();
     const upstream = new AbortController();
@@ -791,5 +807,150 @@ describe("terminal repair ahead of the passthrough web-search bridge", () => {
       .filter(payload => payload.length > 0 && payload !== "[DONE]")
       .map(payload => JSON.parse(payload) as Record<string, unknown>);
     expect(events.some(event => event.type === "response.completed")).toBe(true);
+  });
+
+  /**
+   * The production continuation sender in deliverPassthroughResponse must apply the same
+   * terminal repair to every leg, not only the first one. This drives the real function:
+   * the first leg is a terminal-less intercepted web_search call, the ollama search fetch is
+   * stubbed, and the provider's own fetch returns a terminal-less continuation — which only
+   * reaches the client when the sender's repair wrap synthesizes response.completed.
+   */
+  test("deliverPassthroughResponse repairs a terminal-less continuation leg", async () => {
+    const scheduler = new ManualScheduler();
+    const upstream = new AbortController();
+    const originalFetch = globalThis.fetch;
+
+    const provider = routedProviderConfig("bridge-test", {
+      adapter: "openai-responses",
+      baseUrl: "https://bridge-test.example/v1",
+      authMode: "key",
+      apiKey: "test-bridge-key",
+      webSearchBridge: {
+        enabled: true,
+        backend: "ollama",
+        endpoint: "https://bridge-test.example/api/web_search",
+        maxSearches: 3,
+        timeoutMs: 60_000,
+      },
+      fetch: (async () => new Response(terminallessAnswerLeg(), {
+        headers: { "content-type": "text/event-stream" },
+      })) as unknown as typeof globalThis.fetch,
+    } as never);
+    const config = {
+      providers: { "bridge-test": provider },
+      maxUpstreamBodyBytes: 8 * 1024 * 1024,
+    };
+    const upstreamRequest = {
+      url: "https://bridge-test.example/v1/responses",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "glm-4.7",
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] }],
+        tools: [{ type: "web_search" }],
+      }),
+    };
+    const requestBindings = new WeakMap<object, unknown>();
+    requestBindings.set(upstreamRequest, { kind: "api-key", provider });
+
+    globalThis.fetch = (async () => Response.json({
+      results: [{ url: "https://example.com/release", title: "Release notes", content: "2.50.0 shipped" }],
+    })) as typeof globalThis.fetch;
+    try {
+      const response = await deliverPassthroughResponse(
+        {
+          logCtx: { model: "", provider: "" },
+          config,
+          options: { responsesTerminalRepairScheduler: scheduler },
+          req: new Request("http://localhost/v1/responses", { method: "POST" }),
+        },
+        { authCtx: { kind: "main", accountId: null } },
+        {
+          parsed: {
+            modelId: "glm-4.7",
+            stream: true,
+            options: {},
+            _webSearch: { type: "web_search" },
+          },
+          route: {
+            providerName: "bridge-test",
+            provider,
+            modelId: "glm-4.7",
+            staticPolicy: { model: { responsesTerminalRepair: { graceMs: 5_000 } } },
+          },
+          subagentQuotaFailureModel: undefined,
+          subagentFallbackAccountId: undefined,
+          clientRequestedStream: true,
+          translatorBudget: createTestTranslatorBudget(),
+        },
+        { requestBindings },
+        { openAiSidecar: undefined },
+        {
+          plaintextV2AgentMessageToolNames: new Set<string>(),
+          commitReasoningReplayServingRoute: () => {},
+          routedMuseToolNameAliases: new Map(),
+          routedNamespaceToolAliases: new Map(),
+          plaintextV2AgentMessageAliasedToolNames: new Set<string>(),
+          recordTerminalOutcomes: false,
+          responseCompletionCancelled: false,
+        },
+        {
+          upstreamResponse: new Response(terminallessSearchLeg(), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+          codexSafetyBufferingOptions: undefined,
+          upstream,
+          request: upstreamRequest,
+          connectMs: 5_000,
+          imageGenCallAliases: new Map(),
+          selfNamedNamespaceScrubAuthorization: undefined,
+          authorizedBareNamespaceToolAliases: new Map(),
+          rememberPassthroughResponseChecked: () => {},
+          routedCustomToolNames: new Set<string>(),
+          routedCustomToolRepairNames: new Set<string>(),
+          declaredWireToolNames: new Set<string>(),
+          routedToolSearchNames: new Set<string>(),
+          outboundRequestBody: undefined,
+          functionRepairSchemas: new Map(),
+          undeclaredToolGuardActive: false,
+          declaredNamelessClientCallTypes: new Set<string>(),
+          providerExecutedCallTypes: new Set<string>(),
+          declaredBareWireToolNames: new Set<string>(),
+          rememberPassthroughResponse: false,
+          noteInspectedPayload: () => {},
+          normalizeFunctionCompletionJson: (text: string) => text,
+        },
+      );
+
+      expect(response.ok).toBe(true);
+      const bodyPromise = response.text();
+      // First leg: repair arms once every output item is complete and the grace timer
+      // synthesizes the terminal that lets the bridge dispatch its continuation.
+      for (let i = 0; i < 1_000 && scheduler.pending() === 0; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      expect(scheduler.pending()).toBe(1);
+      scheduler.advance(5_000);
+      // Continuation leg: the production sender wraps the fetch result in the same repair,
+      // so its own terminal-less body re-arms the timer instead of stalling the stream.
+      for (let i = 0; i < 1_000 && scheduler.pending() === 0; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      expect(scheduler.pending()).toBe(1);
+      scheduler.advance(5_000);
+      const body = await bodyPromise;
+
+      const events = body
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data:"))
+        .map(line => line.slice(5).trim())
+        .filter(payload => payload.length > 0 && payload !== "[DONE]")
+        .map(payload => JSON.parse(payload) as Record<string, unknown>);
+      expect(events.some(event => event.type === "response.completed")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
