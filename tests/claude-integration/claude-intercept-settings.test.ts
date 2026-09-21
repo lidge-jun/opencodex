@@ -13,7 +13,7 @@ import { claudeInterceptEnabled, claudeInterceptProxyPort } from "../../src/clau
 import { configSchema } from "../../src/config/schema/config-schema";
 
 const CA = "/home/u/.opencodex/claude-intercept/ca.pem";
-const env = buildClaudeInterceptEnv(8846, CA);
+const env = buildClaudeInterceptEnv(8846, CA, "test-token");
 
 function dir(): string {
   return mkdtempSync(join(tmpdir(), "ocx-intercept-settings-"));
@@ -24,7 +24,7 @@ function readSettings(configDir: string): Record<string, unknown> {
 }
 
 test("env block shape", () => {
-  expect(env).toEqual({ HTTPS_PROXY: "http://127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA });
+  expect(env).toEqual({ HTTPS_PROXY: "http://opencodex:test-token@127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA });
 });
 
 test("apply creates settings.json when absent and is idempotent", () => {

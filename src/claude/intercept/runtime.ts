@@ -8,6 +8,7 @@ import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocal
 import type { PickerRouteInput } from "./picker-models";
 import { createPickerRuntime, type CreatePickerRuntimeOptions, type PickerRuntime } from "./picker-runtime";
 import type { SecurityRunner } from "./picker-trust";
+import { ensureClaudeInterceptProxyToken } from "./proxy-auth";
 
 /**
  * Lifecycle for the Claude intercept pair (CONNECT proxy + TLS listener).
@@ -126,6 +127,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   if (options.requestedPort === 0 && !explicitPort) return null;
   const configDir = options.configDir ?? getConfigDir();
   const ca = await ensureLocalInterceptCaForStartup(configDir);
+  const authToken = ensureClaudeInterceptProxyToken(configDir);
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
   const listener = startClaudeInterceptListener<T>({
     leaf,
@@ -137,6 +139,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   try {
     proxy = await startConnectProxy(claudeInterceptProxyPort(options.config, options.publicPort), {
       interceptPort: listener.port!,
+      authToken,
     });
   } catch (error) {
     await listener.stop(true);

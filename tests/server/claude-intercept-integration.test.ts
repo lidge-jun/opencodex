@@ -13,6 +13,7 @@ import { startServer } from "../../src/server";
 import { findAvailablePort } from "../../src/server/ports";
 import { claudeInterceptCaCertPath } from "../../src/claude/intercept/local-ca";
 import { getClaudeInterceptState } from "../../src/claude/intercept/runtime";
+import { ensureClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
 import type { OcxConfig } from "../../src/types";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -75,7 +76,8 @@ test("Messages through CONNECT reach the router; other paths relay to the config
     expect(state.proxyPort).toBe(interceptPort);
     expect(state.caCertPath).toBe(claudeInterceptCaCertPath(testDir));
     const ca = readFileSync(state.caCertPath, "utf8");
-    const proxy = `http://127.0.0.1:${state.proxyPort}`;
+    const proxyToken = ensureClaudeInterceptProxyToken(testDir);
+    const proxy = `http://opencodex:${proxyToken}@127.0.0.1:${state.proxyPort}`;
 
     // No opencodex admission token is sent: the intercept ingress takes the loopback policy, so
     // the request is judged by the Messages handler (which fails on routing, since the test

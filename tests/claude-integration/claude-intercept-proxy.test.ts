@@ -12,6 +12,8 @@ import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claud
  */
 
 const cleanups: Array<() => Promise<void> | void> = [];
+const AUTH_TOKEN = "test-proxy-token";
+const AUTH_HEADER = `Proxy-Authorization: Basic ${Buffer.from(`opencodex:${AUTH_TOKEN}`).toString("base64")}\r\n`;
 afterAll(async () => {
   for (const cleanup of cleanups.reverse()) await cleanup();
 });
@@ -72,6 +74,7 @@ async function startPair(): Promise<{ proxy: ConnectProxyHandle; ca: ReturnType<
   cleanups.push(echo.close);
   const proxy = await startConnectProxy(0, {
     interceptPort: listener.port!,
+    authToken: AUTH_TOKEN,
     dialUpstream: (host, port) => {
       expect(host).toBe("telemetry.example");
       expect(port).toBe(443);
@@ -88,7 +91,7 @@ async function viaProxy(proxyPort: number, caPem: string, method: string, path: 
     method,
     headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
     body,
-    proxy: `http://127.0.0.1:${proxyPort}`,
+    proxy: `http://opencodex:${AUTH_TOKEN}@127.0.0.1:${proxyPort}`,
     tls: { ca: caPem },
   });
   return { status: res.status, headers: res.headers, body: await res.text() };
@@ -128,7 +131,7 @@ test("other CONNECT targets are relayed blind, including pipelined bytes after t
   const { proxy } = await startPair();
   const out = await new Promise<string>((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port: proxy.port }, () => {
-      socket.write("CONNECT telemetry.example:443 HTTP/1.1\r\nHost: telemetry.example:443\r\n\r\nhello");
+      socket.write(`CONNECT telemetry.example:443 HTTP/1.1\r\nHost: telemetry.example:443\r\n${AUTH_HEADER}\r\nhello`);
     });
     let buf = "";
     socket.on("data", chunk => {
@@ -235,12 +238,18 @@ test("invalid request and loopback are refused before consulting tunnel choice",
 test("plain proxied HTTP, loopback targets and oversized heads are refused", async () => {
   const { proxy } = await startPair();
   expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")).toStartWith("HTTP/1.1 405");
-  expect(await rawRequest(proxy.port, "CONNECT 127.0.0.1:22 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
-  expect(await rawRequest(proxy.port, "CONNECT localhost:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
-  expect(await rawRequest(proxy.port, "CONNECT [::ffff:127.0.0.1]:22 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, `CONNECT 127.0.0.1:22 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, `CONNECT localhost:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, `CONNECT [::ffff:127.0.0.1]:22 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, `CONNECT a:443 HTTP/1.1\r\nX: ${"y".repeat(9000)}`)).toStartWith("HTTP/1.1 431");
   // One read that carries a complete but oversized head is refused the same way.
   expect(await rawRequest(proxy.port, `CONNECT a:443 HTTP/1.1\r\nX: ${"y".repeat(9000)}\r\n\r\n`)).toStartWith("HTTP/1.1 431");
+});
+
+test("CONNECT requires the per-install proxy credential", async () => {
+  const { proxy } = await startPair();
+  expect(await rawRequest(proxy.port, "CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 407");
+  expect(await rawRequest(proxy.port, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nProxy-Authorization: Basic bad\r\n\r\n")).toStartWith("HTTP/1.1 407");
 });
 
 test("isLoopbackTarget covers mapped, unspecified and shorthand loopback literals", () => {
@@ -257,10 +266,11 @@ test("a dead upstream yields 502 instead of a hung tunnel", async () => {
   await dead.close();
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
+    authToken: AUTH_TOKEN,
     dialUpstream: () => connect({ host: "127.0.0.1", port: dead.port }),
   });
   cleanups.push(proxy.close);
-  expect(await rawRequest(proxy.port, "CONNECT gone.example:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 502");
+  expect(await rawRequest(proxy.port, `CONNECT gone.example:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 502");
 });
 
 test("rewriteInterceptedRequest moves the request onto the loopback origin and keeps path, query and headers", () => {

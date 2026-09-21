@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { BlockList, createServer, connect, isIP, type Server, type Socket } from "node:net";
 
 /**
@@ -23,6 +24,8 @@ const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 export interface ConnectProxyOptions {
   /** Loopback port of the TLS listener that terminates intercepted tunnels. */
   interceptPort: number;
+  /** Per-install bearer carried as HTTP Basic proxy credentials. */
+  authToken: string;
   /** Hostnames (lowercase) whose 443 tunnels are spliced onto `interceptPort`. */
   interceptHosts?: readonly string[];
   /** Per-connection override, consulted before interceptHosts; null keeps the default. */
@@ -125,6 +128,14 @@ function splice(client: Socket, upstream: Socket, pending: Uint8Array): void {
   upstream.pipe(client);
 }
 
+function proxyAuthorized(head: string, token: string): boolean {
+  const header = head.split("\r\n").find(line => /^proxy-authorization:/i.test(line));
+  const supplied = header?.slice(header.indexOf(":") + 1).trim();
+  const expected = `Basic ${Buffer.from(`opencodex:${token}`).toString("base64")}`;
+  if (!supplied || supplied.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
+
 function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions): void {
   let head: Buffer = Buffer.alloc(0);
   socket.on("error", () => socket.destroy());
@@ -143,11 +154,16 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
     }
     socket.off("data", onData);
     socket.pause();
-    const target = parseConnectRequestLine(head.subarray(0, end).toString("latin1"));
+    const requestHead = head.subarray(0, end).toString("latin1");
+    const target = parseConnectRequestLine(requestHead);
     // Bytes after the head belong to the tunnel (a client may pipeline its TLS ClientHello).
     let pending = head.subarray(end + 4);
     if (!target) {
       respond(socket, 405, "Method Not Allowed");
+      return;
+    }
+    if (!proxyAuthorized(requestHead, options.authToken)) {
+      respond(socket, 407, "Proxy Authentication Required");
       return;
     }
     if (isLoopbackTarget(target.host)) {
@@ -228,6 +244,7 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
 export function startConnectProxy(port: number, options: ConnectProxyOptions): Promise<ConnectProxyHandle> {
   const resolved: ResolvedConnectProxyOptions = {
     interceptPort: options.interceptPort,
+    authToken: options.authToken,
     interceptHosts: options.interceptHosts ?? CLAUDE_INTERCEPT_HOSTS,
     selectTunnel: options.selectTunnel,
     dialUpstream: options.dialUpstream ?? ((host: string, targetPort: number) => connect({ host, port: targetPort })),

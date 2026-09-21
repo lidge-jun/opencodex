@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { claudeConfigDir } from "../auth-detect";
 
@@ -10,7 +10,7 @@ import { claudeConfigDir } from "../auth-detect";
  * call. Two keys make every Claude Code process route through the local CONNECT proxy while
  * the app itself stays a first-party install:
  *
- *   env.HTTPS_PROXY         = http://127.0.0.1:<proxy port>
+ *   env.HTTPS_PROXY         = http://opencodex:<token>@127.0.0.1:<proxy port>
  *   env.NODE_EXTRA_CA_CERTS = <configDir>/claude-intercept/ca.pem
  *
  * Ownership is tracked by value, never by a marker key. The CA path is the anchor: it lives
@@ -26,12 +26,12 @@ export interface ClaudeInterceptEnv {
   NODE_EXTRA_CA_CERTS: string;
 }
 
-export function claudeInterceptProxyUrl(port: number): string {
-  return `http://127.0.0.1:${port}`;
+export function claudeInterceptProxyUrl(port: number, authToken: string): string {
+  return `http://opencodex:${encodeURIComponent(authToken)}@127.0.0.1:${port}`;
 }
 
-export function buildClaudeInterceptEnv(proxyPort: number, caCertPath: string): ClaudeInterceptEnv {
-  return { HTTPS_PROXY: claudeInterceptProxyUrl(proxyPort), NODE_EXTRA_CA_CERTS: caCertPath };
+export function buildClaudeInterceptEnv(proxyPort: number, caCertPath: string, authToken: string): ClaudeInterceptEnv {
+  return { HTTPS_PROXY: claudeInterceptProxyUrl(proxyPort, authToken), NODE_EXTRA_CA_CERTS: caCertPath };
 }
 
 export type ClaudeInterceptSettingsState =
@@ -69,7 +69,7 @@ function envRecord(doc: SettingsDoc): Record<string, unknown> {
 
 /** Loopback proxy URLs are the only shape opencodex ever writes. */
 export function isClaudeInterceptProxyUrl(value: unknown): value is string {
-  return typeof value === "string" && /^http:\/\/127\.0\.0\.1:\d{1,5}\/?$/.test(value.trim());
+  return typeof value === "string" && /^http:\/\/(?:opencodex:[^@/]+@)?127\.0\.0\.1:\d{1,5}\/?$/.test(value.trim());
 }
 
 function isOwnedCaPath(value: unknown, ownedCaPath: string): value is string {
@@ -112,7 +112,8 @@ export function inspectClaudeInterceptSettings(
 function writeSettings(path: string, doc: SettingsDoc): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+  writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  chmodSync(tmp, 0o600);
   renameSync(tmp, path);
 }
 
