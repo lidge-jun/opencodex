@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { dispatchCommand } from "../../src/cli/dispatch";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import type { CliHead } from "../../src/cli/root";
@@ -10,11 +10,19 @@ import {
 } from "../../src/cli/stop-report";
 import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
 
-const previousExitCode = process.exitCode;
-
-afterEach(() => {
-  process.exitCode = previousExitCode;
-});
+/**
+ * A test batch shares ONE Bun process, and Bun does not clear process.exitCode on a
+ * bare undefined assignment — the suite convention is restore-with-`?? 0`
+ * (cli-dispatch.test.ts, service.test.ts). A leftover nonzero exitCode fails the batch
+ * with zero failing tests, which is exactly what shard batch output then shows.
+ */
+function withExitCode(code: number): () => void {
+  const previousExitCode = process.exitCode;
+  process.exitCode = code;
+  return () => {
+    process.exitCode = previousExitCode ?? 0;
+  };
+}
 
 function record(overrides: Partial<StopRunRecord> = {}): StopRunRecord {
   return {
@@ -157,7 +165,7 @@ describe("ocx stop --json dispatch", () => {
   }
 
   test("emits exactly one JSON document and moves human output to stderr", async () => {
-    process.exitCode = 0;
+    const restoreExitCode = withExitCode(0);
     const summary = summarizeStopRun(record(), { failed: false, historyOnly: false, historyDeferred: false, exitCode: 0 });
     const captured = captureConsole();
     try {
@@ -172,11 +180,12 @@ describe("ocx stop --json dispatch", () => {
       expect(captured.stderr.some(line => line.includes("will fail until it is restarted"))).toBe(true);
     } finally {
       captured.restore();
+      restoreExitCode();
     }
   });
 
   test("preserves the history exit codes across the JSON boundary", async () => {
-    process.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;
+    const restoreExitCode = withExitCode(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
     const summary = summarizeStopRun(record(), {
       failed: false,
       historyOnly: true,
@@ -193,11 +202,12 @@ describe("ocx stop --json dispatch", () => {
       expect((JSON.parse(captured.stdout[0]!) as StopSummaryJson).exitCode).toBe(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
     } finally {
       captured.restore();
+      restoreExitCode();
     }
   });
 
   test("without --json the human output and warning stay on stdout", async () => {
-    process.exitCode = 0;
+    const restoreExitCode = withExitCode(0);
     const summary = summarizeStopRun(record(), { failed: false, historyOnly: false, historyDeferred: false, exitCode: 0 });
     const captured = captureConsole();
     try {
@@ -210,13 +220,14 @@ describe("ocx stop --json dispatch", () => {
       expect(captured.stdout.every(line => { try { JSON.parse(line); return false; } catch { return true; } })).toBe(true);
     } finally {
       captured.restore();
+      restoreExitCode();
     }
   });
 
   test("a failed stop never prints the downtime warning in human mode", async () => {
     // handleStop now returns { ok, summary }: an object is always truthy, so keying the
     // warning on the return value would print "requests will fail" for a failed stop.
-    process.exitCode = 1;
+    const restoreExitCode = withExitCode(1);
     const summary = summarizeStopRun(record({ proxy: "stop-failed", sharedTeardown: "skipped" }), {
       failed: true, historyOnly: false, historyDeferred: false, exitCode: 1,
     });
@@ -230,6 +241,7 @@ describe("ocx stop --json dispatch", () => {
       expect(captured.stdout.some(line => line.includes("will fail until it is restarted"))).toBe(false);
     } finally {
       captured.restore();
+      restoreExitCode();
     }
   });
 });
