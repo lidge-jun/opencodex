@@ -1411,8 +1411,8 @@ rate limit share. The failed-envelope path in the same function restates it too,
 arriving as `status: "failed"` is not reported as the 502 a Codex client retries four times.
 Because a re-wrap is where the in-process marker is lost, `retainReplayRefusal` and
 `carryReplayRefusal` in `src/lib/upstream-retry.ts` are what each formatter calls:
-`src/bridge/errors.ts`, `src/server/responses/passthrough-error.ts`, both Chat wrappers, and the
-deferred-logging re-wrap in `src/server/relay.ts`.
+`src/bridge/errors.ts`, `src/server/responses/passthrough-error.ts`, both Chat wrappers, the
+routed Claude Messages wrapper, and the deferred-logging re-wrap in `src/server/relay.ts`.
 
 **Dropping `Retry-After` is necessary and not sufficient.** The status stays 429 because Codex
 stops there and a 5xx invites four more sends, but the Stainless-generated clients — `openai`
@@ -1422,7 +1422,7 @@ proxy. Every surface therefore also emits `x-should-retry: false`, the one signa
 read before that table. The refusal is the only code that gets it: the WebSocket post-send
 verdicts are genuine upstream observations and keep their existing 502/504 contract. The
 acceptance evidence is a count, not a shape — `tests/server/replay-refusal-parity.test.ts` runs
-the proxy over a socket, drives all three surfaces with a client that implements the published
+the proxy over a socket, drives all four surfaces with a client that implements the published
 SDK rule, and asserts one physical upstream send per logical request, with a rate-limit control
 that shows the same client resending.
 

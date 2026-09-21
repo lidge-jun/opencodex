@@ -10,6 +10,7 @@ import {
   REPLAY_REFUSED_STATUS,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../../src/lib/upstream-retry";
+import { DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC } from "../../src/lib/retry-after";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
@@ -21,7 +22,7 @@ import type { OcxConfig } from "../../src/types";
  * resends -- the proxy answered correctly and the duplicate inference happened anyway.
  *
  * So these cases run the proxy over a real socket, count the sends at the upstream boundary,
- * and drive it with a client that retries the way the published SDKs do. The three surfaces
+ * and drive it with a client that retries the way the published SDKs do. The four surfaces
  * are asserted against one expectation because a client cannot tell them apart: it sent one
  * turn and the turn may already have executed, whichever endpoint carried it.
  */
@@ -132,6 +133,7 @@ function parityConfig(): OcxConfig {
 }
 
 const CHAT_TURN = { messages: [{ role: "user", content: "ping" }] };
+const CLAUDE_TURN = { max_tokens: 64, messages: [{ role: "user", content: "ping" }] };
 const RESPONSES_TURN = { input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }] };
 
 test("every HTTP surface answers an ambiguous reset with one send and no client resend", async () => {
@@ -142,6 +144,7 @@ test("every HTTP surface answers an ambiguous reset with one send and no client 
     { name: "native Chat", path: "/v1/chat/completions", body: { model: "native/model", ...CHAT_TURN } },
     { name: "translated Chat", path: "/v1/chat/completions", body: { model: "bridged/model", ...CHAT_TURN } },
     { name: "Responses", path: "/v1/responses", body: { model: "bridged/model", ...RESPONSES_TURN } },
+    { name: "routed Claude Messages", path: "/v1/messages", body: { model: "bridged/model", ...CLAUDE_TURN } },
   ];
   try {
     for (const surface of surfaces) {
@@ -170,21 +173,22 @@ test("every HTTP surface answers an ambiguous reset with one send and no client 
 /**
  * The control that keeps the assertion above honest. A client double that never resends would
  * pin "one send" for any answer at all, so the same client has to be shown resending a real
- * rate limit -- the answer a refusal was indistinguishable from on the translated surface.
+ * rate limit -- the answer a refusal was indistinguishable from on the translated surfaces.
  */
 test("the same client still resends an ordinary upstream rate limit", async () => {
   saveConfig(parityConfig());
   const sends = countingUpstream(() => new Response(
     JSON.stringify({ error: { message: "Too many requests", type: "rate_limit_error" } }),
-    { status: 429, headers: { "content-type": "application/json", "retry-after": "0" } },
+    { status: 429, headers: { "content-type": "application/json" } },
   ));
   const server = startServer(0);
   try {
     const { response, attempts } = await sendWithClientRetries(
-      new URL("/v1/chat/completions", server.url),
-      { model: "native/model", ...CHAT_TURN },
+      new URL("/v1/messages", server.url),
+      { model: "bridged/model", ...CLAUDE_TURN },
     );
     expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe(String(DEFAULT_RETRYABLE_429_RETRY_AFTER_SEC));
     expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBeNull();
     expect(attempts).toBe(3);
     expect(sends()).toBeGreaterThan(1);
