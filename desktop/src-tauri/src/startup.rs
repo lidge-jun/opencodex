@@ -17,10 +17,11 @@
 
 use crate::{
     auth::Auth,
-    discovery::{self, ProxyEndpoint},
+    endpoint::ProxyEndpoint,
     first_run::{self, StartAtLogin},
     identity, ownership,
-    proxy::ProxyClient,
+    proxy::{ProxyClient, RuntimeIdentity},
+    resolve,
     sidecar::{self, SidecarWatch},
     tray_availability::{self, TrayAvailability},
     AppState,
@@ -47,12 +48,6 @@ pub const PHASE_EVENT: &str = "startup-phase";
 /// read — and every probe under it is bounded by the remaining time rather than by its own
 /// timeout, because otherwise the last probe overruns the ceiling by the whole client timeout.
 pub const DEADLINE: Duration = Duration::from_secs(30);
-
-/// How long an already-running runtime gets to answer before this app starts its own.
-///
-/// The core liveness path carries a comment explaining why this number is not smaller: a single
-/// unanswered 750ms probe was once enough to start a duplicate proxy on Windows.
-const ATTACH_BUDGET: Duration = Duration::from_secs(2);
 
 const POLL: Duration = Duration::from_millis(250);
 
@@ -208,9 +203,9 @@ impl Progress {
     }
 }
 
-/// What the sequence resolved, once it has.
+/// Where the sequence is pointed, once the CLI has said.
 #[derive(Clone)]
-struct Resolved {
+struct Target {
     endpoint: ProxyEndpoint,
     home: PathBuf,
 }
@@ -345,21 +340,40 @@ async fn run(app: &AppHandle) {
     );
 
     report(app, started, Phase::Resolving, None);
-    // D5 hands this resolution to the bundled CLI, so a user on a custom config.port is not started
-    // on a different one. This is the call site that changes when lane A's resolve verb lands; it
-    // is already inside the sequence so the failure has a state, a diagnostic and a retry.
-    let (endpoint, home) = discovery::current();
-    let resolved = Resolved {
-        endpoint,
-        home: home.clone(),
+    // D5: the shell no longer resolves the home, the port or liveness. It asks the bundled CLI,
+    // which owns the tuned probe budgets that exist because a shell-side reimplementation answered
+    // "nobody is listening" twice and started duplicate proxies. The call is inside the sequence, so
+    // a CLI that is missing or slow has a state, a diagnostic and a retry rather than a guess.
+    let resolution = resolve::run(app, deadline).await;
+    let Some(answer) = resolution.resolved() else {
+        // Fail-closed. A resolution that could not be trusted is not an absence, and nothing below
+        // may read it as one.
+        fail(
+            app,
+            started,
+            None,
+            &registration,
+            &watch,
+            Phase::Resolving,
+            resolution
+                .reason()
+                .unwrap_or("the runtime could not be resolved")
+                .to_owned(),
+        );
+        return;
     };
-    let proxy = match ProxyClient::new(endpoint, Auth::new(home)) {
+    let endpoint = answer.endpoint();
+    let target = Target {
+        endpoint,
+        home: answer.home(),
+    };
+    let proxy = match ProxyClient::new(endpoint, Auth::new(answer.home())) {
         Ok(proxy) => proxy,
         Err(error) => {
             fail(
                 app,
                 started,
-                Some(&resolved),
+                Some(&target),
                 &registration,
                 &watch,
                 Phase::Resolving,
@@ -376,27 +390,75 @@ async fn run(app: &AppHandle) {
         started,
         Phase::Resolving,
         Some(format!(
-            "{} with a configuration home of {}",
-            resolved.endpoint.url(""),
-            resolved.home.display()
+            "{} with a configuration home of {}, resolved by the bundled CLI {}",
+            target.endpoint.url(""),
+            target.home.display(),
+            answer.cli_version
         )),
     );
 
-    report(app, started, Phase::Probing, None);
-    // The budget for an existing runtime is counted from here, not from the start of the sequence.
-    // Counted from the start, the registration above can spend it — and a tray or session-bus
-    // registration that took its time would then present as "nothing is listening", which starts a
-    // second proxy next to the one that was already there.
-    let probing_from = Instant::now();
-    if healthy_by(&proxy, (probing_from + ATTACH_BUDGET).min(deadline)).await {
-        report(
+    report(
+        app,
+        started,
+        Phase::Probing,
+        Some(match answer.liveness.status {
+            resolve::Status::Live => "a runtime is already listening".to_owned(),
+            resolve::Status::AbsentProven => {
+                "no runtime is listening, and that absence was proven".to_owned()
+            }
+        }),
+    );
+    match resolve::live_verdict(&resolution) {
+        resolve::LiveVerdict::Attach => {
+            report(
+                app,
+                started,
+                Phase::Attaching,
+                Some("a runtime was already listening, so this app is a guest on it".to_owned()),
+            );
+            if bind(app, &proxy, deadline).await.is_none() {
+                fail(
+                    app,
+                    started,
+                    Some(&target),
+                    &registration,
+                    &watch,
+                    Phase::Attaching,
+                    "the runtime answered but did not identify itself, so this app did not attach"
+                        .to_owned(),
+                );
+                return;
+            }
+            finish(app, started, endpoint);
+            return;
+        }
+        // Something holds the port and this app cannot manage it. That is not an absence, so it
+        // does not authorise starting a second runtime beside it either.
+        resolve::LiveVerdict::Unusable(reason) => {
+            fail(
+                app,
+                started,
+                Some(&target),
+                &registration,
+                &watch,
+                Phase::Attaching,
+                reason,
+            );
+            return;
+        }
+        resolve::LiveVerdict::NotLive => {}
+    }
+    if !resolve::may_start(&resolution) {
+        // Only a proven absence authorises a start. Nothing else may fall through to one.
+        fail(
             app,
             started,
-            Phase::Attaching,
-            Some("a runtime was already listening, so this app is a guest on it".to_owned()),
+            Some(&target),
+            &registration,
+            &watch,
+            Phase::Probing,
+            "the runtime's liveness could not be established, so no runtime was started".to_owned(),
         );
-        bind(app, &proxy, deadline).await;
-        finish(app, started, endpoint);
         return;
     }
 
@@ -423,7 +485,7 @@ async fn run(app: &AppHandle) {
                 fail(
                     app,
                     started,
-                    Some(&resolved),
+                    Some(&target),
                     &registration,
                     &watch,
                     Phase::Starting,
@@ -439,7 +501,20 @@ async fn run(app: &AppHandle) {
     report(app, started, Phase::Waiting, None);
     while Instant::now() < deadline {
         if matches!(proxy.alive_within(deadline).await, Some(Ok(_))) {
-            bind(app, &proxy, deadline).await;
+            if bind(app, &proxy, deadline).await.is_none() {
+                // Healthy is not the same as identified: a 200 with a body that does not carry the
+                // marker is something else holding the port, and the token is never sent to it.
+                fail(
+                    app,
+                    started,
+                    Some(&target),
+                    &registration,
+                    &watch,
+                    Phase::Waiting,
+                    "the runtime reported healthy but did not identify itself".to_owned(),
+                );
+                return;
+            }
             finish(app, started, endpoint);
             return;
         }
@@ -449,7 +524,7 @@ async fn run(app: &AppHandle) {
             fail(
                 app,
                 started,
-                Some(&resolved),
+                Some(&target),
                 &registration,
                 &watch,
                 Phase::Waiting,
@@ -462,7 +537,7 @@ async fn run(app: &AppHandle) {
     fail(
         app,
         started,
-        Some(&resolved),
+        Some(&target),
         &registration,
         &watch,
         Phase::Waiting,
@@ -594,18 +669,6 @@ fn spawn_runtime(
     Some(outcome)
 }
 
-async fn healthy_by(proxy: &ProxyClient, deadline: Instant) -> bool {
-    loop {
-        if matches!(proxy.alive_within(deadline).await, Some(Ok(_))) {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        sleep(POLL).await;
-    }
-}
-
 /// Establish which instance is answering, and whether it is the child this app started.
 ///
 /// The health body is unauthenticated and carries the marker, the pid and the port, so identity is
@@ -613,15 +676,20 @@ async fn healthy_by(proxy: &ProxyClient, deadline: Instant) -> bool {
 /// a spawn records a pid, and this is what says that pid is the one holding the port. An answer
 /// that cannot be read leaves the app owning nothing, which is the safe way round — an owner's stop
 /// sent to a listener that is not ours is a stop sent to somebody else's runtime.
-async fn bind(app: &AppHandle, proxy: &ProxyClient, deadline: Instant) {
+///
+/// The answer is returned rather than swallowed, because a sequence that cannot identify what it is
+/// talking to has not finished. Reporting Ready there would navigate the window to a dashboard the
+/// shell cannot authenticate against, since the management token is only sent to a bound instance.
+async fn bind(app: &AppHandle, proxy: &ProxyClient, deadline: Instant) -> Option<RuntimeIdentity> {
     let identity = match tokio::time::timeout_at(deadline, proxy.identify()).await {
         Ok(Ok(identity)) => identity,
-        _ => return,
+        _ => return None,
     };
     proxy.bind(identity);
     if let Some(state) = app.try_state::<AppState>() {
         state.confirm_ownership(identity);
     }
+    Some(identity)
 }
 
 fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
@@ -646,7 +714,7 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
 fn fail(
     app: &AppHandle,
     started: Instant,
-    resolved: Option<&Resolved>,
+    target: Option<&Target>,
     registration: &Registration,
     watch: &SidecarWatch,
     phase: Phase,
@@ -655,7 +723,7 @@ fn fail(
     let elapsed_ms = elapsed(started);
     let mut progress = Progress::new(Phase::Failed, elapsed_ms);
     progress.diagnostic = Some(diagnostic(
-        resolved.map(|resolved| (resolved.endpoint, resolved.home.clone())),
+        target.map(|target| (target.endpoint, target.home.clone())),
         registration,
         watch,
         phase,
@@ -673,7 +741,7 @@ fn fail(
 /// binary will not run on this CPU" from "the home is not the one the accounts are in", and none of
 /// them were reachable from the generic health failure this replaces.
 pub fn diagnostic(
-    resolved: Option<(ProxyEndpoint, PathBuf)>,
+    target: Option<(ProxyEndpoint, PathBuf)>,
     registration: &Registration,
     watch: &SidecarWatch,
     phase: Phase,
@@ -690,7 +758,7 @@ pub fn diagnostic(
         format!("reason: {reason}"),
         format!("elapsed: {elapsed_ms}ms"),
     ];
-    match resolved {
+    match target {
         Some((endpoint, home)) => {
             lines.push(format!("endpoint: {}", endpoint.url("")));
             lines.push(format!("home: {}", home.display()));
@@ -732,9 +800,7 @@ fn elapsed(started: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        shows_window, LaunchOrigin, Phase, ATTACH_BUDGET, AUTOSTART_FLAG, DEADLINE, PHASES,
-    };
+    use super::{shows_window, LaunchOrigin, Phase, AUTOSTART_FLAG, DEADLINE, PHASES, POLL};
     use crate::tray_availability::TrayAvailability;
     use tokio::time::Duration;
 
@@ -801,10 +867,10 @@ mod tests {
 
     #[test]
     fn the_whole_sequence_is_bounded_well_under_the_minute_it_used_to_take() {
-        let budgets = [DEADLINE, ATTACH_BUDGET];
+        let budgets = [DEADLINE, POLL];
         assert!(budgets
             .iter()
             .all(|budget| *budget <= Duration::from_secs(45)));
-        assert!(ATTACH_BUDGET < DEADLINE);
+        assert!(POLL < DEADLINE);
     }
 }
