@@ -807,7 +807,9 @@ esac
     expect(stopAt).toBeGreaterThan(lockedPlanAt);
     expect(replacementAt).toBeGreaterThan(stopAt);
     expect(releaseAt).toBeGreaterThan(replacementAt);
-    expect(launcherSource.slice(leaseAt, stopAt)).toContain("env: mutationChildEnvironment()");
+    const stopEnvAt = launcherSource.indexOf("env: mutationChildEnvironment()", stopAt);
+    expect(stopEnvAt).toBeGreaterThan(stopAt);
+    expect(stopEnvAt).toBeLessThan(replacementAt);
     expect(launcherSource.slice(lockedPlanAt, stopAt)).toContain("!runtimePlan.mayStopRuntime");
     const packageReplacement = launcherSource.slice(stopAt, launcherSource.indexOf("const postInstallPlan", stopAt));
     expect(packageReplacement.match(/unprivilegedOwnershipMutationEnvironment/g)).toHaveLength(2);

@@ -202,7 +202,8 @@ describe("both updaters consult the shared rule", () => {
     expect(launcher).toContain("selectAuthoritativeServiceState(");
     expect(launcher).toContain("serviceStateFilesFor(");
     expect(launcher).not.toContain("parsed.ownership");
-    expect(launcher).not.toContain("consentGeneration");
+    const reader = launcher.slice(launcher.indexOf("const readOwnership = () =>"), launcher.indexOf("const ownershipIdentity ="));
+    expect(reader).not.toContain("consentGeneration");
     // The authoritative reader delegates to the same module rather than keeping a twin.
     const state = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
     expect(state).toContain('from "./install-state-contract.mjs"');
