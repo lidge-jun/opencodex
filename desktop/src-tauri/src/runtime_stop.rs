@@ -202,7 +202,7 @@ pub async fn run(app: &AppHandle, deadline: Instant) -> StopResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{read, StopResult, SCHEMA};
+    use super::{read, Outcome, Proxy, StopResult, SCHEMA};
 
     fn document(ok: bool, outcome: &str, exit: i32, down: bool, proxy: &str) -> String {
         format!(
@@ -220,7 +220,8 @@ mod tests {
         match result {
             StopResult::Stopped(summary) => {
                 assert_eq!(summary.schema, SCHEMA);
-                assert_eq!(summary.outcome, "stopped");
+                assert_eq!(summary.outcome, Outcome::Stopped);
+                assert_eq!(summary.proxy, Proxy::Stopped);
                 assert!(summary.runtime_down);
             }
             StopResult::Failed(reason) => panic!("{reason}"),
