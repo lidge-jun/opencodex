@@ -94,7 +94,10 @@ take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitte
 parallel tools (or pinned false by the existing provider opt-out contract).
 The native passthrough still applies the existing model capability authority to reasoning: an
 explicit empty ladder removes caller `reasoning_effort`, while an unknown ladder remains
-unclassified. This guard does not alter the separate raw service-tier contract.
+unclassified. The two Chat builders share the explicit wire policy after provider resolution:
+`reasoningWireFormat: "gateway-object"` projects the configured object shape, and a listed
+tool-bearing model omits reasoning effort on both paths. With neither declaration, native raw
+reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.
 
 On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
 tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body

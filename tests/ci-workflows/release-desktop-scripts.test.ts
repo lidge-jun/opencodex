@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
 import { buildUpdaterManifest, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
 import { repoPath } from "../helpers/repo-root";
@@ -39,7 +39,10 @@ describe("desktop release scripts", () => {
         repoRoot: root,
       });
 
-      expect(files.map(path => path.split("/").at(-1))).toEqual([
+      // The paths come back from `join`, so on Windows they are separated by backslashes and a
+      // "/" split returns the whole path. Asking the platform for the last segment keeps this
+      // assertion about the asset names it is written to check.
+      expect(files.map(path => basename(path))).toEqual([
         "OpenCodex-2.61.0-macos.dmg",
         "OpenCodex-2.61.0-macos.dmg.sha256",
         "OpenCodex-2.61.0-macos.app.tar.gz",
@@ -79,7 +82,7 @@ describe("desktop release scripts", () => {
         repoRoot: root,
       });
 
-      expect(files.map(path => path.split("/").at(-1))).toEqual([
+      expect(files.map(path => basename(path))).toEqual([
         "OpenCodex-2.61.0-windows-x64.msi",
         "OpenCodex-2.61.0-windows-x64.msi.sig",
         "OpenCodex-2.61.0-windows-x64.msi.sha256",
@@ -130,6 +133,7 @@ describe("desktop release scripts", () => {
     try {
       writeFileSync(join(root, "OpenCodex-2.61.0-macos.app.tar.gz.sig"), "mac-signature\n");
       writeFileSync(join(root, "OpenCodex-2.61.0-windows-x64.msi.sig"), "win-signature\n");
+      writeFileSync(join(root, "OpenCodex-2.61.0-linux-x86_64.AppImage.sig"), "appimage-signature\n");
       const warnings: string[] = [];
       const manifest = buildUpdaterManifest({
         version: "2.61.0",
@@ -152,9 +156,15 @@ describe("desktop release scripts", () => {
           signature: "win-signature",
           url: "https://github.com/lidge-jun/opencodex/releases/download/v2.61.0/OpenCodex-2.61.0-windows-x64.msi",
         },
+        // The AppImage keeps the plugin's default Linux key so already-released AppImage
+        // installs keep resolving their updates; deb installs select the explicit key.
+        "linux-x86_64": {
+          signature: "appimage-signature",
+          url: "https://github.com/lidge-jun/opencodex/releases/download/v2.61.0/OpenCodex-2.61.0-linux-x86_64.AppImage",
+        },
       });
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("linux-x86_64");
+      expect(warnings[0]).toContain("linux-x86_64-deb");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -183,6 +193,7 @@ describe("desktop release scripts", () => {
     try {
       writeFileSync(join(root, "OpenCodex-2.61.0-macos.app.tar.gz.sig"), "mac-signature\n");
       writeFileSync(join(root, "OpenCodex-2.61.0-windows-x64.msi.sig"), "win-signature\n");
+      writeFileSync(join(root, "OpenCodex-2.61.0-linux-x86_64.AppImage.sig"), "appimage-signature\n");
 
       expect(() =>
         buildUpdaterManifest({
@@ -192,7 +203,7 @@ describe("desktop release scripts", () => {
           out: join(root, "latest.json"),
           requireAll: true,
         }),
-      ).toThrow("Missing signed updater platforms: linux-x86_64");
+      ).toThrow("Missing signed updater platforms: linux-x86_64-deb");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -208,6 +219,30 @@ describe("desktop release scripts", () => {
  * an extension signed that way, so the app would have installed with no widget and nothing in
  * the build would have said so.
  */
+describe("the desktop build toolchain carries the bundle-type marker", () => {
+  // updater.rs selects the deb updater target from tauri_utils::platform::bundle_type(),
+  // which reads a marker the tauri-bundler patches into the binary at packaging time.
+  // Bundlers before 2.5.0 (tauri-cli < 2.7.0) never patch: every packaged artifact then
+  // reports "unknown" and a deb install would resolve the AppImage payload it cannot
+  // apply. Verified statically at tag tauri-cli-v2.11.1: crates/tauri-bundler/src/
+  // bundle.rs maps Deb and AppImage to their marker values, patches per package type,
+  // signs after patching, and restores the unpatched binary between formats.
+  const minimumCliWithBundlePatch = { major: 2, minor: 7 };
+
+  test("the pinned Tauri CLI is new enough to patch the bundle type into each Linux artifact", () => {
+    const manifest = JSON.parse(readFileSync(repoPath("desktop", "package.json"), "utf8")) as {
+      devDependencies?: Record<string, string>;
+    };
+    const version = manifest.devDependencies?.["@tauri-apps/cli"];
+    expect(version).toBeDefined();
+    const [major, minor] = version!.split(".").map(Number);
+    expect(
+      major! > minimumCliWithBundlePatch.major
+        || (major === minimumCliWithBundlePatch.major && minor! >= minimumCliWithBundlePatch.minor),
+    ).toBe(true);
+  });
+});
+
 describe("widget extension signing", () => {
   const script = readFileSync(repoPath("desktop", "scripts", "build-widget.sh"), "utf8");
   const workflow = Bun.YAML.parse(

@@ -11,7 +11,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
-import { parseRecordedOwnership, planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
+import { planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
+import {
+  inspectInstallStateBytes,
+  resolveOwnershipFromEvidence,
+  serviceStateFilesFor,
+} from "../../src/service/install-state-contract.mjs";
 import { parseServiceOwnership } from "../../src/service/state";
 
 describe("the runtime-ownership veto", () => {
@@ -45,7 +50,14 @@ describe("the runtime-ownership veto", () => {
   });
 });
 
-describe("the launcher's reader agrees with the authoritative one", () => {
+/**
+ * The launcher used to keep its own reader, "kept in step" by a table of claim shapes. It was
+ * not in step: it inspected only the anchor path, and it treated a record that fails the whole
+ * install-state contract as an unowned runtime whenever its `ownership` field was simply
+ * absent. That is permission to stop a foreign runtime and reactivate the npm service, so the
+ * reader is gone and both runtimes import one contract.
+ */
+describe("one contract, not two readers kept in step", () => {
   const accepted = [
     { owner: "desktop", installId: "a", consentGeneration: 0 },
     { owner: "cli", installId: "a", consentGeneration: 12 },
@@ -61,27 +73,79 @@ describe("the launcher's reader agrees with the authoritative one", () => {
     "desktop",
     null,
   ];
+  const record = (extra: Record<string, unknown>): string => JSON.stringify({
+    version: 2, codexHome: "/c", opencodexHome: "/o", backend: "scheduler", ...extra,
+  });
+  const resolveText = (text: string) => resolveOwnershipFromEvidence(
+    [inspectInstallStateBytes("/anchor", () => text)],
+  );
 
-  test("both accept the same claims", () => {
+  test("the authoritative reader and the shared contract accept the same claims", () => {
     for (const ownership of accepted) {
       expect(parseServiceOwnership(ownership)).not.toBeNull();
-      expect(parseRecordedOwnership(JSON.stringify({ ownership }))).toEqual(ownership);
+      expect(resolveText(record({ ownership }))).toEqual({ kind: "owned", ownership });
     }
   });
 
-  test("both reject the same claims", () => {
+  test("a rejected claim is unknown, never an unowned runtime", () => {
     for (const ownership of rejected) {
       expect(parseServiceOwnership(ownership)).toBeNull();
-      expect(parseRecordedOwnership(JSON.stringify({ ownership }))).toBeNull();
+      expect(resolveText(record({ ownership })).kind).toBe("unknown");
     }
   });
 
-  test("an absent, empty or unparseable record is not a claim", () => {
-    expect(parseRecordedOwnership(null)).toBeNull();
-    expect(parseRecordedOwnership("")).toBeNull();
-    expect(parseRecordedOwnership("{")).toBeNull();
-    expect(parseRecordedOwnership("[]")).toBeNull();
-    expect(parseRecordedOwnership(JSON.stringify({ version: 2 }))).toBeNull();
+  /**
+   * The case the launcher got wrong: a record that carries no `ownership` field but fails the
+   * contract for another reason. It answered "known unowned" and permitted the stop and the
+   * service refresh; the contract answers `unknown` and vetoes both.
+   */
+  test("an ownership-free record that fails the contract is unknown, not unowned", () => {
+    expect(resolveText(JSON.stringify({ version: 2 })).kind).toBe("unknown");
+    expect(resolveText(JSON.stringify({ version: 99, codexHome: "/c", opencodexHome: "/o" })).kind).toBe("unknown");
+    expect(resolveText(record({ codexHome: "" })).kind).toBe("unknown");
+    expect(resolveText("{").kind).toBe("unknown");
+    expect(resolveText("[]").kind).toBe("unknown");
+    // A record that satisfies the contract and simply has no claim is the one "none" case.
+    expect(resolveText(record({})).kind).toBe("none");
+  });
+
+  test("a claim on the legacy path alone is still a claim, and a conflict is unknown", () => {
+    const anchor = inspectInstallStateBytes("/anchor", () => record({}));
+    const claim = { owner: "desktop", installId: "app-a", consentGeneration: 1 };
+    const legacy = inspectInstallStateBytes("/legacy", () => record({ ownership: claim }));
+    expect(resolveOwnershipFromEvidence([anchor, legacy])).toEqual({ kind: "owned", ownership: claim });
+
+    const other = inspectInstallStateBytes("/legacy", () => record({
+      ownership: { owner: "desktop", installId: "app-b", consentGeneration: 1 },
+    }));
+    const claimed = inspectInstallStateBytes("/anchor", () => record({ ownership: claim }));
+    expect(resolveOwnershipFromEvidence([claimed, other]).kind).toBe("unknown");
+  });
+
+  test("an unreadable path anywhere in the list is unknown", () => {
+    const unreadable = inspectInstallStateBytes("/legacy", () => {
+      const error = new Error("denied") as Error & { code?: string };
+      error.code = "EACCES";
+      throw error;
+    });
+    expect(unreadable.kind).toBe("unreadable");
+    const anchor = inspectInstallStateBytes("/anchor", () => record({}));
+    expect(resolveOwnershipFromEvidence([anchor, unreadable]).kind).toBe("unknown");
+  });
+
+  test("an absent path is the only answer that can mean no claim", () => {
+    const absent = inspectInstallStateBytes("/anchor", () => {
+      const error = new Error("missing") as Error & { code?: string };
+      error.code = "ENOENT";
+      throw error;
+    });
+    expect(absent.kind).toBe("absent");
+    expect(resolveOwnershipFromEvidence([absent])).toEqual({ kind: "none" });
+  });
+
+  test("both runtimes consult the same path list", () => {
+    expect(serviceStateFilesFor("/home/.opencodex", "/home/.opencodex")).toHaveLength(1);
+    expect(serviceStateFilesFor("/pinned", "/home/.opencodex")).toHaveLength(2);
   });
 });
 
@@ -111,6 +175,24 @@ describe("both updaters consult the shared rule", () => {
       expect(source).toContain("planUpdateRuntimeHandling({");
       expect(source).not.toMatch(/owner\s*!==\s*"cli"/);
     }
+  });
+
+  /**
+   * The launcher's own reader is what made the two lanes disagree, so its absence is the
+   * property worth pinning: no JSON.parse of the state record, no claim validation, and the
+   * contract module imported instead.
+   */
+  test("the launcher reads the record only through the shared contract", () => {
+    expect(launcher).toContain('from "../src/service/install-state-contract.mjs"');
+    expect(launcher).toContain("resolveOwnershipFromEvidence(evidence)");
+    expect(launcher).toContain("serviceStateFilesFor(");
+    expect(launcher).not.toContain("parsed.ownership");
+    expect(launcher).not.toContain("consentGeneration");
+    // The authoritative reader delegates to the same module rather than keeping a twin.
+    const state = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
+    expect(state).toContain('from "./install-state-contract.mjs"');
+    expect(state).toContain("return parseInstallStateRecord(value)");
+    expect(state).toContain("return resolveOwnershipFromEvidence(evidence)");
   });
 });
 

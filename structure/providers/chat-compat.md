@@ -77,7 +77,9 @@ boundary, so parsed messages and stored raw history retain the same task/guidanc
 
 Native OpenAI passthrough consults the existing configured capability ladder before forwarding
 `reasoning_effort`; an explicitly empty ladder removes that unsupported control while an unknown
-ladder remains unclassified. It also sanitizes routed reasoning history so `reasoning` input items do not send
+ladder remains unclassified. Both Chat builders then apply the same explicit provider declarations:
+gateway-object projection and tool-bearing model effort omission. An unset declaration preserves the
+native caller field exactly. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
 It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —

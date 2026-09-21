@@ -50,6 +50,12 @@ this wire projection does not change the usage ledger.
 
 Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged.
 
+## CLI resolve and stop contracts for embedding shells
+
+`ocx resolve` (`src/cli/resolve.ts`) is the machine surface a desktop shell asks instead of resolving the config home, the port, and liveness itself: the home comes from `src/config/paths.ts`, the effective port is the live listener's when the identity-checked `findLiveProxy` answers and the configured `config.port ?? 10100` otherwise, and the liveness verdict is that same module's output (pid, runtime-versus-config provenance, version, role). Config reads go through `readConfigDiagnostics`, not `loadConfig`: a missing file is defaults, but an invalid file exits 1 instead of being repaired to defaults, because a defaulted port is a guess the caller must refuse. Liveness is three-valued: when `findLiveProxy` returns null, resolve re-asks the endpoints with the updater's tri-state probe (`endpointsToProve` + `everyEndpointProvenDown` + `probeProxyLiveness`), and only a unanimous definitive "dead" becomes `absent-proven`; unknown exits 1 and never authorises a start. Discovery borrows `START_OWNERSHIP_LIVENESS`, the start path's ownership budget — the verdict feeds the shell's launch decision, so the cost of a false "nobody listening" is the duplicate proxy (#5004). The verb is in `skipsCodexShimAutoRestore`, so a read-only lookup never triggers a shim repair. Arguments are pre-parsed in `src/cli/root.ts` and exit 64 before any preflight side effect, the same ordering `ocx ready` obeys.
+
+`ocx stop --json` is a reporting layer over the unchanged stop path. `src/cli/index.ts` threads a `StopRunRecord` through the existing receipt, drain, respawn-verification and restore flow, and `src/cli/stop-report.ts` maps the recorded facts plus the signals that already pick the exit code into one versioned document (`schema: "ocx-stop/1"`). With `--json` the human lines print on stderr and stdout carries only that document; exit codes 0/1/79/80 cross the process boundary unchanged.
+
 ## Native main reauth JSON output
 
 `src/cli/account-main.ts` emits one JSON object to stdout when `ocx account main reauth --device --no-wait --json` succeeds. The human-readable `follow up:` line is emitted only without `--json`; `flowId` remains available for status polling. `tests/cli/cli-native-profile.test.ts` parses the complete captured stdout and preserves coverage of the human follow-up.
@@ -524,14 +530,31 @@ opaque `installId` naming the owning installation rather than the user or the ma
 `consentGeneration`. An absent claim means the CLI install that registered the service owns
 the runtime, which is what every record written before the field existed says.
 
+`src/service/install-state-contract.mjs` holds the record shape, the path list and the
+resolution rule, and both runtimes import it: `src/service/state.ts` and the Node launcher
+`bin/ocx.mjs`, which cannot import TypeScript. The launcher previously kept its own reader,
+and the divergence was an authorization gap rather than a style problem — it inspected only
+the anchor path and answered "unowned" for any record whose `ownership` field was absent,
+including one that failed the contract outright.
+
 Every write goes through `swapServiceInstallState`. It holds an `O_EXCL` lock beside the
 anchor record for the whole read-modify-write, re-reads the anchor immediately before
 committing and compares the committed bytes afterwards, and it runs the whole sequence again
 when another writer landed inside that window; `revision` is the compare-and-swap token. The
 lock excludes cooperating writers, and the revision check catches a writer that does not take
-it, such as an older `ocx` on the same machine. `writeServiceInstallState` rebuilds only the
-install provenance and carries the ownership claim across unchanged, which is what keeps an
-install, a repair, an update or a stop from dropping it.
+it, such as an older `ocx` on the same machine. The lock file carries a token identifying its
+holder, so eviction and release each remove only the instance they own, and the stale
+threshold exceeds the longest legitimate critical section rather than the typical one. Each
+file is published by writing a sibling temporary file and renaming it, so an interrupted
+commit leaves the previous valid record rather than a truncated one the fail-closed reader
+would report as unknown.
+
+`writeServiceInstallState` rebuilds only the install provenance and carries the ownership
+claim across unchanged, which is what keeps an install, a repair, an update or a stop from
+dropping it. It resolves that claim INSIDE the swap, while the lock is held: a resolution
+taken beforehand is a lost update the compare-and-swap cannot detect, because the stale value
+never came from the base record. Where the anchor and the cross-path resolution still
+disagree, the higher `consentGeneration` wins and an equal generation keeps the anchor.
 
 `resolveServiceOwnership` is how a claim is read for a decision. It reads every state path
 and answers `none`, `owned` or `unknown`; absence is the only thing that means no claim, so
@@ -552,11 +575,19 @@ The verbs that ACTIVATE the npm registration refuse on a foreign or unknown owne
 they deactivate. `src/update/runtime-ownership.mjs` vetoes both the pre-update stop and the
 post-update service refresh for all three update lanes — `src/update/index.ts`,
 `bin/ocx.mjs` and the dashboard worker in `src/update/job.ts` — and the two package updaters
-re-read the claim before any direct-start fallback, because an app can take the runtime during
-an install that takes minutes. The registration is never deleted; `ocx service install` is the
-one verb that releases the marker, and it does so only after the registration succeeded.
+re-read the claim immediately before each runtime action — the stop and the direct-start
+fallback — rather than trusting a plan formed earlier in the run, because an app can take the
+runtime while the tray handoff spawns children or an install runs for minutes. The
+registration is never deleted; `ocx service install` is the one verb that releases the
+marker, and it does so only after the registration succeeded.
 
 The veto reads the recorded claim, not the live process. An app removed without releasing
 leaves a stale claim, and proving which runtime is answering needs the identity the bundled
 CLI's resolve contract will carry; until then the refusals name `ocx service install` as the
 way to clear it.
+
+Re-reading narrows the window between a decision and its action; it does not remove it. A
+claim recorded after the last read and before the child process starts is still acted on with
+stale information. Closing that needs an action-scoped ownership lease held across the child,
+which the state lock deliberately is not — holding it across `ocx stop` or a service refresh
+would deadlock against the child's own write.
