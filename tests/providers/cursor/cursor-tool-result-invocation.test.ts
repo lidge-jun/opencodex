@@ -603,6 +603,21 @@ describe("cursor spare envelope budget restores clipped invocation arguments", (
     expect(line).toContain(JSON.stringify(args));
   });
 
+  test("an impossible restoration serializes its arguments only once in the refund pass", () => {
+    let serializations = 0;
+    const args = {
+      toJSON() {
+        serializations++;
+        return { contents: "A".repeat(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT + 1) };
+      },
+    };
+    const line = invokedLine(resultRoot(encode(writeFileHistory(args), "grok-4.6-high")));
+    expect(line).toEndWith("…[arguments truncated]");
+    // Indexing and initial rendering account for three calls; the refund pass adds exactly one and
+    // must reuse that serialization instead of calling the rendering helper for a fifth copy.
+    expect(serializations).toBe(4);
+  });
+
   // The refund pass must be a no-op below the cap: a line that was never clipped has nothing to
   // restore, and rewriting it would only risk drift from the admission-time rendering.
   test("an under-cap argument is unchanged", () => {
