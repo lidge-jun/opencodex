@@ -698,6 +698,13 @@ Codex history metadata restoration. Tools that manage a custom provider often ta
 provider id; replacing the active id can make those intact sessions disappear from Codex's history
 view. The same protection applies to an external provider selected by a legacy root profile.
 
+While an external provider owns `config.toml`, the settings report that
+`GET /api/settings` and `ocx system settings` return describes the Desktop authless and
+client-compaction switches — and the Codex sign-in requirement — as controlled by that
+provider instead of showing the effective state OpenCodex would produce. Flipping either
+switch still stores the preference, but `config.toml` is not rewritten; the stored value
+takes effect if you switch Codex back to a provider OpenCodex manages and rerun `ocx start`.
+
 Keep one tool as the owner of Codex provider configuration. To use OpenCodex behind an existing
 provider manager, point that provider at `http://127.0.0.1:10100/v1` with Responses passthrough
 (`wire_api = "responses"` in Codex TOML), not Chat Completions translation. When proxy API auth is

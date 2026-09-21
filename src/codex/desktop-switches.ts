@@ -1,5 +1,6 @@
 import type { OcxConfig } from "../types";
 import { shouldSyncCodexOnStart } from "./desired-state";
+import { tomlString } from "./paths";
 import {
   isEffectiveCodexClientCompaction,
   isEffectiveCodexDesktopAuthless,
@@ -11,7 +12,7 @@ export type CodexDesktopSwitchInertReason =
 
 export interface CodexDesktopSwitchState {
   stored: boolean;
-  effective: boolean;
+  effective: boolean | null;
   inertReason?: CodexDesktopSwitchInertReason;
 }
 
@@ -19,6 +20,7 @@ export type CodexDesktopSwitchApplyReason =
   | "not_requested"
   | "proxy_not_running"
   | "integration_disabled"
+  | "external_provider"
   | "write_lock_busy"
   | "injection_refused";
 
@@ -35,7 +37,7 @@ export interface CodexDesktopSwitchReport {
   codexDesktopAuthless: CodexDesktopSwitchState;
   codexClientCompaction: CodexDesktopSwitchState;
   apply: CodexDesktopSwitchApply;
-  authSource: { presentsCodexAccount: boolean; summary: string };
+  authSource: { presentsCodexAccount: boolean | null; summary: string };
 }
 
 type DesktopSwitchConfig = Pick<
@@ -50,9 +52,10 @@ type DesktopSwitchConfig = Pick<
 
 function describeSwitch(
   stored: boolean,
-  effective: boolean,
+  effective: boolean | null,
   config: Pick<OcxConfig, "runtimeRole">,
 ): CodexDesktopSwitchState {
+  if (effective === null) return { stored, effective };
   if (!stored || effective) return { stored, effective };
   return {
     stored,
@@ -68,15 +71,21 @@ export function describeCodexDesktopSwitches(
   apply: CodexDesktopSwitchApply,
 ): CodexDesktopSwitchReport {
   const authlessStored = config.codexDesktopAuthless === true;
-  const authlessEffective = isEffectiveCodexDesktopAuthless(config);
+  const externallyOwned = !apply.applied && apply.reason === "external_provider";
+  const authlessEffective = externallyOwned ? null : isEffectiveCodexDesktopAuthless(config);
   const compactionStored = config.codexClientCompaction === true;
-  const compactionEffective = isEffectiveCodexClientCompaction(config);
+  const compactionEffective = externallyOwned ? null : isEffectiveCodexClientCompaction(config);
 
   return {
     codexDesktopAuthless: describeSwitch(authlessStored, authlessEffective, config),
     codexClientCompaction: describeSwitch(compactionStored, compactionEffective, config),
     apply,
-    authSource: authlessEffective
+    authSource: externallyOwned
+      ? {
+          presentsCodexAccount: null,
+          summary: "An external model provider owns Codex sign-in behavior; its account requirement was not changed.",
+        }
+      : authlessEffective
       ? {
           presentsCodexAccount: false,
           summary: "The Codex app will not require its own account sign-in.",
@@ -86,6 +95,46 @@ export function describeCodexDesktopSwitches(
           summary: "The Codex app will require its own account sign-in.",
         },
   };
+}
+
+/**
+ * The apply record for a report that attempted no rewrite. `not_requested` alone would have
+ * the report claiming OpenCodex's stored-versus-effective state as live, so the read path
+ * consults the same ownership predicate the injector does and reports external ownership
+ * instead — a settings GET and a switch-free PUT then agree with an attempted apply.
+ */
+export async function observedCodexDesktopSwitchApply(): Promise<CodexDesktopSwitchApply> {
+  // Same lazy boundary as applyCodexConfigInjection: the ownership predicate lives in the
+  // injection graph, which the settings read path must not pull in at module scope.
+  const { currentExternalCodexModelProvider } = await import("./inject/config-toml");
+  let provider: string | null;
+  try {
+    provider = currentExternalCodexModelProvider();
+  } catch (error) {
+    // A present-but-unreadable config.toml (permissions, deletion racing existsSync)
+    // must not take down the whole settings report — ownership is simply undetermined.
+    return {
+      applied: false,
+      reason: "not_requested",
+      retryable: true,
+      detail: `config.toml ownership could not be determined: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!provider) return { applied: false, reason: "not_requested", retryable: false };
+  return {
+    applied: false,
+    reason: "external_provider",
+    retryable: false,
+    detail: `config.toml selects the external model_provider ${tomlString(provider)}.`,
+  };
+}
+
+// The apply gates skip the injector entirely, so they run the same ownership read the
+// observed path does — a disabled integration or an absent runtime must not make a
+// switch PUT report local state the external provider still controls.
+async function externalOwnershipApply(): Promise<CodexDesktopSwitchApply | null> {
+  const ownership = await observedCodexDesktopSwitchApply();
+  return !ownership.applied && ownership.reason === "external_provider" ? ownership : null;
 }
 
 /**
@@ -100,13 +149,15 @@ export async function applyCodexConfigInjection(
   config: OcxConfig,
 ): Promise<CodexDesktopSwitchApply> {
   if (!shouldSyncCodexOnStart(config)) {
-    return { applied: false, reason: "integration_disabled", retryable: false };
+    return (await externalOwnershipApply())
+      ?? { applied: false, reason: "integration_disabled", retryable: false };
   }
 
   const { readRuntimePort } = await import("../config/process-state");
   const runtime = readRuntimePort(process.pid);
   if (!runtime) {
-    return { applied: false, reason: "proxy_not_running", retryable: true };
+    return (await externalOwnershipApply())
+      ?? { applied: false, reason: "proxy_not_running", retryable: true };
   }
 
   try {
@@ -119,6 +170,14 @@ export async function applyCodexConfigInjection(
       return {
         applied: false,
         reason: "integration_disabled",
+        retryable: false,
+        detail: result.message,
+      };
+    }
+    if (result.success && result.configApplied === false) {
+      return {
+        applied: false,
+        reason: "external_provider",
         retryable: false,
         detail: result.message,
       };
