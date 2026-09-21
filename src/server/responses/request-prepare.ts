@@ -20,7 +20,7 @@ import {
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
-import { contextPrincipalIdOf } from "../auth-cors";
+import { resolveContextPrincipal } from "../auth-cors";
 import {
   isShadowSourceModel,
   shadowSourceModelPrefix,
@@ -409,7 +409,10 @@ export async function prepareResponsesRequest(
     }
   }
   if (parsed._reasoningReplayScope) {
-    const clientPrincipalId = contextPrincipalIdOf(options.admission)
+    // Scope replay cells to the caller principal. On loopback, admission carries no identity,
+    // so resolve it from an opencodex API key the caller volunteered (same rule as context
+    // history ownership); keyless loopback callers still share the "loopback" bucket.
+    const clientPrincipalId = resolveContextPrincipal(req, config, options.admission)
       ?? (options.admission?.kind === "loopback" ? "loopback" : undefined);
     parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
