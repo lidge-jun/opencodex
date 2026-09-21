@@ -5,12 +5,13 @@ import { repoPath } from "../helpers/repo-root";
 /**
  * The desktop app's half of the runtime-ownership claim.
  *
- * The claim lives in the shared service install state and `src/service/state.ts` owns it: the
- * owner values, the field names, the three answers a read can give, and `ownershipGrantedTo`, which
- * is the comparison an installation applies to its own locally stored install id. The shell holds
- * the other half — an id of its own to compare against — and mirrors the rule rather than inventing
- * one, because a weaker version of a question core already answers is how the shell ended up
- * guessing a port it should have been told.
+ * The claim lives in the shared service install state, which core owns across two files: the
+ * validation that decides what a record may say is in `src/service/install-state-contract.mjs`,
+ * and the types, the three answers a read can give and `ownershipGrantedTo` — the comparison an
+ * installation applies to its own locally stored install id — are in `src/service/state.ts`. The
+ * shell holds the other half, an id of its own to compare against, and mirrors the rule rather
+ * than inventing one, because a weaker version of a question core already answers is how the
+ * shell ended up guessing a port it should have been told.
  *
  * Both halves are read here together, so a change on either side breaks this rather than leaving
  * the two to disagree in a place only a takeover would reveal.
@@ -20,6 +21,7 @@ const IDENTITY = repoPath(`${SHELL}/identity.rs`);
 const OWNERSHIP = repoPath(`${SHELL}/ownership.rs`);
 const STARTUP = repoPath(`${SHELL}/startup.rs`);
 const STATE = repoPath("src/service/state.ts");
+const CONTRACT = repoPath("src/service/install-state-contract.mjs");
 
 function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -29,6 +31,7 @@ describe("desktop install identity", () => {
   const identity = code(IDENTITY);
   const ownership = code(OWNERSHIP);
   const state = code(STATE);
+  const contract = code(CONTRACT);
 
   test("the installation's id is minted once and never rewritten", () => {
     // Exclusive, because two launches racing to mint would answer to two ids, and the second one
@@ -52,7 +55,11 @@ describe("desktop install identity", () => {
   });
 
   test("the owner values are the ones the record accepts", () => {
-    expect(state).toContain('ownership.owner !== "cli" && ownership.owner !== "desktop"');
+    // Both halves of core's answer are read. The runtime rejection is what a record on disk meets,
+    // and the exported type is what every caller is compiled against; a parse that accepted a
+    // third owner and a type that forbade it would disagree exactly where a takeover happens.
+    expect(contract).toContain('value.owner !== "cli" && value.owner !== "desktop"');
+    expect(state).toContain('export type ServiceOwner = "cli" | "desktop"');
     expect(ownership).toContain('#[serde(rename_all = "lowercase")]');
     expect(ownership).toContain("    Cli,");
     expect(ownership).toContain("    Desktop,");
