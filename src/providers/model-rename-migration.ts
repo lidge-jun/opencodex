@@ -187,12 +187,15 @@ function renameInList(value: unknown, from: string, to: string): string[] | null
   return next;
 }
 
-function dropRenamedIdsFromList(value: unknown, from: string, to: string): string[] | null {
-  // The replacement id alone is enough to proceed: the pre-rename registry can have
-  // seeded `to` here while every retired id is already gone from the row. Leaving that
-  // stale classification in place would keep the picker disabled for a newly
-  // adjustable alias, so both ids are filtered whenever either one is present.
-  if (!Array.isArray(value) || (!value.includes(from) && !value.includes(to))) return null;
+function dropRenamedIdsFromList(
+  value: unknown,
+  from: string,
+  to: string,
+  dropStaleTarget: boolean,
+): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const hasRetired = value.includes(from);
+  if (!hasRetired && !(dropStaleTarget && value.includes(to))) return null;
   return value.filter(entry => typeof entry === "string" && entry !== from && entry !== to);
 }
 
@@ -227,6 +230,12 @@ function sameStringArray(value: unknown, expected: readonly string[]): boolean {
   return Array.isArray(value)
     && value.length === expected.length
     && value.every((entry, index) => entry === expected[index]);
+}
+
+function targetReasoningMatchesStaleSeed(row: Record<string, unknown>, rename: ModelRename): boolean {
+  const reasoning = rename.targetSeedRefresh?.reasoning;
+  const efforts = row.modelReasoningEfforts as Record<string, unknown> | undefined;
+  return !!reasoning && !!efforts && sameStringArray(efforts[rename.to], reasoning.fromEfforts);
 }
 
 /** Refresh only exact defaults emitted by the previous registry; preserve user overrides. */
@@ -375,7 +384,12 @@ export function projectModelRenames(
     for (const field of MODEL_ID_LISTS) {
       if (isRegistryResidue(seed, field, row[field], rename)) continue;
       const next = rename.dropNoReasoningModels && field === "noReasoningModels"
-        ? dropRenamedIdsFromList(row[field], rename.from, rename.to)
+        ? dropRenamedIdsFromList(
+          row[field],
+          rename.from,
+          rename.to,
+          targetReasoningMatchesStaleSeed(row, rename),
+        )
         : renameInList(row[field], rename.from, rename.to);
       if (!next) continue;
       row[field] = next;

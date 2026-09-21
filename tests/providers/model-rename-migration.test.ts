@@ -241,6 +241,7 @@ describe("registry model rename migration (#1610)", () => {
           defaultModel: "kimi-for-coding",
           models: ["k3", "k3[1m]", "kimi-for-coding"],
           noReasoningModels: ["kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-for-coding": [] },
         },
       },
     } as unknown as OcxConfig;
@@ -249,6 +250,27 @@ describe("registry model rename migration (#1610)", () => {
     const prov = config.providers.kimi!;
     expect(changed).toBe(true);
     expect(prov.noReasoningModels).toEqual([]);
+    expect(prov.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+  });
+
+  test("preserves an explicit no-reasoning override on the live alias", () => {
+    const configured = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-for-coding",
+          models: ["k3", "k3[1m]", "kimi-for-coding"],
+          noReasoningModels: ["kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-for-coding": ["low"] },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(configured, MODEL_RENAMES);
+    expect(changed).toBe(false);
+    expect(config.providers.kimi?.noReasoningModels).toEqual(["kimi-for-coding"]);
   });
 
   test("leaves a kimi row repointed at a different gateway alone", () => {
