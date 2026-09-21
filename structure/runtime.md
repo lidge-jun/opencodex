@@ -577,10 +577,15 @@ three independent authorities: package replacement, runtime stop and service res
 Unknown and desktop ownership deny all three because a claim alone does not prove that the live
 process is detached from the npm package; CLI ownership permits the ordinary stop-first
 flow. Both package updaters use `src/service/install-state-contract.mjs`, backed by the single
-`state-record.mjs` parser and authority selector. A shared mutation lease covers the final subject/liveness
-recheck through package replacement, and service install/start plus every state mutation take
-the same lease, so the stop decision cannot go stale under a cooperating manager. Dashboard
-restart keeps that lease through port reclaim and delegates its token to the repair child;
-direct start takes it again for the final liveness check through successful bind.
+`state-record.mjs` parser and authority selector. One mutation lease covers the fresh stop
+authorization, the stop child, the current runtime-record re-read and package replacement.
+The updater never treats the pre-stop address as proof that this installation is idle;
+an unreadable current record is unknown, and a valid address is probed even when its recorded
+PID is gone. Lease delegation is passed only to stop and recovery children, never package
+manager children. A replacement refusal passes through owner-aware recovery: only the same CLI
+owner revives the stopped runtime; foreign ownership stays transferred and unknown ownership
+remains a reported recovery requirement. Dashboard restart delegates the lease token to its repair child. Direct
+start holds the same lease through bind plus PID and runtime-address publication. If listener
+rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
 registration succeeds.
