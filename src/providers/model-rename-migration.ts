@@ -45,6 +45,52 @@ export interface ModelRename {
    * but lose the reasoning picker entirely.
    */
   dropReasoningEffortMap?: boolean;
+  /**
+   * Remove both the retired id and its replacement from `noReasoningModels`.
+   *
+   * Use this only when the rename also marks a capability change: carrying the old
+   * no-reasoning classification onto a newly adjustable alias would keep the picker
+   * disabled after the model id itself was repaired.
+   */
+  dropNoReasoningModels?: boolean;
+  /** Refresh exact registry defaults already saved under the replacement id. */
+  targetSeedRefresh?: {
+    contextWindow?: { from: number; to: number };
+    reasoning?: {
+      fromEfforts: readonly string[];
+      toEfforts: readonly string[];
+      defaultEffort: string;
+      effortMap: Readonly<Record<string, string>>;
+    };
+  };
+}
+
+const KIMI_K28_ALIAS = "kimi-for-coding";
+const KIMI_RETIRED_CODING_IDS = [
+  "kimi-k2.7-code",
+  "kimi-k2.7-code-highspeed",
+  "kimi-k2.6",
+  "kimi-k2.5",
+] as const;
+const KIMI_K28_TARGET_SEED_REFRESH: NonNullable<ModelRename["targetSeedRefresh"]> = {
+  contextWindow: { from: 262_144, to: 1_048_576 },
+  reasoning: {
+    fromEfforts: [],
+    toEfforts: ["low", "high", "max"],
+    defaultEffort: "max",
+    effortMap: { none: "none", low: "low", medium: "high", high: "high", xhigh: "max", max: "max" },
+  },
+};
+
+function kimiCodingRenames(provider: "kimi" | "kimi-code", endpoint: string): ModelRename[] {
+  return KIMI_RETIRED_CODING_IDS.map(from => ({
+    provider,
+    from,
+    to: KIMI_K28_ALIAS,
+    reason: `Moonshot retired the k2.x coding ids from the ${endpoint}; kimi-for-coding is the stable alias the endpoint still serves`,
+    dropNoReasoningModels: true,
+    targetSeedRefresh: KIMI_K28_TARGET_SEED_REFRESH,
+  }));
 }
 
 /**
@@ -65,6 +111,14 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
     to: "qwen3.8-max",
     reason: "Alibaba shipped Qwen3.8-Max as stable and documents the preview endpoint as liable to be taken offline once preview concludes",
   },
+  // Kimi coding renames. Moonshot retired the k2.x ids from the subscription/coding
+  // endpoint when K2.8 Preview shipped (live /coding/v1/models lists only
+  // kimi-for-coding[-highspeed], k3, k3-256k); kimi-for-coding is the stable alias the
+  // endpoint still serves and currently routes to K2.8 Preview. The registry picker no
+  // longer seeds the retired ids, so a saved defaultModel naming one is a dead selection
+  // rather than a merely outdated one.
+  ...kimiCodingRenames("kimi", "subscription endpoint after K2.8 Preview shipped"),
+  ...kimiCodingRenames("kimi-code", "coding endpoint after K2.8 Preview shipped"),
   // Antigravity Flash generations. Google takes the previous Flash model off Cloud Code
   // Assist almost immediately when the next ships, so a saved 3.6 (or older 3.5) id is a
   // dead selection rather than a merely outdated one. Routing already redirects these ids
@@ -133,6 +187,18 @@ function renameInList(value: unknown, from: string, to: string): string[] | null
   return next;
 }
 
+function dropRenamedIdsFromList(
+  value: unknown,
+  from: string,
+  to: string,
+  dropStaleTarget: boolean,
+): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const hasRetired = value.includes(from);
+  if (!hasRetired && !(dropStaleTarget && value.includes(to))) return null;
+  return value.filter(entry => typeof entry === "string" && entry !== from && entry !== to);
+}
+
 function renameInRecord(value: unknown, from: string, to: string): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -158,6 +224,42 @@ function dropFromRecord(value: unknown, from: string): Record<string, unknown> |
     next[key] = entry;
   }
   return next;
+}
+
+function sameStringArray(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((entry, index) => entry === expected[index]);
+}
+
+function targetReasoningMatchesStaleSeed(row: Record<string, unknown>, rename: ModelRename): boolean {
+  const reasoning = rename.targetSeedRefresh?.reasoning;
+  const efforts = row.modelReasoningEfforts as Record<string, unknown> | undefined;
+  return !!reasoning && !!efforts && sameStringArray(efforts[rename.to], reasoning.fromEfforts);
+}
+
+/** Refresh only exact defaults emitted by the previous registry; preserve user overrides. */
+function refreshTargetSeed(row: Record<string, unknown>, rename: ModelRename): boolean {
+  const refresh = rename.targetSeedRefresh;
+  if (!refresh) return false;
+  let changed = false;
+
+  const windows = row.modelContextWindows as Record<string, unknown> | undefined;
+  if (windows && refresh.contextWindow && windows[rename.to] === refresh.contextWindow.from) {
+    windows[rename.to] = refresh.contextWindow.to;
+    changed = true;
+  }
+
+  const reasoning = refresh.reasoning;
+  const efforts = row.modelReasoningEfforts as Record<string, unknown> | undefined;
+  if (!reasoning || !efforts || !sameStringArray(efforts[rename.to], reasoning.fromEfforts)) return changed;
+  efforts[rename.to] = [...reasoning.toEfforts];
+
+  const defaults = (row.modelDefaultReasoningEfforts ??= {}) as Record<string, unknown>;
+  if (!(rename.to in defaults)) defaults[rename.to] = reasoning.defaultEffort;
+  const maps = (row.modelReasoningEffortMap ??= {}) as Record<string, unknown>;
+  if (!(rename.to in maps)) maps[rename.to] = { ...reasoning.effortMap };
+  return true;
 }
 
 /**
@@ -281,7 +383,14 @@ export function projectModelRenames(
     let touched = false;
     for (const field of MODEL_ID_LISTS) {
       if (isRegistryResidue(seed, field, row[field], rename)) continue;
-      const next = renameInList(row[field], rename.from, rename.to);
+      const next = rename.dropNoReasoningModels && field === "noReasoningModels"
+        ? dropRenamedIdsFromList(
+          row[field],
+          rename.from,
+          rename.to,
+          targetReasoningMatchesStaleSeed(row, rename),
+        )
+        : renameInList(row[field], rename.from, rename.to);
       if (!next) continue;
       row[field] = next;
       touched = true;
@@ -300,6 +409,7 @@ export function projectModelRenames(
       touched = true;
     }
     if (renameDisabledModels(config, rename)) touched = true;
+    if (touched && refreshTargetSeed(row, rename)) touched = true;
 
     if (touched) {
       changed = true;

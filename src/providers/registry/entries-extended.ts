@@ -72,10 +72,10 @@ import {
   VOLCENGINE_PLAN_TEXT_ONLY_MODELS,
   ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES,
   KIMI_API_MODELS,
-  KIMI_CODING_MODELS,
   KIMI_THINKING_MODELS,
   KIMI_CODING_NO_REASONING_MODELS,
   KIMI_API_NO_REASONING_MODELS,
+  KIMI_CODING_LIVE_MODELS,
   KIMI_CODING_REASONING_EFFORTS,
   KIMI_CODING_DEFAULT_REASONING_EFFORTS,
   KIMI_CODING_REASONING_EFFORT_MAPS,
@@ -1013,13 +1013,17 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "kimi-code", label: "Kimi (coding)", baseUrl: "https://api.kimi.com/coding/v1", adapter: "openai-chat", authKind: "key",
-    dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-k2.7-code",
+    // 260921: kimi-k2.7-code was retired from the coding endpoint; the kimi-for-coding alias
+    // is the stable ID and currently routes to K2.8 Preview (same as the OAuth preset).
+    dashboardUrl: "https://platform.moonshot.cn/console/api-keys", defaultModel: "kimi-for-coding",
     modelSuffixBracketStrip: true,
     // API-key form of the same Kimi Code Plan transport; keep cache affinity identical to OAuth.
     promptCacheKey: true,
     // Keep Responses tool-result adjacency aligned with the OAuth preset (#4726).
     requiresAdjacentResponsesToolResults: true,
-    models: KIMI_CODING_MODELS,
+    // 260921: same live-id picker as the OAuth preset — the retired k2.x ids are repaired
+    // in saved configs by MODEL_RENAMES, not offered on fresh installs.
+    models: KIMI_CODING_LIVE_MODELS,
     modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
     modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
     noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
