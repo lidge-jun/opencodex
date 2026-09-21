@@ -23,6 +23,7 @@
  */
 import type { OAuthController, OAuthCredentials } from "./types";
 import { sanitizeApiKeyValue } from "../providers/api-keys";
+import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBytes } from "../lib/bounded-body";
 
 /** Meta's own Muse Code client. Public in its device-approval URL; not a secret. */
 const CLIENT_ID = "1031625952748946";
@@ -173,12 +174,45 @@ function requestSignal(signal: AbortSignal | undefined): AbortSignal {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
+async function readMuseJson(
+  response: Response,
+  signal: AbortSignal,
+  kind: "device-authorization" | "device-token" | "mint-invalid",
+): Promise<Record<string, unknown> | undefined> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength && /^\d+$/.test(declaredLength) && Number(declaredLength) > BOUNDED_BODY_MAX_BYTES) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new MuseDeviceLoginError(
+      kind,
+      `Muse Code response exceeded the ${BOUNDED_BODY_MAX_BYTES}-byte limit`,
+      { status: response.status },
+    );
+  }
+  const { bytes, oversized } = await readBoundedResponseBytes(response, {
+    maxBytes: BOUNDED_BODY_MAX_BYTES,
+    signal,
+  });
+  if (oversized) {
+    throw new MuseDeviceLoginError(
+      kind,
+      `Muse Code response exceeded the ${BOUNDED_BODY_MAX_BYTES}-byte limit`,
+      { status: response.status },
+    );
+  }
+  try {
+    return record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  } catch {
+    return undefined;
+  }
+}
+
 /** Step 1: ask Meta for a user code. */
 export async function requestMuseDeviceAuthorization(
   deps: MuseDeviceDeps = {},
   signal?: AbortSignal,
 ): Promise<MuseDeviceAuthorization> {
   const now = deps.now ?? Date.now;
+  const request = requestSignal(signal);
   const response = await (deps.fetchImpl ?? fetch)(DEVICE_AUTHORIZATION_URL, {
     method: "POST",
     headers: {
@@ -188,7 +222,7 @@ export async function requestMuseDeviceAuthorization(
     },
     body: new URLSearchParams({ client_id: CLIENT_ID }).toString(),
     redirect: "error",
-    signal: requestSignal(signal),
+    signal: request,
   });
   if (!response.ok) {
     throw new MuseDeviceLoginError(
@@ -197,7 +231,7 @@ export async function requestMuseDeviceAuthorization(
       { status: response.status },
     );
   }
-  const payload = record(await response.json().catch(() => undefined));
+  const payload = await readMuseJson(response, request, "device-authorization");
   const deviceCode = text(payload?.device_code);
   const userCode = text(payload?.user_code);
   if (!deviceCode || !userCode) {
@@ -241,6 +275,7 @@ export async function pollMuseDeviceToken(
     // shape checked the deadline at the top, so a sleep ending exactly at the deadline
     // skipped the final poll and discarded an approval the user had already completed
     // inside that window.
+    const request = requestSignal(signal);
     const response = await (deps.fetchImpl ?? fetch)(DEVICE_TOKEN_URL, {
       method: "POST",
       headers: {
@@ -254,9 +289,9 @@ export async function pollMuseDeviceToken(
         grant_type: DEVICE_GRANT_TYPE,
       }).toString(),
       redirect: "error",
-      signal: requestSignal(signal),
+      signal: request,
     });
-    const payload = record(await response.json().catch(() => undefined));
+    const payload = await readMuseJson(response, request, "device-token");
     if (response.ok) {
       // [W3] No deadline re-check here. If Meta answered 200 with a token, Meta accepted
       // the device code; its clock is authoritative and ours is not. Discarding an issued
@@ -322,6 +357,7 @@ export async function mintMuseApiKey(
   signal?: AbortSignal,
 ): Promise<MuseKeyPayload> {
   const now = deps.now ?? Date.now;
+  const request = requestSignal(signal);
   const response = await (deps.fetchImpl ?? fetch)(MUSE_KEY_URL, {
     method: "POST",
     headers: {
@@ -332,7 +368,7 @@ export async function mintMuseApiKey(
     },
     body: JSON.stringify(options.onboard ? { onboard: true } : {}),
     redirect: "error",
-    signal: requestSignal(signal),
+    signal: request,
   });
   if (response.status === 429) {
     const wait = retryAfterMs(response.headers.get("retry-after"), now());
@@ -352,7 +388,7 @@ export async function mintMuseApiKey(
       { status: response.status },
     );
   }
-  const payload = record(await response.json().catch(() => undefined));
+  const payload = await readMuseJson(response, request, "mint-invalid");
   if (!payload) {
     throw new MuseDeviceLoginError("mint-invalid", "Muse Code key exchange returned an unreadable response", {
       status: response.status,
