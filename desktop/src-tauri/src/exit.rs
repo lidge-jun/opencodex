@@ -21,9 +21,13 @@
 //! may not: coming back onto a runtime that was never stopped puts the user on the old version
 //! while they believe they are on the new one.
 
-use crate::{proxy::ProxyClient, sidecar, tray_availability::TrayAvailability, window, AppState};
+use crate::{
+    proxy::ProxyClient, runtime_stop, sidecar, tray_availability::TrayAvailability, window,
+    AppState,
+};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use tauri::{AppHandle, ExitRequestApi, Manager};
+use tokio::time::Instant;
 
 /// Why the process has been asked to end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -464,9 +468,12 @@ pub fn complete_restart(app: &AppHandle) -> ! {
 /// to somebody else's runtime, so the pid is checked first and a listener that cannot be identified
 /// is left alone.
 ///
-/// Nothing kills the child. The old path did, with `CommandChild::kill()`, and that is a SIGKILL on
-/// Unix: it cut off the in-flight requests, the client-configuration restore and the state-file
-/// clearing that the CLI's own stop performs.
+/// The stop itself is the bundled `ocx stop` (D4), not a management call from inside this process.
+/// The CLI's stop owns the receipt-backed teardown, the drain, the Windows respawn verification and
+/// the client-configuration restore, and an in-process endpoint cannot own its own teardown: launchd
+/// and systemd can terminate the request handler during self-unload. Nothing kills the child either
+/// — the original path did, with `CommandChild::kill()`, a SIGKILL on Unix that cut off exactly the
+/// work the CLI's stop exists to finish.
 pub async fn drain_current(app: &AppHandle) -> DrainVerdict {
     let Some((proxy, child_pid, watch)) = app
         .try_state::<AppState>()
@@ -486,13 +493,18 @@ pub async fn drain_current(app: &AppHandle) -> DrainVerdict {
         Ownership::Gone => DrainVerdict::Drained,
         Ownership::Foreign => DrainVerdict::Drained,
         Ownership::Unknown => DrainVerdict::OwnershipUnknown,
-        Ownership::Ours => match sidecar::drain(&proxy, true, &watch).await.failure() {
-            None => DrainVerdict::Drained,
-            Some(error) => {
-                crate::logging::log_once("graceful stop did not complete", &error);
+        Ownership::Ours => {
+            let deadline = Instant::now() + runtime_stop::DEADLINE;
+            let result = runtime_stop::run(app, deadline).await;
+            if result.is_stopped() {
+                DrainVerdict::Drained
+            } else {
+                // The CLI's own outcome and exit code, carried rather than reinterpreted. A stop
+                // that did not end in exit 0 with the runtime down is a stop that did not happen.
+                crate::logging::log_once("the bundled stop did not complete", &result.describe());
                 DrainVerdict::Failed
             }
-        },
+        }
     }
 }
 

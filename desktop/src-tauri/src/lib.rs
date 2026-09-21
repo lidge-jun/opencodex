@@ -1,5 +1,5 @@
 mod auth;
-mod discovery;
+mod endpoint;
 mod exit;
 mod first_run;
 mod formatting;
@@ -11,6 +11,8 @@ mod logging;
 mod menu;
 mod ownership;
 mod proxy;
+mod resolve;
+mod runtime_stop;
 mod sidecar;
 mod startup;
 mod tray;

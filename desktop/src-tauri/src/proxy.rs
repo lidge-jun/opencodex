@@ -1,4 +1,4 @@
-use crate::{auth::Auth, discovery::ProxyEndpoint};
+use crate::{auth::Auth, endpoint::ProxyEndpoint};
 use reqwest::{redirect, Client, Method, StatusCode};
 use serde_json::Value;
 use std::{
@@ -150,11 +150,6 @@ impl ProxyClient {
         timeout_at(deadline, self.is_alive()).await.ok()
     }
 
-    /// A stop request bounded the same way.
-    pub async fn stop_within(&self, deadline: Instant) -> Option<Result<Value, ProxyError>> {
-        timeout_at(deadline, self.stop()).await.ok()
-    }
-
     pub async fn companion_settings(&self) -> Result<Value, ProxyError> {
         self.get("/api/companion/settings").await
     }
@@ -177,10 +172,6 @@ impl ProxyClient {
 
     pub async fn timeline(&self, query: &str) -> Result<Value, ProxyError> {
         self.get(&format!("/api/usage/timeline?{query}")).await
-    }
-
-    pub async fn stop(&self) -> Result<Value, ProxyError> {
-        self.request(Method::POST, "/api/stop").await
     }
 
     async fn get(&self, path: &str) -> Result<Value, ProxyError> {
