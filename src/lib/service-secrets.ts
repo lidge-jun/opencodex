@@ -63,6 +63,12 @@ export function readServiceApiTokenState(): ServiceApiTokenState {
  * opened descriptor is also fchmod'd first, so a token-bearing inode a race
  * moved aside is still tightened wherever its entry ended up.
  *
+ *
+ * Return contract vs `readServiceApiTokenState`: an empty or malformed token file
+ * reports `unsafe` here and is never written — the path-based pre-check may still
+ * pass the install on loopback while this writer deliberately leaves the file
+ * untouched. Only `absent` permits a fresh write; anything unreadable stays as-is.
+ *
  * Callers must run this under `withConfigMutationLockSync`: client-key rotation
  * replaces the token under that lock, and a republish outside it could rename a
  * stale token back over a committed rotation.
