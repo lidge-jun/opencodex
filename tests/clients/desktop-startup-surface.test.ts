@@ -17,7 +17,10 @@ const LIB = repoPath(`${SRC}/lib.rs`);
 const SIDECAR = repoPath(`${SRC}/sidecar.rs`);
 const STARTUP = repoPath(`${SRC}/startup.rs`);
 const PROXY = repoPath(`${SRC}/proxy.rs`);
-const PAGE = repoPath("desktop/ui/main.js");
+// The startup surface is one file: the page and its script ship together in index.html,
+// because a script loaded from a second file is not named by the policy the webview is
+// actually served and never runs on some platforms. Read the page as the oracle for both.
+const PAGE = repoPath("desktop/ui/index.html");
 const CONFIG = repoPath("desktop/src-tauri/tauri.conf.json");
 
 function code(path: string): string {
@@ -214,6 +217,18 @@ describe("the bootstrap page reports only what it was told", () => {
 
   test("the failure block honours its hidden attribute", () => {
     expect(/#failure\[hidden\][^{]*\{[^}]*display:\s*none/.test(markup)).toBe(true);
+  });
+
+  test("the bootstrap script carries the nonce token the shell replaces", () => {
+    // The webview is served a policy the configuration file does not contain. Tauri appends its
+    // own hashes and nonces to script-src, and a hash or nonce in that directive makes
+    // 'unsafe-inline' inert, so nothing loads unless it is named. Its injector only tags
+    // script[src^='http'], and this page loads its script by relative path, so the page has to
+    // carry the token itself; the shell replaces it with a real nonce and adds that nonce to the
+    // directive. Without it the surface renders as static markup on the platforms where the
+    // asset origin does not satisfy 'self' — observed on Linux, where the page never ran a line.
+    expect(markup).not.toContain("./main.js");
+    expect(markup).toMatch(/<script nonce="__TAURI_SCRIPT_NONCE__">/);
   });
 
   test("the handshake with the shell is bounded", () => {
