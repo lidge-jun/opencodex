@@ -303,7 +303,7 @@ describe("writing the provider store the client reads", () => {
     ]));
     store.putRecord({
       ...record,
-      fragmentPaths: [[...ZCODE_STORE_MODEL_RULES_PATH, malformed]],
+      fragmentPaths: [[...record.fragmentPaths[0]!, malformed]],
     });
     const currentStorePath = installWithStore();
 
