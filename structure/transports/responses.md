@@ -684,6 +684,16 @@ translation, so a catalog that ends up empty there authorizes no client call wha
 still says. An absent catalog states no boundary, exactly as it states none for the declaration
 guard.
 
+Selection matching follows request-local identity correspondence instead of regenerating a set of
+name spellings. The outbound selector keeps its exact kind and wire name; namespace lowering
+contributes only its collision-checked `{namespace, name, kind}` aliases, and the Muse length rewrite
+composes its final wire alias over those identities. After client-facing restoration, two namespaces
+that share one basename remain distinct, as do a function and a custom tool that share one name. A
+custom call may match a function selector only when the same request records that exact
+custom-to-function conversion; malformed narrowing selectors and contradictory alias maps fail
+closed. Payload restoration still precedes sparse-terminal reconstruction, so the scope compares the
+restored call through that correspondence while preserving its item and call identifiers.
+
 The refusal is narrow and it is visible. Only the offending item is dropped, so the assistant text
 that arrived in the same turn still reaches the client rather than being discarded with it. Because
 the turn no longer ended the way the upstream said it did, the reconstructed terminal is published
