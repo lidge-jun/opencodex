@@ -466,6 +466,39 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: KIMI_THINKING_MODELS,
   },
   {
+    id: "kimi-responses",
+    label: "Kimi (Responses)",
+    adapter: "openai-responses",
+    baseUrl: "https://api.kimi.com/coding/v1",
+    authKind: "oauth",
+    modelSuffixBracketStrip: true,
+    // Same wire-capability defaults as the Chat preset; promptCacheKey is a stable
+    // session/task key Kimi documents for cache affinity on both wires.
+    promptCacheKey: true,
+    // Kimi's Responses endpoint rejects hook-provided context between a tool call and
+    // its matching result (#4726); the flag is live on this wire.
+    requiresAdjacentResponsesToolResults: true,
+    featured: false,
+    // Shares the kimi OAuth account: the login flow and credential store are keyed by
+    // oauthId, so adding this preset after logging into kimi needs no second login.
+    oauthId: "kimi",
+    jawcodeBundle: "moonshot",
+    note: "Same Kimi account login, routed over the OpenAI Responses wire. Thinking content stays encrypted server-side; tool calls and results stay visible. Chat wire remains the default preset for transparency.",
+    models: KIMI_CODING_LIVE_MODELS,
+    defaultModel: "kimi-for-coding",
+    modelContextWindows: KIMI_CODING_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: KIMI_CODING_MODEL_INPUT_MODALITIES,
+    noReasoningModels: KIMI_CODING_NO_REASONING_MODELS,
+    modelReasoningEfforts: KIMI_CODING_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: KIMI_CODING_DEFAULT_REASONING_EFFORTS,
+    modelReasoningEffortMap: KIMI_CODING_REASONING_EFFORT_MAPS,
+    noTemperatureModels: KIMI_LOCKED_PARAMETER_MODELS,
+    noTopPModels: KIMI_LOCKED_PARAMETER_MODELS,
+    noPenaltyModels: KIMI_LOCKED_PARAMETER_MODELS,
+    autoToolChoiceOnlyModels: KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS,
+    preserveReasoningContentModels: KIMI_THINKING_MODELS,
+  },
+  {
     id: "kiro",
     label: "Kiro (AWS CodeWhisperer)",
     adapter: "kiro",
