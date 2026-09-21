@@ -536,7 +536,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(stopAt).toBeLessThan(updateAt);
     // The four signals are now inside a runtime-ownership veto: a desktop-owned runtime is
     // not stopped at all. Every original reason to stop still reaches the gate unchanged.
-    expect(updateSource).toContain("if (runtimePlan.stopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(updateSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
   });
 
   test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
@@ -602,12 +602,9 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("serviceReinstallArgs()");
     expect(launcherSource).toContain("aborting the update");
     expect(launcherSource).toContain('"service", "repair"');
-    // The launcher still reads the install-state record for service-installed detection, and
-    // for the backend choice on the genuinely-absent install fallback. It no longer spells the
-    // file name: the path list moved into the contract both runtimes import, so the launcher
-    // cannot consult a shorter list than the authoritative reader.
-    expect(launcherSource).toContain("serviceStateFilesFor(configDir()");
-    expect(launcherSource).toContain("const serviceWasInstalled = existsSync(serviceStatePath)");
+    // The launcher reads the shared active/default state-path set for service-installed
+    // detection and the authoritative backend on the genuinely-absent install fallback.
+    expect(launcherSource).toContain("serviceStateFilesFor");
     // That marker can be STALE, so the fallback asks for structured state rather than
     // parsing a failure message; bin/ocx.mjs is plain Node and cannot import
     // diagnoseService(), so it reads startup.serviceInstalled from `status --json`.
@@ -788,8 +785,8 @@ esac
     // A pending-teardown receipt is a fourth reason to stop: after a parent crashed
     // mid-deferral the service, pid and runtime records can all be absent while shared
     // client config still points at a proxy that is gone (#3008).
-    expect(updateSource).toContain("if (runtimePlan.stopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
-    expect(launcherSource).toContain("if (runtimePlan.stopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown))");
+    expect(updateSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(launcherSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown))");
     // The rule now lives in the shared post-stop decision both lanes import (#3008): a
     // history-only stop proceeds, every other nonzero status and any surviving runtime
     // state aborts. Pinned by tests/update/update-stop-classification.test.ts.

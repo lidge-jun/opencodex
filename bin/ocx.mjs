@@ -15,9 +15,10 @@ import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
 import { planUpdateRuntimeHandling } from "../src/update/runtime-ownership.mjs";
 import {
   inspectInstallStateBytes,
-  resolveOwnershipFromEvidence,
+  selectAuthoritativeServiceState,
   serviceStateFilesFor,
 } from "../src/service/install-state-contract.mjs";
+import { acquireOwnershipMutationLease } from "../src/service/ownership-mutation-lease.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -262,27 +263,40 @@ function runPackageManagerSelfUpdate(manager) {
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must refresh and restart it afterwards.
-  const serviceStateFiles = serviceStateFilesFor(configDir(), join(homedir(), ".opencodex"));
-  const serviceStatePath = serviceStateFiles[0];
-  const serviceWasInstalled = existsSync(serviceStatePath);
-  /**
-   * What this update may do to the runtime, decided by the SAME contract the Bun updater
-   * uses — every state path, the whole record shape, and absence as the only answer that
-   * means no claim.
-   *
-   * This used to be a local reader that inspected the anchor alone and returned "known
-   * unowned" whenever the `ownership` field was simply missing, including from a record that
-   * fails the contract outright. A takeover the Bun updater refused to disturb was therefore
-   * fair game here, which is an authorization gap rather than a cosmetic divergence.
-   */
+  const allServiceStatePaths = serviceStateFilesFor(configDir(), join(homedir(), ".opencodex"));
+  // The test guard's legacy path is the developer's real home. Production always reads the
+  // same active-home + default-home observations as the Bun resolver.
+  const serviceStatePaths = process.env.OCX_TEST_HOME_GUARD === "1"
+    ? allServiceStatePaths.slice(0, 1)
+    : allServiceStatePaths;
+  const serviceWasInstalled = serviceStatePaths.some(path => existsSync(path));
+  // What this update may do to the runtime. The same rule the Bun updater applies, from the
+  // same module: a desktop takeover vetoes both the stop and the service refresh below.
+  const readServiceState = () => selectAuthoritativeServiceState(
+    serviceStatePaths.map(path => inspectInstallStateBytes(path, at => readFileSync(at, "utf8"))),
+  );
   const readOwnership = () => {
-    const evidence = serviceStateFiles.map(path => inspectInstallStateBytes(path, at => readFileSync(at, "utf8")));
-    const resolution = resolveOwnershipFromEvidence(evidence);
-    if (resolution.kind === "owned") return { ownership: resolution.ownership, ownershipUnknown: false };
-    return { ownership: null, ownershipUnknown: resolution.kind === "unknown" };
+    const selected = readServiceState();
+    if (selected.kind === "unknown") return { ownership: null, ownershipUnknown: true, subjectToken: "unknown" };
+    if (selected.kind === "none") return {
+      ownership: null, ownershipUnknown: false, subjectToken: JSON.stringify(["none", selected.revision]),
+    };
+    const ownership = selected.state.ownership ?? null;
+    return {
+      ownership,
+      ownershipUnknown: false,
+      subjectToken: JSON.stringify(ownership
+        ? ["owned", selected.revision, ownership]
+        : ["none", selected.revision]),
+    };
   };
-  let runtimePlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
+  const initialOwnership = readOwnership();
+  const runtimePlan = planUpdateRuntimeHandling({ ...initialOwnership, serviceInstalled: serviceWasInstalled });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
+  if (!runtimePlan.mayReplacePackage) {
+    console.error("opencodex: update stopped before tray handoff, runtime stop, or package replacement because runtime ownership is unknown.");
+    process.exit(1);
+  }
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
@@ -296,10 +310,11 @@ function runPackageManagerSelfUpdate(manager) {
   }
   /** Register from scratch, preserving the recorded backend. Only for a genuinely absent service. */
   function serviceInstallArgs() {
-    try {
-      const state = JSON.parse(readFileSync(serviceStatePath, "utf8"));
-      if (state.backend === "native") return [postUpdateLauncher, "service", "install", "--native"];
-    } catch { /* missing or corrupt — fall through to default */ }
+    const selected = readServiceState();
+    if (selected.kind === "unknown") throw new Error(`service backend is unknown: ${selected.reason}`);
+    if (selected.kind === "state" && selected.state.backend === "native") {
+      return [postUpdateLauncher, "service", "install", "--native"];
+    }
     return [postUpdateLauncher, "service", "install"];
   }
   /**
@@ -450,7 +465,7 @@ function runPackageManagerSelfUpdate(manager) {
         // claim the runtime during an update that takes minutes, and the refusal that repair
         // just returned is indistinguishable from any other failure at this layer.
         const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true });
-        if (!nowOwned.stopRuntime) {
+        if (!nowOwned.mayStopRuntime) {
           console.warn(nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
           return;
         }
@@ -497,12 +512,13 @@ function runPackageManagerSelfUpdate(manager) {
   function recoverStoppedRuntimeAfterFailure() {
     // Nothing was stopped under a foreign owner, so there is nothing to recover — and
     // starting a proxy here would put a second one beside the runtime the app is managing.
-    if (!runtimePlan.stopRuntime) return;
+    const recoveryPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
+    if (!recoveryPlan.mayStopRuntime) return;
     if (!postUpdateLauncherUsable) {
       console.error("opencodex: no verified active launcher remains for automatic recovery; reinstall opencodex manually.");
       return;
     }
-    if (runtimePlan.refreshService) {
+    if (recoveryPlan.mayRestoreService) {
       console.warn("opencodex: update failed after stopping the proxy — restoring the previous background service.");
       refreshBackgroundServiceOrStartDirect();
     } else if (hasRuntimeState) {
@@ -518,15 +534,7 @@ function runPackageManagerSelfUpdate(manager) {
   // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
   // whether the obligation is safe to finish.
   const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
-  // Re-read at the point of action rather than trusting the plan formed above: the Windows
-  // tray handoff between them spawns children, so a takeover can land in the gap, and
-  // stopping a runtime that just changed hands is the failure this lane exists to prevent.
-  {
-    const atStop = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
-    if (atStop.notice && atStop.notice !== runtimePlan.notice) console.log(atStop.notice);
-    runtimePlan = atStop;
-  }
-  if (runtimePlan.stopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)) {
+  if (runtimePlan.mayStopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
     const stillHasRuntimeState =
@@ -576,6 +584,22 @@ function runPackageManagerSelfUpdate(manager) {
         "  The proxy is down, so the update continues; close the Codex app and run 'ocx stop' once afterwards to finish the restore.",
       );
     }
+  }
+
+  const replacementLease = acquireOwnershipMutationLease(serviceStatePaths);
+  const replacementOwnership = readOwnership();
+  const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled });
+  const replacementLiveness = runtimePlan.mayStopRuntime
+    ? probeProxyLiveness(bakePort, bakeHostname)
+    : "dead";
+  if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+    || !replacementPlan.mayReplacePackage
+    || replacementLiveness !== "dead") {
+    replacementLease.release();
+    if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+    console.error(replacementPlan.notice
+      ?? "opencodex: update stopped because runtime ownership or liveness changed after the stop decision; rerun from the beginning.");
+    process.exit(1);
   }
 
   // npm keeps the existing stage -> verify -> swap -> rollback flow. pnpm owns a
@@ -666,6 +690,8 @@ function runPackageManagerSelfUpdate(manager) {
       `The live install was not knowingly modified; run 'ocx update' again or reinstall with ${manual}.`);
     res = { status: 1 };
   }
+  replacementLease.release();
+  const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     repairCodexShimIfNeeded(postUpdateLauncher);
@@ -681,10 +707,10 @@ function runPackageManagerSelfUpdate(manager) {
     }
     // The stop above unloaded any managed service; refresh via the freshly-installed
     // launcher so the new files write the baked paths and the service restarts.
-    if (runtimePlan.refreshService) {
+    if (postInstallPlan.mayRestoreService) {
       console.log("Refreshing the background service with the updated files...");
       refreshBackgroundServiceOrStartDirect();
-    } else if (runtimePlan.stopRuntime) {
+    } else if (postInstallPlan.mayStopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
     }
     process.exit(0);

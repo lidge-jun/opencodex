@@ -1,24 +1,27 @@
-/** Declaration for the plain-ESM install-state contract shared with `bin/ocx.mjs`. */
-export type OwnershipClaim = { owner: string; installId: string; consentGeneration: number };
+export type {
+  AuthoritativeServiceStateRecord,
+  ServiceInstallStateRecord,
+  ServiceOwnershipRecord as OwnershipClaim,
+  ServiceStateRecordEvidence as InstallStateEvidence,
+} from "./state-record.mjs";
 
-export type InstallStateEvidence =
-  | { path: string; kind: "absent" }
-  | { path: string; kind: "unreadable"; reason: string }
-  | { path: string; kind: "invalid" }
-  | { path: string; kind: "valid"; state: unknown };
+export {
+  SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+  SERVICE_OWNERSHIP_PROTOCOL_VERSION,
+  selectAuthoritativeServiceState,
+  serviceStateFingerprint,
+} from "./state-record.mjs";
+
+import type { ServiceStateRecordEvidence } from "./state-record.mjs";
 
 export type OwnershipResolution =
-  | { kind: "none" }
-  | { kind: "owned"; ownership: OwnershipClaim }
-  | { kind: "unknown"; reason: string };
+  | { readonly kind: "none"; readonly revision: number; readonly needsRepair?: boolean }
+  | { readonly kind: "owned"; readonly ownership: { owner: string; installId: string; consentGeneration: number }; readonly revision: number }
+  | { readonly kind: "unknown"; readonly reason: string };
 
-export declare const SERVICE_STATE_FILE: string;
-export declare function parseOwnershipClaim(value: unknown): OwnershipClaim | null;
-/** Returns the validated record, or null. Typed loosely so each runtime applies its own shape. */
-export declare function parseInstallStateRecord(value: unknown): unknown;
-export declare function inspectInstallStateBytes(path: string, read: (path: string) => string): InstallStateEvidence;
-export declare function resolveOwnershipFromEvidence(
-  evidence: readonly { path: string; kind: string; reason?: string; state?: unknown }[],
-): OwnershipResolution;
-export declare function serviceStateFilesFor(opencodexHomeDir: string, defaultHomeDir: string): string[];
-
+export declare const SERVICE_STATE_FILE: "service-state.json";
+export declare function parseOwnershipClaim(value: unknown): import("./state-record.mjs").ServiceOwnershipRecord | null;
+export declare function parseInstallStateRecord(value: unknown): import("./state-record.mjs").ServiceInstallStateRecord | null;
+export declare function inspectInstallStateBytes(path: string, read: (path: string) => string): ServiceStateRecordEvidence;
+export declare function resolveOwnershipFromEvidence(evidence: readonly ServiceStateRecordEvidence[]): OwnershipResolution;
+export declare function serviceStateFilesFor(opencodexHomeDir: string, defaultHomeDir: string, platform?: NodeJS.Platform): string[];

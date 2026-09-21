@@ -197,3 +197,31 @@ describe("desktop startup surface", () => {
     expect(page).toContain("clipboard.writeText");
   });
 });
+
+/**
+ * The surface has to be able to stay silent.
+ *
+ * Two defects made it speak when it had nothing to say and stay quiet when it did. An id rule
+ * with display: grid outranks the user-agent [hidden] { display: none } rule, so the failure
+ * block - the Retry button and the empty diagnostic box - was painted during every normal start.
+ * And an invoke whose command never answers returns a promise that neither settles nor rejects,
+ * so the page kept its initial markup for as long as the shell stayed silent. Together they are
+ * the screen a user reads as a dead application: a starting headline, no checklist, one Retry.
+ */
+describe("the bootstrap page reports only what it was told", () => {
+  const markup = readFileSync(repoPath("desktop/ui/index.html"), "utf8");
+  const page = readFileSync(PAGE, "utf8");
+
+  test("the failure block honours its hidden attribute", () => {
+    expect(/#failure\[hidden\][^{]*\{[^}]*display:\s*none/.test(markup)).toBe(true);
+  });
+
+  test("the handshake with the shell is bounded", () => {
+    expect(page).toContain("HANDSHAKE_DEADLINE_MS");
+    for (const command of ["startup_phases", "startup_snapshot"]) {
+      const bounded = 'withDeadline(invoke(\"' + command + '\")';
+      expect(page.includes(bounded)).toBe(true);
+    }
+    expect(page).toContain("withDeadline(listen(");
+  });
+});

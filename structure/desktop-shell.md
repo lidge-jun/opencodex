@@ -180,10 +180,13 @@ marker, which the GUI detects to identify the shell without using IPC.
 The release workflow packages the desktop shell as `OpenCodex-<version>-macos.dmg`,
 `OpenCodex-<version>-windows-x64.msi`, `OpenCodex-<version>-linux-x86_64.AppImage`, and
 `OpenCodex-<version>-linux-amd64.deb`. Each artifact is collected with a `.sha256` file;
-signed updater artifacts also carry `.sig` files. A release attachment job combines the
-standalone and desktop assets, verifies checksums, and writes `latest.json` only when the
-updater key secret is configured; it then requires all four platforms to have updater
-signatures.
+signed updater artifacts also carry `.sig` files. A pre-publication verification job
+combines the standalone and desktop assets, derives the expected file set from the
+packaging matrices, verifies every checksum and every updater signature, and writes
+`latest.json` only when the updater key secret is configured, requiring all four
+platforms to have updater signatures. Publication waits for that verification, and the
+attachment job uploads the verified bundle only after the verification receipt names
+the same version and commit.
 On macOS, in-app updates download `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for
 the first installation.
 

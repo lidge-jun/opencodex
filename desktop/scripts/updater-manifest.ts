@@ -27,7 +27,7 @@ export interface UpdaterManifest {
   platforms: Record<string, PlatformUpdate>;
 }
 
-const platformFiles: Record<string, string> = {
+export const platformFiles: Record<string, string> = {
   "darwin-aarch64": "macos.app.tar.gz",
   "darwin-x86_64": "macos.app.tar.gz",
   "windows-x86_64": "windows-x64.msi",

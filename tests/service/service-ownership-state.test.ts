@@ -8,7 +8,7 @@
  * doctor suggestion — and nothing said it had gone.
  */
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
 import {
@@ -20,14 +20,22 @@ import {
   readServiceInstallState,
   recordServiceOwner,
   releaseServiceOwner,
+  removeServiceInstallStateRecords,
   resolveServiceOwnership,
+  resolveServiceState,
+  ServiceOwnershipSubjectMismatchError,
+  ServiceTakeoverCompatibilityChangedError,
   ServiceStateConflictError,
   serviceOwnership,
   serviceStatePath,
   serviceStatePaths,
   swapServiceInstallState,
   writeServiceInstallState,
+  type RecordServiceOwnerDeps,
+  type ServiceOwner,
+  type ServiceStateSwapDeps,
 } from "../../src/service/state";
+import { assessServiceTakeoverCompatibility, type ManagingCliObservation } from "../../src/service/ownership-compatibility";
 
 let home: TempHome;
 /**
@@ -57,26 +65,63 @@ afterEach(() => {
 });
 
 const DESKTOP = { owner: "desktop", installId: "app-install-a" } as const;
+const COMPATIBLE_MANAGERS: Readonly<Record<"service-registration" | "path", ManagingCliObservation>> = {
+  "service-registration": { status: "absent" },
+  path: { status: "observed", version: "2.61.0", identity: "path-manager-a" },
+};
+
+function grantServiceOwner(
+  claim: { owner: ServiceOwner; installId: string },
+  deps: ServiceStateSwapDeps & Pick<Partial<RecordServiceOwnerDeps>, "observeManagers"> = {},
+) {
+  const request = approvedOwnerRequest(claim);
+  const { observeManagers = () => COMPATIBLE_MANAGERS, ...swapDeps } = deps;
+  return recordServiceOwner(request, { ...swapDeps, observeManagers });
+}
+
+function approvedOwnerRequest(
+  claim: { owner: ServiceOwner; installId: string },
+  managers = COMPATIBLE_MANAGERS,
+) {
+  const expectedSubject = resolveServiceOwnership();
+  if (expectedSubject.kind === "unknown") throw new Error(expectedSubject.reason);
+  const resolved = resolveServiceState();
+  if (resolved.kind === "unknown") throw new Error(resolved.reason);
+  const expectedCompatibility = assessServiceTakeoverCompatibility({
+    state: resolved.kind === "state" ? resolved.state : null,
+    subject: expectedSubject,
+    managers,
+  });
+  if (expectedCompatibility.kind !== "supported") throw new Error(expectedCompatibility.detail);
+  return { ...claim, expectedSubject, expectedCompatibility };
+}
+
+function releaseCurrentOwner(deps: ServiceStateSwapDeps = {}) {
+  const expected = resolveServiceOwnership();
+  if (expected.kind === "unknown") throw new Error(expected.reason);
+  return releaseServiceOwner(expected, deps);
+}
 
 describe("ownership survives every install-state writer", () => {
   test("a repair over a desktop takeover keeps the owner, the install id and the generation", () => {
-    const claimed = recordServiceOwner(DESKTOP);
-    expect(claimed).toEqual({ owner: "desktop", installId: "app-install-a", consentGeneration: 1 });
+    const claimed = grantServiceOwner(DESKTOP);
+    expect(claimed.ownership).toEqual({ owner: "desktop", installId: "app-install-a", consentGeneration: 1 });
 
     // What a repair does: rebuild the install provenance and write it.
     writeServiceInstallState("scheduler", null);
 
     const after = readServiceInstallState();
-    expect(after?.ownership).toEqual(claimed);
+    expect(after?.ownership).toEqual(claimed.ownership);
     // The provenance half really was refreshed, so this is preservation rather than a
     // write that quietly did nothing.
     expect(after?.bunPath).toBeTruthy();
     expect(after?.backend).toBe("scheduler");
+    expect(after?.ownershipProtocolVersion).toBe(1);
     expect(desktopOwnsService()).toBe(true);
   });
 
   test("a native-backend switch preserves the claim too", () => {
-    recordServiceOwner(DESKTOP);
+    grantServiceOwner(DESKTOP);
     writeServiceInstallState("native");
     const after = readServiceInstallState();
     expect(after?.backend).toBe("native");
@@ -112,14 +157,14 @@ describe("ownership survives every install-state writer", () => {
 
 describe("consent generation and the comparison rule", () => {
   test("a grant increments once; the same installation relaunching does not", () => {
-    expect(recordServiceOwner(DESKTOP).consentGeneration).toBe(1);
-    expect(recordServiceOwner(DESKTOP).consentGeneration).toBe(1);
-    expect(recordServiceOwner({ owner: "desktop", installId: "app-install-b" }).consentGeneration).toBe(2);
-    expect(recordServiceOwner({ owner: "cli", installId: "app-install-b" }).consentGeneration).toBe(3);
+    expect(grantServiceOwner(DESKTOP).ownership.consentGeneration).toBe(1);
+    expect(grantServiceOwner(DESKTOP).ownership.consentGeneration).toBe(1);
+    expect(grantServiceOwner({ owner: "desktop", installId: "app-install-b" }).ownership.consentGeneration).toBe(2);
+    expect(grantServiceOwner({ owner: "cli", installId: "app-install-b" }).ownership.consentGeneration).toBe(3);
   });
 
   test("a grant belongs to one installation, not to the kind of owner", () => {
-    const ownership = recordServiceOwner(DESKTOP);
+    const ownership = grantServiceOwner(DESKTOP).ownership;
     expect(ownershipGrantedTo(ownership, "desktop", "app-install-a")).toBe(true);
     // A reinstalled app carries a different id and must ask for consent again.
     expect(ownershipGrantedTo(ownership, "desktop", "app-install-b")).toBe(false);
@@ -128,16 +173,16 @@ describe("consent generation and the comparison rule", () => {
   });
 
   test("an install id is required, because an empty one would match nothing and claim everything", () => {
-    expect(() => recordServiceOwner({ owner: "desktop", installId: "" })).toThrow(/install id/);
+    expect(() => grantServiceOwner({ owner: "desktop", installId: "" })).toThrow(/install id/);
   });
 
   test("releasing returns the dropped claim and creates no record when there is none", () => {
-    expect(releaseServiceOwner()).toBeNull();
+    expect(releaseCurrentOwner()).toBeNull();
     expect(existsSync(serviceStatePath())).toBe(false);
 
     writeServiceInstallState("scheduler", null);
-    recordServiceOwner(DESKTOP);
-    expect(releaseServiceOwner()).toEqual({ owner: "desktop", installId: "app-install-a", consentGeneration: 1 });
+    grantServiceOwner(DESKTOP);
+    expect(releaseCurrentOwner()).toEqual({ owner: "desktop", installId: "app-install-a", consentGeneration: 1 });
     expect(serviceOwnership()).toBeNull();
     expect(desktopOwnsService()).toBe(false);
     // The install record itself is untouched: releasing ownership is not an uninstall.
@@ -145,7 +190,7 @@ describe("consent generation and the comparison rule", () => {
   });
 
   test("claiming with no install state writes no install provenance it cannot vouch for", () => {
-    recordServiceOwner(DESKTOP);
+    grantServiceOwner(DESKTOP);
     const record = readServiceInstallState();
     expect(record?.ownership?.owner).toBe("desktop");
     expect(record?.bunPath).toBeUndefined();
@@ -154,6 +199,93 @@ describe("consent generation and the comparison rule", () => {
 });
 
 describe("the compare-and-swap", () => {
+  test("a revocation that lands while a provenance writer waits is not resurrected", () => {
+    grantServiceOwner(DESKTOP);
+    let revoked = false;
+    writeServiceInstallState("scheduler", null, {
+      beforeCommit: attempt => {
+        if (attempt === 0 && !revoked) {
+          revoked = true;
+          releaseCurrentOwner();
+        }
+      },
+    });
+    expect(readServiceInstallState()?.ownership).toBeUndefined();
+    expect(readServiceInstallState()?.consentGenerationCeiling).toBe(1);
+  });
+
+  test("authority commit survives a mirror failure and the next writer repairs the mirror", () => {
+    const mirror = home.path("active", "service-state.json");
+    const authority = home.path("default", "service-state.json");
+    mkdirSync(home.path("active"), { recursive: true });
+    mkdirSync(home.path("default"), { recursive: true });
+    const initial = {
+      version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler",
+      revision: 1, ownership: { owner: "desktop", installId: "app-install-a", consentGeneration: 1 },
+      consentGenerationCeiling: 1,
+    } as const;
+    const bytes = `${JSON.stringify(initial, null, 2)}\n`;
+    writeFileSync(mirror, bytes);
+    writeFileSync(authority, bytes);
+    const degraded: string[] = [];
+    releaseServiceOwner({ kind: "owned", ownership: initial.ownership, revision: 1 }, {
+      paths: [mirror, authority],
+      commitStateFile: (path, serialized, validate) => {
+        validate();
+        if (path === mirror) throw new Error("mirror unavailable");
+        writeFileSync(path, serialized);
+      },
+      onMirrorError: path => degraded.push(path),
+    });
+    expect(degraded).toEqual([mirror]);
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([mirror, authority])))
+      .toEqual({ kind: "none", revision: 2 });
+    expect(JSON.parse(readFileSync(mirror, "utf8")).ownership.installId).toBe("app-install-a");
+
+    writeServiceInstallState("scheduler", null, { paths: [mirror, authority] });
+    expect(readFileSync(mirror, "utf8")).toBe(readFileSync(authority, "utf8"));
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([mirror, authority])).kind).toBe("none");
+  });
+
+  test("an authority publication failure leaves both prior records unchanged", () => {
+    const mirror = home.path("active-state.json");
+    const authority = home.path("authority-state.json");
+    const initial = JSON.stringify({
+      version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler", revision: 4,
+    });
+    writeFileSync(mirror, initial);
+    writeFileSync(authority, initial);
+    expect(() => swapServiceInstallState(current => ({ ...current!, launcherPath: "/next/ocx" }), {
+      paths: [mirror, authority],
+      commitStateFile: () => { throw new Error("rename refused"); },
+    })).toThrow(/rename refused/);
+    expect(readFileSync(mirror, "utf8")).toBe(initial);
+    expect(readFileSync(authority, "utf8")).toBe(initial);
+  });
+
+  test("a mirror deletion failure keeps the authority, so a revoked claim cannot migrate back", () => {
+    const mirror = home.path("active-delete.json");
+    const authority = home.path("authority-delete.json");
+    writeFileSync(mirror, JSON.stringify({
+      version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler", revision: 4,
+      ownership: { owner: "desktop", installId: "revoked", consentGeneration: 1 },
+    }));
+    writeFileSync(authority, JSON.stringify({
+      version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler", revision: 5,
+      consentGenerationCeiling: 1,
+    }));
+    expect(() => removeServiceInstallStateRecords({
+      paths: [mirror, authority],
+      unlink: path => {
+        if (path === mirror) throw new Error("mirror delete refused");
+        unlinkSync(path);
+      },
+    })).toThrow(/mirror delete refused/);
+    expect(existsSync(authority)).toBe(true);
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([mirror, authority])))
+      .toEqual({ kind: "none", revision: 5 });
+  });
+
   test("a writer that lands inside the commit window is detected and the swap recomputes", () => {
     writeServiceInstallState("scheduler", null);
     const before = readServiceInstallState()?.revision ?? 0;
@@ -161,7 +293,7 @@ describe("the compare-and-swap", () => {
     const result = swapServiceInstallState(current => ({ ...current!, launcherPath: "/opt/ocx" }), {
       beforeCommit: attempt => {
         // Exactly one interleaved writer, on the first attempt only.
-        if (attempt === 0) recordServiceOwner(DESKTOP);
+        if (attempt === 0) grantServiceOwner(DESKTOP);
       },
     });
 
@@ -178,7 +310,7 @@ describe("the compare-and-swap", () => {
     let competitors = 0;
     expect(() => swapServiceInstallState(current => ({ ...current!, launcherPath: "/opt/ocx" }), {
       attempts: 3,
-      beforeCommit: () => { competitors += 1; recordServiceOwner({ owner: "desktop", installId: "app-" + competitors }); },
+      beforeCommit: () => { competitors += 1; grantServiceOwner({ owner: "desktop", installId: "app-" + competitors }); },
     })).toThrow(ServiceStateConflictError);
 
     expect(competitors).toBe(3);
@@ -202,6 +334,17 @@ describe("the compare-and-swap", () => {
     expect(readFileSync(serviceStatePath(), "utf8")).toBe(before);
   });
 
+  test("exhausted revision refuses before publishing an unreadable successor", () => {
+    writeFileSync(serviceStatePath(), JSON.stringify({
+      version: 2, codexHome: home.codexHome, opencodexHome: home.root,
+      backend: "scheduler", revision: Number.MAX_SAFE_INTEGER,
+    }));
+    const before = readFileSync(serviceStatePath(), "utf8");
+    expect(() => swapServiceInstallState(current => ({ ...current!, launcherPath: "/next/ocx" })))
+      .toThrow(/revision is exhausted/);
+    expect(readFileSync(serviceStatePath(), "utf8")).toBe(before);
+  });
+
   /**
    * Unreadable is not absent. Reading a directory is the portable way to produce that
    * answer; a real one is a permission the process does not have. Either way the swap has
@@ -214,6 +357,59 @@ describe("the compare-and-swap", () => {
     expect(() => swapServiceInstallState(() => ({
       version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler",
     }), { paths: [unreadable] })).toThrow(/could not be read/);
+  });
+});
+
+describe("the consented subject is a precondition", () => {
+  test("a delayed service-install release cannot delete a successor claim", () => {
+    const first = grantServiceOwner(DESKTOP);
+    const successor = grantServiceOwner({ owner: "desktop", installId: "app-install-b" });
+    expect(() => releaseServiceOwner(first, { allowRevisionAdvance: true }))
+      .toThrow(ServiceOwnershipSubjectMismatchError);
+    expect(resolveServiceOwnership()).toEqual(successor);
+  });
+
+  test("a revocation during the internal retry invalidates the approval", () => {
+    grantServiceOwner(DESKTOP);
+    const request = approvedOwnerRequest({ owner: "desktop", installId: "app-install-b" });
+    let revoked = false;
+    expect(() => recordServiceOwner(request, {
+      observeManagers: () => COMPATIBLE_MANAGERS,
+      beforeCommit: attempt => {
+        if (attempt === 0 && !revoked) {
+          revoked = true;
+          releaseCurrentOwner();
+        }
+      },
+    })).toThrow(ServiceOwnershipSubjectMismatchError);
+    expect(resolveServiceOwnership().kind).toBe("none");
+  });
+
+  test("a revision-only change requires fresh approval even when the owner is unchanged", () => {
+    writeServiceInstallState("scheduler", null);
+    const request = approvedOwnerRequest(DESKTOP);
+    let changed = false;
+    expect(() => recordServiceOwner(request, {
+      observeManagers: () => COMPATIBLE_MANAGERS,
+      beforeCommit: attempt => {
+        if (attempt === 0 && !changed) {
+          changed = true;
+          writeServiceInstallState("scheduler", null);
+        }
+      },
+    })).toThrow(ServiceOwnershipSubjectMismatchError);
+    expect(readServiceInstallState()?.ownership).toBeUndefined();
+  });
+
+  test("managing CLI compatibility is re-observed immediately before the grant", () => {
+    const request = approvedOwnerRequest(DESKTOP);
+    expect(() => recordServiceOwner(request, {
+      observeManagers: () => ({
+        "service-registration": { status: "absent" },
+        path: { status: "observed", version: "2.60.0", identity: "path-manager-old" },
+      }),
+    })).toThrow(ServiceTakeoverCompatibilityChangedError);
+    expect(readServiceInstallState()?.ownership).toBeUndefined();
   });
 });
 
@@ -233,6 +429,11 @@ describe("parsing", () => {
     expect(parseServiceInstallState({ ...valid, revision: 0 })?.revision).toBe(0);
     expect(parseServiceInstallState({ ...valid, revision: 1.5 })).toBeNull();
     expect(parseServiceInstallState({ ...valid, revision: -1 })).toBeNull();
+    expect(parseServiceInstallState({ ...valid, revision: Number.MAX_SAFE_INTEGER })).not.toBeNull();
+    expect(parseServiceInstallState({
+      ...valid,
+      ownership: { owner: "desktop", installId: "a", consentGeneration: Number.MAX_SAFE_INTEGER },
+    })).not.toBeNull();
     expect(parseServiceInstallState(valid)?.revision).toBeUndefined();
   });
 
@@ -259,18 +460,23 @@ describe("the record is read fail-closed", () => {
   test("a corrupt anchor is unknown; corrupt legacy leftovers are ignored", () => {
     writeFileSync(serviceStatePath(), "not json");
     expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath()])).kind).toBe("unknown");
+    unlinkSync(serviceStatePath());
 
     // The second path is the legacy default-home entry. Junk left there by an old version
     // must not be able to block every repair on the machine.
-    recordServiceOwner(DESKTOP);
+    grantServiceOwner(DESKTOP);
     const legacy = home.path("legacy-service-state.json");
     writeFileSync(legacy, "{ broken");
-    const resolution = resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath(), legacy]));
-    expect(resolution).toEqual({ kind: "owned", ownership: { owner: "desktop", installId: "app-install-a", consentGeneration: 1 } });
+    const resolution = resolveServiceOwnership(inspectServiceStateEvidence([legacy, serviceStatePath()]));
+    expect(resolution).toEqual({
+      kind: "owned",
+      ownership: { owner: "desktop", installId: "app-install-a", consentGeneration: 1 },
+      revision: expect.any(Number),
+    });
   });
 
   test("paths that name different owners are unknown", () => {
-    recordServiceOwner(DESKTOP);
+    grantServiceOwner(DESKTOP);
     const other = home.path("other-service-state.json");
     const record = JSON.parse(readFileSync(serviceStatePath(), "utf8"));
     writeFileSync(other, JSON.stringify({ ...record, ownership: { ...record.ownership, installId: "app-install-b" } }));
@@ -278,7 +484,8 @@ describe("the record is read fail-closed", () => {
   });
 
   test("absent everywhere is the only thing that means no claim", () => {
-    expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath()]))).toEqual({ kind: "none" });
+    expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath()])))
+      .toEqual({ kind: "none", revision: 0 });
   });
 
   /**
@@ -297,118 +504,94 @@ describe("the record is read fail-closed", () => {
 
 describe("the generation cannot be reused", () => {
   test("a release keeps the high-water mark so the next grant does not repeat it", () => {
-    expect(recordServiceOwner(DESKTOP).consentGeneration).toBe(1);
-    releaseServiceOwner();
+    expect(grantServiceOwner(DESKTOP).ownership.consentGeneration).toBe(1);
+    releaseCurrentOwner();
     expect(readServiceInstallState()?.consentGenerationCeiling).toBe(1);
     // Without the ceiling this would be 1 again, and an app-local record still holding the
     // first 1 would read the second grant as its own prior consent.
-    expect(recordServiceOwner(DESKTOP).consentGeneration).toBe(2);
+    expect(grantServiceOwner(DESKTOP).ownership.consentGeneration).toBe(2);
   });
 
   test("an ordinary install-state write carries the ceiling forward", () => {
-    recordServiceOwner(DESKTOP);
-    releaseServiceOwner();
+    grantServiceOwner(DESKTOP);
+    releaseCurrentOwner();
     writeServiceInstallState("scheduler", null);
     expect(readServiceInstallState()?.consentGenerationCeiling).toBe(1);
-    expect(recordServiceOwner({ owner: "desktop", installId: "app-install-b" }).consentGeneration).toBe(2);
+    expect(grantServiceOwner({ owner: "desktop", installId: "app-install-b" }).ownership.consentGeneration).toBe(2);
   });
 });
 
 describe("the anchor lock", () => {
-  test("a lock another process holds blocks the write rather than racing it", () => {
-    writeFileSync(serviceStatePath() + ".lock", "");
+  test("a live update lease blocks ownership mutation before the state lock is touched", () => {
+    const leasePath = serviceStatePath() + ".mutation.lock";
+    const processInstance = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const token = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    mkdirSync(leasePath, { recursive: true });
+    writeFileSync(`${leasePath}/v1-777-${processInstance}-${token}.json`, JSON.stringify({
+      version: 1, pid: 777, processInstance, token, createdAt: 1,
+    }));
+    expect(() => writeServiceInstallState("scheduler", null, {
+      paths: [serviceStatePath()],
+      mutationLease: { waitMs: 0, now: () => 1_000_000, processAlive: () => true },
+    })).toThrow(/runtime mutation lease/);
+    expect(existsSync(serviceStatePath())).toBe(false);
+  });
+
+  test("a crashed incomplete update lease is reclaimed only after the stale grace", () => {
+    const leasePath = serviceStatePath() + ".mutation.lock";
+    mkdirSync(leasePath, { recursive: true });
+    writeServiceInstallState("scheduler", null, {
+      paths: [serviceStatePath()],
+      mutationLease: {
+        waitMs: 0,
+        now: () => Date.now() + 60_000,
+        processAlive: () => false,
+      },
+    });
+    expect(readServiceInstallState()?.backend).toBe("scheduler");
+  });
+
+  test("age never evicts a holder whose PID is still alive", () => {
+    const lockPath = serviceStatePath() + ".lock";
+    const processInstance = "11111111-1111-4111-8111-111111111111";
+    const token = "22222222-2222-4222-8222-222222222222";
+    mkdirSync(lockPath, { recursive: true });
+    writeFileSync(`${lockPath}/v1-777-${processInstance}-${token}.json`, JSON.stringify({
+      version: 1, pid: 777, processInstance, token, createdAt: 1,
+    }));
     expect(() => swapServiceInstallState(() => ({
       version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler",
-    }), { lockWaitMs: 50 })).toThrow(/another process is writing/);
+    }), {
+      paths: [serviceStatePath()],
+      lockWaitMs: 0,
+      lockHooks: { now: () => 1_000_000, processAlive: () => true },
+    })).toThrow(/another process owns/);
     // Nothing was written: the swap never reached a commit.
     expect(existsSync(serviceStatePath())).toBe(false);
   });
 
-  test("a swap nested inside another one is not a race and does not deadlock", () => {
-    writeServiceInstallState("scheduler", null);
-    const result = swapServiceInstallState(current => ({ ...current!, launcherPath: "/opt/ocx" }), {
-      beforeCommit: attempt => { if (attempt === 0) recordServiceOwner(DESKTOP); },
+  test("a late release cannot remove a successor lock", () => {
+    const statePath = serviceStatePath();
+    const lockPath = `${statePath}.lock`;
+    const successorInstance = "33333333-3333-4333-8333-333333333333";
+    const successorToken = "44444444-4444-4444-8444-444444444444";
+    swapServiceInstallState(current => ({
+      ...(current ?? { version: 2, codexHome: home.codexHome, opencodexHome: home.root, backend: "scheduler" }),
+      launcherPath: "/opt/ocx",
+    }), {
+      paths: [statePath],
+      lockHooks: {
+        beforeRelease: () => {
+          for (const entry of readdirSync(lockPath)) unlinkSync(`${lockPath}/${entry}`);
+          rmSync(lockPath, { recursive: true });
+          mkdirSync(lockPath, { recursive: true });
+          writeFileSync(`${lockPath}/v1-888-${successorInstance}-${successorToken}.json`, JSON.stringify({
+            version: 1, pid: 888, processInstance: successorInstance, token: successorToken, createdAt: 2,
+          }));
+        },
+      },
     });
-    expect(result?.ownership?.installId).toBe("app-install-a");
+    expect(existsSync(`${lockPath}/v1-888-${successorInstance}-${successorToken}.json`)).toBe(true);
   });
 
-  /**
-   * The lock file names its holder. Without that, a holder evicted as stale would delete the
-   * REPLACEMENT lock on its way out and hand a third writer the pathname while the second is
-   * still inside its critical section.
-   */
-  test("release removes only the lock instance this holder created", () => {
-    const lockPath = serviceStatePath() + ".lock";
-    let observed = "";
-    writeServiceInstallState("scheduler", null);
-    swapServiceInstallState(current => {
-      observed = readFileSync(lockPath, "utf8").trim();
-      // Stand in for an eviction: the pathname now belongs to somebody else.
-      writeFileSync(lockPath, "a-different-holder\n");
-      return { ...current! };
-    });
-    expect(observed).not.toBe("");
-    expect(existsSync(lockPath)).toBe(true);
-    expect(readFileSync(lockPath, "utf8").trim()).toBe("a-different-holder");
-    unlinkSync(lockPath);
-  });
-});
-
-describe("the record is replaced as a unit", () => {
-  /**
-   * An in-place write truncates first, so an interrupted commit used to leave the anchor empty
-   * or half-serialized. Since the reader became fail-closed that reads as `unknown`, which
-   * blocks start, repair, restart and every update until the operator runs a takeover install.
-   */
-  test("a commit leaves no staging file behind and the record stays parseable", () => {
-    writeServiceInstallState("scheduler", null);
-    recordServiceOwner(DESKTOP);
-    const leftovers = readdirSync(home.root).filter(name => name.endsWith(".tmp"));
-    expect(leftovers).toEqual([]);
-    expect(readServiceInstallState()?.ownership?.installId).toBe("app-install-a");
-  });
-
-  test("the write path stages and renames rather than truncating the record in place", () => {
-    const source = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
-    const commit = source.slice(
-      source.indexOf("function commitServiceStateFile("),
-      source.indexOf("export function swapServiceInstallState("),
-    );
-    expect(commit).toContain("renameSync(staged, path)");
-    // Hardened BEFORE the rename: between rename and chmod the record would be readable
-    // at the default mode.
-    expect(commit.indexOf("hardenSecretPath(staged")).toBeLessThan(commit.indexOf("renameSync(staged, path)"));
-  });
-});
-
-describe("a claim recorded under the lock is never overwritten by an older one", () => {
-  /**
-   * `writeServiceInstallState` used to resolve ownership BEFORE the swap took the lock. A
-   * takeover landing in between reached `current`, passed the revision check untouched, and
-   * was then overwritten by the older claim the resolution had captured — a lost update the
-   * compare-and-swap cannot see, because the stale value never came from the base record.
-   */
-  test("the resolution is read inside the swap, not before it", () => {
-    const source = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
-    const writer = source.slice(
-      source.indexOf("export function writeServiceInstallState("),
-      source.indexOf("function preservedConsent("),
-    );
-    expect(writer).toContain("preservedConsent(current, resolveServiceOwnership())");
-    expect(writer).not.toMatch(/const resolution = resolveServiceOwnership\(\);/);
-  });
-
-  test("a higher generation wins, and an equal generation keeps the anchor", () => {
-    recordServiceOwner(DESKTOP);
-    recordServiceOwner({ owner: "desktop", installId: "app-install-b" });
-    const before = readServiceInstallState();
-    expect(before?.ownership?.installId).toBe("app-install-b");
-    expect(before?.ownership?.consentGeneration).toBe(2);
-
-    // An ordinary install-state refresh must not demote it to the earlier grant.
-    writeServiceInstallState("scheduler", null);
-    const after = readServiceInstallState();
-    expect(after?.ownership?.installId).toBe("app-install-b");
-    expect(after?.ownership?.consentGeneration).toBe(2);
-  });
 });

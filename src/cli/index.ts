@@ -94,7 +94,8 @@ import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-r
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
 import { startupDataPlaneToken } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
+import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
@@ -448,6 +449,29 @@ async function handleStart(options: { block?: boolean } = {}) {
   // live daemon holding resources while it overwrites its own binary.
   await maybeShowUpdatePrompt();
 
+  const startLease = acquireOwnershipMutationLease(serviceStatePaths());
+  // The earlier probe owned journal cleanup. This one owns the bind decision: an updater may
+  // have stopped the old runtime and acquired the same lease before package replacement.
+  const fencedLive = await findLiveProxy(START_OWNERSHIP_LIVENESS);
+  if (fencedLive) {
+    const decision = decideStartWithLiveOwner({
+      livePort: fencedLive.port,
+      requestedPort,
+      ocxService: process.env.OCX_SERVICE,
+    });
+    if (decision === "service-stay-out") {
+      startLease.release();
+      console.log(`Proxy already running (PID ${fencedLive.pid ?? "unknown"}, port ${fencedLive.port}); service wrapper staying out of the way.`);
+      process.exit(0);
+    }
+    if (decision === "refuse") {
+      startLease.release();
+      console.error(`⚠️  Proxy appeared before bind (PID ${fencedLive.pid ?? "unknown"}, port ${fencedLive.port}). Use 'ocx stop' first.`);
+      process.exit(1);
+    }
+    siblingStart = true;
+  }
+
   // Port selection is check-then-bind: a concurrent `ocx start`/`ensure` can win the port
   // between the probe and Bun.serve. Soft starts may re-pick; hard-pinned `--port` retries
   // the same port only (never hop — that was the remaining PR #152 gap).
@@ -460,6 +484,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   const readinessGate = createReadinessGate();
   let server: ReturnType<typeof startServer>;
   const localAttestationSecret = createLocalAttestationSecret();
+  try {
   for (let attempt = 0; ; attempt++) {
     try {
       server = startServer(port, { localAttestationSecret, readinessGate });
@@ -471,6 +496,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     } catch (err) {
       if (err instanceof SpendLedgerOwnerError) {
         console.error(`❌ ${err.message}`);
+        startLease.release();
         process.exit(1);
       }
       if (err instanceof AuxiliaryListenerBindError || !isAddrInUse(err) || attempt >= 2) throw err;
@@ -480,6 +506,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         const freed = await waitForPortAvailable(port, hostname, { timeoutMs: 3_000, intervalMs: 50 });
         if (!freed) {
           console.error(`❌ Port ${port} stayed busy; refusing to hop to an ephemeral port.`);
+          startLease.release();
           process.exit(1);
         }
         continue;
@@ -487,6 +514,9 @@ async function handleStart(options: { block?: boolean } = {}) {
       console.log(`⚠️  Port ${port} was taken while starting; picking another...`);
       port = await chooseListenPort(requestedPort, { sibling: siblingStart });
     }
+  }
+  } finally {
+    startLease.release();
   }
   // A single request's streaming error must never crash the daemon serving every
   // other Codex session — capture the full stack to crash.log and stay up.
