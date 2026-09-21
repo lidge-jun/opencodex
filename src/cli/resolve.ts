@@ -11,19 +11,26 @@
  * Contract:
  *  - `--json` puts exactly ONE JSON document on stdout, versioned by `schema`; the
  *    default prints two human lines, the same opt-in split as `ocx ready --json`.
- *  - exit 0 whenever resolution succeeded — "no proxy" is a verdict, not a failure.
- *  - exit 1 when the CLI cannot resolve (unreadable config): the caller must refuse to
- *    guess a home, a port or a liveness verdict rather than fall back to defaults.
+ *  - exit 0 whenever resolution succeeded — "no proxy" is a verdict, not a failure,
+ *    and a MISSING config.json is defaults, not an error.
+ *  - exit 1 when the CLI cannot resolve: an invalid config.json must NOT be answered
+ *    with `loadConfig`'s repair-to-defaults behaviour, because that hands the caller
+ *    a guessed port. The caller must refuse to guess a home, a port or a liveness
+ *    verdict rather than fall back to defaults.
  *  - exit 64 for any argument, pre-parsed in src/cli/root.ts before preflight side
  *    effects, mirroring `ocx ready`.
+ *
+ * Discovery uses the START_OWNERSHIP_LIVENESS budget, not the 750ms single-shot default:
+ * the shell's launch decision keys on this verdict, and answering "nobody" for a slow
+ * live proxy is the duplicate-proxy decision the start path tunes against (#5004).
  *
  * Lives outside cli/index.ts (which dispatches argv at module top level) so tests can
  * import it, the same split as ready.ts.
  */
-import { loadConfig } from "../config";
+import { readConfigDiagnostics, type ConfigDiagnostics } from "../config";
 import { getConfigDir } from "../config/paths";
 import { packageVersion } from "../lib/package-version";
-import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
+import { findLiveProxy, START_OWNERSHIP_LIVENESS, type LiveProxy } from "../server/proxy-liveness";
 
 /** Wire version of the resolve document. Bump only on an incompatible shape change. */
 export const RESOLVE_SCHEMA = "ocx-resolve/1";
@@ -78,7 +85,7 @@ export function parseResolveArgs(argv: string[]): ResolveParseResult {
 
 export interface ResolveIo {
   configDir?: () => string;
-  loadConfig?: () => { port?: number };
+  readDiagnostics?: () => ConfigDiagnostics;
   findLive?: () => Promise<LiveProxy | null>;
   cliVersion?: () => string;
   stdout?: { log: (s: string) => void };
@@ -136,30 +143,42 @@ function reportHuman(json: ResolveJson, stdout: { log: (s: string) => void }): v
 
 /**
  * Run `ocx resolve` over injected I/O. Returns the exit code. The production defaults
- * perform exactly one identity-checked discovery (findLiveProxy with its own budgets) —
- * resolve adds no probing policy of its own, because a second budget is precisely the
- * duplicate-proxy bug the liveness module's budgets exist to prevent.
+ * read config through the diagnostics surface (which distinguishes missing, valid and
+ * invalid instead of repairing to defaults) and perform one identity-checked discovery
+ * at the ownership-safe budget — resolve adds no probing policy of its own.
  */
 export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise<number> {
   const stdout = io.stdout ?? console;
   const stderr = io.stderr ?? console;
   const configDir = io.configDir ?? getConfigDir;
-  const load = io.loadConfig ?? loadConfig;
-  const findLive = io.findLive ?? findLiveProxy;
+  const readDiagnostics = io.readDiagnostics ?? readConfigDiagnostics;
+  const findLive = io.findLive ?? (() => findLiveProxy(START_OWNERSHIP_LIVENESS));
   const cliVersion = io.cliVersion ?? packageVersion;
   const configHome = configDir();
-  let config: { port?: number };
-  let live: LiveProxy | null;
+  let diagnostics: ConfigDiagnostics;
   try {
-    config = load();
-    live = await findLive();
+    diagnostics = readDiagnostics();
   } catch (error) {
     // A resolution that could not run must not read as "no proxy": the caller has to
     // refuse to guess (D5) rather than treat this as a not-found verdict.
     stderr.error(`resolve failed: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
-  const json = buildResolveJson(config, live, configHome, cliVersion());
+  if (diagnostics.source === "fallback") {
+    // An invalid config must not resolve to defaults: the effective port would be a
+    // guess at 10100 while the operator's config.port is unread. The repair-to-defaults
+    // policy in loadConfig is for interactive recovery, not for a shell contract.
+    stderr.error(`resolve failed: the config in ${configHome} is invalid (${diagnostics.error ?? "unknown error"}); refusing to guess.`);
+    return 1;
+  }
+  let live: LiveProxy | null;
+  try {
+    live = await findLive();
+  } catch (error) {
+    stderr.error(`resolve failed: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const json = buildResolveJson(diagnostics.config, live, configHome, cliVersion());
   if (args.json) stdout.log(JSON.stringify(json));
   else reportHuman(json, stdout);
   return 0;

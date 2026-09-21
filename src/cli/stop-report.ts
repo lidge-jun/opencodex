@@ -38,6 +38,7 @@ export type StopSharedTeardownOutcome =
   | "restored"
   | "performed-by-proxy"
   | "refused"
+  | "failed"
   | "skipped";
 
 /** Facts recorded where the stop path already decides them. */
@@ -110,6 +111,7 @@ function stopMessage(record: StopRunRecord, signals: StopRunSignals, outcome: St
   if (record.service === "state-unknown") return "The service manager state could not be read.";
   if (record.service === "error") return "Stopping the installed service failed.";
   if (record.inheritedTeardownBlocks) return "An earlier stop left an outstanding shared teardown that could not be confirmed.";
+  if (record.sharedTeardown === "failed") return "The shared teardown failed; client configuration may still point at the stopped proxy.";
   if (record.receiptClearFailed) return "The shared teardown finished, but its receipt could not be removed.";
   if (record.sharedTeardown === "refused") return "The shared teardown was refused before it changed anything; it is still owed.";
   if (signals.historyOnly) return "The proxy stopped; Codex history cleanup did not complete.";

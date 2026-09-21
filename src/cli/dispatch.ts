@@ -103,7 +103,9 @@ const commandRunners: Record<string, CommandRunner> = {
     // re-start the proxy immediately, so warning there would contradict the next line.
     const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";
     if (!takeFlag(deps.args.slice(1), "--json")) {
-      if (await deps.handleStop()) console.log(warning);
+      // handleStop returns the structured outcome now; an object is always truthy, so
+      // the warning must key on .ok — otherwise a failed stop would still claim downtime.
+      if ((await deps.handleStop()).ok) console.log(warning);
       return Number(process.exitCode ?? 0);
     }
     // --json is a reporting layer over the SAME stop path: the receipt, the drain, the

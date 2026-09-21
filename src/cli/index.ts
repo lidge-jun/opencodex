@@ -1288,7 +1288,7 @@ async function handleStop() {
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
     }
     const restore = await restoreSharedClientStateAfterStop();
-    record.sharedTeardown = restore.historyDeferred ? "refused" : "restored";
+    record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
     if (restore.other) stopFailed = true;
     else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
     else if (restore.historyOnly) historyOnlyFailure = true;
