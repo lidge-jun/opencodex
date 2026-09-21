@@ -161,7 +161,13 @@ describe("package tree integrity", () => {
       const pending: Array<() => void> = [];
       return {
         pending,
-        schedule: (callback: () => void) => { pending.push(callback); },
+        schedule: (callback: () => void) => {
+          pending.push(callback);
+          return () => {
+            const index = pending.indexOf(callback);
+            if (index >= 0) pending.splice(index, 1);
+          };
+        },
         runNext: () => {
           const callback = pending.shift();
           if (!callback) throw new Error("expected a scheduled callback");
@@ -253,7 +259,9 @@ describe("package tree integrity", () => {
       observation = base;
       clock += 2_000;
       expect(guard.status()).toEqual({ ok: true });
-      scheduler.runNext(); // stale generation from the first replacement
+      // Baseline recovery cancels the armed timer through its cancel handle,
+      // so the stale callback is already gone from the pending queue.
+      expect(scheduler.pending).toHaveLength(0);
       expect(calls).toBe(0);
 
       observation = { ...base, inode: 12n };
@@ -262,6 +270,37 @@ describe("package tree integrity", () => {
       expect(calls).toBe(0);
       scheduler.runNext();
       expect(calls).toBe(1);
+    });
+
+    test("dispose cancels the pending restart timer and blocks late callbacks", () => {
+      let observation: PackageTreeObservation | null = base;
+      let clock = 0;
+      let calls = 0;
+      const scheduler = createScheduler();
+      const guard = createPackageTreeIntegrityGuard(
+        () => observation,
+        () => clock,
+        {
+          onReplaced: () => { calls += 1; },
+          replacedRestartDelayMs: 5_000,
+          schedule: scheduler.schedule,
+        },
+      );
+
+      expect(guard.status()).toEqual({ ok: true });
+      observation = { ...base, inode: 11n };
+      clock += 2_000;
+      expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+      expect(scheduler.pending).toHaveLength(1);
+
+      guard.dispose();
+      expect(scheduler.pending).toHaveLength(0);
+
+      // A further observation cannot re-arm the guard after disposal.
+      clock += 10_000;
+      guard.status();
+      expect(scheduler.pending).toHaveLength(0);
+      expect(calls).toBe(0);
     });
 
     test("an unreadable manifest must become readable before a fresh debounce", () => {
@@ -434,6 +473,7 @@ describe("package tree integrity", () => {
     saveConfig(config());
     const packageTreeIntegrity = {
       status: () => ({ ok: false as const, reason: "package_tree_replaced" as const }),
+      dispose: () => {},
     };
     const server = startServer(0, { packageTreeIntegrity });
     try {
@@ -503,6 +543,52 @@ describe("package tree integrity", () => {
       expect(pending).toHaveLength(0);
     } finally {
       await server.stop(true);
+    }
+  });
+
+  test("server.stop() disarms a pending package-tree restart callback", async () => {
+    saveConfig(config());
+    const base: PackageTreeObservation = {
+      device: 1n, inode: 10n, contentTimeNs: 100n, size: 500n,
+    };
+    let observation: PackageTreeObservation = base;
+    const pending: Array<() => void> = [];
+    let restartAcceptances = 0;
+    const server = startServer(0, {
+      packageTreeInstaller: "npm",
+      observePackageTree: () => observation,
+      packageTreeIntegrityOptions: {
+        replacedRestartDelayMs: 5_000,
+        schedule: callback => {
+          pending.push(callback);
+          return () => {
+            const index = pending.indexOf(callback);
+            if (index >= 0) pending.splice(index, 1);
+          };
+        },
+      },
+      acceptSystemRestart: () => {
+        restartAcceptances += 1;
+        return {
+          accepted: true,
+          alreadyDraining: false,
+          activeTurnCount: 0,
+          drainTimeoutMs: 60_000,
+        };
+      },
+    });
+    try {
+      expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
+      observation = { ...base, inode: 11n, contentTimeNs: 200n };
+      await Bun.sleep(1_100); // expire the guard's successful-observation cache
+      expect((await fetch(new URL("/healthz", server.url))).status).toBe(503);
+      expect(pending).toHaveLength(1);
+
+      await server.stop(true);
+      expect(pending).toHaveLength(0);
+      expect(restartAcceptances).toBe(0);
+    } finally {
+      await server.stop(true).catch(() => {});
     }
   });
 });

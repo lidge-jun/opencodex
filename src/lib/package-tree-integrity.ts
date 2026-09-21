@@ -14,6 +14,13 @@ export type PackageTreeIntegrityStatus =
 
 export interface PackageTreeIntegrityGuard {
   status(): PackageTreeIntegrityStatus;
+  /**
+   * Permanently disarms the guard: cancels any pending restart timer and
+   * invalidates queued callbacks. Called from `server.stop()` so a still-queued
+   * replacement callback cannot schedule a drain-and-restart after shutdown
+   * has already begun.
+   */
+  dispose(): void;
 }
 
 export interface PackageTreeIntegrityOptions {
@@ -28,8 +35,12 @@ export interface PackageTreeIntegrityOptions {
   onReplaced?: () => void;
   /** Sustained-replacement delay before `onReplaced` fires. 0 fires on first detection. */
   replacedRestartDelayMs?: number;
-  /** Test seam; production uses an unref'd timer. */
-  schedule?: (callback: () => void, delayMs: number) => void;
+  /**
+   * Test seam; production uses an unref'd timer. May return a cancellation
+   * function; when it does, `resetRestartTimer` cancels the pending callback
+   * instead of leaving it queued behind a generation check.
+   */
+  schedule?: (callback: () => void, delayMs: number) => (() => void) | void;
 }
 
 export type ObservePackageTree = () => PackageTreeObservation | null;
@@ -93,17 +104,22 @@ export function createPackageTreeIntegrityGuard(
   let notified = false;
   let timerGeneration = 0;
   let timerScheduled = false;
+  let cancelScheduled: (() => void) | null = null;
   let waitingForReadableTree = false;
   let replacementCandidate: PackageTreeObservation | null = null;
   const restartDelayMs = options.replacedRestartDelayMs ?? 5_000;
   const schedule = options.schedule ?? ((callback, delayMs) => {
     const timer = setTimeout(callback, delayMs);
     timer.unref?.();
+    return () => clearTimeout(timer);
   });
 
   const resetRestartTimer = (): void => {
     timerGeneration += 1;
     timerScheduled = false;
+    const cancel = cancelScheduled;
+    cancelScheduled = null;
+    cancel?.();
   };
 
   const armRestartTimer = (delayMs = restartDelayMs): void => {
@@ -151,10 +167,21 @@ export function createPackageTreeIntegrityGuard(
       }
     };
     if (delayMs === 0) verifyAndNotify();
-    else schedule(verifyAndNotify, delayMs);
+    else {
+      // The seam may run the callback synchronously; only keep its cancel
+      // function when this generation is still the live one afterwards.
+      const cancel = schedule(verifyAndNotify, delayMs);
+      if (generation === timerGeneration && timerScheduled && typeof cancel === "function") {
+        cancelScheduled = cancel;
+      }
+    }
   };
 
   return {
+    dispose(): void {
+      resetRestartTimer();
+      notified = true;
+    },
     status(): PackageTreeIntegrityStatus {
       const at = now();
       if (lastOkAt !== null && at - lastOkAt < PACKAGE_TREE_RECHECK_MS) return { ok: true };
@@ -197,6 +224,8 @@ export function createRuntimePackageTreeIntegrityGuard(
   now: () => number = Date.now,
   options: PackageTreeIntegrityOptions = {},
   ): PackageTreeIntegrityGuard {
-    if (installer === "source" || isStandaloneBinary()) return { status: () => ({ ok: true }) };
+    if (installer === "source" || isStandaloneBinary()) {
+      return { status: () => ({ ok: true }), dispose: () => {} };
+    }
     return createPackageTreeIntegrityGuard(observe, now, options);
   }

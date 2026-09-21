@@ -773,6 +773,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     value: async (closeActiveConnections?: boolean): Promise<void> => {
       remoteWorkspaceStopping = true;
       liveCallBindings.clear();
+      // Disarm the package-tree restart timer before listener teardown: a queued
+      // replacement callback must not call acceptSystemRestart() after stop() has
+      // begun, or it would schedule a drain-and-restart on a stopped server.
+      packageTreeIntegrity.dispose();
       // The orchestration lives in `runListenerShutdown` so its two competing properties —
       // cleanup completes, failure propagates — are testable without a live socket.
       await runListenerShutdown(
