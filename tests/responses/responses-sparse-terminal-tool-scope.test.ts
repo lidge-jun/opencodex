@@ -240,12 +240,12 @@ describe("Grok sparse terminal reconstruction honours the request's tool selecti
       input: "echo ok",
     };
 
-    const { terminal } = relay(namespaced.body, ordered(custom), {
+    const { terminal } = relay(namespaced.body, ordered(custom, MESSAGE_ITEM), {
       clientToolAuthorizationBody: clientBody,
       routedNamespaceToolAliases: namespaced.aliases,
       convertedRoutedCustomToolNames: converted.names,
     });
-    expect(responseOf(terminal).output).toEqual([custom]);
+    expect(responseOf(terminal).output).toEqual([custom, MESSAGE_ITEM]);
   });
 
   test("malformed narrowing selectors fail closed instead of becoming unrestricted", () => {
