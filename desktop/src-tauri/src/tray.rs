@@ -126,10 +126,19 @@ pub fn install(app: &AppHandle, proxy: ProxyClient) -> tauri::Result<()> {
                     let app = app.clone();
                     let stop_item = stop_item.clone();
                     tauri::async_runtime::spawn(async move {
-                        let stopped = proxy.stop().await.is_ok() || proxy.is_alive().await.is_err();
+                        let mut stopped = proxy.stop().await.is_ok();
+                        for _ in 0..10 {
+                            if stopped || proxy.is_alive().await.is_err() {
+                                stopped = true;
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
                         if stopped {
                             app.state::<crate::AppState>().shutdown_child();
                             let _ = stop_item.set_enabled(false);
+                        } else {
+                            eprintln!("tray: proxy still answering /healthz after stop request");
                         }
                     });
                 }

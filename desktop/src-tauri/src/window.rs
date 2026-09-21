@@ -25,7 +25,7 @@ pub fn configure(window: &WebviewWindow) {
 
 pub fn navigation_allowed(endpoint: ProxyEndpoint) -> impl Fn(&Url) -> bool {
     move |url| {
-        if url.scheme() == "tauri" {
+        if is_app_origin(url) {
             return true;
         }
         if url.scheme() == "http" && url.host_str() == Some(endpoint.host) {
@@ -36,6 +36,17 @@ pub fn navigation_allowed(endpoint: ProxyEndpoint) -> impl Fn(&Url) -> bool {
             return false;
         }
         url.scheme() == "about" && url.as_str() == "about:blank"
+    }
+}
+
+/// The bundled `frontendDist` origin. Tauri serves it as `tauri://localhost` on macOS and
+/// Linux, and as `http://tauri.localhost` on Windows, where WebView2 has no custom-scheme
+/// support.
+fn is_app_origin(url: &Url) -> bool {
+    match url.scheme() {
+        "tauri" => true,
+        "http" => url.host_str() == Some("tauri.localhost"),
+        _ => false,
     }
 }
 
@@ -70,7 +81,30 @@ pub fn set_tray_policy(app: &AppHandle, visible: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::webview_user_agent;
+    use super::{is_app_origin, navigation_allowed, webview_user_agent};
+    use crate::discovery::ProxyEndpoint;
+    use tauri::Url;
+
+    #[test]
+    fn navigation_allows_the_app_origin_on_every_platform() {
+        let allowed = navigation_allowed(ProxyEndpoint {
+            host: "127.0.0.1",
+            port: 10100,
+        });
+        assert!(allowed(
+            &Url::parse("tauri://localhost/index.html?port=10100").unwrap()
+        ));
+        assert!(allowed(
+            &Url::parse("http://tauri.localhost/index.html?port=10100").unwrap()
+        ));
+        assert!(allowed(
+            &Url::parse("http://127.0.0.1:10100/#/usage").unwrap()
+        ));
+        assert!(!is_app_origin(
+            &Url::parse("https://tauri.localhost/index.html").unwrap()
+        ));
+        assert!(!allowed(&Url::parse("file:///C:/index.html").unwrap()));
+    }
 
     #[test]
     fn webview_user_agent_marks_the_desktop_shell() {
