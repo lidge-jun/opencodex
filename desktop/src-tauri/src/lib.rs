@@ -3,11 +3,13 @@ mod discovery;
 mod exit;
 mod first_run;
 mod formatting;
+mod identity;
 mod logging;
 // macOS only: it exists to replace one item in a menu no other platform installs. Compiling it
 // elsewhere would leave its contents unreachable, which -D warnings rejects.
 #[cfg(target_os = "macos")]
 mod menu;
+mod ownership;
 mod proxy;
 mod sidecar;
 mod startup;

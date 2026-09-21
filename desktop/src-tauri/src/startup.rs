@@ -19,6 +19,7 @@ use crate::{
     auth::Auth,
     discovery::{self, ProxyEndpoint},
     first_run::{self, StartAtLogin},
+    identity, ownership,
     proxy::ProxyClient,
     sidecar::{self, SidecarWatch},
     tray_availability::{self, TrayAvailability},
@@ -214,6 +215,14 @@ struct Resolved {
     home: PathBuf,
 }
 
+/// What registering established about this installation.
+#[derive(Clone, Debug)]
+pub struct Registration {
+    pub login: StartAtLogin,
+    /// This installation's own id, and what the recorded runtime owner says about it.
+    pub identity: String,
+}
+
 struct Live {
     latest: Progress,
     reported: Vec<&'static str>,
@@ -225,7 +234,7 @@ pub struct Startup {
     live: Mutex<Live>,
     running: AtomicBool,
     /// The outcome of the one-time registration, once it has happened.
-    registered: Mutex<Option<StartAtLogin>>,
+    registered: Mutex<Option<Registration>>,
 }
 
 impl Startup {
@@ -244,18 +253,18 @@ impl Startup {
         self.live.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn registration(&self) -> Option<StartAtLogin> {
-        *self
-            .registered
+    fn registration(&self) -> Option<Registration> {
+        self.registered
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
-    fn remember_registration(&self, login: StartAtLogin) {
+    fn remember_registration(&self, registration: Registration) {
         *self
             .registered
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(login);
+            .unwrap_or_else(PoisonError::into_inner) = Some(registration);
     }
 
     /// The whole state of the run so far, which is what the page asks for when it loads.
@@ -323,12 +332,16 @@ async fn run(app: &AppHandle) {
         return;
     };
     report(app, started, Phase::Registering, None);
-    let login = register(app, deadline).await;
+    let registration = register(app, deadline).await;
     report(
         app,
         started,
         Phase::Registering,
-        Some(login.describe().to_owned()),
+        Some(format!(
+            "{}; {}",
+            registration.login.describe(),
+            registration.identity
+        )),
     );
 
     report(app, started, Phase::Resolving, None);
@@ -347,7 +360,7 @@ async fn run(app: &AppHandle) {
                 app,
                 started,
                 Some(&resolved),
-                login,
+                &registration,
                 &watch,
                 Phase::Resolving,
                 error.to_string(),
@@ -405,7 +418,7 @@ async fn run(app: &AppHandle) {
                     app,
                     started,
                     Some(&resolved),
-                    login,
+                    &registration,
                     &watch,
                     Phase::Starting,
                     error,
@@ -430,7 +443,7 @@ async fn run(app: &AppHandle) {
                 app,
                 started,
                 Some(&resolved),
-                login,
+                &registration,
                 &watch,
                 Phase::Waiting,
                 format!("the runtime {}", exit.describe()),
@@ -443,7 +456,7 @@ async fn run(app: &AppHandle) {
         app,
         started,
         Some(&resolved),
-        login,
+        &registration,
         &watch,
         Phase::Waiting,
         format!(
@@ -458,7 +471,7 @@ async fn run(app: &AppHandle) {
 /// It happens once per process. A retry re-runs the runtime half of the sequence, and running this
 /// half again would build a second tray icon with its own refresh loop and its own menu handlers —
 /// the failure would look like the app duplicating itself every time the user pressed Retry.
-async fn register(app: &AppHandle, deadline: Instant) -> StartAtLogin {
+async fn register(app: &AppHandle, deadline: Instant) -> Registration {
     if let Some(done) = app
         .try_state::<Startup>()
         .and_then(|startup| startup.registration())
@@ -501,10 +514,18 @@ async fn register(app: &AppHandle, deadline: Instant) -> StartAtLogin {
             crate::window::show(&window);
         }
     }
+    // This installation's own id, and what the recorded runtime owner says about it. The claim
+    // lives in the shared service install state and the CLI is what reads it; the comparison
+    // against our own id is the rule that record publishes.
+    let install_id = identity::install_id(app);
+    let registration = Registration {
+        login,
+        identity: ownership::describe(ownership::resolve(app).as_ref(), install_id.as_deref()),
+    };
     if let Some(startup) = app.try_state::<Startup>() {
-        startup.remember_registration(login);
+        startup.remember_registration(registration.clone());
     }
-    login
+    registration
 }
 
 /// Build the tray on the main thread, which is where GTK requires it on Linux.
@@ -600,7 +621,7 @@ fn fail(
     app: &AppHandle,
     started: Instant,
     resolved: Option<&Resolved>,
-    login: StartAtLogin,
+    registration: &Registration,
     watch: &SidecarWatch,
     phase: Phase,
     reason: String,
@@ -609,7 +630,7 @@ fn fail(
     let mut progress = Progress::new(Phase::Failed, elapsed_ms);
     progress.diagnostic = Some(diagnostic(
         resolved.map(|resolved| (resolved.endpoint, resolved.home.clone())),
-        login,
+        registration,
         watch,
         phase,
         &reason,
@@ -627,7 +648,7 @@ fn fail(
 /// them were reachable from the generic health failure this replaces.
 pub fn diagnostic(
     resolved: Option<(ProxyEndpoint, PathBuf)>,
-    login: StartAtLogin,
+    registration: &Registration,
     watch: &SidecarWatch,
     phase: Phase,
     reason: &str,
@@ -650,7 +671,8 @@ pub fn diagnostic(
         }
         None => lines.push("endpoint: not resolved".to_owned()),
     }
-    lines.push(format!("start at login: {}", login.describe()));
+    lines.push(format!("start at login: {}", registration.login.describe()));
+    lines.push(format!("runtime ownership: {}", registration.identity));
     lines.push(match watch.exit() {
         Some(exit) => format!("runtime process: {}", exit.describe()),
         None => "runtime process: still running or never started".to_owned(),
