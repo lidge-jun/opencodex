@@ -133,7 +133,15 @@ export function extractOcxProviderTableBlock(content: string): string | null {
  * only do if the append is a transform rather than a second file operation.
  */
 export function appendOcxProviderTableBlock(content: string, block: string): string {
-  if (hasOcxProviderTable(content)) return content;
+  if (hasOcxProviderTable(content)) {
+    const existing = extractOcxProviderTableBlock(content);
+    if (existing !== block.replace(/\n+$/, "") + "\n") {
+      throw new Error(
+        "Codex restore refused: the native config already defines a different [model_providers.opencodex] table.",
+      );
+    }
+    return content;
+  }
   return `${content.replace(/\n+$/, "")}\n\n${block.replace(/\n+$/, "")}\n`;
 }
 
