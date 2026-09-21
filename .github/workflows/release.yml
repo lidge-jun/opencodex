@@ -155,9 +155,12 @@ jobs:
           else
             tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui
           fi
-          cd ../../..
-          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
-          else sha256sum "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "dist/ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          cd ../..
+          # shasum -c in attach-release runs from dist/release, where the artifact download
+          # lands these files flat; the checksum therefore records the bare file name, which
+          # sha256sum takes verbatim from its argument.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
           fi
 
       - name: Upload standalone release
@@ -345,6 +348,7 @@ jobs:
         run: bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: Rename release assets
+        shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           DESKTOP_TARGET: ${{ matrix.target }}
@@ -481,7 +485,7 @@ jobs:
           gh release upload "v${RELEASE_VERSION}" dist/release/* --clobber
 
   publish:
-    needs: validate-dispatch
+    needs: [validate-dispatch, package-standalone, package-desktop]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -632,8 +636,10 @@ jobs:
           fi
 
           # Keep in sync with the service-lifecycle.yml trigger paths. src/cli.ts is
-          # the pre-restructure compat stub that durable launchers still execute.
-          if printf '%s\n' "$changed_files" | grep -Eq '^(src/service\.ts|src/cli\.ts|src/cli/index\.ts|src/lib/bun-runtime\.ts|package\.json|bun\.lock|\.github/workflows/service-lifecycle\.yml|\.github/workflows/release\.yml)$'; then
+          # the pre-restructure compat stub that durable launchers still execute; the
+          # service implementation itself is the src/service/ directory, and the desktop
+          # shell packages and launches it.
+          if printf '%s\n' "$changed_files" | grep -Eq '^(src/service\.ts|src/service/.*|desktop/.*|src/cli\.ts|src/cli/index\.ts|src/lib/bun-runtime\.ts|package\.json|bun\.lock|\.github/workflows/service-lifecycle\.yml|\.github/workflows/release\.yml)$'; then
             service_url="$(
               gh run list \
                 --workflow service-lifecycle.yml \

@@ -8,7 +8,7 @@
  * doctor suggestion — and nothing said it had gone.
  */
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { repoPath } from "../helpers/repo-root";
 import {
@@ -330,5 +330,85 @@ describe("the anchor lock", () => {
       beforeCommit: attempt => { if (attempt === 0) recordServiceOwner(DESKTOP); },
     });
     expect(result?.ownership?.installId).toBe("app-install-a");
+  });
+
+  /**
+   * The lock file names its holder. Without that, a holder evicted as stale would delete the
+   * REPLACEMENT lock on its way out and hand a third writer the pathname while the second is
+   * still inside its critical section.
+   */
+  test("release removes only the lock instance this holder created", () => {
+    const lockPath = serviceStatePath() + ".lock";
+    let observed = "";
+    writeServiceInstallState("scheduler", null);
+    swapServiceInstallState(current => {
+      observed = readFileSync(lockPath, "utf8").trim();
+      // Stand in for an eviction: the pathname now belongs to somebody else.
+      writeFileSync(lockPath, "a-different-holder\n");
+      return { ...current! };
+    });
+    expect(observed).not.toBe("");
+    expect(existsSync(lockPath)).toBe(true);
+    expect(readFileSync(lockPath, "utf8").trim()).toBe("a-different-holder");
+    unlinkSync(lockPath);
+  });
+});
+
+describe("the record is replaced as a unit", () => {
+  /**
+   * An in-place write truncates first, so an interrupted commit used to leave the anchor empty
+   * or half-serialized. Since the reader became fail-closed that reads as `unknown`, which
+   * blocks start, repair, restart and every update until the operator runs a takeover install.
+   */
+  test("a commit leaves no staging file behind and the record stays parseable", () => {
+    writeServiceInstallState("scheduler", null);
+    recordServiceOwner(DESKTOP);
+    const leftovers = readdirSync(home.root).filter(name => name.endsWith(".tmp"));
+    expect(leftovers).toEqual([]);
+    expect(readServiceInstallState()?.ownership?.installId).toBe("app-install-a");
+  });
+
+  test("the write path stages and renames rather than truncating the record in place", () => {
+    const source = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
+    const commit = source.slice(
+      source.indexOf("function commitServiceStateFile("),
+      source.indexOf("export function swapServiceInstallState("),
+    );
+    expect(commit).toContain("renameSync(staged, path)");
+    // Hardened BEFORE the rename: between rename and chmod the record would be readable
+    // at the default mode.
+    expect(commit.indexOf("hardenSecretPath(staged")).toBeLessThan(commit.indexOf("renameSync(staged, path)"));
+  });
+});
+
+describe("a claim recorded under the lock is never overwritten by an older one", () => {
+  /**
+   * `writeServiceInstallState` used to resolve ownership BEFORE the swap took the lock. A
+   * takeover landing in between reached `current`, passed the revision check untouched, and
+   * was then overwritten by the older claim the resolution had captured — a lost update the
+   * compare-and-swap cannot see, because the stale value never came from the base record.
+   */
+  test("the resolution is read inside the swap, not before it", () => {
+    const source = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
+    const writer = source.slice(
+      source.indexOf("export function writeServiceInstallState("),
+      source.indexOf("function preservedConsent("),
+    );
+    expect(writer).toContain("preservedConsent(current, resolveServiceOwnership())");
+    expect(writer).not.toMatch(/const resolution = resolveServiceOwnership\(\);/);
+  });
+
+  test("a higher generation wins, and an equal generation keeps the anchor", () => {
+    recordServiceOwner(DESKTOP);
+    recordServiceOwner({ owner: "desktop", installId: "app-install-b" });
+    const before = readServiceInstallState();
+    expect(before?.ownership?.installId).toBe("app-install-b");
+    expect(before?.ownership?.consentGeneration).toBe(2);
+
+    // An ordinary install-state refresh must not demote it to the earlier grant.
+    writeServiceInstallState("scheduler", null);
+    const after = readServiceInstallState();
+    expect(after?.ownership?.installId).toBe("app-install-b");
+    expect(after?.ownership?.consentGeneration).toBe(2);
   });
 });

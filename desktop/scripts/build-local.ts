@@ -21,14 +21,24 @@
  * `OpenCodex.app.tar.gz (updater)` and still fails. The override has to reach the config itself.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const desktopDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
-/** Bundle targets that carry no updater archive. */
-const LOCAL_BUNDLES = ["app", "dmg"] as const;
+/** Bundle targets per host platform that carry no updater archive. */
+const LOCAL_BUNDLES: Record<string, readonly string[]> = {
+  darwin: ["app", "dmg"],
+  win32: ["msi", "nsis"],
+  linux: ["appimage", "deb"],
+};
+
+const bundles = LOCAL_BUNDLES[process.platform];
+if (!bundles) {
+  console.error(`[build:local] unsupported host platform: ${process.platform}`);
+  process.exit(1);
+}
 
 /**
  * Config merged over `tauri.conf.json` for this invocation only.
@@ -43,7 +53,7 @@ function run(): number {
   const extra = process.argv.slice(2);
   const args = [
     "tauri", "build", "--ci",
-    "--bundles", LOCAL_BUNDLES.join(","),
+    "--bundles", bundles.join(","),
     "--config", LOCAL_CONFIG,
     ...extra,
   ];
@@ -58,10 +68,15 @@ function run(): number {
 const status = run();
 if (status === 0) {
   const bundleRoot = join(desktopDir, "src-tauri", "target", "release", "bundle");
-  const app = join(bundleRoot, "macos", "OpenCodex.app");
   // Naming what exists is the point of the script: the previous output ended on an error line, so
   // the artifacts it had already written were the least visible thing in it.
-  if (existsSync(app)) console.log(`[build:local] ${app}`);
+  for (const dir of ["macos", "dmg", "msi", "nsis", "appimage", "deb"]) {
+    const directory = join(bundleRoot, dir);
+    if (!existsSync(directory)) continue;
+    for (const name of readdirSync(directory)) {
+      if (/\.(app|dmg|msi|exe|AppImage|deb)$/i.test(name)) console.log(`[build:local] ${join(directory, name)}`);
+    }
+  }
   console.log("[build:local] updater artifacts skipped; release signing is unchanged.");
 }
 process.exit(status);

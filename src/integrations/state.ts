@@ -15,7 +15,14 @@ import type { ConfigFormat } from "../clients/config-export";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import { SNAPSHOT_RETENTION } from "./journal";
-import { AmbiguousSelectorError, parseSegment, readPath, selectIndex, type PathSegment } from "./merge";
+import {
+  AmbiguousSelectorError,
+  InvalidSelectorError,
+  parseSegment,
+  readPath,
+  selectIndex,
+  type PathSegment,
+} from "./merge";
 import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
 import {
   protectedContributionFingerprint,
@@ -312,8 +319,13 @@ export function classifyIntegration(input: {
       }
     }
   } catch (error) {
-    if (!(error instanceof AmbiguousSelectorError)) throw error;
-    return { state: "unsafe", reason: "ambiguous-selector" };
+    if (error instanceof AmbiguousSelectorError) {
+      return { state: "unsafe", reason: "ambiguous-selector" };
+    }
+    if (error instanceof InvalidSelectorError) {
+      return { state: "unsafe", reason: "unparseable" };
+    }
+    throw error;
   }
   if (!hasOurFragments(input.parsed, input.contribution)) return { state: "absent" };
 

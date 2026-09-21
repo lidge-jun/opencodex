@@ -2543,6 +2543,7 @@ dependencies = [
 name = "opencodex-desktop"
 version = "2.61.0"
 dependencies = [
+ "dbus",
  "reqwest 0.12.24",
  "serde",
  "serde_json",
@@ -2554,6 +2555,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tauri-utils",
  "tokio",
  "uuid",
 ]

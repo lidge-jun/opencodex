@@ -404,7 +404,7 @@ export async function runUpdate(): Promise<void> {
   } catch { /* best-effort */ }
   // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
   // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
-  const runtimePlan = planUpdateRuntimeHandling({
+  let runtimePlan = planUpdateRuntimeHandling({
     ...(await resolvedRuntimeOwnership()),
     serviceInstalled: serviceWasInstalled,
   });
@@ -456,6 +456,19 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
   let stopAttempted = false;
+  // Re-read at the point of action rather than trusting the plan formed above. Between the
+  // two the Windows tray handoff spawns children and the listen target is captured, so a
+  // takeover can land in between — and stopping a runtime that just changed hands is the
+  // failure this lane exists to prevent. Reassigning the one variable keeps the recovery
+  // branches and the restart hint reading the same decision as the stop.
+  {
+    const atStop = planUpdateRuntimeHandling({
+      ...(await resolvedRuntimeOwnership()),
+      serviceInstalled: serviceWasInstalled,
+    });
+    if (atStop.notice && atStop.notice !== runtimePlan.notice) console.log(atStop.notice);
+    runtimePlan = atStop;
+  }
   if (runtimePlan.stopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
     stopAttempted = true;
     console.log("⏹  Stopping the running proxy before updating...");

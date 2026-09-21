@@ -12,9 +12,12 @@ import { repoPath } from "../helpers/repo-root";
  * the current state, an existing marker returns early, and the tray is built afterwards so its
  * checkbox reflects the result. Get the write order backwards and a user who turns the setting off
  * has it turned back on for them on the next launch.
+ *
+ * The one-time rewrite that teaches an existing login item to announce itself is the exception, and
+ * it writes its marker the other way round on purpose — see the comment on it.
  */
 const FIRST_RUN = repoPath("desktop/src-tauri/src/first_run.rs");
-const LIB = repoPath("desktop/src-tauri/src/lib.rs");
+const STARTUP = repoPath("desktop/src-tauri/src/startup.rs");
 
 function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\/[^\n]*/g, "");
@@ -52,11 +55,24 @@ describe("start at login default", () => {
   });
 
   test("it runs before the tray is installed", () => {
-    const lib = code(LIB);
-    const applied = lib.indexOf("first_run::apply_start_at_login_default");
-    const tray = lib.indexOf("tray::install");
+    const startup = code(STARTUP);
+    const applied = startup.indexOf("first_run::apply_start_at_login_default");
+    const tray = startup.indexOf("crate::tray::install");
     expect(applied).toBeGreaterThan(-1);
     expect(tray).toBeGreaterThan(-1);
     expect(applied).toBeLessThan(tray);
+  });
+
+  test("the launch-origin rewrite claims its marker only once it has succeeded", () => {
+    const start = firstRun.indexOf("pub fn adopt_launch_origin_argument");
+    expect(start).toBeGreaterThan(-1);
+    const body = firstRun.slice(start);
+    const enable = body.indexOf("autolaunch().enable()");
+    const claim = body.indexOf("fs::write(&claimed");
+    expect(enable).toBeGreaterThan(-1);
+    expect(claim).toBeGreaterThan(enable);
+    // It never turns the setting on or off; it only rewrites an entry that is already there.
+    expect(body).toContain("Ok(true) =>");
+    expect(body).not.toContain("autolaunch().disable()");
   });
 });

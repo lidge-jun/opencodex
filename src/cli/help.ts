@@ -23,7 +23,7 @@ Usage:
   ocx setup                   Interactive setup (alias: init)
   ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]
                               Start the proxy; SOCKS5 defaults to 127.0.0.1:10808
-  ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
+  ocx stop [--json]           Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
   ocx restore --remove-codex-provider-table
@@ -63,6 +63,7 @@ Usage:
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
   ocx capabilities [--json]    List declared capabilities and the API routes they drive
   ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
+  ocx resolve [--json]        Config home, effective port, and liveness (JSON for shells)
   ocx provider <sub>          Providers, connectivity, quota, and selected models
   ocx account <sub>           Accounts, login/reauth, key pools, and quota controls
   ocx models <sub>            Live/custom models, visibility, context, and shadow calls

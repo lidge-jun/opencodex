@@ -11,6 +11,6 @@
     "prepare-widget": "bash scripts/build-widget.sh"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.5.0"
+    "@tauri-apps/cli": "2.11.1"
   }
 }

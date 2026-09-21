@@ -88,7 +88,10 @@ export default function ConsequenceDialog({
     dismiss();
   }, [dismiss]);
 
-  const confirm = useCallback(async () => {
+  // Named for what it does rather than shadowing the banned global: a local `confirm`
+  // reads exactly like the platform dialog this dashboard no longer uses, and the source
+  // guard in tests/gui/platform-dialog-guard.test.ts cannot tell the two call forms apart.
+  const applyConsequence = useCallback(async () => {
     if (pending) return;
     setPending(true);
     setFailure(null);
@@ -146,7 +149,7 @@ export default function ConsequenceDialog({
         <IntegrationPlanDetails plan={activePlan} plans={plans} />
         {failure && <Notice tone="err">{failure}</Notice>}
         <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void confirm()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
+          <button type="button" className="btn btn-primary" onClick={() => void applyConsequence()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
             {t(copy.confirmKey)}
           </button>
         </div>

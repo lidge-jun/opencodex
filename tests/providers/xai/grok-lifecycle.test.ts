@@ -164,7 +164,9 @@ describe("Grok fence lifecycle wiring", () => {
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
     // process.exit() inside handleStop would strand runTrayProxyRestart's start() half.
     expect(stopFn).toContain("process.exitCode = 1");
-    expect(stopFn).toContain("return !stopFailed");
+    // The structured outcome (the stop --json summary) keeps the old boolean as ok, so
+    // the dispatcher's downtime-warning gate is byte-for-byte the pre-summary semantics.
+    expect(stopFn).toContain("return { ok: !stopFailed, summary };");
     expect(stopFn).not.toContain("process.exit(1)");
 
     const restartCase = sliceFn(DISPATCH_SOURCE, "restart: async", "health: async");

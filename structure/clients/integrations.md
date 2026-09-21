@@ -255,6 +255,14 @@ match another provider's rule for the same model and replace it. A rule carrying
 provider id that no record accounts for — including one the client's own migration created — is a
 conflict, and the explicit overwrite remains the only way past it.
 
+Persisted selector segments have two disjoint grammars owned by `src/integrations/merge.ts`.
+An unversioned `[field=value]` segment is permanently a one-criterion selector; commas and later
+equals signs remain part of its value, so an older ownership record keeps naming the same element.
+New multi-field selectors use the explicit `[v2:field=value,field=value]` grammar and are emitted by
+the shared formatter. A segment beginning with that reserved marker but failing the complete v2
+grammar is unreadable rather than a plain key or a v1 selector, so malformed persisted bytes cannot
+silently select a different element.
+
 A store whose schema cannot be established is reported, never merged into. That file holds the
 user's other providers and the client rewrites it on its own, so asserting a nesting we have not
 observed would trade a silent no-op for a silent loss. Status reports the store beside the file

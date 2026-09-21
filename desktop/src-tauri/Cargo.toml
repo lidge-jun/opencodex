@@ -20,6 +20,7 @@ serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = "=1.0.140"
 uuid = { version = "=1.18.1", features = ["v4"] }
 tauri = { version = "=2.11.6", features = ["tray-icon", "image-png"] }
+tauri-utils = "=2.9.3"
 tauri-plugin-autostart = "=2.5.0"
 tauri-plugin-opener = "=2.5.3"
 tauri-plugin-process = "=2.3.0"
@@ -27,6 +28,12 @@ tauri-plugin-shell = "=2.2.0"
 tauri-plugin-single-instance = "=2.4.0"
 tauri-plugin-updater = "=2.9.0"
 tokio = { version = "=1.45.1", features = ["sync", "time"] }
+
+# Linux only, and already in this graph: `tao` enables its own `dbus` feature by default, so
+# `libdbus-sys` is compiled for every Linux build of this shell today. Naming it here adds a
+# session-bus probe for the StatusNotifier watcher without adding a package or a system library.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "=0.9.12"
 
 [profile.release]
 codegen-units = 1

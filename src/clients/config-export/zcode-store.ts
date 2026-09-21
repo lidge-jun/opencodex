@@ -2,6 +2,7 @@
 import type { ExportContext, ManagedContribution, ManagedFragment } from "./contracts";
 import { authoritativeContextWindow, inputModalitiesForClient, normalizeExportModels } from "./model-metadata";
 import { OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
+import { formatSelectorConjunction } from "../../integrations/merge";
 
 /**
  * The file ZCode 3.14 and later actually read their custom providers from.
@@ -79,8 +80,10 @@ export function zcodeStoreSchemaEstablished(parsed: unknown): boolean {
  * context window rather than with a selector that points somewhere else.
  */
 function modelRuleSelector(modelId: string): string | null {
-  if (modelId.includes(",") || modelId.includes("]")) return null;
-  return `[providerId=${OPENCODE_PROVIDER_ID},modelId=${modelId}]`;
+  return formatSelectorConjunction([
+    { field: "providerId", value: OPENCODE_PROVIDER_ID },
+    { field: "modelId", value: modelId },
+  ]);
 }
 
 /** The rows this export publishes, filtered exactly as the legacy block filters them. */
