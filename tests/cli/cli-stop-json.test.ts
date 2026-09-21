@@ -121,6 +121,16 @@ describe("summarizeStopRun", () => {
     expect(summary.sharedTeardown).toBe("performed-by-proxy");
     expect(summary.outcome).toBe("stopped");
   });
+
+  test("a failed shared teardown is not reported as restored", () => {
+    // restore.other means the config/catalog restore failed: the proxy is down but the
+    // client config may still point at it. The summary must say failed, not restored.
+    const summary = summarize(record({ sharedTeardown: "failed" }), { failed: true, exitCode: 1 });
+    expect(summary.outcome).toBe("failed");
+    expect(summary.runtimeDown).toBe(true);
+    expect(summary.sharedTeardown).toBe("failed");
+    expect(summary.message).toContain("teardown failed");
+  });
 });
 
 describe("ocx stop --json dispatch", () => {
@@ -198,6 +208,26 @@ describe("ocx stop --json dispatch", () => {
       expect(code).toBe(0);
       expect(captured.stdout.some(line => line.includes("will fail until it is restarted"))).toBe(true);
       expect(captured.stdout.every(line => { try { JSON.parse(line); return false; } catch { return true; } })).toBe(true);
+    } finally {
+      captured.restore();
+    }
+  });
+
+  test("a failed stop never prints the downtime warning in human mode", async () => {
+    // handleStop now returns { ok, summary }: an object is always truthy, so keying the
+    // warning on the return value would print "requests will fail" for a failed stop.
+    process.exitCode = 1;
+    const summary = summarizeStopRun(record({ proxy: "stop-failed", sharedTeardown: "skipped" }), {
+      failed: true, historyOnly: false, historyDeferred: false, exitCode: 1,
+    });
+    const captured = captureConsole();
+    try {
+      const code = await dispatchCommand(
+        { kind: "command", command: "stop", args: ["stop"] },
+        stopDeps(async () => ({ ok: false, summary }), ["stop"]),
+      );
+      expect(code).toBe(1);
+      expect(captured.stdout.some(line => line.includes("will fail until it is restarted"))).toBe(false);
     } finally {
       captured.restore();
     }

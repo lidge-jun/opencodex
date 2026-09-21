@@ -109,4 +109,17 @@ describe("ocx resolve real subprocess", () => {
       removeTreeWithRetry(home);
     }
   });
+
+  test("an invalid config.json is refused rather than resolved to defaults", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-resolve-invalid-config-"));
+    try {
+      writeFileSync(join(home, "config.json"), "{ not json", "utf8");
+      const run = await runResolveCli(["resolve", "--json"], home);
+      expect(run.exitCode).toBe(1);
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toContain("refusing to guess");
+    } finally {
+      removeTreeWithRetry(home);
+    }
+  });
 });

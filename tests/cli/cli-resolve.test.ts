@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   RESOLVE_DEFAULT_PORT,
   RESOLVE_SCHEMA,
@@ -7,6 +8,8 @@ import {
   runResolve,
 } from "../../src/cli/resolve";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
+import type { ConfigDiagnostics } from "../../src/config";
+import { repoPath } from "../helpers/repo-root";
 
 function fakeLive(overrides: Partial<LiveProxy> = {}): LiveProxy {
   return {
@@ -82,7 +85,7 @@ describe("runResolve", () => {
     const errors: string[] = [];
     const code = await runResolve({ json: true }, {
       configDir: () => "/home/fixture/.opencodex",
-      loadConfig: () => ({ port: 12345 }),
+      readDiagnostics: () => ({ config: { port: 12345 }, source: "file", error: null } as ConfigDiagnostics),
       findLive: async () => fakeLive(),
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
@@ -111,7 +114,7 @@ describe("runResolve", () => {
     const lines: string[] = [];
     const code = await runResolve({ json: true }, {
       configDir: () => "/h",
-      loadConfig: () => ({}),
+      readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
       findLive: async () => null,
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
@@ -122,12 +125,12 @@ describe("runResolve", () => {
     expect(parsed.port.effective).toBe(RESOLVE_DEFAULT_PORT);
   });
 
-  test("a resolution failure exits 1 with nothing on stdout", async () => {
+  test("a config read failure exits 1 with nothing on stdout", async () => {
     const lines: string[] = [];
     const errors: string[] = [];
     const code = await runResolve({ json: true }, {
       configDir: () => "/h",
-      loadConfig: () => { throw new Error("config.json is not valid JSON"); },
+      readDiagnostics: () => { throw new Error("config.json is not readable"); },
       findLive: async () => null,
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
@@ -135,14 +138,43 @@ describe("runResolve", () => {
     });
     expect(code).toBe(1);
     expect(lines).toEqual([]);
-    expect(errors.join("\n")).toContain("config.json is not valid JSON");
+    expect(errors.join("\n")).toContain("config.json is not readable");
+  });
+
+  test("an invalid config is refused, not repaired to defaults", async () => {
+    // loadConfig repairs a broken config to factory defaults; a shell contract must not
+    // answer 10100 for a config the operator pointed at another port. The diagnostics
+    // surface distinguishes that case (source "fallback") so resolve can exit 1.
+    const lines: string[] = [];
+    const errors: string[] = [];
+    let probed = false;
+    const code = await runResolve({ json: true }, {
+      configDir: () => "/h",
+      readDiagnostics: () => ({ config: {}, source: "fallback", error: "invalid_json" } as ConfigDiagnostics),
+      findLive: async () => { probed = true; return null; },
+      cliVersion: () => "1.2.3",
+      stdout: { log: value => lines.push(value) },
+      stderr: { error: value => errors.push(value) },
+    });
+    expect(code).toBe(1);
+    expect(lines).toEqual([]);
+    expect(errors.join("\n")).toContain("refusing to guess");
+    // No liveness probe may run against a guessed port.
+    expect(probed).toBe(false);
+  });
+
+  test("the production default probes with the ownership-safe budget", () => {
+    // Source oracle: the verdict feeds the shell's launch decision, so it borrows the
+    // start path's START_OWNERSHIP_LIVENESS budget instead of the 750ms single probe.
+    const src = readFileSync(repoPath("src", "cli", "resolve.ts"), "utf8");
+    expect(src).toContain("findLiveProxy(START_OWNERSHIP_LIVENESS)");
   });
 
   test("the default output is two human lines, never JSON", async () => {
     const lines: string[] = [];
     const code = await runResolve({ json: false }, {
       configDir: () => "/home/fixture/.opencodex",
-      loadConfig: () => ({ port: 12345 }),
+      readDiagnostics: () => ({ config: { port: 12345 }, source: "file", error: null } as ConfigDiagnostics),
       findLive: async () => fakeLive(),
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
@@ -158,7 +190,7 @@ describe("runResolve", () => {
     const lines: string[] = [];
     const code = await runResolve({ json: false }, {
       configDir: () => "/h",
-      loadConfig: () => ({}),
+      readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
       findLive: async () => null,
       cliVersion: () => "1.2.3",
       stdout: { log: value => lines.push(value) },
