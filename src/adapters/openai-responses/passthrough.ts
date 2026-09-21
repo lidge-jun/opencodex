@@ -295,7 +295,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
       const synthesizeMissingCallOutputs = !forward && (stateless || pairedToolResults);
       if (forward || stateless || pairedToolResults) {
-        outBody = repairOrphanedInputItems(outBody, unexpandedMiss, synthesizeMissingCallOutputs);
+        // A stateful destination can resolve an output-only delta against the call stored behind
+        // an unexpanded previous_response_id. All other shapes have no hidden call to preserve.
+        const repairOrphanOutputs = forward || stateless || !unexpandedMiss;
+        outBody = repairOrphanedInputItems(
+          outBody,
+          repairOrphanOutputs && unexpandedMiss,
+          synthesizeMissingCallOutputs,
+          repairOrphanOutputs,
+        );
       }
       if (provider.dropResponsesReasoningItems === true) {
         outBody = dropResponsesReasoningInputItems(outBody);

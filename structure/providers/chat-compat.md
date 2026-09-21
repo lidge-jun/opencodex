@@ -207,8 +207,10 @@ xAI's public Responses API is stateful (`store` defaults true; `previous_respons
 stored conversation), so the provider is not marked `statelessResponses`. The pairing repair
 synthesizes an honest unknown-status placeholder without touching `store` or
 `previous_response_id`: repairing an interrupted history must not cost the thread its server-side
-state. Forward auth suppresses the synthesis regardless of the flag, because the backend that holds
-the conversation can resolve the pair itself.
+state. An output-only continuation is preserved because its call may live in that server-side state;
+pairing only synthesizes results for calls present in the current input. Forward auth suppresses the
+synthesis regardless of the flag, because the backend that holds the conversation can resolve the
+pair itself.
 
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
