@@ -12,7 +12,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
-import { parseRecordedOwnership, planUpdateRuntimeHandling } from "../src/update/runtime-ownership.mjs";
+import { planUpdateRuntimeHandling } from "../src/update/runtime-ownership.mjs";
+import {
+  inspectInstallStateBytes,
+  resolveOwnershipFromEvidence,
+  serviceStateFilesFor,
+} from "../src/service/install-state-contract.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -257,29 +262,26 @@ function runPackageManagerSelfUpdate(manager) {
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must refresh and restart it afterwards.
-  const serviceStatePath = join(configDir(), "service-state.json");
+  const serviceStateFiles = serviceStateFilesFor(configDir(), join(homedir(), ".opencodex"));
+  const serviceStatePath = serviceStateFiles[0];
   const serviceWasInstalled = existsSync(serviceStatePath);
-  // What this update may do to the runtime. The same rule the Bun updater applies, from the
-  // same module: a desktop takeover vetoes both the stop and the service refresh below.
+  /**
+   * What this update may do to the runtime, decided by the SAME contract the Bun updater
+   * uses — every state path, the whole record shape, and absence as the only answer that
+   * means no claim.
+   *
+   * This used to be a local reader that inspected the anchor alone and returned "known
+   * unowned" whenever the `ownership` field was simply missing, including from a record that
+   * fails the contract outright. A takeover the Bun updater refused to disturb was therefore
+   * fair game here, which is an authorization gap rather than a cosmetic divergence.
+   */
   const readOwnership = () => {
-    if (!existsSync(serviceStatePath)) return { ownership: null, ownershipUnknown: false };
-    try {
-      const raw = readFileSync(serviceStatePath, "utf8");
-      // Fails CLOSED on a record that exists but does not parse: unreadable and malformed
-      // are not "nobody owns it", and reading them that way reactivates the npm launcher
-      // over a takeover the user consented to.
-      if (!raw.trim()) return { ownership: null, ownershipUnknown: true };
-      let parsed;
-      try { parsed = JSON.parse(raw); } catch { return { ownership: null, ownershipUnknown: true }; }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ownership: null, ownershipUnknown: true };
-      if (parsed.ownership === undefined) return { ownership: null, ownershipUnknown: false };
-      const ownership = parseRecordedOwnership(raw);
-      return ownership ? { ownership, ownershipUnknown: false } : { ownership: null, ownershipUnknown: true };
-    } catch {
-      return { ownership: null, ownershipUnknown: true };
-    }
+    const evidence = serviceStateFiles.map(path => inspectInstallStateBytes(path, at => readFileSync(at, "utf8")));
+    const resolution = resolveOwnershipFromEvidence(evidence);
+    if (resolution.kind === "owned") return { ownership: resolution.ownership, ownershipUnknown: false };
+    return { ownership: null, ownershipUnknown: resolution.kind === "unknown" };
   };
-  const runtimePlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
+  let runtimePlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
   if (runtimePlan.notice) console.log(runtimePlan.notice);
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
@@ -516,6 +518,14 @@ function runPackageManagerSelfUpdate(manager) {
   // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
   // whether the obligation is safe to finish.
   const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
+  // Re-read at the point of action rather than trusting the plan formed above: the Windows
+  // tray handoff between them spawns children, so a takeover can land in the gap, and
+  // stopping a runtime that just changed hands is the failure this lane exists to prevent.
+  {
+    const atStop = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
+    if (atStop.notice && atStop.notice !== runtimePlan.notice) console.log(atStop.notice);
+    runtimePlan = atStop;
+  }
   if (runtimePlan.stopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });

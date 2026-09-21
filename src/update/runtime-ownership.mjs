@@ -7,35 +7,17 @@
  * situation separately is how a fix ships on one side only.
  */
 
-/**
- * The ownership claim recorded in `service-state.json`, or null.
+/*
+ * There is deliberately no ownership PARSER here any more.
  *
- * Kept in step with `parseServiceOwnership` in `src/service/state.ts`, which is the
- * authoritative reader; this one exists because the Node launcher cannot import TypeScript.
- * `tests/update/update-desktop-owner.test.ts` drives the same accepted and rejected shapes
- * through both so they cannot drift apart.
- *
- * @param {string | null | undefined} raw The state file's text, or null when it is absent.
- * @returns {{ owner: string, installId: string, consentGeneration: number } | null}
+ * This module used to carry one so the Node launcher could read the record without importing
+ * TypeScript, kept "in step" with the authoritative reader by a test that drove the same
+ * shapes through both. It was not in step: it inspected one path and treated a record that
+ * failed the whole install-state contract as an unowned runtime whenever its `ownership`
+ * field was simply absent. Reading and resolving now live in
+ * `src/service/install-state-contract.mjs`, which both runtimes import, so there is one
+ * algorithm rather than two that a test has to keep aligned.
  */
-export function parseRecordedOwnership(raw) {
-  if (typeof raw !== "string" || raw.length === 0) return null;
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const ownership = parsed.ownership;
-  if (!ownership || typeof ownership !== "object" || Array.isArray(ownership)) return null;
-  if (ownership.owner !== "cli" && ownership.owner !== "desktop") return null;
-  if (typeof ownership.installId !== "string" || ownership.installId.length === 0) return null;
-  const generation = ownership.consentGeneration;
-  if (typeof generation !== "number" || !Number.isInteger(generation) || generation < 0) return null;
-  return ownership;
-}
-
 /**
  * Decide how an update treats a runtime it may not own.
  *
