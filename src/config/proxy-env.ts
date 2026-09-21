@@ -161,6 +161,10 @@ export function applyProxyEnvWith(
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
+    // Ambient-proxy path: only loopback bypasses are appended. A configured noProxy is
+    // deliberately NOT merged here — with no config.proxy the operator's bypass list has
+    // no declared proxy to apply against, and merging it would silently widen direct
+    // egress beyond the loopback fix this branch exists for.
     if (ambientProxyStateExists()) mergeNoProxyEntries();
     configureSocks5Fetch();
     return;

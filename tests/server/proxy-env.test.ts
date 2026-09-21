@@ -242,6 +242,20 @@ describe("applyProxyEnv", () => {
     expect(directCalls).toBe(1);
   });
 
+  test.each(["ALL_PROXY", "all_proxy"])("inherited SOCKS %s still owns non-loopback fetches", async key => {
+    process.env[key] = "socks5://untrusted-proxy.invalid:1080";
+    applyProxyEnv(configWithProxy());
+    // The bypass must be scoped to loopback only: a non-loopback URL still routes through
+    // the inherited SOCKS proxy, which fails here because the proxy is unreachable. The
+    // direct fallback must NOT be consulted — if it were, the bypass leaked.
+    let directCalls = 0;
+    await expect(configuredOutboundFetch("http://api.example.com/v1/chat/completions", undefined, async () => {
+      directCalls += 1;
+      return new Response("direct");
+    })).rejects.toThrow();
+    expect(directCalls).toBe(0);
+  });
+
   test("merges configured comma-separated noProxy entries", () => {
     applyProxyEnv(configWithProxy("http://proxy.corp:8080", "internal.example,10.0.0.0/8"));
     expect(process.env.NO_PROXY).toBe("internal.example,10.0.0.0/8,localhost,127.0.0.1,::1,[::1]");
