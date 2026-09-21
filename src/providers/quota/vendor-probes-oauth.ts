@@ -241,7 +241,10 @@ function parseClaudeLimit(value: unknown): { label: string; percent: number; res
   const label = lowerLabel.includes("fable") ? "Fable"
     : lowerLabel.includes("opus") ? "Opus"
       : lowerLabel.includes("sonnet") ? "Sonnet"
-        : rawLabel;
+        : null;
+  // An unrecognized display_name is never published as a quota label: stripping
+  // control characters still leaves attacker-chosen residue on the quota line.
+  if (label === null) return null;
   const resetAt = normalizeResetAt(rec.resets_at);
   return { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) };
 }
