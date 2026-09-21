@@ -200,10 +200,16 @@ impl ExitCoordinator {
                 inner.deferred = true;
                 None
             }
-            ExitPhase::Draining
-            | ExitPhase::Drained
-            | ExitPhase::DrainFailed
-            | ExitPhase::OwnershipUnknown => None,
+            // A failed drain is a terminal failure, not work in flight, and retrying it is the
+            // recovery: the update stayed pending, so the next attempt runs the stop again. Without
+            // this the first refusal would be permanent until the app was restarted by hand — which
+            // is the one thing a user with a runtime that would not stop cannot easily do.
+            ExitPhase::DrainFailed | ExitPhase::OwnershipUnknown => {
+                let reason = *inner.reason.get_or_insert(fallback);
+                inner.phase = ExitPhase::Draining;
+                Some(reason)
+            }
+            ExitPhase::Draining | ExitPhase::Drained => None,
         }
     }
 
@@ -606,6 +612,30 @@ mod tests {
         coordinator.finish_drain(DrainVerdict::OwnershipUnknown);
         assert_eq!(coordinator.phase(), ExitPhase::OwnershipUnknown);
         assert_eq!(coordinator.decision(), ExitDecision::Refuse);
+    }
+
+    #[test]
+    fn a_refused_restart_can_be_tried_again() {
+        let coordinator = ExitCoordinator::new();
+        coordinator.claim_drain(ExitReason::CoordinatedRestart);
+        coordinator.finish_drain(DrainVerdict::Failed);
+        // The update stayed pending, so pressing Install again runs the stop again rather than
+        // finding the app permanently unable to try.
+        assert_eq!(
+            coordinator.claim_drain(ExitReason::CoordinatedRestart),
+            Some(ExitReason::CoordinatedRestart)
+        );
+        assert_eq!(coordinator.phase(), ExitPhase::Draining);
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert_eq!(coordinator.decision(), ExitDecision::Proceed);
+    }
+
+    #[test]
+    fn a_successful_drain_is_not_re_entered() {
+        let coordinator = ExitCoordinator::new();
+        coordinator.claim_drain(ExitReason::UserQuit);
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert_eq!(coordinator.claim_drain(ExitReason::UserQuit), None);
     }
 
     #[test]

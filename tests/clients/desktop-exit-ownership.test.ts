@@ -127,6 +127,11 @@ describe("desktop exit ownership", () => {
     expect(rule).toContain("Some(ExitReason::CoordinatedRestart) => ExitDecision::Refuse");
     // A quit still closes the app on one, which is the trade that is defensible.
     expect(rule).toContain("_ => ExitDecision::Proceed");
+    // And the refusal is recoverable: the update stayed pending, so the next attempt runs the
+    // stop again rather than finding the app permanently unable to try.
+    const claim = exit.slice(exit.indexOf("pub fn claim_drain"), exit.indexOf("pub fn finish_drain"));
+    expect(claim).toContain("ExitPhase::DrainFailed | ExitPhase::OwnershipUnknown => {");
+    expect(claim).toContain("ExitPhase::Draining | ExitPhase::Drained => None,");
   });
 
   test("stop, quit and update are one execution over one child", () => {
@@ -161,7 +166,7 @@ describe("desktop exit ownership", () => {
     expect(arm).toContain("inner.reason.get_or_insert(fallback)");
     expect(arm).toContain("inner.phase = ExitPhase::Draining;");
     // Nothing else in the file moves the phase to draining.
-    expect(exit.split("inner.phase = ExitPhase::Draining;")).toHaveLength(3);
+    expect(exit.split("inner.phase = ExitPhase::Draining;")).toHaveLength(4);
   });
 
   test("a quit that lands while a runtime is starting is deferred, not lost", () => {
