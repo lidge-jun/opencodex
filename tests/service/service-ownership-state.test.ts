@@ -460,6 +460,7 @@ describe("the record is read fail-closed", () => {
   test("a corrupt anchor is unknown; corrupt legacy leftovers are ignored", () => {
     writeFileSync(serviceStatePath(), "not json");
     expect(resolveServiceOwnership(inspectServiceStateEvidence([serviceStatePath()])).kind).toBe("unknown");
+    unlinkSync(serviceStatePath());
 
     // The second path is the legacy default-home entry. Junk left there by an old version
     // must not be able to block every repair on the machine.
