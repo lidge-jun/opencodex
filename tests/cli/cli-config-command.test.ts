@@ -36,10 +36,16 @@ function freshConfig() {
       blsc: {
         adapter: "openai-chat",
         baseUrl: "https://llmapi.blsc.cn",
+        proxy: "direct",
         modelCosts: {
           "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
           "sk-abcdef1234567890": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
         },
+      },
+      nocreds: {
+        adapter: "openai-chat",
+        baseUrl: "https://nocreds.example",
+        proxy: "http://127.0.0.1:7890",
       },
     },
     defaultProvider: "openai",
@@ -56,11 +62,21 @@ describe("ocx config display redaction", () => {
       const show = runCli(["config", "show", "--json"], { OPENCODEX_HOME: dir });
       expect(show.status).toBe(0);
       expect(show.stdout).not.toContain(secret);
-      expect(JSON.parse(show.stdout).providers.openai.proxy).toBe("********");
+      const shown = JSON.parse(show.stdout).providers;
+      // Credentialed URL: userinfo stripped, host/port kept for diagnostics.
+      expect(shown.openai.proxy).toBe("http://egress.test:3128/");
+      expect(show.stdout).not.toContain("route_user");
+      // "direct" and credential-less URLs carry no secret and stay readable.
+      expect(shown.blsc.proxy).toBe("direct");
+      expect(shown.nocreds.proxy).toBe("http://127.0.0.1:7890");
 
       const get = runCli(["config", "get", "providers.openai.proxy"], { OPENCODEX_HOME: dir });
       expect(get.status).toBe(0);
-      expect(get.stdout.trim()).toBe("********");
+      expect(get.stdout.trim()).toBe("http://egress.test:3128/");
+
+      const getDirect = runCli(["config", "get", "providers.blsc.proxy"], { OPENCODEX_HOME: dir });
+      expect(getDirect.status).toBe(0);
+      expect(getDirect.stdout.trim()).toBe("direct");
 
       const set = runCli([
         "config", "set", "providers.openai.proxy",
@@ -68,7 +84,7 @@ describe("ocx config display redaction", () => {
       ], { OPENCODEX_HOME: dir });
       expect(set.status).toBe(0);
       expect(set.stdout).not.toContain("next_password");
-      expect(JSON.parse(set.stdout).value).toBe("********");
+      expect(JSON.parse(set.stdout).value).toBe("http://egress.test:8080/");
     } finally {
       removeTreeWithRetry(dir);
     }

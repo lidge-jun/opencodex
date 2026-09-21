@@ -5,6 +5,7 @@ import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
 import type { ServiceApiTokenState } from "../lib/service-secrets";
+import { redactUrlForLog } from "../lib/redact";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -17,12 +18,15 @@ const USAGE = `Usage:
   ocx config import <path|-> --yes [--json]`;
 
 /**
- * Keys whose VALUE is a credential and must never be printed or exported.
+ * Keys whose VALUE is a credential and must never be printed by display commands.
+ * `config export` writes the raw config so an export can restore credentials; it does
+ * not call `redact`.
  *
- * URL-valued credentials must be named explicitly: neither `webhookUrl` nor a proxy URL's
- * userinfo matches the other patterns.
+ * URL-valued credentials must be named explicitly: `webhookUrl` matches none of the
+ * other patterns, and a proxy URL's userinfo is handled by the `proxy` branch in
+ * `redact` rather than by masking the whole value.
  */
-const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret|webhookUrl|proxy)$/i;
+const SECRET_KEYS = /^(apiKey|key|accessToken|refreshToken|idToken|token|password|clientSecret|webhookUrl)$/i;
 const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 /**
@@ -95,6 +99,19 @@ async function readRemoteHubConfigNote(config: OcxConfig): Promise<ReturnType<ty
 }
 
 function redact(value: unknown, key = ""): unknown {
+  if (key === "proxy" && typeof value === "string") {
+    // "direct" and credential-less proxy URLs carry no secret and stay readable; only a
+    // URL with userinfo is masked, and then only its credentials — host and port stay
+    // visible so the output still says WHERE traffic goes. A non-URL value that is not
+    // "direct" cannot be proven credential-free, so it is masked whole.
+    if (!value || value === "direct") return value;
+    try {
+      const parsed = new URL(value);
+      return parsed.username || parsed.password ? redactUrlForLog(value) : value;
+    } catch {
+      return "********";
+    }
+  }
   if (SECRET_KEYS.test(key) && typeof value === "string") return value ? "********" : value;
   // `client.priorCatalog` is the base64 catalog snapshot connect took before overwriting the
   // local one — up to 64 MB of it (src/config.ts). Printed in full it buried `runtimeRole` and
