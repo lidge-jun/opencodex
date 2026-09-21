@@ -142,6 +142,75 @@ describe("registry model rename migration (#1610)", () => {
       expect(entry?.models).not.toContain(rename.from);
     }
   });
+
+  test("repairs a saved kimi row still defaulting to the retired k2.7 id", () => {
+    // The shape a config saved under the pre-K2.8 registry carries: the picker list,
+    // the context-window record and the default all name kimi-k2.7-code, and the old
+    // registry already seeded kimi-for-coding rows next to them.
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.7-code",
+          models: ["k3", "k3[1m]", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+          modelContextWindows: { "kimi-k2.7-code": 262_144, "kimi-for-coding": 262_144 },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(changed).toBe(true);
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    // The picker entry is renamed in place (it keeps its slot, per renameInList) and
+    // collapses into the row the old registry already seeded under the live alias.
+    expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"]);
+    // The current registry seed no longer publishes the retired id anywhere (the kimi
+    // preset records are live-id only, so the residue guard has nothing to skip), and the
+    // record already carries a kimi-for-coding row from the old registry - the rename
+    // drops the retired key and keeps the newer row untouched.
+    expect(prov.modelContextWindows?.["kimi-k2.7-code"]).toBeUndefined();
+    expect(prov.modelContextWindows?.["kimi-for-coding"]).toBe(262_144);
+  });
+
+  test("repairs the kimi-code key preset row the same way", () => {
+    const stale = {
+      providers: {
+        "kimi-code": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "key",
+          apiKey: "sk-test",
+          defaultModel: "kimi-k2.7-code",
+          models: ["k3", "k3[1m]", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers["kimi-code"]!;
+    expect(changed).toBe(true);
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding", "kimi-k2.6", "kimi-k2.5"]);
+  });
+
+  test("leaves a kimi row repointed at a different gateway alone", () => {
+    const custom = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://my-proxy.internal/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.7-code",
+          models: ["kimi-k2.7-code"],
+        },
+      },
+    } as unknown as OcxConfig;
+    const { changed } = projectModelRenames(custom, MODEL_RENAMES);
+    expect(changed).toBe(false);
+  });
 });
 
 describe("model rename startup persistence", () => {

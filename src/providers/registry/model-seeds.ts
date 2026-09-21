@@ -650,12 +650,18 @@ export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]"];
 // with "model token limit: 1048576" beyond that.
 // Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
 export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
-export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K28_MODELS];
+export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K28_MODELS];
+export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
 export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
-export const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_LEGACY_API_MODELS, "kimi-for-coding"];
-export const KIMI_THINKING_MODELS = KIMI_CODING_MODELS;
-export const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_MODELS.filter(id => !KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id));
+// Every kimi coding preset record - picker, context windows, locked-parameter lists -
+// derives from the live ids only. seeding a retired id in a metadata list would re-arm
+// the model-rename migration on every boot (#5066): the list holds the retired id but
+// not the live alias, so the residue guard cannot skip it. The retired ids survive only
+// in KIMI_LEGACY_API_MODELS (moonshot platform API records); model-rename-migration
+// repairs saved rows still naming them.
+export const KIMI_THINKING_MODELS = KIMI_CODING_LIVE_MODELS;
+export const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_LIVE_MODELS.filter(id => !KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id));
 export const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => id !== "kimi-k3");
 export const KIMI_CODING_K3_REASONING_EFFORTS = ["low", "high", "max"];
 export const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
@@ -667,7 +673,7 @@ export const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
   max: "max",
 };
 export const KIMI_CODING_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
+  KIMI_CODING_LIVE_MODELS.map(id => [id, KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
 );
 export const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, "max"]),
@@ -678,8 +684,8 @@ export const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
 export const KIMI_API_REASONING_EFFORTS = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? ["max"] : []]),
 );
-export const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_MODELS;
-export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-for-coding"];
+export const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_LIVE_MODELS;
+export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-for-coding"];
 export const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
@@ -767,7 +773,7 @@ export const NVIDIA_NIM_NO_VISION_MODELS = [
   "poolside/laguna-xs-2.1", "z-ai/glm-5.3", "z-ai/glm-5.2",
 ];
 export const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+  KIMI_CODING_LIVE_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
 );
 export const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, ["text", "image"]]),

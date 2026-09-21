@@ -65,6 +65,24 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
     to: "qwen3.8-max",
     reason: "Alibaba shipped Qwen3.8-Max as stable and documents the preview endpoint as liable to be taken offline once preview concludes",
   },
+  // Kimi coding renames. Moonshot retired the k2.x ids from the subscription/coding
+  // endpoint when K2.8 Preview shipped (live /coding/v1/models lists only
+  // kimi-for-coding[-highspeed], k3, k3-256k); kimi-for-coding is the stable alias the
+  // endpoint still serves and currently routes to K2.8 Preview. The registry picker no
+  // longer seeds the retired ids, so a saved defaultModel naming one is a dead selection
+  // rather than a merely outdated one.
+  {
+    provider: "kimi",
+    from: "kimi-k2.7-code",
+    to: "kimi-for-coding",
+    reason: "Moonshot retired the k2.x coding ids from the subscription endpoint when K2.8 Preview shipped; kimi-for-coding is the stable alias the endpoint still serves",
+  },
+  {
+    provider: "kimi-code",
+    from: "kimi-k2.7-code",
+    to: "kimi-for-coding",
+    reason: "Moonshot retired the k2.x coding ids from the coding endpoint when K2.8 Preview shipped; kimi-for-coding is the stable alias the endpoint still serves",
+  },
   // Antigravity Flash generations. Google takes the previous Flash model off Cloud Code
   // Assist almost immediately when the next ships, so a saved 3.6 (or older 3.5) id is a
   // dead selection rather than a merely outdated one. Routing already redirects these ids

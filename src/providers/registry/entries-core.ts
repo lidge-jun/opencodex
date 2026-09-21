@@ -55,7 +55,7 @@ import {
   deepseekThinkingEffortsFor,
   deepseekReasoningMapFor,
   KIMI_K3_STANDARD_CONTEXT_WINDOW,
-  KIMI_CODING_MODELS,
+  KIMI_CODING_LIVE_MODELS,
   KIMI_THINKING_MODELS,
   KIMI_CODING_NO_REASONING_MODELS,
   KIMI_CODING_K3_REASONING_EFFORTS,
@@ -444,7 +444,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
     note: "Log in with your Kimi account",
-    models: KIMI_CODING_MODELS,
+    // 260921: the retired k2.x ids stay out of the picker — live /coding/v1/models lists
+    // only kimi-for-coding[-highspeed], k3, k3-256k. Saved rows still naming kimi-k2.7-code
+    // are repaired by MODEL_RENAMES in model-rename-migration.ts.
+    models: KIMI_CODING_LIVE_MODELS,
     // 260921: kimi-k2.7-code was retired from the subscription endpoint (live /models lists
     // only kimi-for-coding[-highspeed], k3, k3-256k). The kimi-for-coding alias is the
     // stable ID and currently routes to K2.8 Preview.
