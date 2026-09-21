@@ -112,7 +112,9 @@ describe("desktop exit ownership", () => {
     expect(body).toContain("claim_drain(ExitReason::CoordinatedRestart)");
     expect(body).toContain("drain_current(app).await");
     expect(body).toContain("coordinator.finish_drain(verdict)");
-    expect(exit).toContain("sidecar::drain(&proxy, true, &watch)");
+    // D4: the stop is the bundled CLI's, which owns the receipt-backed teardown this process
+    // cannot perform on itself.
+    expect(exit).toContain("runtime_stop::run(app, deadline).await");
   });
 
   test("a failed drain is not recorded as a drain, and a restart refuses it", () => {
@@ -247,24 +249,27 @@ describe("desktop exit ownership", () => {
   });
 
   test("a drain never runs against a runtime this app did not start", () => {
-    const sidecar = code(repoPath(`${SRC}/sidecar.rs`));
-    const drain = sidecar.slice(
-      sidecar.indexOf("pub async fn drain("),
-      sidecar.indexOf("async fn gone("),
-    );
-    expect(drain).toContain("if !owned {");
-    expect(drain).toContain("return DrainOutcome::NotOwned;");
-    expect(drain.indexOf("if !owned {")).toBeLessThan(drain.indexOf("proxy.stop_within("));
+    const exit = code(EXIT);
+    const drain = exit.slice(exit.indexOf("pub async fn drain_current("));
+    const body = drain.slice(0, drain.indexOf("\nenum Ownership"));
+    // Only a confirmed-ours runtime is stopped. A foreign one is left alone, and one that cannot
+    // be identified stops nothing at all.
+    expect(body).toContain("Ownership::Foreign => DrainVerdict::Drained");
+    expect(body).toContain("Ownership::Unknown => DrainVerdict::OwnershipUnknown");
+    expect(body.indexOf("Ownership::Ours =>")).toBeLessThan(body.indexOf("runtime_stop::run"));
+    // Nothing in the shell performs the stop itself any more.
+    expect(code(repoPath(`${SRC}/sidecar.rs`))).not.toContain("fn drain(");
+    expect(code(repoPath(`${SRC}/proxy.rs`))).not.toContain("Method::POST");
   });
 
   test("only an observed exit or a refused connection proves the runtime stopped", () => {
-    const sidecar = code(repoPath(`${SRC}/sidecar.rs`));
-    const start = sidecar.indexOf("async fn gone(");
+    const exit = code(EXIT);
+    const start = exit.indexOf("async fn confirm(");
     expect(start).toBeGreaterThan(-1);
-    const body = sidecar.slice(start, sidecar.indexOf("\n}", start));
+    const body = exit.slice(start, exit.indexOf("fn hide_windows(", start));
     expect(body).toContain("watch.exit().is_some()");
     expect(body).toContain("error.is_unreachable()");
     // Any-error-means-gone is the shape this replaces.
-    expect(sidecar).not.toContain("proxy.is_alive().await.is_err()");
+    expect(exit).not.toContain("proxy.is_alive().await.is_err()");
   });
 });

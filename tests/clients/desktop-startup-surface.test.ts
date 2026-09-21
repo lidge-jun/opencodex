@@ -48,7 +48,7 @@ describe("desktop startup surface", () => {
     for (const call of [
       "block_on",
       "ensure_proxy",
-      "discovery::current()",
+      "resolve::run",
       "ProxyClient::new",
       "tray_availability::detect()",
       "tray::install",
@@ -61,7 +61,8 @@ describe("desktop startup surface", () => {
 
   test("resolving and registering are states that own their work", () => {
     expect(startup).toContain("Phase::Resolving");
-    expect(startup).toContain("discovery::current()");
+    // D5: the shell asks the bundled CLI rather than reading a port record and guessing.
+    expect(startup).toContain("resolve::run(app, deadline).await");
     expect(startup).toContain("ProxyClient::new(endpoint");
     expect(startup).toContain("Phase::Registering");
     expect(startup).toContain("tray_availability::detect");
@@ -89,7 +90,7 @@ describe("desktop startup surface", () => {
   test("the child's exit code is what ends the wait early", () => {
     const wait = startup.indexOf("Phase::Waiting, None);");
     expect(wait).toBeGreaterThan(-1);
-    const loop = startup.slice(wait, startup.indexOf("async fn healthy_by", wait));
+    const loop = startup.slice(wait, startup.indexOf("async fn register(", wait));
     expect(loop).toContain("watch.exit()");
     expect(loop).toContain("exit.describe()");
   });
@@ -97,9 +98,12 @@ describe("desktop startup surface", () => {
   test("one deadline covers the whole sequence and bounds every probe under it", () => {
     expect(startup).toContain("pub const DEADLINE: Duration");
     expect(startup).toContain("let deadline = started + DEADLINE;");
-    expect(startup).toContain("let probing_from = Instant::now();");
-    expect(startup).toContain("(probing_from + ATTACH_BUDGET).min(deadline)");
-    expect(startup).not.toContain("(started + ATTACH_BUDGET)");
+    // The budget for finding an existing runtime is the CLI's now, not a second one here: the
+    // tuned probe budgets exist because a shell-side reimplementation answered "nobody is
+    // listening" twice and started duplicate proxies.
+    expect(startup).not.toContain("ATTACH_BUDGET");
+    expect(startup).not.toContain("fn healthy_by");
+    expect(startup).toContain("resolve::run(app, deadline).await");
     // A probe bounded only by the client's own timeout overruns whatever budget it was started
     // under, which is how a stated ceiling becomes an unstated one.
     expect(startup).not.toContain("proxy.is_alive()");
@@ -110,7 +114,10 @@ describe("desktop startup surface", () => {
     expect(startup).toContain("tokio::time::timeout_at(deadline, receiver)");
     const proxy = code(PROXY);
     expect(proxy).toContain("timeout_at(deadline, self.is_alive())");
-    expect(proxy).toContain("timeout_at(deadline, self.stop())");
+    // The stop is the bundled CLI's now, under its own deadline.
+    const stop = code(repoPath("desktop/src-tauri/src/runtime_stop.rs"));
+    expect(stop).toContain("timeout_at(deadline, command.output())");
+    expect(stop).toContain("pub const DEADLINE: Duration");
   });
 
   test("a retry waits on the child it already started rather than starting a second one", () => {
