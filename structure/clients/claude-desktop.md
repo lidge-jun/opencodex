@@ -59,8 +59,10 @@ the gateway; a failed gateway apply preserves the first-party env. After a succe
 write, `removeDesktop3pStandardPivot({ replaceWhileEnabled: true })` retires the owned gateway.
 A refused pivot that has not changed Desktop rolls back only the managed env keys while they still match this apply;
 unrelated settings survive, and rollback failure is reported explicitly. If Desktop already pivoted to standard but credential cleanup is incomplete, first-party stays active and its mode is recorded. After a successful gateway
-write, only env values anchored on OpenCodex's CA path are removed. Cleanup failure is reported as
-partial application without saving a successful mode marker. These file operations are ordered,
+write, only env values anchored on OpenCodex's CA path are removed. The committed gateway mode and profile fingerprint are persisted together before first-party
+cleanup via `src/claude/desktop-gateway-state.ts`. Cleanup failure remains a partial failure, while
+subsequent default applies and status retain the gateway choice. A separate persistence failure
+is reported explicitly; its mode/profile snapshot is not claimed to have been saved. These file operations are ordered,
 not a crash-atomic transaction across the settings file and Desktop library.
 Disabling the integration (native toggle, `ocx ensure` with the durable switch OFF) removes both the
 gateway profile and the first-party env. With the switch ON in first-party mode, `ocx ensure`
