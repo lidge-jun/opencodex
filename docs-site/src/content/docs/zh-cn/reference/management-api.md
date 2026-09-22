@@ -149,7 +149,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `POST /api/codex-prompt/adopt` | 将 `config.toml` 中的 `developer_instructions` 导入为自定义层 | 400 无效正文、`invalid_characters`、`body_too_large`、`composed_too_large`；409 `config_unreadable`、`nothing_to_adopt`、`adopt_unsupported_form`、`stale_revision` |
 | `POST /api/codex-prompt/repair` | 修复 `config.toml` 与受管 projection 之间的 drift | 400 无效正文；409 `config_unreadable`、`nothing_to_repair`、`repair_unsupported`、`stale_revision` |
 
-有关层模型和每个层写入的键，请参见 [Codex 提示词层](/guides/codex-prompt/)。
+有关层模型和每个层写入的键，请参见 [Codex 提示词层](/zh-cn/guides/codex-prompt/)。
 
 ### 配置、启动、同步和更新
 

@@ -198,6 +198,11 @@ Voir [Couches de prompt Codex](/fr/guides/codex-prompt/) pour le modèle de couc
 
 ### Journaux, utilisation et stockage
 
+Les journaux de requêtes conservent `servedModel` lorsque le fournisseur en amont indique le modèle qui a répondu, et
+`wireModel` lorsque le modèle envoyé en amont diffère de celui présenté au client. Le tableau de bord affiche
+`wire → served` si ces modèles diffèrent ; l'infobulle conserve les deux valeurs. En l'absence d'indication du modèle
+par le fournisseur en amont, cette information reste absente : elle n'est pas déduite du modèle demandé.
+
 | Méthode et chemin | Objectif | Erreurs notables |
 | --- | --- | --- |
 | `GET /api/logs` | Requête filtrée dans les journaux de requêtes en mémoire | — |

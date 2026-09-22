@@ -202,6 +202,11 @@ Katman modeli ve her katmanın yazdığı anahtarlar için [Codex İstem Katmanl
 
 ### Günlükler, kullanım ve depolama
 
+İstek günlükleri, üst servis yanıt veren modeli bildirdiğinde `servedModel` alanını saklar. Üst servise gönderilen model
+istemciye gösterilen modelden farklı olduğunda `wireModel` alanını da saklar. Bu modeller farklıysa kontrol paneli
+`wire → served` gösterir; bilgi balonunda her iki değer de korunur. Üst servisten yanıt veren modele ilişkin bilgi
+gelmezse bu alan boş kalır; istenen modelden çıkarım yapılmaz.
+
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |
 | --- | --- | --- |
 | `GET /api/logs` | Filtrelenmiş bellek içi istek günlüklerini sorgulayın | — |

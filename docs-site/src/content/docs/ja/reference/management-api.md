@@ -151,7 +151,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `POST /api/codex-prompt/adopt` | `config.toml` の `developer_instructions` をカスタムレイヤーとしてインポートします | 400 無効な本文、`invalid_characters`、`body_too_large`、`composed_too_large`; 409 `config_unreadable`、`nothing_to_adopt`、`adopt_unsupported_form`、`stale_revision` |
 | `POST /api/codex-prompt/repair` | `config.toml` と所有された projection 間の drift を修復します | 400 無効な本文; 409 `config_unreadable`、`nothing_to_repair`、`repair_unsupported`、`stale_revision` |
 
-レイヤーモデルと各レイヤーが書き込むキーについては、[Codex プロンプトレイヤー](/guides/codex-prompt/) を参照してください。
+レイヤーモデルと各レイヤーが書き込むキーについては、[Codex プロンプトレイヤー](/ja/guides/codex-prompt/) を参照してください。
 
 ### 設定、起動、同期、更新
 
@@ -172,6 +172,11 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET, PUT /api/shadow-call-settings` |シャドウ コール インターセプト設定の読み取りまたは更新 | 400 無効な形状または値 |
 
 ### ログ、使用状況、およびストレージ
+
+リクエストログは、上流が応答したモデルを示した場合に `servedModel` を保持します。上流に送信したモデルが
+クライアントに提示したモデルと異なる場合は `wireModel` も保持します。両者が異なるとき、ダッシュボードには
+`wire → served` と表示され、ツールチップに両方の値が残ります。上流からモデルの情報が得られない場合、
+リクエストされたモデルから推測せず、その情報は記録しません。
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |

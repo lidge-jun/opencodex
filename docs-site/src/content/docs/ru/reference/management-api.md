@@ -175,7 +175,7 @@ GUI-сессия в стиле loopback не выпускается.
 | `POST /api/codex-prompt/adopt` | Импортировать `developer_instructions` из `config.toml` как пользовательский слой | 400 invalid body, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
 | `POST /api/codex-prompt/repair` | Устранить drift между `config.toml` и принадлежащей projection | 400 invalid body; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
 
-О модели слоёв и ключах, которые записывает каждый слой, см. [Слои промпта Codex](/guides/codex-prompt/).
+О модели слоёв и ключах, которые записывает каждый слой, см. [Слои промпта Codex](/ru/guides/codex-prompt/).
 
 ### Конфигурация, startup, sync и updates
 
@@ -196,6 +196,11 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET, PUT /api/shadow-call-settings` | Прочитать или обновить настройки shadow-call interception | 400 invalid shape or value |
 
 ### Логи, usage и storage
+
+В журналах запросов поле `servedModel` сохраняется, когда вышестоящий сервис сообщает модель, которая ответила.
+Поле `wireModel` сохраняется, когда отправленная вышестоящему сервису модель отличается от модели, показанной клиенту.
+Если эти модели различаются, панель показывает `wire → served`, а подсказка сохраняет оба значения. Если вышестоящий
+сервис не сообщил модель ответа, она остаётся неизвестной и не выводится из запрошенной модели.
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |

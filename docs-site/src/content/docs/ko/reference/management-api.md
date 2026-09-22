@@ -154,7 +154,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `POST /api/codex-prompt/adopt` | `config.toml`의 `developer_instructions`를 사용자 지정 레이어로 가져옵니다 | 400 잘못된 본문, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
 | `POST /api/codex-prompt/repair` | `config.toml`과 소유 projection 사이의 drift를 복구합니다 | 400 잘못된 본문; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
 
-레이어 모델과 각 레이어가 쓰는 키는 [Codex 프롬프트 레이어](/guides/codex-prompt/)를 참고하십시오.
+레이어 모델과 각 레이어가 쓰는 키는 [Codex 프롬프트 레이어](/ko/guides/codex-prompt/)를 참고하십시오.
 
 ### 구성, 시작, 동기화, 업데이트
 
@@ -175,6 +175,11 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `GET, PUT /api/shadow-call-settings` | shadow-call interception 설정을 읽거나 업데이트합니다 | 400 잘못된 형태 또는 값 |
 
 ### 로그, 사용량, 저장소
+
+요청 로그는 상위 서비스가 실제로 응답한 모델을 알려주면 `servedModel`을 기록하고, 상위 서비스로 보낸 모델이
+클라이언트에 표시된 모델과 다르면 `wireModel`을 기록합니다. 두 모델이 다를 때 대시보드는 `wire → served`로
+표시하고 툴팁에는 두 값을 모두 남깁니다. 상위 서비스가 응답 모델을 알려주지 않았다면 요청한 모델에서
+추정하지 않고 해당 정보를 비워 둡니다.
 
 | HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
