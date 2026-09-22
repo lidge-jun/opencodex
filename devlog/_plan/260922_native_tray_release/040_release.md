@@ -107,3 +107,15 @@ no remaining architecture gap. Independent A audit follows.
 Latest owner steering: Latest owner instruction ci 걍 무시하고 머지해 executed: PR5490 admin squash merged to dev6c2f7676dcedba21bdbacf4fb84a7b2c286d1ee6 at2026-09-22T09:24:09Z. Priorcandidate3d64 hadPR/allplatform/serviceSUCCESS. D1 now precedesD0 by explicituseroverride; no fabricated B order. D0reviewfinding gatewaypartialbookkeeping remains narrowfollowup beforefreezeRC/publish. Bothpreview+stabledeployment remainsauthorized. No-local-tests andno-verify unchanged.
 
 Independent A audit: Volta NEAR-PASS. Both text gaps are folded: D0 explicitly requires credential-boundary security review under MAINTAINERS.md in addition to ordinary source review; the original local-verification wording above now matches the latest no-local-execution restriction. New promotion drafts #5510/#5511 are provisional and will receive the corrected RC. No release has been published.
+
+### D0b — ordinary macOS shard process boundaries
+The post-merge dev run35710172686 hit its 20-minute limit in macOS shard1. Its last recorded
+passing cases were in catalog-full-picker-order around09:30:51; no further test output appeared
+before cancellation around09:48:13. The precise subsequent blocked import/cleanup boundary is
+not visible in the log. The same membership passed under the bounded full-control batches.
+Replace ordinary macOS shard monolithic processes and their separate serial loop with that
+shared batch runner: sorted all-file1/2 and2/2, maximum12files, parallel1,300-second batch bound,
+60-second per-test ceiling, existing20-minute job cap. Preserve singleton families, fail-red
+attribution and all tests. The actual workflow harness must prove complete/disjoint membership,
+exact-path collision handling and failure disposition. Sol source/security review precedes the
+owner-authorized immediate dev merge; local checks remain NOT RUN.

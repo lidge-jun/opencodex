@@ -168,13 +168,14 @@ it is promoted, so those files follow the promotion model rather than ordinary i
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
 alone with fresh process homes. Hosted batches preserve sorted round-robin shard membership
-and split only process boundaries; every selected file still runs once. The macOS control
-runs the complete 1/1 file list in sequential batches of at most 12 files with one worker.
+and split only process boundaries; every selected file still runs once. Ordinary macOS shards
+select 1/2 and 2/2 from the full sorted file list; macOS control selects 1/1. Both execute
+sequential batches of at most 12 files with one worker.
 Storage-policy and API-usage families run as singletons, as do manifest-declared files.
 This preserves full test membership but does not claim cross-batch shared-process coverage.
 Every primary assertion failure, timeout or crash fails the run; diagnostic singleton
 attribution never turns a failed primary green. Each control batch has a 300-second process
-bound plus 15 seconds for forced reap, inside the unchanged 75-minute job cap. Other batch
+bound plus 15 seconds for forced reap, inside unchanged 20-minute shard and 75-minute control job caps. Other batch
 lanes keep their existing defaults; optional parallelism must be a positive integer.
 
 The Windows selector is an operational stability control, not a security boundary. A pull request
@@ -382,7 +383,7 @@ runs the full suite in nine shards only on manual `workflow_dispatch` with `lane
 empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
 aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
 
-No recovery retry can turn a failed workflow green. Linux, Windows and macOS control use
+No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
 Windows uses six files and 480 seconds. macOS control uses twelve files, 300 seconds and one
