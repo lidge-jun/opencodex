@@ -30,6 +30,8 @@ describe("inline thinking format boundaries", () => {
   test("Kiro retains single-block normalization and subsequent literal tags", () => {
     expect(split([" \n<think>why</think>\n  answer<think>literal</think>"], false))
       .toEqual({ answer: "answer<think>literal</think>", reasoning: "why" });
+    expect(split([" ", "\n", "<think>why</think>\n  answer<think>literal</think>"], false))
+      .toEqual({ answer: "answer<think>literal</think>", reasoning: "why" });
   });
   test("ordinary code examples never activate parsing", () => {
     const input = "```xml\n<think>literal</think>\n```";
@@ -62,7 +64,26 @@ describe("inline thinking format boundaries", () => {
       reserve.mockRestore();
     }
   });
+  test("split leading whitespace charges only newly retained bytes", () => {
+    const count = 20000;
+    const suffix = "<think>r</think>a";
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 100_000 });
+    const reserve = spyOn(budget, "reserveTransient");
+    const parser = new InlineThinkTagParser(budget, { interleaved: true });
+    try {
+      for (let i = 0; i < count; i++) parser.feed(" ");
+      const events = [...parser.feed(suffix), ...parser.flush()];
+      expect(projection(events)).toEqual({ answer: " ".repeat(count) + "a", reasoning: "r" });
+      const reservedBytes = reserve.mock.calls.reduce((total, [bytes]) => total + bytes, 0);
+      expect(reservedBytes).toBeLessThanOrEqual(4 * Buffer.byteLength(" ".repeat(count) + suffix));
+    } finally {
+      parser.dispose();
+      reserve.mockRestore();
+    }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
   test("partial tags and unterminated reasoning flush without loss", () => {
+    expect(split([" ", "\n"])).toEqual({ answer: " \n", reasoning: "" });
     expect(split(["<thi"])).toEqual({ answer: "<thi", reasoning: "" });
     expect(split(["<think>why😀</thi"])).toEqual({ answer: "", reasoning: "why😀</thi" });
     expect(split(["<think>x</think>answer<th"])).toEqual({ answer: "answer<th", reasoning: "x" });

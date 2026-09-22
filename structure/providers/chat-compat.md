@@ -64,6 +64,8 @@ inside subsequent code fences or quoted examples: this explicit opt-in does not 
 Gateways producing ambiguous literals should use structured reasoning instead. A moving cursor
 scans each upstream chunk without copying the remaining response after every block. Only undecided
 leading input or a trailing tag fragment is retained and charged to the translator budget.
+Undecided leading whitespace is charged one incoming segment at a time and joined only when
+the initial format is decided or the stream ends.
 A block left unterminated at end of stream flushes as reasoning rather than being
 dropped. In interleaved Chat mode, whitespace after the leading block and after later blocks
 remains answer text, including indentation and blank lines. Kiro uses single-block mode and

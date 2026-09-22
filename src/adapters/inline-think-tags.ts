@@ -40,6 +40,9 @@ export interface InlineThinkTagOptions {
  */
 export class InlineThinkTagParser {
   private state: ParserState = "pre";
+  private preWhitespaceChunks: string[] = [];
+  private preWhitespaceLength = 0;
+  private preWhitespaceBytes = 0;
   private preBuffer = "";
   private thinkingBuffer = "";
   private closeTag = "";
@@ -61,29 +64,55 @@ export class InlineThinkTagParser {
     this.budget?.releaseRetained(previousBytes, { kind: "reasoning" });
   }
 
+  private appendPreWhitespace(text: string): void {
+    if (!text) return;
+    const bytes = Buffer.byteLength(text);
+    const reservation = this.budget?.reserveTransient(bytes, { kind: "reasoning" });
+    this.preWhitespaceChunks.push(text);
+    this.preWhitespaceLength += text.length;
+    this.preWhitespaceBytes += bytes;
+    reservation?.commitRetained();
+  }
+
+  private finishPreWhitespace(emit: boolean): string {
+    if (this.preWhitespaceLength === 0) return "";
+    const out = emit ? this.preWhitespaceChunks.join("") : "";
+    this.preWhitespaceChunks.length = 0;
+    this.preWhitespaceLength = 0;
+    this.budget?.releaseRetained(this.preWhitespaceBytes, { kind: "reasoning" });
+    this.preWhitespaceBytes = 0;
+    return out;
+  }
+
   feed(text: string): AdapterEvent[] {
     if (!text) return [];
     if (this.state === "streaming") return [{ type: "text_delta", text }];
     let input = text;
     if (this.state === "pre") {
-      input = this.preBuffer + text;
-      this.replaceCarry("preBuffer", "");
-      const stripped = input.trimStart();
-      const openTag = OPEN_TAGS.find(tag => stripped.startsWith(tag));
+      if (this.preBuffer) {
+        input = this.preBuffer + text;
+        this.replaceCarry("preBuffer", "");
+      } else {
+        const stripped = text.trimStart();
+        const leadingLength = text.length - stripped.length;
+        if (leadingLength > 0) this.appendPreWhitespace(text.slice(0, leadingLength));
+        if (!stripped) return [];
+        input = stripped;
+      }
+      const openTag = OPEN_TAGS.find(tag => input.startsWith(tag));
       if (openTag) {
-        const leadingLength = input.length - stripped.length;
-        const leading = this.interleaved ? input.slice(0, leadingLength) : "";
+        const leading = this.finishPreWhitespace(this.interleaved);
         this.state = "thinking";
         this.closeTag = closeTagFor(openTag);
         const events: AdapterEvent[] = leading ? [{ type: "text_delta", text: leading }] : [];
-        return this.drainChunk(input, leadingLength + openTag.length, events);
+        return this.drainChunk(input, openTag.length, events);
       }
-      if (stripped.length <= MAX_OPEN_TAG && isPossibleOpenTagPrefix(stripped)) {
+      if (input.length <= MAX_OPEN_TAG && isPossibleOpenTagPrefix(input)) {
         this.replaceCarry("preBuffer", input);
         return [];
       }
       this.state = "streaming";
-      return input ? [{ type: "text_delta", text: input }] : [];
+      return [{ type: "text_delta", text: this.finishPreWhitespace(true) + input }];
     }
     if (this.state === "thinking") {
       input = this.thinkingBuffer + text;
@@ -102,8 +131,8 @@ export class InlineThinkTagParser {
       this.state = "streaming";
       return out ? [{ type: "reasoning_raw_delta", text: out }] : [];
     }
-    if (this.preBuffer) {
-      const out = this.preBuffer;
+    if (this.preWhitespaceLength > 0 || this.preBuffer) {
+      const out = this.finishPreWhitespace(true) + this.preBuffer;
       this.replaceCarry("preBuffer", "");
       this.state = "streaming";
       return [{ type: "text_delta", text: out }];
@@ -113,6 +142,7 @@ export class InlineThinkTagParser {
 
   /** Release any partial tag/content carry when the owning stream stops early. */
   dispose(): void {
+    this.finishPreWhitespace(false);
     this.replaceCarry("preBuffer", "");
     this.replaceCarry("thinkingBuffer", "");
     this.closeTag = "";
