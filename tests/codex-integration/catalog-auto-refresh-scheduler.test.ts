@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,7 +18,9 @@ import {
   CATALOG_AUTO_REFRESH_MIN_INTERVAL_MS,
   getConfigPath,
   getDefaultConfig,
+  saveConfigPreservingClaudeCode,
 } from "../../src/config";
+import type { OcxConfig } from "../../src/types";
 import {
   installIsolatedCodexHome,
   type IsolatedCodexHome,
@@ -35,7 +37,7 @@ let previousOpenCodexHome: string | undefined;
 let openCodexHome = "";
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let convergeFactoryCalls = 0;
-let convergeImpl: () => Promise<CatalogOnlyOutcome> = async () => COMMITTED_CATALOG_ONLY;
+let convergeImpl: (config: OcxConfig) => Promise<CatalogOnlyOutcome> = async () => COMMITTED_CATALOG_ONLY;
 let convergeSpy: { mockRestore(): void } | null = null;
 let releaseHanging: ((outcome: CatalogOnlyOutcome) => void) | null = null;
 let pendingTick: Promise<unknown> | null = null;
@@ -68,9 +70,9 @@ beforeEach(() => {
   pendingTick = null;
   // The tick's only converge seam is a dynamic import of management-convergence.
   // Stub it so an enabled fixture cannot spend a live /models call or rewrite the catalog.
-  convergeSpy = spyOn(managementConvergence, "createManagementConvergeCodex").mockImplementation(() => {
+  convergeSpy = spyOn(managementConvergence, "createManagementConvergeCodex").mockImplementation((config) => {
     convergeFactoryCalls += 1;
-    return convergeImpl;
+    return () => convergeImpl(config);
   });
 });
 
@@ -166,6 +168,48 @@ describe("catalog auto-refresh scheduler", () => {
     expect(catalogAutoRefreshTickCountForTests()).toBe(0);
     expect(convergeFactoryCalls).toBe(0);
     expect(lastCatalogAutoRefreshOutcome()).toBeNull();
+  });
+
+  test("a tick preserves a config hand edit made while convergence is in flight", async () => {
+    writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+    convergeImpl = async (config) => {
+      const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      onDisk.catalogAutoRefresh = { enabled: false, intervalMinutes: 60 };
+      writeFileSync(getConfigPath(), JSON.stringify(onDisk), "utf8");
+      saveConfigPreservingClaudeCode(config);
+      return COMMITTED_CATALOG_ONLY;
+    };
+
+    await runCatalogAutoRefreshTickForTests();
+
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.catalogAutoRefresh?.enabled).toBe(false);
+  });
+
+  test("a tick preserves listener and newly added fields edited while convergence is in flight", async () => {
+    // The general live-save policy leaves hostname/port and disk-only keys out of
+    // the rebase. For the tick's detached snapshot those skips would discard the
+    // hand edit wholesale, so arming it detached reconciles every field instead.
+    writeCatalogAutoRefreshConfig({ enabled: true, intervalMinutes: 60 });
+    convergeImpl = async (config) => {
+      const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      onDisk.port = 10101;
+      onDisk.hostname = "127.0.0.2";
+      onDisk.metricsExport = { enabled: true };
+      writeFileSync(getConfigPath(), JSON.stringify(onDisk), "utf8");
+      // The same save convergeCodexCatalog performs after mutating discovery fields.
+      config.disabledModels = ["xai:grok-0"];
+      saveConfigPreservingClaudeCode(config);
+      return COMMITTED_CATALOG_ONLY;
+    };
+
+    await runCatalogAutoRefreshTickForTests();
+
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.port).toBe(10101);
+    expect(persisted.hostname).toBe("127.0.0.2");
+    expect(persisted.metricsExport?.enabled).toBe(true);
+    expect(persisted.disabledModels).toEqual(["xai:grok-0"]);
   });
 
   test("an overlapping tick returns immediately without a second converge", async () => {
