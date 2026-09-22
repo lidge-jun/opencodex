@@ -6,6 +6,8 @@ const labels: Partial<Record<TKey, string>> = {
   "logs.modelTooltip.model": "模型",
   "logs.modelTooltip.resolvedModel": "解析后模型",
   "logs.modelTooltip.servedModel": "实际服务模型",
+  "logs.modelTooltip.wireModel": "线上模型",
+  "logs.modelRerouteTitle": "上游提供的模型与请求不同",
   "logs.modelTooltip.requestedTier": "请求层级",
   "logs.modelTooltip.configuredTier": "配置层级",
   "logs.modelTooltip.responseTier": "响应层级",
@@ -39,6 +41,12 @@ test("model diagnostics do not include an extra Latin capital A with circumflex"
 
 test("model diagnostics surface the upstream-served model when it differs from the wire model", () => {
   expect(modelTitle(entry({ model: "gpt-5.6-sol", servedModel: "gpt-5.6-luna" }), t)).toBe(
-    "模型=gpt-5.6-sol · 实际服务模型=gpt-5.6-luna",
+    "上游提供的模型与请求不同 · 模型=gpt-5.6-sol · 实际服务模型=gpt-5.6-luna",
+  );
+});
+
+test("model diagnostics omit the reroute notice when the served model matches the wire model", () => {
+  expect(modelTitle(entry({ model: "gpt-5.6-sol", wireModel: "gpt-5.6-sol", servedModel: "gpt-5.6-sol" }), t)).toBe(
+    "模型=gpt-5.6-sol · 实际服务模型=gpt-5.6-sol · 线上模型=gpt-5.6-sol",
   );
 });

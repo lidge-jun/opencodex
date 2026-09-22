@@ -18,6 +18,16 @@ export interface ModelTitleEntry {
 }
 
 /**
+ * A reroute means the upstream answered a different model than the one on the
+ * wire. The wire id is the rewritten request when a route/virtual rewrite
+ * diverged it from the client-facing model, and the client-facing model
+ * otherwise.
+ */
+export function isModelRerouted(log: Pick<ModelTitleEntry, "model" | "servedModel" | "wireModel">): boolean {
+  return log.servedModel !== undefined && log.servedModel !== (log.wireModel ?? log.model);
+}
+
+/**
  * #2455: the echoed tier alone does not say whether Fast was granted. The ChatGPT
  * backend answers `default` on turns it in fact scheduled as priority, so its echo is
  * marked non-authoritative and the outcome stays `assumed` (#2558) — which is the
@@ -40,6 +50,7 @@ function tierConfirmationSuffix(outcome: ModelTitleEntry["tierOutcome"], t: TFn)
 
 export function modelTitle(log: ModelTitleEntry, t: TFn): string {
   const details = [
+    isModelRerouted(log) ? t("logs.modelRerouteTitle") : undefined,
     `${t("logs.modelTooltip.model")}=${log.model}`,
     log.resolvedModel ? `${t("logs.modelTooltip.resolvedModel")}=${log.resolvedModel}` : undefined,
     log.servedModel ? `${t("logs.modelTooltip.servedModel")}=${log.servedModel}` : undefined,
