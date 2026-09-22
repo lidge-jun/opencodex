@@ -240,7 +240,7 @@ Raw reasoning content and provider-authored summaries remain distinct on the Res
 
 Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
 
-Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification.
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification. A GET answered with 404 `unknown_flow` is the exception: the flow no longer exists, so polling stops and the generic failure state appears.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
