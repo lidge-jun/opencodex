@@ -392,7 +392,9 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   group ids, a non-empty member list, and each credential in at most one group, with members
   written `"<provider>:<credential-id>"` because ids are provider-scoped in the auth store. The
   config write path rejects a declaration that breaks any of those and the load path drops the
-  list with a warning, keeping `pool.kernel` and `pool.cacheAffinity`; `classifyCredential`
+  list with a warning, keeping `pool.kernel` and `pool.cacheAffinity`. Validation diagnostics
+  identify group and member positions without reproducing operator-supplied identifiers;
+  `classifyCredential`
   reports an ambiguous claim on `declaredGroupConflict` and falls back to the documented or
   unknown answer rather than taking the first matching group.
 
