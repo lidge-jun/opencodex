@@ -592,6 +592,38 @@
 				]
 			}
 		},
+		"anthropic.claude-opus-5-5": {
+			"id": "anthropic.claude-opus-5-5",
+			"name": "Anthropic Opus 5.5",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max",
+				"levels": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"max"
+				]
+			}
+		},
 		"anthropic.claude-sonnet-5": {
 			"id": "anthropic.claude-sonnet-5",
 			"name": "Anthropic Sonnet 5",
@@ -722,6 +754,38 @@
 				"output": 25,
 				"cacheRead": 0.5,
 				"cacheWrite": 6.25
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max",
+				"levels": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"max"
+				]
+			}
+		},
+		"au.anthropic.claude-opus-5-5": {
+			"id": "au.anthropic.claude-opus-5-5",
+			"name": "Anthropic Opus 5.5 (AU)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.4,
+				"output": 22,
+				"cacheRead": 0.22,
+				"cacheWrite": 5.5
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -1319,6 +1383,38 @@
 				]
 			}
 		},
+		"eu.anthropic.claude-opus-5-5": {
+			"id": "eu.anthropic.claude-opus-5-5",
+			"name": "Anthropic Opus 5.5 (EU)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.4,
+				"output": 22,
+				"cacheRead": 0.22,
+				"cacheWrite": 5.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max",
+				"levels": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"max"
+				]
+			}
+		},
 		"eu.anthropic.claude-sonnet-4-20250514-v1:0": {
 			"id": "eu.anthropic.claude-sonnet-4-20250514-v1:0",
 			"name": "Anthropic Sonnet 4 (EU)",
@@ -1650,6 +1746,38 @@
 				]
 			}
 		},
+		"global.anthropic.claude-opus-5-5": {
+			"id": "global.anthropic.claude-opus-5-5",
+			"name": "Anthropic Opus 5.5 (Global)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max",
+				"levels": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"max"
+				]
+			}
+		},
 		"global.anthropic.claude-sonnet-4-20250514-v1:0": {
 			"id": "global.anthropic.claude-sonnet-4-20250514-v1:0",
 			"name": "Anthropic Sonnet 4 (Global)",
@@ -1895,6 +2023,38 @@
 				"output": 25,
 				"cacheRead": 0.5,
 				"cacheWrite": 6.25
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max",
+				"levels": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"max"
+				]
+			}
+		},
+		"jp.anthropic.claude-opus-5-5": {
+			"id": "jp.anthropic.claude-opus-5-5",
+			"name": "Anthropic Opus 5.5 (JP)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.4,
+				"output": 22,
+				"cacheRead": 0.22,
+				"cacheWrite": 5.5
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -3213,6 +3373,38 @@
 				]
 			}
 		},
+		"us.anthropic.claude-opus-5-5": {
+			"id": "us.anthropic.claude-opus-5-5",
+			"name": "Anthropic Opus 5.5 (US)",
+			"api": "bedrock-converse-stream",
+			"provider": "amazon-bedrock",
+			"baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.4,
+				"output": 22,
+				"cacheRead": 0.22,
+				"cacheWrite": 5.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max",
+				"levels": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"max"
+				]
+			}
+		},
 		"us.anthropic.claude-sonnet-4-20250514-v1:0": {
 			"id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
 			"name": "Anthropic Sonnet 4 (US)",
@@ -4120,6 +4312,31 @@
 				"output": 25,
 				"cacheRead": 0.5,
 				"cacheWrite": 6.25
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max"
+			}
+		},
+		"claude-opus-5-5": {
+			"id": "claude-opus-5-5",
+			"name": "Anthropic Opus 5.5",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -14792,6 +15009,25 @@
 			},
 			"contextWindow": 222222,
 			"maxTokens": 8888
+		},
+		"anthropic/claude-opus-5.5": {
+			"id": "anthropic/claude-opus-5.5",
+			"name": "Anthropic Opus 5.5",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"anthropic/claude-opus-5-fast": {
 			"id": "anthropic/claude-opus-5-fast",
@@ -63841,6 +64077,31 @@
 				"maxLevel": "high"
 			}
 		},
+		"anthropic/claude-opus-5.5": {
+			"id": "anthropic/claude-opus-5.5",
+			"name": "Anthropic Opus 5.5",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
 		"anthropic/claude-opus-5-fast": {
 			"id": "anthropic/claude-opus-5-fast",
 			"name": "Anthropic Opus 5 (Fast)",
@@ -72680,6 +72941,34 @@
 				"maxLevel": "xhigh"
 			}
 		},
+		"claude-opus-5-5": {
+			"id": "claude-opus-5-5",
+			"name": "Anthropic Opus 5.5",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.8,
+				"output": 24,
+				"cacheRead": 0.24,
+				"cacheWrite": 6
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"compat": {
+				"supportsUsageInStreaming": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
 		"claude-opus-5-fast": {
 			"id": "claude-opus-5-fast",
 			"name": "anthropic-opus-5-fast",
@@ -76428,6 +76717,31 @@
 				"maxLevel": "max"
 			}
 		},
+		"anthropic/claude-opus-5.5": {
+			"id": "anthropic/claude-opus-5.5",
+			"name": "Anthropic Opus 5.5",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max"
+			}
+		},
 		"anthropic/claude-opus-5-fast": {
 			"id": "anthropic/claude-opus-5-fast",
 			"name": "Anthropic Opus 5 (Fast)",
@@ -76444,6 +76758,31 @@
 				"output": 50,
 				"cacheRead": 1,
 				"cacheWrite": 12.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max"
+			}
+		},
+		"anthropic/claude-opus-5.5-fast": {
+			"id": "anthropic/claude-opus-5.5-fast",
+			"name": "Anthropic Opus 5.5 (Fast)",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 8,
+				"output": 40,
+				"cacheRead": 0.4,
+				"cacheWrite": 10
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,

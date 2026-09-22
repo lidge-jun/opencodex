@@ -487,7 +487,7 @@ Grok — so the Cursor entry declares `fastWire.kind: "cursor-variant"` and the 
 builder resolves the variant instead of setting a request field.
 
 Only the bases that actually declare a fast variant advertise Fast: `claude-opus-4-7`,
-`claude-opus-4-8`, `claude-opus-5`, `grok-4.5`, `grok-4.6`. Every other Cursor row publishes
+`claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `grok-4.5`, `grok-4.6`. Every other Cursor row publishes
 `supportsServiceTier: false`, so Codex shows no toggle rather than a dead one.
 
 A base whose umbrella row routes thinking upgrades to its **thinking-fast** variant, not to

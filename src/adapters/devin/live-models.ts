@@ -56,6 +56,8 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5-6-terra": 1_000_000,
   "gpt-6-astra": 1_000_000,
   "claude-opus-4-8": 1_000_000,
+  // 260923: read from the live catalog (devin/claude-opus-5-5 context_length 1_000_000).
+  "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "claude-fable-5-1": 1_000_000,
   "claude-sonnet-5": 1_000_000,
