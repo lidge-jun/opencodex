@@ -29,9 +29,10 @@ describe("kiro wire token estimate", () => {
   });
 
   test("pure-CJK text and an empty model id keep the replacement-string results", () => {
-    const korean = "요청을 보내고 응답을 파싱한다".repeat(30);
+    const korean = "요청을보내고응답을파싱한다".repeat(30);
     const cjk = kiroCjkCount(korean);
     const latin = korean.length - cjk;
+    expect(latin).toBe(0);
     const expectedFor = (prefixed: string) => Math.ceil(
       estimateTokens("x".repeat(latin), prefixed) * KIRO_LATIN_WIRE_EXPANSION
       + estimateTokens("\uac00".repeat(cjk), prefixed),
