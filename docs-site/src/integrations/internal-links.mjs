@@ -31,15 +31,25 @@ const UNCHECKED_PREFIXES = ["/_astro/", "/pagefind/"];
 const GENERATED_NOT_FOUND_PAGE = "/404.html";
 const LOCALE_NOT_FOUND_PATH = /^\/[a-z]{2}(?:-[a-z]{2})?\/404\/?$/;
 
-/** @param {string} value */
-function decodeEntities(value) {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+const NAMED_ENTITIES = /** @type {Record<string, string>} */ ({ amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: "\u00a0" });
+
+/**
+ * Attribute values arrive HTML-encoded. Numeric references matter as much as named ones:
+ * href="&#47;guides/pi/" is the path /guides/pi/.
+ * @param {string} value
+ */
+export function decodeEntities(value) {
+  return value.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+  });
 }
+
+// Double-quoted, single-quoted and unquoted attribute values are all valid HTML.
+const ATTRIBUTE = /\s(href|src|id)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>\x60]+))/gi;
 
 /**
  * The URL a page is served at, used as the base for its relative links.
@@ -111,9 +121,12 @@ export function resolveFile(files, path) {
  */
 export function scanHtml(html) {
   const ids = new Set();
-  for (const match of html.matchAll(/\sid="([^"]*)"/g)) ids.add(decodeEntities(match[1]));
   const links = [];
-  for (const match of html.matchAll(/\s(?:href|src)="([^"]*)"/g)) links.push(match[1]);
+  for (const match of html.matchAll(ATTRIBUTE)) {
+    const value = match[2] ?? match[3] ?? match[4] ?? "";
+    if (match[1].toLowerCase() === "id") ids.add(decodeEntities(value));
+    else links.push(value);
+  }
   return { ids, links };
 }
 

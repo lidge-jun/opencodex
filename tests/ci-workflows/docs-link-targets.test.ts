@@ -27,6 +27,7 @@ type PageScan = { ids: ReadonlySet<string>; links: readonly string[] };
 type BrokenLink = { page: string; href: string; reason: string };
 type InternalLinks = {
   internalTarget(value: string, base: string): { path: string; fragment: string } | null;
+  scanHtml(html: string): PageScan;
   checkInternalLinks(files: ReadonlySet<string>, pages: ReadonlyMap<string, PageScan>): { checked: number; broken: BrokenLink[] };
 };
 
@@ -62,6 +63,7 @@ function routeTable(): Set<string> {
   for (const file of walk(CONTENT)) {
     if (!/\.mdx?$/.test(file)) continue;
     const route = relative(CONTENT, file).split("\\").join("/").replace(/\.mdx?$/, "").replace(/(^|\/)index$/, "");
+    // Astro serves slugs in lower case; a URL is checked against them exactly, so /Guides/ fails.
     routes.add(route.toLowerCase());
   }
   return routes;
@@ -74,9 +76,9 @@ const LOCALES = localeKeys();
 function resolvesOnSite(sitePath: string): boolean {
   const path = decodeURI(sitePath).replace(/^\/+|\/+$/g, "");
   if (path !== "" && existsSync(join(PUBLIC, path))) return true;
-  if (ROUTES.has(path.toLowerCase())) return true;
+  if (ROUTES.has(path)) return true;
   const [first, ...rest] = path.split("/");
-  return LOCALES.includes(first) && ROUTES.has(rest.join("/").toLowerCase());
+  return LOCALES.includes(first) && ROUTES.has(rest.join("/"));
 }
 
 function sitePathOf(url: string): string {
@@ -122,6 +124,7 @@ describe("docs link targets", () => {
     expect(resolvesOnSite(sitePathOf("https://opencodex.me/guides/macos-menu-bar/"))).toBe(true);
     expect(resolvesOnSite(sitePathOf("https://opencodex.me/ko/guides/desktop-app/"))).toBe(true);
     expect(resolvesOnSite(sitePathOf("https://opencodex.me/opencodex/guides/macos-menu-bar/"))).toBe(false);
+    expect(resolvesOnSite(sitePathOf("https://opencodex.me/Guides/Providers/"))).toBe(false);
     expect(resolvesOnSite(sitePathOf("https://lidge-jun.github.io/opencodex/guides/cursor-private-inference/"))).toBe(true);
     expect(resolvesOnSite("/favicon.png")).toBe(true);
   });
@@ -139,6 +142,15 @@ describe("docs link targets", () => {
     expect(internalTarget("https://github.com/lidge-jun/opencodex", server)).toBeNull();
     expect(internalTarget("mailto:someone@example.com", server)).toBeNull();
     expect(internalTarget("/_astro/page.css", server)).toBeNull();
+    expect(internalTarget("&#47;guides/pi/", server)).toEqual({ path: "/guides/pi/", fragment: "" });
+    expect(internalTarget("/guides/pi/?a=1&amp;b=2#x", server)).toEqual({ path: "/guides/pi/", fragment: "x" });
+  });
+
+  test("the build check reads every attribute quoting form", async () => {
+    const { scanHtml } = await loadIntegration();
+    const scan = scanHtml("<h2 id='one'>x</h2><h3 id=two>y</h3><a href=\"/a/\">a</a><a href='/b/'>b</a><img src=/c.png>");
+    expect([...scan.ids]).toEqual(["one", "two"]);
+    expect(scan.links).toEqual(["/a/", "/b/", "/c.png"]);
   });
 
   test("the build check reports missing pages and fragments, exempting only the 404 page locale picker", async () => {
