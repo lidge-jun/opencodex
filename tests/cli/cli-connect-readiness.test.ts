@@ -274,6 +274,14 @@ function runStatusProbe(options: {
             const observeInstalled = env => {
               const sentinelCalls = [];
               const lowerBefore = calls().lower.length;
+              // Windows process.env looks up PATH without case, but a spread plain
+              // object may contain only Path; the resolver reads env.PATH literally.
+              // Keep the lower launcher as the sole PATH alternative to the
+              // selected absolute CODEX_CLI_PATH and the installed sentinel.
+              for (const key of Object.keys(env)) {
+                if (key.toLowerCase() === "path") delete env[key];
+              }
+              env.PATH = dirs.lower;
               resolveCodexRuntime({
                 env,
                 execFileSync: (file, args, options) => {

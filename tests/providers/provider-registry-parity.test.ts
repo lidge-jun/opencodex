@@ -322,7 +322,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelInputModalities?.["gpt-5.5"]).toEqual(["text", "image"]);
     expect((KEY_LOGIN_PROVIDERS["openai-apikey"] as unknown as { virtualModels?: unknown }).virtualModels).toBeUndefined();
     const apiRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "openai-apikey")!;
-    expect(apiRegistry.models).toHaveLength(11);
+    expect(apiRegistry.models).toEqual(KEY_LOGIN_PROVIDERS["openai-apikey"].models);
     expect(Object.keys(apiRegistry.virtualModels ?? {}).sort()).toEqual([
       "gpt-5.6-luna-pro", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro",
     ]);
