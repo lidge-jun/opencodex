@@ -8,6 +8,7 @@ const SOCKS5_RESPONSE_TIMEOUT_MS = 200_000;
 const MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
 const MAX_BODY_SLICE_BYTES = 64 * 1024;
 const MAX_DECODED_BODY_BYTES = 32 * 1024 * 1024;
+const MAX_STREAM_DECODE_EXPANSION_RATIO = 128;
 const SOCKS5_VERSION = 0x05;
 const SOCKS5_NO_AUTH = 0x00;
 const SOCKS5_USER_PASS = 0x02;
@@ -527,9 +528,9 @@ function bodylessResponse(method: string, status: number): boolean {
  * response means an upstream ignored that; gzip and deflate are undone here, and any other
  * coding fails closed rather than surfacing bytes no caller can parse.
  *
- * Decoded bodies are capped separately below because a tiny coded response can otherwise expand
- * until a buffered caller exhausts the process. Identity bodies retain their existing streaming
- * behavior; providers are asked to use that path by default.
+ * Buffered decoded bodies have an absolute cap. Event streams instead have an expansion bound,
+ * so a long stream can continue without allowing a tiny coded response to inflate unchecked.
+ * Identity bodies retain their existing streaming behavior; providers are asked to use that path.
  */
 function contentCodingFormat(headers: Headers): "gzip" | "deflate" | undefined {
   const coding = classifyContentCoding(headers);
@@ -538,15 +539,31 @@ function contentCodingFormat(headers: Headers): "gzip" | "deflate" | undefined {
   throw new Socks5FetchError("SOCKS5 upstream returned an unsupported content-encoding: " + coding.coding);
 }
 
-/** Refuse compressed bodies whose decoded representation exceeds the translator's turn ceiling. */
-function decodedBody(body: ReadableStream<Uint8Array>, format: "gzip" | "deflate"): ReadableStream<Uint8Array> {
+/** Bound buffered bodies absolutely and event streams relative to consumed coded bytes. */
+function decodedBody(
+  body: ReadableStream<Uint8Array>,
+  format: "gzip" | "deflate",
+  eventStream: boolean,
+): ReadableStream<Uint8Array> {
   const decompressor = new DecompressionStream(format) as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
+  let codedBytes = 0;
   let decodedBytes = 0;
-  return body.pipeThrough(decompressor).pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+  const countedBody = eventStream ? body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      codedBytes += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+  })) : body;
+  return countedBody.pipeThrough(decompressor).pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       decodedBytes += chunk.byteLength;
-      if (decodedBytes > MAX_DECODED_BODY_BYTES) {
-        throw new Socks5FetchError(`SOCKS5 decoded response exceeds ${MAX_DECODED_BODY_BYTES} byte cap`);
+      const limit = eventStream
+        ? Math.max(MAX_DECODED_BODY_BYTES, codedBytes * MAX_STREAM_DECODE_EXPANSION_RATIO)
+        : MAX_DECODED_BODY_BYTES;
+      if (decodedBytes > limit) {
+        throw new Socks5FetchError(eventStream
+          ? "SOCKS5 decoded event stream exceeds expansion limit"
+          : `SOCKS5 decoded response exceeds ${MAX_DECODED_BODY_BYTES} byte cap`);
       }
       controller.enqueue(chunk);
     },
@@ -725,7 +742,11 @@ export async function socks5Fetch(
       responseHeaders.delete("content-length");
     }
     const responseBodyStream = body !== null && codingFormat !== undefined
-      ? decodedBody(body, codingFormat)
+      ? decodedBody(
+        body,
+        codingFormat,
+        responseHead.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream",
+      )
       : body;
     request.signal.removeEventListener("abort", onAbort);
     return new Response(responseBodyStream, {
