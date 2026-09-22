@@ -1358,12 +1358,25 @@ describe("management and data-plane credential separation", () => {
 
     const redeemable = createGuiPairingGrant("https://dashboard.example.test", config, state, now + 11);
     // Redemption is a digest-keyed lookup, even after the source limiter has refused guesses.
-    // Iterating the grant map here would turn a valid redemption into a failed request.
-    Object.defineProperty(state.pairingGrants, Symbol.iterator, {
-      value: () => { throw new Error("pairing lookup scanned grants"); },
+    // Scanning the grant map before that lookup is the regression; minting a session may still
+    // prune expired grants afterwards.
+    const grants = state.pairingGrants;
+    const nativeGet = grants.get.bind(grants);
+    let lookedUp = false;
+    Object.defineProperty(grants, "get", {
+      configurable: true,
+      value: (key: string) => { lookedUp = true; return nativeGet(key); },
+    });
+    Object.defineProperty(grants, Symbol.iterator, {
+      configurable: true,
+      value: () => {
+        if (!lookedUp) throw new Error("pairing lookup scanned grants");
+        return Map.prototype.entries.call(grants);
+      },
     });
     expect(consumeGuiPairingGrant(validOrigin, { grant: `ocx_pair_${"y".repeat(43)}` }, config, state, now + 11, guessContext))
       .toMatchObject({ allowed: false, reason: "source" });
+    lookedUp = false;
     expect(consumeGuiPairingGrant(validOrigin, { grant: redeemable.grant }, config, state, now + 12, guessContext))
       .toMatchObject({ browserOrigin: "https://dashboard.example.test", issuance: "pairing" });
 
