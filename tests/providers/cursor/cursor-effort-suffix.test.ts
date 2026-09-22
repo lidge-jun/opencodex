@@ -26,7 +26,8 @@ const RECORDED_CURSOR_GROK_46_DISCOVERY_IDS = [
   "cursor-grok-4.6-xhigh-fast",
 ] as const;
 
-// Live GetUsableModels and accepted wire ids: devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+// Live GetUsableModels roster (live calls accepted grok-4.7-low and grok-4.7-xhigh-fast):
+// devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
 const RECORDED_CURSOR_GROK_47_DISCOVERY_IDS = [
   "grok-4.7-low",
   "grok-4.7-medium",
