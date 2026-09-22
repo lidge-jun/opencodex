@@ -234,7 +234,7 @@ describe("applyProxyEnv", () => {
 
   test.each([
     ["an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
-    ["SOCKS beside an inherited HTTPS proxy", { ALL_PROXY: "socks5://proxy.invalid:1080", https_proxy: "http://proxy.invalid:3128" }],
+    ["an inherited HTTPS proxy", { https_proxy: "http://proxy.invalid:3128" }],
     ["only NO_PROXY", {}],
   ] as const)("leaves NO_PROXY untouched with %s and no config.proxy", (_label, inherited) => {
     // Bun applies an inherited HTTP(S) proxy itself and matches NO_PROXY entries as domain
@@ -284,7 +284,10 @@ describe("applyProxyEnv", () => {
     }
   });
 
-  test("an inherited SOCKS proxy keeps *.localhost names on the proxy", async () => {
+  test.each([
+    ["alone", {}],
+    ["beside an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
+  ] as const)("an inherited SOCKS proxy %s: loopback goes direct, *.localhost stays on SOCKS", async (_label, inherited) => {
     const refusing = createTcpServer(socket => socket.destroy());
     await new Promise<void>((resolve, reject) => {
       refusing.once("error", reject);
@@ -294,7 +297,9 @@ describe("applyProxyEnv", () => {
     if (!address || typeof address === "string") throw new Error("proxy fixture did not bind a TCP port");
     // socks5h: the proxy resolves the name, so the fixture fails the request without local DNS.
     process.env.ALL_PROXY = `socks5h://127.0.0.1:${address.port}`;
+    Object.assign(process.env, inherited);
     applyProxyEnv(configWithProxy());
+    expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
     let directCalls = 0;
     const direct = async () => {
       directCalls += 1;

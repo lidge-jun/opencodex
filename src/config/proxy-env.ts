@@ -98,15 +98,16 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
   }
 }
 
-// With no config.proxy, loopback bypasses are written only for an inherited SOCKS proxy that
-// owns HTTP(S) traffic: that proxy is applied by the in-process matcher, where the loopback
-// entries match exactly. An inherited HTTP(S) proxy is Bun's own, and Bun matches NO_PROXY
-// entries as domain suffixes, so adding "localhost" there would also send any *.localhost name
-// direct. A proxy-free process is left untouched: writing NO_PROXY into it is itself a
-// proxy-env mutation callers observe (the lab sandbox rejects these keys as a forbidden leak).
+// With no config.proxy, loopback bypasses are written only for an inherited SOCKS proxy. The
+// installed fetch wrapper applies SOCKS before anything else (src/lib/proxy-env.ts
+// configuredOutboundFetch), and its matcher treats these loopback entries as exact hosts, so
+// only a request already judged loopback reaches Bun's own proxying, even beside an inherited
+// HTTP(S) proxy. An inherited HTTP(S) proxy alone is Bun's, and Bun matches NO_PROXY entries as
+// domain suffixes, so adding "localhost" there would also send any *.localhost name direct.
+// A proxy-free process is left untouched: writing NO_PROXY into it is itself a proxy-env
+// mutation callers observe (the lab sandbox rejects these keys as a forbidden leak).
 function inheritedSocksProxyOwnsTraffic(): boolean {
-  if (socks5ProxyFromEnv() === undefined) return false;
-  return !["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].some(key => process.env[key]?.trim());
+  return socks5ProxyFromEnv() !== undefined;
 }
 
 function withNoProxyEntries(existing: string, configured: readonly string[]): string {

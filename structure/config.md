@@ -546,8 +546,8 @@ configuration. An explicit SOCKS5 or SOCKS5h URL selects ALL_PROXY and removes
 stale scheme-proxy variables; HTTP(S) settings retain their existing environment
 precedence. Activation keeps the existing Windows auto-discovery path and loopback
 NO_PROXY entries; the no-configured-proxy return merges them only for an inherited SOCKS
-proxy that owns HTTP(S) traffic (no inherited HTTP(S) proxy), leaving a proxy-free process and
-an inherited HTTP(S) proxy, which Bun matches by domain suffix, untouched. The in-process
+proxy, which the installed fetch wrapper applies first, leaving a proxy-free process and an
+inherited HTTP(S) proxy alone, which Bun matches by domain suffix, untouched. The in-process
 matcher treats a bare `localhost` or IP-literal entry as one host, never a suffix. An inherited non-empty
 lowercase `no_proxy`, which Bun fetch reads first, receives the same entries. When the
 environment no longer selects SOCKS, activation
