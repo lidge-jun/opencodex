@@ -238,6 +238,12 @@ const LOGICAL_REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
  * persisted identity. Exact-match readers (`requested_model = ?`) must encode
  * lookup input through this same function. Idempotent — encoded forms fit the
  * bound — which matters because rows are normalized again on read.
+ *
+ * Idempotence has one cost: a literal selector that equals another selector's
+ * persisted form is indistinguishable from it, so both rows share one display
+ * value and one exact-match filter. Reaching that needs the caller to send the
+ * exact prefix-and-digest string; keeping them apart would need a separate
+ * full-selector digest column.
  */
 export function encodePersistedRequestedModel(selector: string): string {
   if (selector.length <= MAX_PERSISTED_REQUESTED_MODEL_LEN) return selector;

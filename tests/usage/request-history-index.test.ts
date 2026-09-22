@@ -332,6 +332,12 @@ describe("request-history index (RI-02)", () => {
     expect(persistedA.length).toBeLessThanOrEqual(130);
     const roundTrip = await queryRequestHistory({ requestedModel: persistedA }, undefined, 10);
     expect(roundTrip.rows.map(row => row.requestId)).toEqual(["sel-a"]);
+
+    // Documented limit of an idempotent encoding: a literal selector equal to another selector's
+    // persisted form shares that persisted identity, so the exact filter returns both rows.
+    appendUsageEntry(entry("sel-literal", 3000, "a", "m1", { requestedModel: persistedA }));
+    const aliased = await queryRequestHistory({ requestedModel: persistedA }, undefined, 10);
+    expect(aliased.rows.map(row => row.requestId).sort()).toEqual(["sel-a", "sel-literal"]);
   });
 
   test("row-by-id returns the canonical entry and unknown ids 404 through the API", async () => {

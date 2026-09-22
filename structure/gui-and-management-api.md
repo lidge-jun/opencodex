@@ -541,10 +541,13 @@ status, so an unexpected management response cannot add raw upstream material.
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
 Requested selectors longer than 130 characters persist as a prefix plus a digest of the complete
-selector; the request-history exact-match filter applies the same idempotent encoding. Serving-model
+selector; the request-history exact-match filter applies the same idempotent encoding. Because the
+encoding is idempotent, a literal selector equal to another selector's persisted form shares that
+identity (`tests/usage/request-history-index.test.ts` pins it). Serving-model
 identities remain unchanged. Only historical Codex `openai`, `chatgpt` and `openai-multi` main labels
 collapse for reporting; configured provider names ending in `-main` remain separate. CLI access-key
-usage is unavailable without a valid attribution timestamp, rather than a measured zero or never-used key.
+usage is unavailable without an ISO-8601 UTC attribution timestamp, rather than a measured zero or
+never-used key.
 `src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`
 inside an owner-only `0o700` directory. Consecutive appends reuse the directory and permission
 check for at most one second; the first append at or after that boundary attempts to reapply both
