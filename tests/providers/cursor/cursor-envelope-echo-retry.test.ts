@@ -476,6 +476,30 @@ describe("cursor external output quarantine + corrective retry (devlog 260826 ga
     expect(text).toBe("post-thought answer");
   });
 
+  test.each([
+    " ".repeat(513) + ECHO_TEXT + "x".repeat(32 * 1024),
+    "Ordinary prose. ".repeat(150) + "Shell is blocked; switching to exec_command. " + "x".repeat(32 * 1024),
+  ])("matches beyond bounded feed prefixes remain ordinary output", async text => {
+    let attempts = 0;
+    const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
+      createTransport: (() => ({
+        async *run() {
+          attempts++;
+          yield { type: "text", text } satisfies CursorServerMessage;
+          yield { type: "done" } satisfies CursorServerMessage;
+        },
+        writeClient() {},
+      })) as never,
+    });
+    const body = toolResultBody("cursor/kimi-k3");
+    body.context.tools = [{ name: "exec", description: "Execute tools", parameters: {}, freeform: true }];
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+    expect(attempts).toBe(1);
+    expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(text);
+    expect(events.some(event => event.type === "error")).toBe(false);
+  });
+
   test.each([1, 100])("quarantine keeps reasoning ordered before an upstream error (%s frames)", async count => {
     const adapter = createCursorAdapter({ ...provider, apiKey: "cursor-token" }, {
       createTransport: (() => ({

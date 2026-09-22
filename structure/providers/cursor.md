@@ -207,6 +207,10 @@ its decision needs. Retained bytes are projected from payload length before any 
 copy exists, so a multi-megabyte frame cannot force a same-size encoded allocation. An event
 that cannot fit the remaining budget settles both sniffers, releases the held events, and is
 emitted directly.
+Each adapter feed is limited to 512 UTF-16 code units for envelope detection and 2,048 for
+routing-commentary detection. Matches beyond that frame prefix intentionally do not trigger a
+corrective retry; the complete text still reaches the client and the diagnostic midstream
+observer. These feed limits bound temporary copies and do not promise frame-independent parsing.
 
 Adjacent midstream markers retain separate findings, capped at eight. A new marker closes the
 previous corruption window before consuming its line, including a call-id on the marker's own

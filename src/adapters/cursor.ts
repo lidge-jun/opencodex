@@ -365,10 +365,10 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             releaseGuardHeld();
             return false;
           };
-          // Each sniffer settles from a bounded leading window (40 B / 512 B respectively), so
-          // feeding an oversized delta whole would retain megabytes it never inspects. The
-          // bounded prefix still covers every decision path — including marker prefixes and
-          // routing claims — while the tail falls through to the aggregate cap.
+          // Bound each feed before a sniffer copies or encodes it. Their normal 40 B / 512 B
+          // hold thresholds are checked after classification, so one large frame previously
+          // let a late match inspect an arbitrary tail. Only these leading UTF-16 prefixes
+          // now participate in corrective retry; later text remains ordinary output.
           const ECHO_SNIFF_FEED_MAX_CHARS = 512;
           const ROUTING_SNIFF_FEED_MAX_CHARS = 2048;
           const boundedSniffText = (text: string, maxChars: number): string =>
