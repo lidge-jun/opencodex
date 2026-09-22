@@ -11,7 +11,7 @@ import type { GenerationContext } from "../lib/state-store-sweeper";
  * credential. `index.ts` re-exports the two public names, so existing importers are unaffected.
  */
 export const loginState = new Map<string, { error?: string; done: boolean }>();
-export const loginAbort = new Map<string, AbortController>();
+export const loginAbort = new Map<string, { controller: AbortController; flowId?: string }>();
 export const kiroLoginSettling = new Set<string>();
 
 /** Pending paste for a login in progress: either a waiter or a stashed early submission. */

@@ -60,7 +60,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account import-orca --source <orca-data-directory> --registry <orca-data.json> [--apply] [--json]
   ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
-  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes] [--token-id <token-id>] [--json]
   ocx account main <doctor|list|register|add|reauth|switch|recover> ...

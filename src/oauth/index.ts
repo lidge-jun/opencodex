@@ -179,6 +179,7 @@ export interface LoginOpts {
 }
 
 export interface LoginFlowLifecycle {
+  flowId?: string;
   /** Runs after background credential/config persistence settles, before status becomes done. */
   onSettled?: () => void | Promise<void>;
 }
@@ -1817,17 +1818,18 @@ export function oauthLoginSummary(maskEmails = true): Array<{ provider: string; 
 }
 
 export function clearLoginState(provider: string): void {
-  loginAbort.get(provider)?.abort("cleared");
+  loginAbort.get(provider)?.controller.abort("cleared");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
   loginState.delete(provider);
 }
 
-export function cancelLoginFlow(provider: string): boolean {
-  const ctrl = loginAbort.get(provider);
+export function cancelLoginFlow(provider: string, flowId?: string): boolean {
+  const active = loginAbort.get(provider);
   const existing = loginState.get(provider);
-  if (!ctrl && (!existing || existing.done)) return false;
-  ctrl?.abort("cancelled");
+  if (flowId !== undefined && active?.flowId !== flowId) return false;
+  if (!active && (!existing || existing.done)) return false;
+  active?.controller.abort("cancelled");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: true, error: "Login cancelled" });
@@ -1848,7 +1850,7 @@ export async function startLoginFlow(
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: false });
   const abort = new AbortController();
-  loginAbort.set(provider, abort);
+  loginAbort.set(provider, { controller: abort, flowId: lifecycle?.flowId });
   if (provider === "kiro") kiroLoginSettling.add(provider);
   return new Promise((resolve, reject) => {
     let urlResolved = false;
@@ -1863,7 +1865,7 @@ export async function startLoginFlow(
       signal: abort.signal,
     };
     const abandonIfNotOwner = (error?: unknown): boolean => {
-      if (loginAbort.get(provider) === abort) return false;
+      if (loginAbort.get(provider)?.controller === abort) return false;
       if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
       return true;
     };
@@ -1901,7 +1903,7 @@ export async function startLoginFlow(
     // Background: runLogin persists the credential + provider entry to disk. The lifecycle hook
     // lets a long-lived server config adopt that settled state before clients observe done=true.
     const assertCurrentOwner = (): void => {
-      if (loginAbort.get(provider) !== abort) throw new OAuthLoginSupersededError();
+      if (loginAbort.get(provider)?.controller !== abort) throw new OAuthLoginSupersededError();
     };
     void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
       () => settle(),
