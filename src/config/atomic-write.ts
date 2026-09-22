@@ -2,6 +2,7 @@ import {
   chmodSync,
   closeSync,
   fchmodSync,
+  fsyncSync,
   fstatSync,
   lstatSync,
   openSync,
@@ -10,7 +11,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import {
@@ -162,6 +163,27 @@ function carryHardenAcrossContentWrite(path: string): void {
   reattributeHardenedSecretPath(path);
 }
 
+/**
+ * Commit the directory entry a rename just wrote.
+ *
+ * Best effort by platform, not by importance: Windows has no directory descriptor to sync and
+ * some filesystems refuse the open, and failing a replacement that already happened would be
+ * worse than reporting it. The throw that matters is the temp's own `fsync`, which runs before
+ * the rename and stops it.
+ */
+function syncParentDirectory(target: string): void {
+  if (process.platform === "win32") return;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(dirname(target), "r");
+    fsyncSync(descriptor);
+  } catch {
+    /* the rename already landed; a directory that cannot be synced is not a reason to undo it */
+  } finally {
+    if (descriptor !== undefined) { try { closeSync(descriptor); } catch { /* already closed */ } }
+  }
+}
+
 function writePrivateTempFile(
   path: string,
   content: string,
@@ -185,6 +207,40 @@ function writePrivateTempFile(
     // Second assertion, after the content write: the object this path resolves
     // to is still the object the ACL was applied to and the one we just wrote.
     assertPrivateTempDescriptor(path, descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  carryHardenAcrossContentWrite(path);
+}
+
+/**
+ * The same private temp, filled by a writer that streams into the descriptor.
+ *
+ * For content that must not be held in memory as one string. The identity assertions, the
+ * ownership handshake and the hardening are the same; the difference is that the bytes arrive in
+ * bounded chunks and the descriptor is flushed before it closes.
+ *
+ * The `fsync` is not optional here and its failure is not swallowed. A replacement whose
+ * REPLACEMENT is not on disk can lose the rows it was supposed to retain, so the throw is what
+ * stops the rename from happening at all.
+ */
+function writePrivateTempFileWith(
+  path: string,
+  write: (descriptor: number) => void,
+  timeoutMemoKey: string,
+  onCreated: () => void,
+): void {
+  const descriptor = openSync(path, "wx", 0o600);
+  onCreated();
+  try {
+    if (windowsHardeningApplies()) {
+      hardenSecretPath(path, { required: true, timeoutMemoKey });
+    }
+    if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
+    assertPrivateTempDescriptor(path, descriptor);
+    write(descriptor);
+    assertPrivateTempDescriptor(path, descriptor);
+    fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
   }
@@ -215,14 +271,14 @@ async function writePrivateTempFileAsync(
   carryHardenAcrossContentWrite(path);
 }
 
-export function atomicWriteFile(
+function atomicWriteFileToTarget(
   path: string,
-  content: string,
+  content: string | ((descriptor: number) => void),
+  target: string,
   io?: AtomicWriteIO,
   hooks: AtomicWriteHooks = {},
 ): void {
   recordOwnedConfigPath(getConfigDir(), path);
-  const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
@@ -246,13 +302,26 @@ export function atomicWriteFile(
   };
   try {
     if (io) ownsTemp = true;
-    effective.write(tmp, content);
+    // A streaming writer bypasses the string form of `write` and nothing else. Every later
+    // step -- harden, the pre-rename hooks, the rename and the whole residual-cleanup path,
+    // which still scrubs through `effective.write(tmp, "")` -- is shared with the string form.
+    if (typeof content === "function") writePrivateTempFileWith(tmp, content, path, () => { ownsTemp = true; });
+    else effective.write(tmp, content);
     hooks.afterTempWrite?.(tmp, target);
     effective.harden(tmp);
     hardened = true;
     hooks.beforeRename?.(tmp, target);
     hooks.validateBeforeRename?.(target);
     effective.rename(tmp, target);
+    // The rename is only as durable as the directory entry recording it. Fsyncing the temp's
+    // CONTENT and then losing the entry in a power cut leaves the old file in place, or the
+    // directory in an indeterminate state, while the caller was told the replacement landed.
+    //
+    // Only the streaming form does this. It is the one that makes a durability claim -- a
+    // replacement is not an append, and losing it can lose the rows it was meant to keep -- and
+    // adding a directory sync to the string form would charge every config write for a promise
+    // its callers have never been given.
+    if (typeof content === "function") syncParentDirectory(target);
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
     if (!ownsTemp) throw cause;
@@ -285,6 +354,49 @@ export function atomicWriteFile(
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
     throw cause;
   }
+}
+
+export function atomicWriteFile(
+  path: string,
+  content: string,
+  io?: AtomicWriteIO,
+  hooks: AtomicWriteHooks = {},
+): void {
+  atomicWriteFileToTarget(path, content, resolveWriteTarget(path), io, hooks);
+}
+
+/**
+ * Atomically replace a file with bytes produced straight into the temporary descriptor.
+ *
+ * Same publication contract as {@link atomicWriteFile}: an exclusively created private temp, the
+ * identity assertions around the write, `hooks.validateBeforeRename` immediately before the
+ * rename, the platform-aware replace, and the residual cleanup on any failure. A custom
+ * {@link AtomicWriteIO} is not accepted, because the point of this form is that the default
+ * writer owns the descriptor.
+ */
+export function atomicWriteFileStreamed(
+  path: string,
+  write: (descriptor: number) => void,
+  hooks: AtomicWriteHooks = {},
+): void {
+  atomicWriteFileToTarget(path, write, resolveWriteTarget(path), undefined, hooks);
+}
+
+/**
+ * Atomically replace the named directory entry without resolving a symlink at
+ * that entry. This is for files in directories writable by another process:
+ * a raced symlink is replaced, never followed to a more privileged target.
+ */
+export function atomicWriteFileNoFollow(
+  path: string,
+  content: string,
+  io?: AtomicWriteIO,
+  hooks: AtomicWriteHooks = {},
+): void {
+  // Only the final entry is no-follow: the parent still resolves, because an
+  // OS alias above the configured root (a home junction, /tmp) is legitimate
+  // and Windows cannot exclusive-create a temp through a junction.
+  atomicWriteFileToTarget(path, content, join(resolveWriteTarget(dirname(path)), basename(path)), io, hooks);
 }
 
 export interface AtomicWriteAsyncIO {

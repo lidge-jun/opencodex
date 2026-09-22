@@ -677,6 +677,8 @@ describe("Codex app-server process matching (#476)", () => {
     const snapshots = [{ pid: 7, commandLine: "codex app-server --listen unix://x" }];
     const io = {
       listSnapshots: () => snapshots,
+      readStartMs: () => 1_000,
+      catalogMtimeMs: () => 2_000,
       kill: () => {},
       isAlive: () => false,
       waitExit: () => true,
@@ -699,6 +701,55 @@ describe("Codex app-server process matching (#476)", () => {
     expect(restarted.warned).toBe(false);
     expect(restarted.restart?.stopped).toEqual([7]);
     expect(logs.some(line => line.includes("Stopping Codex app-server"))).toBe(true);
+  });
+
+  test("afterCatalogWriteHandleAppServers warns only for processes proven stale", () => {
+    const errors: string[] = [];
+    const snapshots = [
+      { pid: 7, commandLine: "codex app-server --listen unix://stale" },
+      { pid: 8, commandLine: "codex app-server --listen unix://fresh" },
+    ];
+    const result = afterCatalogWriteHandleAppServers({
+      restart: false,
+      log: { log: () => {}, error: line => errors.push(String(line)) },
+      io: {
+        listSnapshots: () => snapshots,
+        readStartMs: pid => pid === 7 ? 1_000 : 3_000,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    expect(result.warned).toBe(true);
+    expect(result.processes.map(process => process.pid)).toEqual([7]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("PID: 7");
+    expect(errors[0]).not.toContain("8");
+  });
+
+  test("afterCatalogWriteHandleAppServers stays quiet for fresh and unknown observations", () => {
+    const errors: string[] = [];
+    const base = {
+      restart: false,
+      log: { log: () => {}, error: line => errors.push(String(line)) },
+    } as const;
+    const fresh = afterCatalogWriteHandleAppServers({
+      ...base,
+      io: {
+        listSnapshots: () => [{ pid: 7, commandLine: "codex app-server --listen unix://fresh" }],
+        readStartMs: () => 3_000,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    const unknown = afterCatalogWriteHandleAppServers({
+      ...base,
+      io: {
+        listSnapshots: () => [{ pid: 8, commandLine: "codex app-server --listen unix://unknown" }],
+        readStartMs: () => null,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    expect(fresh.warned).toBe(false);
+    expect(unknown.warned).toBe(false);
+    expect(errors).toEqual([]);
   });
 });
 

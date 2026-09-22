@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
 import { browserSecurityHeaders } from "../server/auth-cors";
@@ -16,11 +15,9 @@ import { readClientConnectionState } from "./state";
 import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./machine-api";
 import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
 import { relayHubManagementRequest } from "./hub-relay";
+import { packageVersion } from "../lib/package-version";
 
-const VERSION = (() => {
-  try { return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string; }
-  catch { return "0.0.0"; }
-})();
+const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
   "/dashboard", "/startup", "/providers", "/models", "/subagents",
   "/logs", "/usage", "/storage", "/codex-set", "/integrations",

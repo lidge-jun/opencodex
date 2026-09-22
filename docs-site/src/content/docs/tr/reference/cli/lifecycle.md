@@ -470,6 +470,8 @@ Windows durum tepsisi simgesini kurun ve kontrol edin. Windows oturum açılış
 başlar ve tek tıklamayla proxy kontrolleri sağlar. `start` ve `stop` yalnızca
 simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 `--no-start`, `install` için geçerlidir ve tepsiyi hemen başlatmadan kurar.
+Kullanımdan kaldırıldı: OpenCodex masaüstü uygulaması Windows, macOS ve Linux'ta tepsi sağlar;
+`ocx tray`, masaüstü uygulaması olmayan kurulumlar için kullanılmaya devam eder.
 
 ## Kontrol Paneli
 

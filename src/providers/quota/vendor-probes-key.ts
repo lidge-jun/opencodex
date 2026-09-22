@@ -1,6 +1,8 @@
 import { resolveProviderApiKey } from "../key-store";
 import { getProviderRegistryEntry, registryEntryForProviderDestination } from "../registry";
 import { isCanonicalOllamaCloudUrl } from "../../adapters/ollama-native-url";
+import { providerEgressFetchInit, resolveProviderEgress } from "../../lib/provider-egress";
+import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { QUOTA_JSON_READ_FAILURE, asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import {
   AUTHORITATIVE_EMPTY_QUOTA,
@@ -14,6 +16,12 @@ import {
 import { getTokenForAccountQuotaProbe } from "./account-cache";
 import type { AccountQuotaMode, ProviderQuota, ProviderQuotaCreditsUsd } from "../quota-types";
 import type { OcxProviderConfig } from "../../types";
+
+// A quota probe must use the provider's inference route so it neither reports a false healthy path nor leaks a key through another exit.
+async function quotaFetch(providerName: string, config: OcxProviderConfig, url: string, init: RequestInit): Promise<Response> {
+  const egress = resolveProviderEgress({ providerName, provider: config, url });
+  return configuredOutboundFetch(url, { ...init, ...providerEgressFetchInit(egress) });
+}
 
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
@@ -144,10 +152,10 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
   if (!apiKey) return null;
   const headers = { Accept: "application/json", Authorization: `Bearer ${apiKey}` } as const;
   const [subscriptionResponse, tokenResponse] = await Promise.all([
-    fetch(`${A6API_BASE_URL}/dashboard/billing/subscription`, {
+    quotaFetch(provider, config, `${A6API_BASE_URL}/dashboard/billing/subscription`, {
       headers, redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }),
-    fetch(`${A6API_BASE_URL}/api/usage/token/`, {
+    quotaFetch(provider, config, `${A6API_BASE_URL}/api/usage/token/`, {
       headers, redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     }),
   ]);
@@ -241,7 +249,7 @@ async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig)
   if (!isCanonicalOpenCodeGoBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(OPENCODE_GO_USAGE_URL, {
+  const response = await quotaFetch(provider, config, OPENCODE_GO_USAGE_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -287,7 +295,7 @@ async function fetchOpenRouterQuota(provider: string, config: OcxProviderConfig)
   if (!isCanonicalOpenRouterBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${OPENROUTER_BASE_URL}/key`, {
+  const response = await quotaFetch(provider, config, `${OPENROUTER_BASE_URL}/key`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -337,7 +345,7 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
   if (!isCanonicalDeepSeekBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${DEEPSEEK_BASE_URL}/user/balance`, {
+  const response = await quotaFetch(provider, config, `${DEEPSEEK_BASE_URL}/user/balance`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -382,7 +390,7 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
   if (!isCanonicalClineBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${CLINE_BASE_URL}/api/v1/users/me/plan/usage-limits`, {
+  const response = await quotaFetch(provider, config, `${CLINE_BASE_URL}/api/v1/users/me/plan/usage-limits`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -480,7 +488,7 @@ async function fetchOllamaCloudQuota(provider: string, config: OcxProviderConfig
   if (!isCanonicalOllamaCloudBaseUrl(effectiveBaseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(OLLAMA_CLOUD_USAGE_URL, {
+  const response = await quotaFetch(provider, config, OLLAMA_CLOUD_USAGE_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -604,7 +612,7 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const authorization = monitorHost === ZAI_CN_BASE_URL ? apiKey : `Bearer ${apiKey}`;
-  const response = await fetch(`${monitorHost}/api/monitor/usage/quota/limit`, {
+  const response = await quotaFetch(provider, config, `${monitorHost}/api/monitor/usage/quota/limit`, {
     headers: { Accept: "application/json", Authorization: authorization },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -652,7 +660,7 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
   if (!apiKey) return null;
   const cnHost = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.minimaxi.com");
   const remainsUrl = cnHost ? "https://api.minimaxi.com/v1/token_plan/remains" : MINIMAX_REMAINS_URL;
-  const response = await fetch(remainsUrl, {
+  const response = await quotaFetch(provider, config, remainsUrl, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -695,7 +703,7 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const host = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.moonshot.cn") ? "https://api.moonshot.cn/v1" : MOONSHOT_BASE_URL;
-  const response = await fetch(`${host}/users/me/balance`, {
+  const response = await quotaFetch(provider, config, `${host}/users/me/balance`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -738,7 +746,7 @@ async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Pr
   if (!isCanonicalVeniceBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${VENICE_BASE_URL}/billing/balance`, {
+  const response = await quotaFetch(provider, config, `${VENICE_BASE_URL}/billing/balance`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -781,7 +789,7 @@ async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig):
   if (!isCanonicalSyntheticBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${SYNTHETIC_BASE_URL}/quotas`, {
+  const response = await quotaFetch(provider, config, `${SYNTHETIC_BASE_URL}/quotas`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -831,7 +839,7 @@ async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig):
   if (!isCanonicalDeepInfraBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${DEEPINFRA_BASE_URL}/payment/checklist?compute_owed=true`, {
+  const response = await quotaFetch(provider, config, `${DEEPINFRA_BASE_URL}/payment/checklist?compute_owed=true`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -873,7 +881,7 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
   if (!isCanonicalNeuralwattBaseUrl(config.baseUrl)) return null;
   const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
-  const response = await fetch(`${NEURALWATT_BASE_URL}/quota`, {
+  const response = await quotaFetch(provider, config, `${NEURALWATT_BASE_URL}/quota`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1050,7 +1058,7 @@ export async function fetchKimiQuota(provider: string, config: OcxProviderConfig
   // Never release credentials to a user-edited or lookalike provider host.
   if (!isCanonicalKimiCodeBaseUrl(config.baseUrl)) return null;
   if (!accessToken) return null;
-  const response = await fetch(KIMI_CODE_USAGE_URL, {
+  const response = await quotaFetch(provider, config, KIMI_CODE_USAGE_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1077,9 +1085,14 @@ function parseCommandCodeWindow(value: unknown): { percent: number; resetAt?: nu
 }
 
 /** Soft-fail GET returning a parsed record, or null when unavailable. */
-async function fetchCommandCodeJson(url: string, bearer: string): Promise<Record<string, unknown> | null> {
+async function fetchCommandCodeJson(
+  provider: string,
+  config: OcxProviderConfig,
+  url: string,
+  bearer: string,
+): Promise<Record<string, unknown> | null> {
   try {
-    const response = await fetch(url, {
+    const response = await quotaFetch(provider, config, url, {
       headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1097,12 +1110,14 @@ async function fetchCommandCodeJson(url: string, bearer: string): Promise<Record
  * pools' billing cycle, and `currentPeriodEnd` becomes expiresAt.
  */
 async function fetchCommandCodeSpend(
+  provider: string,
+  config: OcxProviderConfig,
   bearer: string,
   credits: Record<string, unknown> | null,
   orgQuery: string,
 ): Promise<ProviderQuotaCreditsUsd | undefined> {
   if (!credits) return undefined;
-  const subscriptionBody = await fetchCommandCodeJson(`${COMMAND_CODE_SUBSCRIPTIONS_URL}${orgQuery}`, bearer);
+  const subscriptionBody = await fetchCommandCodeJson(provider, config, `${COMMAND_CODE_SUBSCRIPTIONS_URL}${orgQuery}`, bearer);
   const subscription = asRecord(subscriptionBody?.data) ?? subscriptionBody;
   const periodStart = typeof subscription?.currentPeriodStart === "string" ? subscription.currentPeriodStart.trim() : "";
   // Unscoped /usage/summary is lifetime spend; mixing it with current-cycle
@@ -1110,7 +1125,7 @@ async function fetchCommandCodeSpend(
   if (!periodStart) return undefined;
   const sinceQuery = `${orgQuery ? "&" : "?"}since=${encodeURIComponent(periodStart)}`;
   const expiresAt = normalizeResetAt(subscription?.currentPeriodEnd);
-  const summaryBody = await fetchCommandCodeJson(`${COMMAND_CODE_USAGE_URL}${orgQuery}${sinceQuery}`, bearer);
+  const summaryBody = await fetchCommandCodeJson(provider, config, `${COMMAND_CODE_USAGE_URL}${orgQuery}${sinceQuery}`, bearer);
   const summary = asRecord(summaryBody?.data) ?? summaryBody;
   const used = toFiniteNumber(summary?.totalCost) ?? toFiniteNumber(summary?.totalMonthlyCredits);
   if (used === undefined || used < 0) return undefined;
@@ -1161,12 +1176,12 @@ export async function fetchCommandCodeQuota(provider: string, config: OcxProvide
   // Never release credentials to a user-edited or lookalike provider host.
   if (!isCanonicalCommandCodeBaseUrl(config.baseUrl)) return null;
   if (!bearer) return null;
-  const whoamiBody = await fetchCommandCodeJson(COMMAND_CODE_WHOAMI_URL, bearer);
+  const whoamiBody = await fetchCommandCodeJson(provider, config, COMMAND_CODE_WHOAMI_URL, bearer);
   const whoami = asRecord(whoamiBody?.data) ?? whoamiBody;
   const org = asRecord(whoami?.org);
   const orgId = typeof org?.id === "string" && org.id.trim() ? org.id.trim() : null;
   const orgQuery = orgId ? `?orgId=${encodeURIComponent(orgId)}` : "";
-  const response = await fetch(`${COMMAND_CODE_CREDITS_URL}${orgQuery}`, {
+  const response = await quotaFetch(provider, config, `${COMMAND_CODE_CREDITS_URL}${orgQuery}`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1183,7 +1198,7 @@ export async function fetchCommandCodeQuota(provider: string, config: OcxProvide
   if (!credits && !limits) return null;
   const fiveHour = parseCommandCodeWindow(limits?.fiveHour);
   const weekly = parseCommandCodeWindow(limits?.weekly);
-  const creditsUsd = await fetchCommandCodeSpend(bearer, credits, orgQuery);
+  const creditsUsd = await fetchCommandCodeSpend(provider, config, bearer, credits, orgQuery);
   const quota: ProviderQuota = {
     ...(fiveHour ? {
       fiveHourPercent: fiveHour.percent,

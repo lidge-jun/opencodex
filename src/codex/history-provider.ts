@@ -335,6 +335,17 @@ class CodexHistoryIntegrityError extends Error {
  */
 export const HISTORY_RELABEL_STANDS_DOWN = "history_paginated_requires_native_writer";
 
+/**
+ * The narrower reason: a provider-table transition found an `openai`-tagged row Codex has
+ * already paginated. It is not a plain stand-down, because the transition also takes the root
+ * `openai_base_url` out, and that combination would send the conversation to Codex's built-in
+ * OpenAI endpoint rather than this proxy.
+ *
+ * A constant for the same reason as the one above: `src/codex/inject/paginated-openai-compat.ts`
+ * decides what to do about it, and a literal repeated in two files is how the pair drifts apart.
+ */
+export const HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE = "history_paginated_openai_requires_native_writer";
+
 function assertLegacyHistoryRecord(line: string): void {
   let value: unknown;
   try { value = JSON.parse(line); } catch { throw new CodexHistoryIntegrityError("history_rollout_record_invalid"); }
@@ -459,7 +470,7 @@ export function preflightCodexHistoryInjection(
       }
       assertLegacyHistoryWritable(row.rollout_path);
     }
-    if (foundPaginatedOpenaiRow) return "history_paginated_openai_requires_native_writer";
+    if (foundPaginatedOpenaiRow) return HISTORY_PAGINATED_OPENAI_NEEDS_ROOT_OVERRIDE;
     return foundPaginatedRow ? HISTORY_RELABEL_STANDS_DOWN : null;
   } catch (error) {
     return error instanceof CodexHistoryIntegrityError

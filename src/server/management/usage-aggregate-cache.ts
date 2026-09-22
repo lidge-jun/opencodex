@@ -66,6 +66,7 @@ const pinnedAggregates = new Set<RetainedUsageAggregate>();
 let baseFlight: Promise<UsageAggregateResult> | null = null;
 const filteredFlights = new Map<string, Promise<UsageAggregateResult>>();
 const retainedFilteredAggregates = new Map<string, RetainedUsageAggregate>();
+const MAX_CONCURRENT_FILTERED_AGGREGATES = 4;
 
 function currentTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -283,6 +284,9 @@ export async function getFilteredUsageAggregate(filter: {
   ]);
   const existing = filteredFlights.get(key);
   if (existing) return existing;
+  if (filteredFlights.size >= MAX_CONCURRENT_FILTERED_AGGREGATES) {
+    throw new Error("too many concurrent filtered usage aggregates");
+  }
 
   const flight = refreshFilteredAggregate(key, normalizedFilter, fixedWindow);
   filteredFlights.set(key, flight);

@@ -14,7 +14,7 @@ opencodex は、Codex が読み取る 2 つの内容 (構成 (`$CODEX_HOME/confi
 ```toml
 # root keys, before the first table
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 
 # fastMode を設定した場合のみ。未設定なら [features] は作られません
@@ -82,7 +82,7 @@ model_provider = "opencodex"
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 
 # appended at the end of the file
-# Auto-injected by opencodex
+# Auto-injected by opencodex (undo: ocx restore)
 [model_providers.opencodex]
 name = "OpenCodex Proxy"
 base_url = "http://your-host:10100/v1"
@@ -281,7 +281,7 @@ opencodex が管理対象 [バックグラウンドサービス](/reference/cli/
 
 ## ページ分割履歴の保護による拒否
 
-対象の履歴ストアがページ分割をサポートする場合、プロバイダー変更は `history_paginated_requires_native_writer` を返すことがあります。この理由では、Codex の設定、参照プロファイル、モデルカタログは拒否されません。`ocx sync` と `ocx start` はこれらのファイルを書き込み、`model_catalog_json` を設定するため、Codex のモデル選択には OpenCodex 経由のモデルがすべて表示され続けます。会話履歴の再ラベル付けを控えるのはこの理由だけの場合です。ページ分割された履歴の番号は Codex 自身の書き込み処理が割り当て、再試行しても変わりません。読み取れない状態データベース、識別子が変わった履歴、実行できなかった事前検査など、それ以外の履歴事前検査の理由では、後から成功する可能性があるため、遷移全体を拒否してロールバックします。この状態では OpenCodex はページ分割された履歴ファイルやスレッド行を変更しません。既存の会話はすでに付いているプロバイダーのまま移行されず、新しい会話は通常どおりプロキシ経由でルーティングされます。再ラベル付けを控えるとき、ホームに既にある `[model_providers.opencodex]` テーブルは廃止せず残します。ルート上書き（loopback）形式でも同じで、行が `opencodex` と付いている会話は、まだ存在するプロバイダー id を保てます。移行可能なストアの legacy 行も対象です。CLI は `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)` と表示します。`ocx restore` と Codex 設定の削除は、いまも `history_paginated_requires_native_writer` で拒否されます。スレッド行がまだ参照しているのに `[model_providers.opencodex]` 定義を外すと、それらの会話は解決できなくなり、復元経路には互換プロバイダー表を残す手段がありません。すでにページ分割されているホームは、現状では製品からアンインストールできません。意図した動作ではなく、既知の未解決作業です。
+対象の履歴ストアがページ分割をサポートする場合、プロバイダー変更は `history_paginated_requires_native_writer` を返すことがあります。この理由では、Codex の設定、参照プロファイル、モデルカタログは拒否されません。`ocx sync` と `ocx start` はこれらのファイルを書き込み、`model_catalog_json` を設定するため、Codex のモデル選択には OpenCodex 経由のモデルがすべて表示され続けます。会話履歴の再ラベル付けを控えるのはこの理由だけの場合です。ページ分割された履歴の番号は Codex 自身の書き込み処理が割り当て、再試行しても変わりません。読み取れない状態データベース、識別子が変わった履歴、実行できなかった事前検査など、それ以外の履歴事前検査の理由では、後から成功する可能性があるため、遷移全体を拒否してロールバックします。この状態では OpenCodex はページ分割された履歴ファイルやスレッド行を変更しません。既存の会話はすでに付いているプロバイダーのまま移行されず、新しい会話は通常どおりプロキシ経由でルーティングされます。再ラベル付けを控えるとき、ホームに既にある `[model_providers.opencodex]` テーブルは廃止せず残します。ルート上書き（loopback）形式でも同じで、行が `opencodex` と付いている会話は、まだ存在するプロバイダー id を保てます。移行可能なストアの legacy 行も対象です。CLI は `Codex resume history: left to Codex's native writer (history_paginated_requires_native_writer)` と表示します。`ocx restore`、`ocx stop`、`ocx uninstall` は `history_paginated_requires_native_writer` で拒否しなくなりました。OpenCodex が書いたルートのルーティングキーをすべて取り除き、`[model_providers.opencodex]` の定義はディスクに残します。そのプロバイダーを指している会話は解決でき、素の `codex` はプロキシを向かなくなります。結果は残した行を示す部分復元として報告され、`ocx restore --remove-codex-provider-table` を使えばその行も削除できます。そのときは該当の会話が開かなくなります。また、`openai` と付いた会話を Codex がすでにページ分割したホームでプロバイダーテーブル形式の統合を有効にすると、以前は `history_paginated_openai_requires_native_writer` で全体が拒否され、何も書かれず統合も無効のままでした。現在は、管理対象のルート `openai_base_url` 上書きを `[model_providers.opencodex]` テーブルと一緒に残す形で移行を完了します。Codex はこの上書きを組み込みの `openai` プロバイダーに統合するため、それらの会話は再ラベル付けなしでプロキシに届き、履歴ファイルやスレッド行は変更されません。`x-opencodex-api-key` の受け入れヘッダーを必要とするルーティング形式だけは今も拒否されます。組み込みプロバイダーがそのヘッダーを運べないためで、そのメッセージは解決策を二つ名指しします。ループバックリスナー経由で Codex を接続して上書きを維持するか、`syncResumeHistory` を `false` にして、それらの会話が Codex 自身の OpenAI エンドポイントに向かうことを受け入れるかです。
 
 ルート URL 上書き方式に戻すとき、履歴の事前確認が成功していても、OpenCodex は設定を確定する前に既存の `[model_providers.opencodex]` 定義を保持します。確定後やバックグラウンドの履歴処理開始中に Codex が履歴形式を移行しても、以前の `opencodex` 会話はプロバイダーを引き続き解決できます。新しい会話は選択されたルートプロバイダーを使い、明示的な復元には従来の個別の削除チェックが適用されます。
 

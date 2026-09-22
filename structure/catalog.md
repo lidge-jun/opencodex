@@ -166,6 +166,10 @@ Provider live-model lists are cached with a configured TTL (`src/codex/model-cac
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
+irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
+roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
+the previous credential's stale roster nor suppresses the next credential's first discovery.
 
 A Devin live row spreads its measured `inputModalities` before
 `catalogHintsFromProviderConfig`, so exact `modelCapabilities` declarations, the legacy

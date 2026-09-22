@@ -352,6 +352,15 @@ export const SERIAL_FULL_SUITE_FILES = [
   "adapters/openai/openai-provider-option-e2e.test.ts",
   "ci-workflows/release-helper.test.ts",
   "update/update-stop-first.test.ts",
+  // Relays a 50 MiB WebSocket frame end to end against a 15s deadline, so its result is a
+  // measurement of the whole process, not of the relay. On a healthy 3-CPU macOS runner the
+  // echo leg alone spends 7.4s of that budget; whichever half of `--shard=N/2` it lands in
+  // decides whether it finishes. It has been passing by accident: it sat in the lighter half
+  // until three unrelated test files were added elsewhere in the tree, Bun repartitioned, and
+  // it went from 7.4s to over 15s twice in a row without anything on the sideband path
+  // changing. Quarantining it here is what keeps it a test of the relay instead of a test of
+  // its neighbours.
+  "server/server-live.test.ts",
 ] as const;
 
 type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P

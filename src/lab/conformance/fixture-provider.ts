@@ -12,6 +12,11 @@ export function fixtureProviderConfig(adapter: string): OcxProviderConfig {
     models: ["fixture-model"],
     defaultModel: "fixture-model",
     liveModels: false,
+    // The wire role is no longer read from the hostname, and an undeclared destination folds
+    // `developer` to `system` because one that rejects the role answers 400 and the turn never
+    // starts. This fixture is the one place that asserts the forwarded role, so the destination
+    // it stands for records that it accepts it. Only the Chat adapter reaches that decision.
+    ...(adapter === "openai-chat" ? { foldDeveloperRoleToSystem: false } : {}),
   };
 }
 

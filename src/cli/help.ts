@@ -1,9 +1,5 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { findCommand } from "./registry";
-
-const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
+import { packageVersion as readPackageVersion } from "../lib/package-version";
 
 /**
  * Version of the `ocx` bundle this process is running from.
@@ -13,9 +9,7 @@ const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta
  * rather than throwing; callers must treat that as "cannot compare", not as a mismatch.
  */
 export function packageVersion(): string {
-  const raw = readFileSync(join(repoRoot, "package.json"), "utf8");
-  const parsed = JSON.parse(raw) as { version?: unknown };
-  return typeof parsed.version === "string" ? parsed.version : "unknown";
+  return readPackageVersion();
 }
 
 export function printVersion(): void {
@@ -29,9 +23,11 @@ Usage:
   ocx setup                   Interactive setup (alias: init)
   ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]
                               Start the proxy; SOCKS5 defaults to 127.0.0.1:10808
-  ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
+  ocx stop [--json]           Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
+  ocx restore --remove-codex-provider-table
+                              Also drop [model_providers.opencodex] that a paginated restore kept
   ocx recover-history --legacy-openai --yes
                                Force all user-message opencodex rows to OpenAI (legacy recovery)
   ocx recover-history --ocx-compaction <thread-id> --yes
@@ -67,6 +63,7 @@ Usage:
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
   ocx capabilities [--json]    List declared capabilities and the API routes they drive
   ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
+  ocx resolve [--json]        Config home, effective port, and liveness (JSON for shells)
   ocx provider <sub>          Providers, connectivity, quota, and selected models
   ocx account <sub>           Accounts, login/reauth, key pools, and quota controls
   ocx models <sub>            Live/custom models, visibility, context, and shadow calls
@@ -89,6 +86,7 @@ Usage:
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection
   ocx config <sub>            Validated configuration show/get/set/import/export
+  ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Read-only Compatibility Lab projection inspection
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile

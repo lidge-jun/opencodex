@@ -8,7 +8,7 @@ namespace handling retain their provider contract; the bounded native scope live
 [the shared catalog](../catalog.md#shared-catalog).
 
 Cursor's direct adapter does not enter the OpenAI Chat serializer's
-[OpenCode Go instruction ordering](chat-compat.md#opencode-go-chronological-instructions).
+[chronological instruction ordering](chat-compat.md#chronological-in-conversation-instructions).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
 
@@ -59,6 +59,12 @@ effort variants the roster carries. That is deliberate — Cursor advertises ids
 `Run` returns `not_found`, which is what `CURSOR_KNOWN_UNCALLABLE_MODEL_IDS` and the
 variant-level quarantine exist for — so a new family is admitted by adding its capability row,
 not by relaxing the filter.
+
+Synthetic ultra rows (`<base>-1m` markers such as `kimi-k3-1m`, kept in `configured` by legacy
+pins or retain lists) clear that base-availability check and one more: the live roster must flag
+Max Mode for the base (`GetUsableModels.maxMode`), or the row stays hidden. Base availability
+alone is not enough — an account on a plan without Max Mode would otherwise see a row whose
+ultra request it cannot serve.
 
 A seeded ladder carries only rungs supported by vendor evidence. `muse-spark-1.3` is seeded at
 `minimal` through `xhigh` even though Cursor's roster also advertises `muse-spark-1.3-max`:

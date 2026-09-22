@@ -121,7 +121,34 @@ Sur macOS, l'intégration automatique (`claudeCode.systemEnv`) suit la même ré
 `claude` lancée sans passer par `ocx` se comporte donc de la même manière. Le fichier d'environnement est un instantané actualisé au
 démarrage du proxy ou lors de l'enregistrement des paramètres, tandis que `ocx claude` effectue toujours une résolution immédiate.
 
-## Profil Claude Desktop
+## Modes Claude Desktop : first-party (par défaut) et passerelle
+
+Claude Desktop utilise OpenCodex dans l'un de deux modes mutuellement exclusifs. Choisissez-le dans
+**Claude → Bureau → Mode de connexion** du tableau de bord ou avec
+`ocx claude desktop apply --first-party|--gateway`.
+
+- **First-party (par défaut)** : Desktop lui-même n'est pas reconfiguré. La connexion claude.ai,
+  l'onglet Chat, les connecteurs et le contrôle à distance continuent de fonctionner. OpenCodex
+  n'écrit que deux valeurs dans le bloc `env` de `~/.claude/settings.json` :
+  `HTTPS_PROXY=http://127.0.0.1:<port public+100>` et
+  `NODE_EXTRA_CA_CERTS=~/.opencodex/claude-intercept/ca.pem`. Seuls Claude Code lancé par Desktop
+  pour l'onglet Code (sous-agents compris) et la CLI `claude` du terminal les lisent et passent par le
+  proxy d'interception local ; seuls `POST /v1/messages` et `count_tokens` sont traités par OpenCodex,
+  les autres chemins de `api.anthropic.com` sont relayés tels quels vers Anthropic. L'AC n'est jamais
+  installée dans le magasin de confiance du système.
+- **Passerelle (tiers)** : l'ancien mode ; le profil ci-dessous fait basculer toute l'application sur
+  OpenCodex comme passerelle. Sélectionnez-le explicitement (`--gateway`, ou les anciens
+  `--static`/`--hybrid`/`--discovery-only`).
+
+Le mode est enregistré dans `claudeCode.desktopMode`. Les installations ayant déjà appliqué un profil
+passerelle le conservent après mise à jour ; seules les nouvelles installations démarrent en
+first-party. Changer de mode supprime la configuration de l'autre mode (uniquement les valeurs
+écrites par OpenCodex) ; un `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS` étranger (proxy d'entreprise) n'est
+jamais écrasé et l'application est refusée. Quittez complètement Desktop puis rouvrez-le après un
+changement. Les détails et la compatibilité de la CLI Claude Code sont décrits dans la documentation
+anglaise.
+
+## Profil Claude Desktop (mode passerelle)
 
 Claude Desktop utilise un profil distinct de Claude Code. Ouvrez **Claude → Bureau** dans le
 tableau de bord afin de placer chaque route disponible dans l'une des quatre familles : Opus, Fable, Sonnet ou Haiku.
@@ -628,4 +655,4 @@ Utilisez `"haiku"` comme valeur de remplacement pour le modèle.
 
 Dans `config.json`, `claudeCode.stabilizePromptCache: true` déplace les notices Claude reconnues en fin des instructions système vers un dernier message utilisateur sur les routes traduites. La valeur par défaut est `false`. Activez cette option seulement si ce changement de rôle convient à vos clients. Les exemples dans des blocs de code et le texte non reconnu sont conservés ; le transfert Anthropic natif reste inchangé. Sans métadonnées, la clé de cache suit les instructions stabilisées. Cette option ne crée pas une identité de conversation et ne garantit aucun succès du cache amont.
 
-Sur la route Chat d’OpenCode Go pour `deepseek-v4.1-flash`, les rappels système traduits dans l’historique conservent automatiquement leur position et leur rôle system, après les résultats d’outils encore attendus. Ainsi, l’ajout de rappels ne réécrit pas le prompt système initial. Ce comportement s’applique avec ou sans `stabilizePromptCache` ; la conversion des autres modèles et destinations, ainsi que le transfert Anthropic natif, restent inchangés. La réutilisation du cache exige toujours une identité de session stable et un cache disponible en amont. Les changements des instructions ou outils antérieurs et la compaction de la conversation peuvent aussi affecter les succès du cache ; préserver l’ordre des rappels ne suffit pas à garantir sa réutilisation.
+Sur toutes les routes Chat traduites, les rappels de l’historique conservent leur position dans la conversation, après les résultats d’outils encore attendus. L’ajout d’un rappel ne réécrit donc pas le prompt système initial, et une instruction placée au milieu de la conversation n’arrive plus avant les tours qu’elle était censée suivre. Le rôle porté par cet emplacement se décide séparément : un rappel part en `system`, sauf si le fournisseur enregistre `foldDeveloperRoleToSystem: false`, ce qui indique que le service en amont accepte le rôle `developer` et le transmet à la même position. Un service qui ne l’accepte pas répond `400 role 'developer' is not allowed` et le tour ne démarre pas, d’où le repli d’une destination non enregistrée. Ce comportement s’applique avec ou sans `stabilizePromptCache` ; le transfert Anthropic natif reste inchangé. La réutilisation du cache exige toujours une identité de session stable et un cache disponible en amont. Les changements des instructions ou outils antérieurs et la compaction de la conversation peuvent aussi affecter les succès du cache ; préserver l’ordre des rappels ne suffit pas à garantir sa réutilisation.

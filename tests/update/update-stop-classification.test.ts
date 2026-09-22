@@ -316,8 +316,10 @@ describe("stop failure classification (#3008)", () => {
     expect(cli).toMatch(/if \(stopFailed\) process\.exitCode = 1;\s*\n\s*else if \(historyOnlyFailure\) process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;/);
     // The code is set rather than exited inline so the dispatcher still receives the
     // return value and decides what happens next. The deferred code (#4718) sits between
-    // them and obeys the same rule, so the function still ends by returning.
-    expect(cli).toMatch(/process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;[\s\S]*?\n\s*return !stopFailed;\n\}/);
+    // them and obeys the same rule, so the function still ends by returning. The return
+    // is a structured outcome since the stop summary landed: ok preserves the old
+    // boolean exactly, and the summary derives from the same signals.
+    expect(cli).toMatch(/process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;[\s\S]*?\n\s*return \{ ok: !stopFailed, summary \};\n\}/);
     // The deferred code never outranks an ordinary failure, and it is only reachable when
     // this run can still prove the obligations left behind are the ones it chose to keep.
     expect(cli).toMatch(/else if \(historyDeferredNonces\) \{/);

@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   CURSOR_CAPABILITIES,
+  cursorLiveRosterScope,
   cursorUmbrellaRows,
   parseCursorVariantId,
   recordLiveCursorClaudeModels,
   resetLiveCursorClaudeWireIdentitiesForTests,
   resolveCursorSelection,
 } from "../../../src/adapters/cursor/catalog";
+import { clearModelCache } from "../../../src/codex/model-cache";
 import {
   cursorEffortSuffix,
   cursorModelHasEffortTiers,
@@ -209,6 +211,30 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       } finally {
         resetLiveCursorClaudeWireIdentitiesForTests();
       }
+    });
+
+    test("live roster spellings stay isolated by provider credential scope and clear with its cache", () => {
+      const trusted = cursorLiveRosterScope("https://trusted.cursor.test", "trusted-token");
+      const untrusted = cursorLiveRosterScope("https://other.cursor.test", "other-token");
+      recordLiveCursorClaudeModels(
+        ["claude-4.6-opus-high-thinking"],
+        { provider: "cursor-trusted", key: trusted },
+      );
+      recordLiveCursorClaudeModels(
+        ["claude-opus-4-6-thinking-high"],
+        { provider: "cursor-other", key: untrusted },
+      );
+
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: trusted }).wireId)
+        .toBe("claude-4.6-opus-high-thinking");
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: untrusted }).wireId)
+        .toBe("claude-opus-4-6-thinking-high");
+
+      clearModelCache("cursor-other");
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: untrusted }).wireId)
+        .toBe("claude-4.6-opus-high-thinking");
+      expect(resolveCursorSelection("claude-4.6-opus", "high", undefined, { liveRosterScope: trusted }).wireId)
+        .toBe("claude-4.6-opus-high-thinking");
     });
 
     test("ultra arms maxMode only on evidence-gated bases", () => {

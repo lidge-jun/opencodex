@@ -12,6 +12,21 @@ import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
+import {
+  inspectPackageRuntimeLiveness,
+  planStoppedRuntimeRecovery,
+  planUpdateRuntimeHandling,
+} from "../src/update/runtime-ownership.mjs";
+import {
+  inspectInstallStateBytes,
+  selectAuthoritativeServiceState,
+  serviceStateFilesFor,
+} from "../src/service/install-state-contract.mjs";
+import {
+  acquireOwnershipMutationLease,
+  ownershipMutationLeaseChildEnvironment,
+  unprivilegedOwnershipMutationEnvironment,
+} from "../src/service/ownership-mutation-lease.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -41,6 +56,9 @@ import {
 } from "../src/update/codex-cli-update-launch-policy.mjs";
 
 const PKG = "@bitkyc08/opencodex";
+const UPDATE_RECOVERY_READY_MS = 30_000;
+const UPDATE_RECOVERY_POLL_MS = 100;
+const UPDATE_RECOVERY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 try {
   process.cwd();
 } catch {
@@ -256,8 +274,45 @@ function runPackageManagerSelfUpdate(manager) {
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must refresh and restart it afterwards.
-  const serviceStatePath = join(configDir(), "service-state.json");
-  const serviceWasInstalled = existsSync(serviceStatePath);
+  const allServiceStatePaths = serviceStateFilesFor(configDir(), join(homedir(), ".opencodex"));
+  // The test guard's legacy path is the developer's real home. Production always reads the
+  // same active-home + default-home observations as the Bun resolver.
+  const serviceStatePaths = process.env.OCX_TEST_HOME_GUARD === "1"
+    ? allServiceStatePaths.slice(0, 1)
+    : allServiceStatePaths;
+  const serviceWasInstalled = serviceStatePaths.some(path => existsSync(path));
+  // What this update may do to the runtime. The same rule the Bun updater applies, from the
+  // same module: a desktop takeover vetoes both the stop and the service refresh below.
+  const readServiceState = () => selectAuthoritativeServiceState(
+    serviceStatePaths.map(path => inspectInstallStateBytes(path, at => readFileSync(at, "utf8"))),
+  );
+  const readOwnership = () => {
+    const selected = readServiceState();
+    if (selected.kind === "unknown") return { ownership: null, ownershipUnknown: true, subjectToken: "unknown" };
+    if (selected.kind === "none") return {
+      ownership: null, ownershipUnknown: false, subjectToken: JSON.stringify(["none", selected.revision]),
+    };
+    const ownership = selected.state.ownership ?? null;
+    return {
+      ownership,
+      ownershipUnknown: false,
+      subjectToken: JSON.stringify(ownership
+        ? ["owned", selected.revision, ownership]
+        : ["none", selected.revision]),
+    };
+  };
+  const ownershipIdentity = observation => observation.ownershipUnknown
+    ? null
+    : JSON.stringify(observation.ownership
+      ? ["owned", observation.ownership.owner, observation.ownership.installId, observation.ownership.consentGeneration]
+      : ["none"]);
+  const initialOwnership = readOwnership();
+  let runtimePlan = planUpdateRuntimeHandling({ ...initialOwnership, serviceInstalled: serviceWasInstalled });
+  if (runtimePlan.notice) console.log(runtimePlan.notice);
+  if (!runtimePlan.mayReplacePackage) {
+    console.error("opencodex: update stopped before tray handoff, runtime stop, or package replacement because runtime ownership is unknown.");
+    process.exit(1);
+  }
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
@@ -271,10 +326,11 @@ function runPackageManagerSelfUpdate(manager) {
   }
   /** Register from scratch, preserving the recorded backend. Only for a genuinely absent service. */
   function serviceInstallArgs() {
-    try {
-      const state = JSON.parse(readFileSync(serviceStatePath, "utf8"));
-      if (state.backend === "native") return [postUpdateLauncher, "service", "install", "--native"];
-    } catch { /* missing or corrupt — fall through to default */ }
+    const selected = readServiceState();
+    if (selected.kind === "unknown") throw new Error(`service backend is unknown: ${selected.reason}`);
+    if (selected.kind === "state" && selected.state.backend === "native") {
+      return [postUpdateLauncher, "service", "install", "--native"];
+    }
     return [postUpdateLauncher, "service", "install"];
   }
   /**
@@ -302,39 +358,45 @@ function runPackageManagerSelfUpdate(manager) {
     }
   }
 
-  // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
-  // Do not treat a live runtime port of 10100 as "missing" — track whether the read succeeded.
+  function readCurrentRuntimeTarget() {
+    let raw;
+    try {
+      raw = readFileSync(join(configDir(), "runtime-port.json"), "utf8");
+    } catch (error) {
+      return error && typeof error === "object" && "code" in error && error.code === "ENOENT"
+        ? { kind: "absent" }
+        : { kind: "unknown" };
+    }
+    try {
+      const rt = JSON.parse(raw);
+      const pid = Number(rt?.pid);
+      if (!Number.isFinite(rt?.port) || rt.port <= 0 || rt.port > 65535
+        || !Number.isSafeInteger(pid) || pid <= 0) return { kind: "unknown" };
+      return { kind: "target", target: {
+        pid,
+        port: Math.trunc(rt.port),
+        hostname: typeof rt.hostname === "string" && rt.hostname.trim() !== ""
+          ? rt.hostname.trim()
+          : null,
+      } };
+    } catch { return { kind: "unknown" }; }
+  }
+
+  // Capture the recovery target before stop clears runtime-port.json. Replacement safety
+  // re-reads this record under the mutation lease instead of trusting this snapshot.
   let bakePort = 10100;
   // The hostname travels with the port: a proxy bound to ::1 or a specific interface is
   // invisible to a probe that assumes 127.0.0.1, and "no answer" would then read as
   // "stopped" for exactly the proxy the probe exists to find.
   let bakeHostname = "127.0.0.1";
-  let sawRuntimePort = false;
-  let sawRuntimeHostname = false;
-  try {
-    const rt = JSON.parse(readFileSync(join(configDir(), "runtime-port.json"), "utf8"));
-    if (Number.isFinite(rt?.port) && rt.port > 0 && rt.port <= 65535) {
-      // Only trust runtime when its pid still looks alive (stale crash leftovers fall back to config).
-      const rtPid = Number(rt?.pid);
-      let runtimeLive = false;
-      if (Number.isSafeInteger(rtPid) && rtPid > 0) {
-        try {
-          process.kill(rtPid, 0);
-          runtimeLive = true;
-        } catch (e) {
-          if (e && typeof e === "object" && "code" in e && e.code === "EPERM") runtimeLive = true;
-        }
-      }
-      if (runtimeLive) {
-        bakePort = Math.trunc(rt.port);
-        if (typeof rt?.hostname === "string" && rt.hostname.trim() !== "") {
-          bakeHostname = rt.hostname.trim();
-          sawRuntimeHostname = true;
-        }
-        sawRuntimePort = true;
-      }
-    }
-  } catch { /* fall through to config */ }
+  const initialRuntimeObservation = readCurrentRuntimeTarget();
+  const initialRuntimeTarget = initialRuntimeObservation.kind === "target" ? initialRuntimeObservation.target : null;
+  let sawRuntimePort = initialRuntimeTarget !== null;
+  let sawRuntimeHostname = initialRuntimeTarget?.hostname !== null && initialRuntimeTarget?.hostname !== undefined;
+  if (initialRuntimeTarget) {
+    bakePort = initialRuntimeTarget.port;
+    if (initialRuntimeTarget.hostname) bakeHostname = initialRuntimeTarget.hostname;
+  }
   // Port and hostname resolve INDEPENDENTLY: a legacy runtime record carries a port and no
   // hostname, and skipping config in that case probed 127.0.0.1 for a proxy bound to ::1.
   if (!sawRuntimePort || bakeHostname === "127.0.0.1") {
@@ -350,6 +412,18 @@ function runPackageManagerSelfUpdate(manager) {
   }
   // Wildcard and bracketed-IPv6 normalization lives in probeProxyLiveness, so both lanes
   // get it from one place.
+  function currentPackageRuntimeLiveness() {
+    return inspectPackageRuntimeLiveness({
+      capturedTarget: { port: bakePort, hostname: bakeHostname },
+      readCurrentTarget: () => {
+        const current = readCurrentRuntimeTarget();
+        return current.kind === "target"
+          ? { kind: "target", target: { port: current.target.port, hostname: current.target.hostname ?? bakeHostname } }
+          : current;
+      },
+      probe: target => probeProxyLiveness(target.port, target.hostname),
+    }).overall;
+  }
 
   const launcher = fileURLToPath(import.meta.url);
   // The pnpm owner preflight has verified this package tree and global group. Keep that exact
@@ -359,13 +433,17 @@ function runPackageManagerSelfUpdate(manager) {
     ? join(owner.packagePath, "bin", "ocx.mjs")
     : launcher;
   let postUpdateLauncherUsable = true;
+  let delegatedOwnershipMutationToken = null;
+  const mutationChildEnvironment = () => delegatedOwnershipMutationToken
+    ? ownershipMutationLeaseChildEnvironment(process.env, delegatedOwnershipMutationToken)
+    : unprivilegedOwnershipMutationEnvironment(process.env);
 
   function startProxyDirectly() {
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) {
       console.error("opencodex: cannot restart the proxy because the launcher is missing; reinstall opencodex manually.");
-      return;
+      return false;
     }
-    const env = { ...process.env };
+    const env = mutationChildEnvironment();
     delete env.OCX_SERVICE;
     console.log(`Attempting to restart the proxy on port ${bakePort}.`);
     const child = spawn(process.execPath, [postUpdateLauncher, "start", "--port", String(bakePort)], {
@@ -378,13 +456,24 @@ function runPackageManagerSelfUpdate(manager) {
       console.error(`opencodex: direct proxy restart failed: ${error.message}`);
     });
     child.unref();
+    const deadline = Date.now() + UPDATE_RECOVERY_READY_MS;
+    while (Date.now() < deadline) {
+      const current = readCurrentRuntimeTarget();
+      if (current.kind === "target"
+        && probeProxyLiveness(current.target.port, current.target.hostname ?? bakeHostname) === "live") return true;
+      Atomics.wait(UPDATE_RECOVERY_SLEEP, 0, 0, UPDATE_RECOVERY_POLL_MS);
+    }
+    console.error("opencodex: the recovery proxy did not publish a healthy runtime before the recovery deadline.");
+    return false;
   }
 
   function refreshBackgroundServiceOrStartDirect() {
     const prevBake = process.env.OCX_BAKE_PORT;
     process.env.OCX_BAKE_PORT = String(bakePort);
     try {
-      let svc = spawnSync(process.execPath, serviceRefreshArgs(), { stdio: "inherit", windowsHide: true });
+      let svc = spawnSync(process.execPath, serviceRefreshArgs(), {
+        stdio: "inherit", windowsHide: true, env: mutationChildEnvironment(),
+      });
       // `serviceWasInstalled` is inferred from service-state.json alone, which can be
       // STALE — present while the registration is gone. Repair refuses that case by
       // design, and its thrown Error is indistinguishable from any other failure at
@@ -395,7 +484,9 @@ function runPackageManagerSelfUpdate(manager) {
       // could re-register a service the user just uninstalled.
       if (svc.status !== 0 && readServiceInstalledFromStatus(postUpdateLauncher) === false) {
         console.log("No registered service found — installing it instead.");
-        svc = spawnSync(process.execPath, serviceInstallArgs(), { stdio: "inherit", windowsHide: true });
+        svc = spawnSync(process.execPath, serviceInstallArgs(), {
+          stdio: "inherit", windowsHide: true, env: mutationChildEnvironment(),
+        });
       }
       let needDirectStart = svc.status !== 0;
       if (!needDirectStart) {
@@ -421,6 +512,14 @@ function runPackageManagerSelfUpdate(manager) {
         }
       }
       if (needDirectStart) {
+        // Re-read rather than reuse the plan from before the package install: the app can
+        // claim the runtime during an update that takes minutes, and the refusal that repair
+        // just returned is indistinguishable from any other failure at this layer.
+        const nowOwned = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: true });
+        if (!nowOwned.mayStopRuntime) {
+          console.warn(nowOwned.notice ?? "opencodex: the background runtime is owned elsewhere; not starting a second proxy.");
+          return;
+        }
         // Repair normally avoids elevation for a healthy registration, but a stale Windows
         // scheduler definition can require it. It can also fail — or exit 0 while leaving
         // a non-viable manager. Fall back to a direct detached proxy start so the
@@ -439,189 +538,264 @@ function runPackageManagerSelfUpdate(manager) {
     }
   }
 
-  // Never replace package files under a live proxy — stop it first (full `ocx stop`
-  // semantics: graceful drain, service stop, native Codex restore). Gate on the service
-  // and the runtime-port record too: a service-managed or orphaned proxy can be live
-  // while ocx.pid is stale/missing.
-  if (trayBeforeUpdate.stopBeforeReplacement) {
-    console.log("⏹  Handing off the Windows tray before updating...");
-    try {
-      handoffWindowsTrayForUpdate(trayBeforeUpdate, {
-        stop: () => {
-          const stopped = runTrayLifecycle(launcher, "stop");
-          return { exitStatus: stopped.status, running: trayInstallState().running };
-        },
-        start: () => runTrayLifecycle(launcher, "start"),
-      });
-    } catch {
-      console.error("opencodex: could not stop the Windows tray; aborting before package replacement.");
-      process.exit(1);
-    }
-  }
-  const hasRuntimeState =
-    existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
+  const updateLease = acquireOwnershipMutationLease(serviceStatePaths);
+  delegatedOwnershipMutationToken = updateLease.token;
+  let updateLeaseReleased = false;
+  const releaseUpdateLease = () => {
+    if (updateLeaseReleased) return;
+    updateLeaseReleased = true;
+    delegatedOwnershipMutationToken = null;
+    updateLease.release();
+  };
 
-  function recoverStoppedRuntimeAfterFailure() {
-    if (!postUpdateLauncherUsable) {
-      console.error("opencodex: no verified active launcher remains for automatic recovery; reinstall opencodex manually.");
-      return;
-    }
-    if (serviceWasInstalled) {
-      console.warn("opencodex: update failed after stopping the proxy — restoring the previous background service.");
-      refreshBackgroundServiceOrStartDirect();
-    } else if (hasRuntimeState) {
-      console.warn("opencodex: update failed after stopping the proxy — restarting the previous version directly.");
-      startProxyDirectly();
-    }
-  }
-
-  // An outstanding pending-teardown receipt is a fourth reason to run the stop. After a
-  // parent crashed mid-deferral the service, pid and runtime records can all be absent
-  // while the shared client config still points at a proxy that is gone; installing over
-  // that silently skips the recovery the receipt was written to trigger (#3008). Presence
-  // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
-  // whether the obligation is safe to finish.
-  const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
-  if (serviceWasInstalled || hasRuntimeState || hasPendingTeardown) {
-    console.log("⏹  Stopping the running proxy before updating...");
-    const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
-    const stillHasRuntimeState =
-      existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
-    // A history-only failure means teardown succeeded and a backup manifest is waiting for
-    // review: the proxy is down and replacing package files is safe. Every other nonzero
-    // status is a stop that did not finish, and a signal kill (status null) says nothing
-    // about whether it did - both abort, because replacing files under a live server
-    // leaves it running mixed old and new modules (#3008).
-    // The same decision the Bun updater makes, from the same module (#3008). Absent PID and
-    // runtime files are weak evidence, so the captured endpoint is asked; "unknown" aborts
-    // because a silent listener is exactly the state where replacing files is dangerous.
-    const decision = decidePostStopUpdate({
-      status: stopRes.status,
-      hasRuntimeState: stillHasRuntimeState,
-      // Re-checked AFTER the stop: a quarantined receipt lets the stop itself succeed
-      // (there is nothing left to stop), so a pre-stop check alone let the retry install
-      // over a teardown that never ran.
-      teardownOutstanding: hasPendingTeardownIn(readdirSync, configDir()),
-      liveness: probeProxyLiveness(bakePort, bakeHostname),
-    });
-    const historyOnlyStop = decision.reason === "history-only";
-    if (!decision.proceed) {
-      if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-      if (decision.reason === "teardown-outstanding") {
-        console.error("opencodex: a shared teardown from an earlier stop is still outstanding and needs manual review; aborting the update.");
-        console.error("opencodex: confirm no proxy is running, run 'ocx restore', then remove the pending-teardown file in the opencodex home.");
-      } else console.error(decision.reason === "proxy-unknown"
-        ? `opencodex: could not confirm the proxy on ${bakeHostname}:${bakePort} is stopped; aborting the update. Run 'ocx stop' and retry.`
-        : "opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
-      process.exit(1);
-    }
-    if (historyOnlyStop || historyRestoreIncomplete()) {
-      console.warn(
-        "opencodex: WARNING — Codex resume-history metadata restore is incomplete (a backup manifest remains).\n" +
-        "  The DB may be busy or the manifest/target may need review; untracked routed history is intentionally unchanged.\n" +
-        "  After the update: close the Codex app, run 'ocx doctor', then run 'ocx stop' once to retry.",
-      );
-    }
-    if (decision.reason === "history-deferred") {
-      // The reported #4718 path is this lane. Nothing was restored, so this is a different
-      // sentence from the manifest warning above: an operator told "history metadata is
-      // incomplete" would assume config and catalog already came back.
-      console.warn(
-        "opencodex: WARNING — the shared teardown was refused by the Codex history preflight and restored nothing.\n" +
-        "  Config, catalog, history and provenance were preserved, and the teardown receipt was kept.\n" +
-        "  The proxy is down, so the update continues; close the Codex app and run 'ocx stop' once afterwards to finish the restore.",
-      );
-    }
-  }
-
-  // npm keeps the existing stage -> verify -> swap -> rollback flow. pnpm owns a
-  // content-addressable store and generated global shims, so its path uses pnpm's own
-  // global update operation and verifies the active group instead of renaming files.
-  console.log(`Updating${latest ? ` to v${latest}` : ""} (${manager === "npm" ? "transactional" : "pnpm-managed"})...`);
   let res;
   try {
-    if (manager === "npm") {
-      const packageDir = resolve(here, "..");
-      const tx = transactionalNpmUpdate({
-        packageDir,
-        pkgName: PKG,
-        targetVersion: latest || undefined,
-        tag,
-        runNpm: (args) => {
-          const invocation = npmInvocation(args);
-          if (!invocation) return { status: 1 };
-          return spawnSync(invocation.file, invocation.args, {
-            stdio: "inherit",
-            timeout: 180000,
-            windowsHide: true,
-            ...invocation.options,
-          });
-        },
-        log: (line) => console.log(line),
-      });
-      postUpdateLauncherUsable = tx.ok
-        || tx.rolledBack === true
-        || ["stage", "verify", "swap-backup"].includes(tx.phase);
-      if (tx.ok) {
-        res = { status: 0 };
-      } else if (tx.phase === "stage" || tx.phase === "verify") {
-        // Live tree untouched: report and stop. Nothing to roll back.
-        console.error(`opencodex: update aborted before touching the live install (${tx.phase}): ${tx.error}`);
-        res = { status: 1 };
-      } else {
-        console.error(`opencodex: update failed (${tx.phase}): ${tx.error}${tx.rolledBack ? " — previous version restored." : ""}`);
-        res = { status: 1 };
-      }
-    } else {
-      const update = runPnpmGlobalUpdate({
-        packageName: PKG,
-        currentVersion: current,
-        targetVersion: latest || undefined,
-        tag,
-        owner,
-        runningPackagePath: resolve(here, ".."),
-        runPnpm: (args, capture = false) => {
-          const invocation = pnpmOwnerInvocation(owner, args);
-          if (!invocation) return { status: 1 };
-          return spawnSync(invocation.file, invocation.args, {
-            stdio: capture ? "pipe" : "inherit",
-            encoding: "utf8",
-            timeout: 180000,
-            windowsHide: true,
-            env: invocation.env,
-            ...invocation.options,
-          });
-        },
-        log: line => console.log(line),
-      });
-      if (update.ok) {
-        // pnpm switches the active global group and updates its shim. Continue recovery
-        // through that fresh package tree, not the old group whose launcher is still
-        // executing this update.
-        postUpdateLauncher = join(update.path, "bin", "ocx.mjs");
-        res = { status: 0 };
-      } else {
-        console.error(`opencodex: ${update.error}${update.rolledBack ? "." : " Manual recovery may be required."}`);
-        postUpdateLauncherUsable = Boolean(update.activePath);
-        if (update.activePath) postUpdateLauncher = join(update.activePath, "bin", "ocx.mjs");
-        res = { status: 1 };
+    // Stop authority is decided under the same lease the child joins. A takeover between the
+    // earlier preflight and this boundary therefore blocks stop before it is sent.
+    const lockedOwnership = readOwnership();
+    const lockedPlan = planUpdateRuntimeHandling({ ...lockedOwnership, serviceInstalled: serviceWasInstalled });
+    if (lockedOwnership.subjectToken !== initialOwnership.subjectToken || !lockedPlan.mayReplacePackage) {
+      releaseUpdateLease();
+      console.error(lockedPlan.notice
+        ?? "opencodex: update stopped because runtime ownership changed before stop authorization; rerun from the beginning.");
+      process.exit(1);
+    }
+    runtimePlan = lockedPlan;
+    const stoppedOwnershipIdentity = ownershipIdentity(lockedOwnership);
+
+    // Never replace package files under a live proxy — stop it first (full `ocx stop`
+    // semantics: graceful drain, service stop, native Codex restore). Gate on the service
+    // and the runtime-port record too: a service-managed or orphaned proxy can be live
+    // while ocx.pid is stale/missing.
+    if (trayBeforeUpdate.stopBeforeReplacement) {
+      console.log("⏹  Handing off the Windows tray before updating...");
+      try {
+        handoffWindowsTrayForUpdate(trayBeforeUpdate, {
+          stop: () => {
+            const stopped = runTrayLifecycle(launcher, "stop");
+            return { exitStatus: stopped.status, running: trayInstallState().running };
+          },
+          start: () => runTrayLifecycle(launcher, "start"),
+        });
+      } catch {
+        releaseUpdateLease();
+        console.error("opencodex: could not stop the Windows tray; aborting before package replacement.");
+        process.exit(1);
       }
     }
-  } catch (error) {
-    // An unexpected throw means we cannot prove the live tree is untouched, so the
-    // legacy in-place install (which deletes live first) is exactly the wrong rescue —
-    // it recreates the #1849 destruction path. Report and stop; the boot probe and the
-    // recovery marker cover the swap-window states.
-    const manual = manager === "pnpm"
-      ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
-      : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
-    // An unexpected exception leaves the active package path unproven for either manager.
-    // Do not run service/tray/proxy recovery through a possibly half-swapped tree.
-    postUpdateLauncherUsable = false;
-    console.error(`opencodex: ${manager} update failed unexpectedly (${error?.message ?? error}). ` +
-      `The live install was not knowingly modified; run 'ocx update' again or reinstall with ${manual}.`);
-    res = { status: 1 };
+    const hasRuntimeState =
+      existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
+    let stopAttempted = false;
+
+    function recoverStoppedRuntimeAfterFailure(reason) {
+      const recoveryOwnership = readOwnership();
+      const recoveryLiveness = currentPackageRuntimeLiveness();
+      const recovery = planStoppedRuntimeRecovery({
+        stopAttempted,
+        ...recoveryOwnership,
+        sameOwner: ownershipIdentity(recoveryOwnership) === stoppedOwnershipIdentity,
+        liveness: recoveryLiveness,
+        serviceInstalled: serviceWasInstalled,
+        launcherUsable: postUpdateLauncherUsable,
+        hadRuntimeState: hasRuntimeState,
+      });
+      if (recovery.reason === "ownership-unknown") {
+        console.error(`opencodex: ${reason}; runtime ownership is unknown, so automatic recovery was refused. Run 'ocx status --json' and repair the service-state record before retrying.`);
+      } else if (recovery.reason === "ownership-transferred") {
+        console.log("opencodex: runtime ownership moved to another installation; the stopped CLI runtime was not revived.");
+      } else if (recovery.reason.startsWith("runtime-")) {
+        console.error(`opencodex: ${reason}; package runtime liveness is ${recoveryLiveness}, so automatic recovery was refused.`);
+      } else if (recovery.reason === "launcher-unavailable") {
+        console.error("opencodex: no verified active launcher remains for automatic recovery; reinstall opencodex manually.");
+      } else if (recovery.action === "service") {
+        console.warn(`opencodex: ${reason} after stopping the proxy — restoring the previous background service.`);
+        refreshBackgroundServiceOrStartDirect();
+      } else if (recovery.action === "direct") {
+        console.warn(`opencodex: ${reason} after stopping the proxy — restarting the previous version directly.`);
+        startProxyDirectly();
+      }
+      return recovery;
+    }
+
+    // An outstanding pending-teardown receipt is a fourth reason to run the stop. After a
+    // parent crashed mid-deferral the service, pid and runtime records can all be absent
+    // while the shared client config still points at a proxy that is gone; installing over
+    // that silently skips the recovery the receipt was written to trigger (#3008). Presence
+    // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
+    // whether the obligation is safe to finish.
+    const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
+    const stopNeeded = serviceWasInstalled || hasRuntimeState || hasPendingTeardown;
+    if (stopNeeded && !runtimePlan.mayStopRuntime) {
+      releaseUpdateLease();
+      console.error(runtimePlan.notice
+        ?? "opencodex: update stopped because this installation may not stop the current runtime.");
+      process.exit(1);
+    }
+    if (stopNeeded) {
+      stopAttempted = true;
+      console.log("⏹  Stopping the running proxy before updating...");
+      const stopRes = spawnSync(process.execPath, [launcher, "stop"], {
+        stdio: "inherit", windowsHide: true, env: mutationChildEnvironment(),
+      });
+      const stillHasRuntimeState =
+        existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
+      // A history-only failure means teardown succeeded and a backup manifest is waiting for
+      // review: the proxy is down and replacing package files is safe. Every other nonzero
+      // status is a stop that did not finish, and a signal kill (status null) says nothing
+      // about whether it did - both abort, because replacing files under a live server
+      // leaves it running mixed old and new modules (#3008).
+      // The same decision the Bun updater makes, from the same module (#3008). Absent PID and
+      // runtime files are weak evidence, so the captured endpoint is asked; "unknown" aborts
+      // because a silent listener is exactly the state where replacing files is dangerous.
+      const decision = decidePostStopUpdate({
+        status: stopRes.status,
+        hasRuntimeState: stillHasRuntimeState,
+        // Re-checked AFTER the stop: a quarantined receipt lets the stop itself succeed
+        // (there is nothing left to stop), so a pre-stop check alone let the retry install
+        // over a teardown that never ran.
+        teardownOutstanding: hasPendingTeardownIn(readdirSync, configDir()),
+        liveness: probeProxyLiveness(bakePort, bakeHostname),
+      });
+      const historyOnlyStop = decision.reason === "history-only";
+      if (!decision.proceed) {
+        if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+        if (decision.reason === "teardown-outstanding") {
+          console.error("opencodex: a shared teardown from an earlier stop is still outstanding and needs manual review; aborting the update.");
+          console.error("opencodex: confirm no proxy is running, run 'ocx restore', then remove the pending-teardown file in the opencodex home.");
+        } else console.error(decision.reason === "proxy-unknown"
+          ? `opencodex: could not confirm the proxy on ${bakeHostname}:${bakePort} is stopped; aborting the update. Run 'ocx stop' and retry.`
+          : "opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+        releaseUpdateLease();
+        process.exit(1);
+      }
+      if (historyOnlyStop || historyRestoreIncomplete()) {
+        console.warn(
+          "opencodex: WARNING — Codex resume-history metadata restore is incomplete (a backup manifest remains).\n" +
+          "  The DB may be busy or the manifest/target may need review; untracked routed history is intentionally unchanged.\n" +
+          "  After the update: close the Codex app, run 'ocx doctor', then run 'ocx stop' once to retry.",
+        );
+      }
+      if (decision.reason === "history-deferred") {
+        // The reported #4718 path is this lane. Nothing was restored, so this is a different
+        // sentence from the manifest warning above: an operator told "history metadata is
+        // incomplete" would assume config and catalog already came back.
+        console.warn(
+          "opencodex: WARNING — the shared teardown was refused by the Codex history preflight and restored nothing.\n" +
+          "  Config, catalog, history and provenance were preserved, and the teardown receipt was kept.\n" +
+          "  The proxy is down, so the update continues; close the Codex app and run 'ocx stop' once afterwards to finish the restore.",
+        );
+      }
+    }
+
+    const replacementOwnership = readOwnership();
+    const replacementPlan = planUpdateRuntimeHandling({ ...replacementOwnership, serviceInstalled: serviceWasInstalled });
+    const replacementLiveness = currentPackageRuntimeLiveness();
+    if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+      || !replacementPlan.mayReplacePackage
+      || replacementLiveness !== "dead") {
+      recoverStoppedRuntimeAfterFailure("replacement was refused");
+      releaseUpdateLease();
+      if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+      console.error(replacementPlan.notice
+        ?? "opencodex: update stopped because runtime ownership or liveness changed after the stop decision; rerun from the beginning.");
+      process.exit(1);
+    }
+
+    // npm keeps the existing stage -> verify -> swap -> rollback flow. pnpm owns a
+    // content-addressable store and generated global shims, so its path uses pnpm's own
+    // global update operation and verifies the active group instead of renaming files.
+    console.log(`Updating${latest ? ` to v${latest}` : ""} (${manager === "npm" ? "transactional" : "pnpm-managed"})...`);
+    try {
+      if (manager === "npm") {
+        const packageDir = resolve(here, "..");
+        const tx = transactionalNpmUpdate({
+          packageDir,
+          pkgName: PKG,
+          targetVersion: latest || undefined,
+          tag,
+          runNpm: (args) => {
+            const invocation = npmInvocation(args);
+            if (!invocation) return { status: 1 };
+            return spawnSync(invocation.file, invocation.args, {
+              ...invocation.options,
+              stdio: "inherit",
+              timeout: 180000,
+              windowsHide: true,
+              env: unprivilegedOwnershipMutationEnvironment(invocation.options?.env ?? process.env),
+            });
+          },
+          log: (line) => console.log(line),
+        });
+        postUpdateLauncherUsable = tx.ok
+          || tx.rolledBack === true
+          || ["stage", "verify", "swap-backup"].includes(tx.phase);
+        if (tx.ok) {
+          res = { status: 0 };
+        } else if (tx.phase === "stage" || tx.phase === "verify") {
+          // Live tree untouched: report and stop. Nothing to roll back.
+          console.error(`opencodex: update aborted before touching the live install (${tx.phase}): ${tx.error}`);
+          res = { status: 1 };
+        } else {
+          console.error(`opencodex: update failed (${tx.phase}): ${tx.error}${tx.rolledBack ? " — previous version restored." : ""}`);
+          res = { status: 1 };
+        }
+      } else {
+        const update = runPnpmGlobalUpdate({
+          packageName: PKG,
+          currentVersion: current,
+          targetVersion: latest || undefined,
+          tag,
+          owner,
+          runningPackagePath: resolve(here, ".."),
+          runPnpm: (args, capture = false) => {
+            const invocation = pnpmOwnerInvocation(owner, args);
+            if (!invocation) return { status: 1 };
+            return spawnSync(invocation.file, invocation.args, {
+              ...invocation.options,
+              stdio: capture ? "pipe" : "inherit",
+              encoding: "utf8",
+              timeout: 180000,
+              windowsHide: true,
+              env: unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env),
+            });
+          },
+          log: line => console.log(line),
+        });
+        if (update.ok) {
+          // pnpm switches the active global group and updates its shim. Continue recovery
+          // through that fresh package tree, not the old group whose launcher is still
+          // executing this update.
+          postUpdateLauncher = join(update.path, "bin", "ocx.mjs");
+          res = { status: 0 };
+        } else {
+          console.error(`opencodex: ${update.error}${update.rolledBack ? "." : " Manual recovery may be required."}`);
+          postUpdateLauncherUsable = Boolean(update.activePath);
+          if (update.activePath) postUpdateLauncher = join(update.activePath, "bin", "ocx.mjs");
+          res = { status: 1 };
+        }
+      }
+    } catch (error) {
+      // An unexpected throw means we cannot prove the live tree is untouched, so the
+      // legacy in-place install (which deletes live first) is exactly the wrong rescue —
+      // it recreates the #1849 destruction path. Report and stop; the boot probe and the
+      // recovery marker cover the swap-window states.
+      const manual = manager === "pnpm"
+        ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
+        : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
+      // An unexpected exception leaves the active package path unproven for either manager.
+      // Do not run service/tray/proxy recovery through a possibly half-swapped tree.
+      postUpdateLauncherUsable = false;
+      console.error(`opencodex: ${manager} update failed unexpectedly (${error?.message ?? error}). ` +
+        `The live install was not knowingly modified; run 'ocx update' again or reinstall with ${manual}.`);
+      res = { status: 1 };
+    }
+    if (res.status !== 0) recoverStoppedRuntimeAfterFailure("update failed");
+  } finally {
+    // Expected aborts release before process.exit(); this covers every thrown or newly-added
+    // path and keeps token restoration coupled to the lease itself.
+    releaseUpdateLease();
   }
+  const postInstallPlan = planUpdateRuntimeHandling({ ...readOwnership(), serviceInstalled: serviceWasInstalled });
   if (res.status === 0) {
     console.log(`\nUpdated${latest ? ` to v${latest}` : ""}.`);
     repairCodexShimIfNeeded(postUpdateLauncher);
@@ -637,16 +811,15 @@ function runPackageManagerSelfUpdate(manager) {
     }
     // The stop above unloaded any managed service; refresh via the freshly-installed
     // launcher so the new files write the baked paths and the service restarts.
-    if (serviceWasInstalled) {
+    if (postInstallPlan.mayRestoreService) {
       console.log("Refreshing the background service with the updated files...");
       refreshBackgroundServiceOrStartDirect();
-    } else {
+    } else if (postInstallPlan.mayStopRuntime) {
       console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, bakePort)}`);
     }
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure && postUpdateLauncherUsable) runTrayLifecycle(postUpdateLauncher, "start");
-  recoverStoppedRuntimeAfterFailure();
   const manual = manager === "pnpm"
     ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
     : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;

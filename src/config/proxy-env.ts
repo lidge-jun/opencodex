@@ -143,8 +143,14 @@ export function applyProxyEnvWith(
     } else {
       const found = readWindowsSystemProxy(auto.reader, auto.platform);
       if (found.kind === "proxy") {
-        console.log(`[opencodex] proxy "auto": using Windows system proxy ${describeProxyForLog(found.url)}`);
-        proxy = found.url;
+        const origins = [
+          found.httpUrl && `HTTP ${describeProxyForLog(found.httpUrl)}`,
+          found.httpsUrl && `HTTPS ${describeProxyForLog(found.httpsUrl)}`,
+        ].filter(Boolean).join(", ");
+        console.log(`[opencodex] proxy "auto": using Windows system proxy ${origins}`);
+        if (found.httpUrl) process.env.HTTP_PROXY = found.httpUrl;
+        if (found.httpsUrl) process.env.HTTPS_PROXY = found.httpsUrl;
+        proxy = undefined;
       } else {
         const reason = found.kind === "unsupported"
           ? "only Windows system proxy discovery is supported; using direct egress on this OS"

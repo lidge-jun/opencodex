@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { isStandaloneBinary } from "./standalone";
 
 export interface PackageTreeObservation {
   readonly device: bigint;
@@ -96,6 +97,6 @@ export function createRuntimePackageTreeIntegrityGuard(
   observe: ObservePackageTree = observePackageManifest,
   now: () => number = Date.now,
 ): PackageTreeIntegrityGuard {
-  if (installer === "source") return { status: () => ({ ok: true }) };
+  if (installer === "source" || isStandaloneBinary()) return { status: () => ({ ok: true }) };
   return createPackageTreeIntegrityGuard(observe, now);
 }

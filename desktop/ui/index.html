@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCodex</title>
+    <style>
+      :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
+      body { display: grid; min-height: 100vh; place-items: center; margin: 0; background: #f5f5f7; color: #202124; }
+      main { width: min(38rem, calc(100vw - 3rem)); padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 8px 30px #0001; }
+      h1 { margin-top: 0; font-size: 1.4rem; }
+      #headline { margin: 0 0 .25rem; font-weight: 600; }
+      #detail { margin: 0; min-height: 1.4rem; color: #666; font-size: .9rem; }
+      #phases { margin: 1.25rem 0 0; padding: 0; list-style: none; display: grid; gap: .4rem; }
+      #phases li { display: flex; gap: .6rem; align-items: baseline; color: #8a8a8e; }
+      #phases li .mark { width: 1rem; text-align: center; }
+      #phases li[data-state="active"] { color: #202124; font-weight: 600; }
+      #phases li[data-state="done"] { color: #4b8b3b; }
+      #phases li[data-state="failed"] { color: #b3261e; font-weight: 600; }
+      #failure { margin-top: 1.25rem; display: grid; gap: .75rem; }
+      #failure[hidden] { display: none; }
+      .actions { display: flex; gap: .6rem; align-items: center; }
+      button { border: 0; border-radius: .5rem; padding: .6rem 1rem; background: #2563eb; color: white; cursor: pointer; font: inherit; }
+      button.secondary { background: #e3e3e8; color: #202124; }
+      button[disabled] { opacity: .5; cursor: default; }
+      #copyState { color: #666; font-size: .85rem; }
+      textarea { width: 100%; box-sizing: border-box; min-height: 9rem; resize: vertical; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: .5rem; border: 1px solid #0002; padding: .6rem; background: #fafafa; color: inherit; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #1c1c1e; color: #f5f5f7; }
+        main { background: #2c2c2e; }
+        #detail, #copyState { color: #bbb; }
+        #phases li[data-state="active"] { color: #f5f5f7; }
+        #phases li[data-state="done"] { color: #8bd17c; }
+        #phases li[data-state="failed"] { color: #ff8a80; }
+        button.secondary { background: #3a3a3c; color: #f5f5f7; }
+        textarea { background: #1c1c1e; border-color: #ffffff22; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>OpenCodex</h1>
+      <p id="headline">Starting OpenCodex…</p>
+      <p id="detail"></p>
+      <ol id="phases"></ol>
+      <div id="failure" hidden>
+        <div class="actions">
+          <button id="retry" type="button">Retry</button>
+          <button id="copy" class="secondary" type="button">Copy diagnostic</button>
+          <span id="copyState"></span>
+        </div>
+        <textarea id="diagnostic" readonly spellcheck="false"></textarea>
+      </div>
+    </main>
+    <!--
+  The startup surface is inlined rather than loaded from a second file, and that is a
+  correctness requirement rather than a packaging preference.
+
+  The webview is not served the policy in tauri.conf.json. The shell appends its own hashes
+  and nonces to script-src, and a hash or nonce in that directive makes any inline allowance
+  inert, so every script has to be named. The shell nonce injector matches script[src^=http]
+  only, so a page that loads its script by relative path is never named -- and on a platform
+  where the asset origin does not satisfy self, that page renders as static markup with no
+  way to say so. Measured on Linux: the asset was served 200 as text/javascript, and not one
+  line of it ran. An inline script carrying the token does run there.
+-->
+    <script nonce="__TAURI_SCRIPT_NONCE__">
+// The bootstrap page is the startup surface. It does not probe anything itself: the shell owns the
+// sequence, its deadline and its diagnostic, and this page renders what it is told. The phase list
+// is asked for rather than written here, so a state added in the shell appears without a second
+// edit — and one removed cannot leave a row behind.
+//
+// What each row shows comes from the shell too, including the states already finished. Rebuilding
+// that history from events would be wrong: the first states finish in milliseconds, so a page whose
+// listener attached a moment late would show a run in progress with nothing behind it.
+//
+// Nothing here uses alert, confirm or prompt. The embedded webview implements none of the
+// WKUIDelegate panel methods on macOS, so a platform dialog is silently declined and the user sees
+// nothing at all. Every message this page has goes into the page — including its own failures,
+// because a surface that cannot report is the problem this file exists to fix.
+
+const bridge = window.__TAURI__;
+const invoke = bridge && bridge.core && bridge.core.invoke;
+const listen = bridge && bridge.event && bridge.event.listen;
+
+// The shell owns the sequence and its deadline. The page has no deadline of its own: an invoke
+// whose command never answers returns a promise that neither settles nor rejects, and the page
+// then keeps its initial markup forever - the headline still says the run is starting, the
+// checklist is empty, and the only thing on screen is a Retry button with an empty diagnostic.
+// That is indistinguishable from a hung product. Bounding the handshake turns the silence into a
+// failure the page can report and the user can copy.
+const HANDSHAKE_DEADLINE_MS = 5000;
+
+function withDeadline(work, what) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('the shell did not answer ' + what + ' within ' + HANDSHAKE_DEADLINE_MS + ' ms'));
+    }, HANDSHAKE_DEADLINE_MS);
+    Promise.resolve(work).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+const headline = document.querySelector("#headline");
+const detail = document.querySelector("#detail");
+const phaseList = document.querySelector("#phases");
+const failure = document.querySelector("#failure");
+const retry = document.querySelector("#retry");
+const copy = document.querySelector("#copy");
+const copyState = document.querySelector("#copyState");
+const diagnostic = document.querySelector("#diagnostic");
+
+const MARKS = { done: "✓", failed: "✕", active: "…", pending: "·" };
+
+let phases = [];
+
+function render(progress) {
+  const completed = new Set((progress && progress.completed) || []);
+  const failedPhase = (progress && progress.failedPhase) || null;
+  const current = progress && progress.phase;
+  phaseList.replaceChildren();
+  for (const phase of phases) {
+    let state = "pending";
+    if (phase.id === failedPhase) {
+      state = "failed";
+    } else if (phase.id === current) {
+      state = "active";
+    } else if (completed.has(phase.id)) {
+      state = "done";
+    }
+    const row = document.createElement("li");
+    row.dataset.state = state;
+    const mark = document.createElement("span");
+    mark.className = "mark";
+    mark.textContent = MARKS[state];
+    const label = document.createElement("span");
+    label.textContent = phase.label;
+    row.append(mark, label);
+    phaseList.append(row);
+  }
+}
+
+function apply(progress) {
+  if (!progress) return;
+  headline.textContent = progress.label;
+  detail.textContent = progress.detail || "";
+  const failed = progress.phase === "failed";
+  failure.hidden = !failed;
+  retry.disabled = !progress.canRetry;
+  if (failed) {
+    diagnostic.value = progress.diagnostic || "";
+    copyState.textContent = "";
+  }
+  render(progress);
+}
+
+function reportPageFailure(message, error) {
+  const cause = error && error.message ? error.message : String(error);
+  headline.textContent = "OpenCodex could not read its own startup state.";
+  detail.textContent = message;
+  failure.hidden = false;
+  retry.disabled = false;
+  diagnostic.value = [message, cause].join("\n");
+}
+
+async function copyDiagnostic() {
+  const text = diagnostic.value;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    copyState.textContent = "Copied to the clipboard.";
+    return;
+  } catch {
+    // A webview without clipboard access is the reason the text is on screen in the first place.
+  }
+  diagnostic.focus();
+  diagnostic.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  copyState.textContent = copied
+    ? "Copied to the clipboard."
+    : "The text above is selected — copy it with your keyboard.";
+}
+
+retry.addEventListener("click", async () => {
+  if (!invoke) return;
+  copyState.textContent = "";
+  retry.disabled = true;
+  try {
+    await invoke("retry_startup");
+  } catch (error) {
+    reportPageFailure("The retry could not be sent to the shell.", error);
+  }
+});
+copy.addEventListener("click", copyDiagnostic);
+
+async function start() {
+  if (!invoke || !listen) {
+    headline.textContent = "This page is the OpenCodex desktop shell's startup surface.";
+    detail.textContent = "Open it from the OpenCodex app.";
+    return;
+  }
+  try {
+    phases = (await withDeadline(invoke("startup_phases"), "startup_phases")).filter((phase) => !phase.terminal);
+    render(null);
+    // The listener goes on before the snapshot is read, so a transition landing between the two is
+    // delivered rather than lost.
+    await withDeadline(listen("startup-phase", (event) => apply(event.payload)), "the startup-phase subscription");
+    apply(await withDeadline(invoke("startup_snapshot"), "startup_snapshot"));
+  } catch (error) {
+    reportPageFailure("The startup surface could not reach the shell.", error);
+  }
+}
+
+start();
+</script>
+  </body>
+</html>

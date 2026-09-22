@@ -5,8 +5,10 @@ import ModelPriceDialog from "../components/ModelPriceDialog";
 import { fetchCodexAppServerState } from "../codex-app-server-state";
 import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
+import { confirmAction } from "../action-dialogs";
+import { editModelAlias, editProviderAlias } from "./models-alias-editing";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
+import { Switch, Notice, EmptyState, Select, Tooltip, type NoticeTone } from "../ui";
 import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh, IconPencil } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
@@ -140,7 +142,7 @@ interface AliasView {
   defaults: { global: boolean; providers: Record<string, boolean> };
 }
 
-export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: { apiBase: string; restartEpoch?: number; catalogSyncedAt?: string }) {
+export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt, reportRestart }: { apiBase: string; restartEpoch?: number; catalogSyncedAt?: string; reportRestart: (message: string, tone: NoticeTone) => void }) {
   // Codex app-server staleness (devlog/_fin/260815_gui_codex_restart). Named
   // appServerState, not catalogState: this file already binds that name to the
   // model-catalog resource state, which is an unrelated concept. (Spelling the
@@ -188,6 +190,10 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: {
   // this page, and a restart succeeding there must still clear the banner here.
   const { restarting: codexRestarting, restart: handleCodexRestart } = useCodexRestart(apiBase, {
     onSettled: () => { void reloadAppServerState(); },
+    // Reported through the shell, not this page's toast: a restart takes up to 30s and
+    // outlives a navigation away, and an outcome that says app-servers are still running
+    // must not be discarded because the user moved on while waiting for it.
+    report: reportRestart,
   });
 
   useEffect(() => {
@@ -380,29 +386,11 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: {
     return () => controller.abort();
   }, [reloadAliases]);
 
-  const saveProviderAlias = async (provider: string) => {
-    const entered = window.prompt(t("models.aliasPrompt"), aliases.providers[provider] ?? "");
-    if (entered === null) return;
-    const response = await fetch(`${apiBase}/api/providers/${encodeURIComponent(provider)}/alias`, {
-      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: entered.trim() || null }),
-    });
-    if (!response.ok) { publishFeedback(false, t("models.aliasConflict")); return; }
-    await reloadAliases();
-    publishFeedback(true, t("models.aliasSaved"));
-  };
-
-  const saveModelAlias = async (provider: string, model: string) => {
-    const current = aliases.models[provider]?.[model]?.alias ?? "";
-    const entered = window.prompt(t("models.modelAliasPrompt"), current);
-    if (entered === null) return;
-    const body = entered.trim() ? { set: { [model]: entered.trim() } } : { remove: [model] };
-    const response = await fetch(`${apiBase}/api/providers/${encodeURIComponent(provider)}/model-aliases`, {
-      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    });
-    if (!response.ok) { publishFeedback(false, t("models.aliasConflict")); return; }
-    await reloadAliases();
-    publishFeedback(true, t("models.aliasSaved"));
-  };
+  const aliasEditingDeps = { apiBase, t, reloadAliases, publishFeedback };
+  const saveProviderAlias = (provider: string) =>
+    editProviderAlias(provider, aliases.providers[provider] ?? "", aliasEditingDeps);
+  const saveModelAlias = (provider: string, model: string) =>
+    editModelAlias(provider, model, aliases.models[provider]?.[model]?.alias ?? "", aliasEditingDeps);
 
   const setDefaultAliases = async (enabled: boolean, provider?: string) => {
     const response = await fetch(`${apiBase}/api/default-aliases`, {
@@ -1196,7 +1184,12 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: {
     await Promise.all([loadModelDiscovery(), load()]);
   };
 
-  const applyPreset = async (provider: string, mode: "preset" | "all") => {
+  const applyPreset = async (provider: string, mode: "preset" | "all", replacing?: { presetCount: number }) => {
+    // Consent lives with the write, not with the button, so every caller is gated.
+    if (replacing && !(await confirmAction({
+      message: t("models.presetConfirmReplace", { count: String(replacing.presetCount) }),
+      tone: "danger",
+    }))) return;
     if (catalogMutationRef.current) return;
     catalogMutationRef.current = true;
     setPresetBusy(provider);
@@ -1367,7 +1360,8 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: {
     }
   };
 
-  const deleteCustomModel = async (id: string) => {
+  const deleteCustomModel = async (id: string, name: string) => {
+    if (!(await confirmAction({ message: t("models.customDeleteConfirm", { name }), confirmLabel: t("common.delete"), tone: "danger" }))) return;
     try {
       const r = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (r.ok) {
@@ -1553,13 +1547,11 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: {
                            color: preset.mode === mode ? undefined : "var(--muted)",
                          }}
                          disabled={busy || busyHere || selectionPending}
-                         onClick={(e) => {
-                           e.stopPropagation();
-                           // Switching from a custom selection destroys it, so confirm first.
-                           if (mode === "preset" && preset.mode === "custom"
-                             && !confirm(t("models.presetConfirmReplace", { count: String(preset.presetCount) }))) return;
-                           void applyPreset(provider, mode);
-                         }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Switching from a custom selection destroys it, so consent first.
+                          void applyPreset(provider, mode, mode === "preset" && preset.mode === "custom" ? preset : undefined);
+                        }}
                        >
                          {t(`models.presetMode_${mode}` as TKey)}
                        </button>
@@ -1867,12 +1859,13 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt }: {
                                type="button"
                                className="btn btn-ghost btn-sm text-caption"
                                style={{ color: "var(--red)" }}
-                               onClick={() => {
-                                 if (window.confirm(t("models.customDeleteConfirm", { name: m.displayName ?? m.id }))) {
-                                   void deleteCustomModel(m.customId!);
-                                 }
-                                 setHoveredModel(null);
-                               }}
+                              onClick={() => {
+                                // Hover is cleared AFTER the dialog closes, not before it
+                                // opens: dropping it first unmounts this button, and the
+                                // dialog then has nothing to return focus to.
+                                void deleteCustomModel(m.customId!, m.displayName ?? m.id)
+                                  .finally(() => setHoveredModel(null));
+                              }}
                              >{t("models.customDelete")}</button>
                            </div>
                          )}

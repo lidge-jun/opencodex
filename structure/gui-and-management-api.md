@@ -1,5 +1,9 @@
 # GUI And Management API
 
+The companion settings contract in `src/companion/` persists menu-bar and widget display
+preferences, while `src/server/management/companion-routes.ts` exposes those settings and the
+usage timeline assembled by `src/usage/timeline.ts` to local clients.
+
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
@@ -14,6 +18,15 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 The [Orca importer](codex-home.md#orca-source-owned-account-import) is a local CLI operation with
 no management route. Imported accounts use existing quota validation; deferred warmups reread
 linked sources after the quota await to reject revoked or rotated captures.
+
+## Compact desktop usage
+
+The standalone `/#/tray` GUI route presents local usage and account limits without the
+full dashboard navigation. It reuses the existing API session and fetch wrapper; it
+has no Tauri IPC capability. Companion settings control its sections and chart. Account
+limits use account-level management reads rather than attributing aggregate provider
+quotas to individual accounts. Missing usage is distinct from measured zero. The popup
+shares the existing timeline renderer with the companion settings preview.
 
 ## Dashboard serving
 
@@ -142,7 +155,7 @@ this document owns is which module holds which area and what invariant that area
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent OpenCodex guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. When OpenCodex owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
 | V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), the `keepNativeChatGptOnV1` hybrid pin, and the logical maximum thread count. Selecting `v2` normally enables the native flag; with the hybrid pin it disables that global override so native rows can resolve to v1 while routed rows resolve to v2. Selecting `v1` disables the flag; `default` leaves it unchanged. PUT rejects an explicit enabled flag that conflicts with the selected mode or hybrid pin. Every transition preserves the logical thread limit, is rollback-safe, and resyncs the catalog. GET and successful PUT also return stored `multiAgentModeHintText` plus response-only `multiAgentModeHintRecommendation: { text, revision }`; the recommendation is not a writable or persisted config field. Both also return response-only `multiAgentSurfaceAdvisory: { required, mode, recommended, version, docsUrl }`, true while the resolved mode is not v1 and the stored acknowledgement version is behind; PUT accepts `multiAgentSurfaceAdvisoryAcknowledged`, where only `true` stores the current version and `false` is an explicit no-op, and it composes with a `multiAgentMode` write in the same body so the dialog's recommended answer is one request. |
 | Logs & Debug | One sidebar entry (`/#logs`) with two tabs. Logs tab: request/runtime logs for local diagnosis. `LogsFilterBar` owns controls over the shared `LogFilterState`; `filterLogs` composes filters over the loaded ring. The logs envelope adds `generatedAt` (proxy epoch milliseconds); the page advances that sample with monotonic elapsed time and retains a browser-clock fallback for older proxies. Reset returns focus to the stable All surface radio. Provider/model options include attempts, model choices match normalized complete identities, and relative-time filtering refreshes every 30 seconds while the Logs tab is active, independently of network auto-refresh. Debug tab (`/#logs/debug`; legacy `/#debug` deep links redirect there): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` (monotonic `after` cursor, legacy `since` accepted). CLI: `ocx debug provider|usage …` (both streams via running proxy API). |
-| Usage | `GET /api/usage` read-only aggregates of readable rows from `~/.opencodex/usage.jsonl`; the ledger is streamed in fixed 1 MiB chunks, so the former read-byte and parsed-row caps cannot omit its prefix. Oversized skipped rows produce positive `usageIncomplete` metadata. The response includes measured / reported / unreported / unsupported / estimated counts, a daily zero-filled grid, and model and provider breakdowns. Never exposes prompts. |
+| Usage | `GET /api/usage` read-only aggregates of readable rows from `~/.opencodex/usage.jsonl`; the ledger is streamed in fixed 1 MiB chunks, so the former read-byte and parsed-row caps cannot omit its prefix. Oversized skipped rows produce positive `usageIncomplete` metadata. The response includes measured / reported / unreported / unsupported / estimated counts, a daily zero-filled grid, and model and provider breakdowns. `GET /api/usage/timeline` uses the same ledger and canonical attribution helpers for bounded bucketed model series. Never exposes prompts. |
 | Request metrics | `GET /api/metrics` exposes process-local Prometheus text format v0.0.4 only when `metricsExport.enabled` was true at startup. The ordinary management gate applies; data-plane credentials do not grant access, and disabled mode is 404. `src/server/request-metrics.ts` owns fixed counters/histograms and receives a narrow final-request fact from `src/server/request-log.ts`; `src/server/index/serve-options.ts` creates one owner and injects the recorder and read-only snapshot into the request and management paths. |
 | System | `POST /api/system/restart` restarts the proxy in place. Local CLI/tray callers first attest the exact runtime PID and port, then send a process-scoped HMAC capability bound to that method, path, PID, and port; the capability authorizes no other management route and is invalid after replacement. The caller observes one absolute deadline and accepts success only after a different runtime PID is healthy on the same port. `GET /api/system/health` is the authenticated scalar-only identity used by shared-plane Dashboard status and restart reconnect polling; its `spendLedger` block reports only ownership held/unheld, initialized/configured/degraded booleans and bounded persistence/corruption counters. Reading it never constructs, replays or prunes the ledger. Paths, scopes, accounts and request ids are absent, and the block never moves to unauthenticated `/healthz`. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + eager-relay gate decision, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Its response-state block also reports spill-write `initial`/`healthy`/`degraded` status, a consecutive-failure streak, fixed error class, and failure/success timestamps. A successful publication clears the streak in the same process; raw error text and paths never enter this surface. Scalar-only payload; dashboard/admin callers use the standard management gate, while `ocx doctor` may use only the exact process-scoped local-read capability. It must never move to unauthenticated `/healthz`. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
@@ -152,7 +165,7 @@ this document owns is which module holds which area and what invariant that area
 | Provider quotas and tests | `src/server/management/provider-routes.ts` — `GET /api/provider-quotas`, `POST /api/providers/test`, `GET/PUT /api/provider-context-caps`, `GET /api/provider-presets`. A quota read may be served from cache or force-refreshed; absent quota data is reported as unknown rather than as a measured zero. |
 | Models and visibility | `src/server/management/model-routes.ts` — `GET /api/models`, `PUT /api/disabled-models`, `PUT /api/model-visibility`, `PUT /api/selected-models`, `GET/POST /api/custom-models`. Visibility writes trigger catalog sync through the owning server path. |
 | Effort and fallback | `src/server/management/agent-settings-routes.ts` — `GET/PUT /api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`. Caps clamp; they do not reject. |
-| Grok and Claude integrations | `src/server/management/agent-settings-routes.ts` — `GET /api/grok`, `PUT /api/grok/selection`, `POST /api/grok/apply`, `GET/PUT /api/claude-desktop`, `POST /api/claude-desktop/apply`, `GET /api/claude-desktop/status`, `GET/PUT /api/claude-code`. Apply writes an external app's profile, so its status probe must read the same resolved path it writes (see [`responses.md`](transports/responses.md)). |
+| Grok and Claude integrations | `src/server/management/agent-settings-routes.ts` — `GET /api/grok`, `PUT /api/grok/selection`, `POST /api/grok/apply`, `GET/PUT /api/claude-desktop`, `POST /api/claude-desktop/apply` (`mode`: `first-party` default, `gateway`, or legacy shapes), `GET /api/claude-desktop/status` (`mode`, `firstParty`), `GET/PUT /api/claude-code`. Gateway apply writes an external app's profile, so its status probe must read the same resolved path it writes (see [`responses.md`](transports/responses.md)); first-party apply writes only the Claude Code proxy env, see [`clients/claude-desktop.md`](clients/claude-desktop.md#desktop-modes-first-party-and-gateway). `gui/src/pages/ClaudeDesktop.tsx` renders the mode selector and sends the chosen `mode` with apply. |
 | File-integration plans | `src/server/management/integration-routes.ts` and `aside-profile-routes.ts` — `POST /api/client-integrations/preview`, `POST /api/client-integrations/restore/preview`, and `POST /api/client-integrations/aside/profiles/{profileId}/preview`. Management-authenticated, declared non-mutating, and they write nothing: no snapshot, no lock, no maintenance, no recovery. They answer `409 integration_preview_unavailable` rather than gathering a model roster, because discovery refreshes credentials and writes the provider cache. Responses carry only declared managed schema paths, closed change kinds and an opaque fingerprint; no value, filesystem location or selected member identity appears. Mutation routes accept `operation` and `planFingerprint` together or not at all, reject a half-bound request and an operation that disagrees with the change, and answer `409 integration_preview_stale` with a freshly computed plan. Binding is an optimistic token, never authorization. [The integration contract](clients/integrations.md) owns the ordering. |
 | Grok reset coupons | `src/server/management/grok-coupon-routes.ts` — `GET /api/grok/reset-coupons`, `POST /api/grok/reset-coupons/consume`. The dashboard owner is `gui/src/hooks/useGrokResetCoupons.ts` with `gui/src/components/provider-workspace/GrokResetCoupons.tsx`, wired into the xAI OAuth rows of `ProviderAuthPanel`. Redemption truth is the settled ledger `code`, not the HTTP status: a replayed failure returns 200 with `replayed: true`. See [`providers/xai-grok.md`](providers/xai-grok.md). |
 | Combos | `src/server/management/combo-routes.ts` — `GET/PUT/DELETE /api/combos` own provider combination and failover definitions. |
@@ -449,10 +462,10 @@ observations separate from token or API-equivalent cost totals.
 
 `src/server/hub-usage.ts` serves `GET /v1/usage` on hubs for an explicit configured data key. The authenticated key selects the aggregate; query parameters cannot select an API-key identity. Unscoped environment/admin credentials and loopback bypass are not admitted. The response projects only this client's numeric totals, provider/model/day rows and incomplete-history metadata through `src/remote/hub-usage.ts`; accounts, raw records and key IDs are omitted. Unknown fields are stripped at every object boundary and the serialized body is capped at 1 MiB.
 
-Custom usage windows are immutable bounds on the streaming accumulator, applied to each
-ledger entry before attribution and daily aggregation. The filtered aggregate cache includes
-both inclusive millisecond bounds in its identity and retains the existing ledger revision,
-overlay-version and timezone checks. Preset warming never consumes custom summaries.
+Custom usage windows are immutable bounds on the streaming accumulator, applied before attribution and daily
+aggregation. The filtered cache includes both inclusive millisecond bounds in its identity and retains the existing ledger revision, overlay-version and timezone checks.
+At most four distinct filtered scans may run concurrently; identical requests share one scan and excess distinct
+work fails closed. Preset warming never consumes custom summaries.
 The response retains its preset range discriminator for compatibility and explicitly marks
 `customWindow`, `since`, and `until`; the chart uses the window's local calendar days with
 the existing 366-day cap. GUI custom reports bypass the held preset/session cache.
@@ -524,6 +537,21 @@ monitoring or protection against another process changing the path again after t
 An opt-in shadow-call rewrite persists the bounded, redacted original helper model as
 `shadowCallRewrittenFrom`, so helper traffic remains identifiable after restart without storing
 request content or inferring a helper subtype from timing.
+A failed request persists closed `failureStage` and `failureCause` members on the attempt that ended
+it and on the logical row, derived once at `addFinalRequestLog` from facts that are themselves
+closed; `errorCode` and `upstreamError` carry upstream text and are deliberately not read there. The
+resend verdict they imply is never stored — `/api/logs` computes `resendPermission` at read time, so
+a row written by an older build cannot assert a permission the current tables refuse. An attempt also
+carries `deliverySummary`: adapter events, relayed frames, semantic bytes, side effects and terminal
+frames, counted where each event is delivered rather than where it is read, so the gap between the
+first two is the loss signal. Provider debug formats one ring line per finalized attempt from those
+counts and writes no second record. `GET /api/usage?failures=1` groups failed rows by a versioned
+fingerprint over closed vocabularies only, rebuilt through the same cooperative scanner and
+inheriting its bounds, so deleting a ledger row removes it from the grouping.
+`usageLedgerMaxBytes` is unset by default; when set, an append that crosses it publishes the newest
+whole rows byte for byte through the shared atomic writer, refuses the rename unless the source is
+the exact revision that was copied, and then discards the Logs ring, the retained aggregates and the
+request-history index so no surface serves rows the ledger no longer has.
 `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
 The management route scans the ledger from its beginning in fixed 1 MiB chunks on a
@@ -620,9 +648,16 @@ log scan, or persistence. Restart creates a fresh owner, resets every counter/hi
 `opencodex_metrics_process_start_time_seconds`.
 
 The label vocabularies are closed: protocol is `responses`, `chat`, `messages`, or `unknown`; result
-is `completed`, `failed`, `incomplete`, or `aborted`; recovery is one of eight coarse classes. A
+is `completed`, `failed`, `incomplete`, or `aborted`; recovery is one of the coarse classes listed in
+`REQUEST_METRICS_RECOVERY_CLASSES`, and cause is one of the shared failure causes in
+`REQUEST_METRICS_FAILURE_CAUSES`, which aliases the dictionary rather than copying it. Each is the
+roster the exporter itself iterates. The count is
+deliberately not restated here: it was written as eight, a bounded label value was added, and the
+documentation then contradicted the output it describes. A
 logical request increments once, physical sends sum the finalized attempt counts, and each distinct
-recovery kind already retained on an attempt contributes once to its coarse class. HTTP 200 never
+recovery kind already retained on an attempt contributes once to its coarse class.
+`opencodex_request_failures_total` counts the cause the recorder derived and never re-derives one,
+and it labels a counter only: no histogram carries a cause. HTTP 200 never
 overrides a failed terminal event. Duration observes every valid finalized duration; TTFT observes
 only finite nonnegative first-output values, while `opencodex_ttft_missing_total` is the complementary
 denominator. No request, credential, account, provider, model, conversation, raw error, prompt, tool,
@@ -634,6 +669,16 @@ request to `~/.opencodex/usage-debug.jsonl` (mode `0o600`, auto-trimmed to the m
 once it exceeds 200) with the upstream content-type, body kind (`sse / json / other / none`), a 2KB
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
+
+For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
+before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
+`~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
+presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
+process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
+log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
+section/index only). The signing key is created at process start and never persisted, so tags
+compare values within one proxy process and never become a durable correlation key; no prompt
+text, tool name, raw identifier, or header value is recorded. Off by default.
 
 ## Z.ai quota destination ownership
 
@@ -749,3 +794,8 @@ is chosen; for a combo selector the warning lists the combo's target providers f
 and states that failover targets receive the conversation too. `GET /api/settings` returns
 the override or null; `PUT /api/settings` accepts a complete validated object or null to clear it.
 Save failure restores live settings and deletion provenance; the dashboard retains the draft for retry.
+
+`src/server/gui-static.ts` serves the dashboard from `gui/dist`, with `OPENCODEX_GUI_DIST` taking
+priority and standalone binaries resolving the copied directory beside `ocx`. Runtime package
+metadata comes from the bundled `src/lib/package-version.ts` manifest import so compiled binaries
+do not read a source-tree `package.json`.

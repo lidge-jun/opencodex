@@ -11,6 +11,7 @@ import {
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
   retryOn429PolicyConfigError,
+  retryOnResetPolicyConfigError,
   sanitizeModelCostsForDisplay,
 } from "../config";
 import {
@@ -29,6 +30,7 @@ import {
   upstreamHttpVersionConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { providerEgressConfigError } from "../lib/provider-egress";
 import { redactSecretString } from "../lib/redact";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
@@ -722,6 +724,10 @@ export function providerManagementConfigError(
     delete canonicalCandidate.modelCosts;
     // requestPacing is a user-owned transport overlay, not part of the canonical seed.
     delete canonicalCandidate.requestPacing;
+    // retryOnReset is the same kind of overlay: it tunes how this provider's own Responses
+    // sends recover, not what the canonical forward seed is. Validated below
+    // (retryOnResetPolicyConfigError).
+    delete canonicalCandidate.retryOnReset;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
     // narrowing what their own native rows advertise. They can only ever LOWER the measured
     // window (see nativeOpenAiContextWindow), so admitting them cannot widen what the proxy
@@ -768,6 +774,10 @@ export function providerManagementConfigError(
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
   }
+  const retryOnResetError = retryOnResetPolicyConfigError(raw.retryOnReset);
+  if (retryOnResetError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${retryOnResetError}`;
+  }
   const requestPacingError = requestPacingConfigError(raw.requestPacing);
   if (requestPacingError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${requestPacingError}`;
@@ -779,6 +789,13 @@ export function providerManagementConfigError(
   const upstreamHttpVersionError = upstreamHttpVersionConfigError(raw.upstreamHttpVersion);
   if (upstreamHttpVersionError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${upstreamHttpVersionError}`;
+  }
+  // Per-provider egress shares one definition with the transports and the config loader, so a
+  // value the dashboard accepts is one a request can actually leave by. The message never
+  // echoes the value: a proxy URL routinely embeds `user:password@`.
+  const egressError = providerEgressConfigError(typed);
+  if (egressError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${egressError}`;
   }
   const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
   if (modelCostsError) {
@@ -947,6 +964,13 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   decodesNativeCompactionBlobs: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
+  // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and
+  // the editor may not write it. `ocx config set` and the config file remain the way to set
+  // it, which is the same boundary `apiKey` sits behind and for the same reason.
+  proxy: "redacted",
+  // A bypass list names destinations, carries no credential, and is only meaningful next to a
+  // route the operator can already see.
+  noProxy: "editor",
   upstreamHttpVersion: "editor",
   upstreamWebsocket: "editor",
   directGeminiWireRenames: "editor",
@@ -1024,6 +1048,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   pinParallelToolCallsFalse: "editor",
   terminalContinuationGuard: "editor",
   openaiChatEofTolerance: "editor",
+  foldDeveloperRoleToSystem: "editor",
   promptCacheKey: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",
@@ -1033,6 +1058,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   showThinkingSummary: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
+  retryOnReset: "editor",
   reasoningSplitModels: "editor",
   reasoningDetailsModels: "editor",
   thinkingToggleModels: "editor",

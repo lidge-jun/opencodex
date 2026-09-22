@@ -1,4 +1,10 @@
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  assertRouteAllowedByScope,
+  resolveAdmissionModelScope,
+} from "../admission-model-scope";
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import {
@@ -655,7 +661,12 @@ export async function handleResponsesCompact(
     // routes ordinary turns elsewhere (#2901); the compaction-scoped router
     // may land that on the configured default provider instead of 404.
     route = routeCompactionModel(config, compactModel, evidenceFromBody(raw));
+    // A compaction override picks the model, not the caller, so the key's scope
+    // is applied to what the override resolved to rather than to the selector
+    // the client sent.
+    assertRouteAllowedByScope(resolveAdmissionModelScope(config, admission), compactRequestedModel, route);
   } catch (err) {
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
       // no-eligible reason) so a failed compact policy request stays

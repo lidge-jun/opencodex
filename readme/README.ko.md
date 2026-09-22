@@ -89,12 +89,38 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 **http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
-Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고, 대시보드에서
-5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은 정상 계정을 쓰고,
-round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로 시작한 계정에 붙어
-있어서, 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터 재평가, failover,
-계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다. Codex Desktop 로그인처럼
-다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면, 계정에 선택 순서를 지정하세요.
+
+<details>
+<summary><b>데스크톱 앱과 macOS 위젯 — 베타</b></summary>
+
+같은 대시보드를 감싼 네이티브 앱과, 브라우저를 열지 않고 프록시 상태·오늘의 사용량·프로바이더
+쿼터를 보여 주는 WidgetKit 확장입니다. 프록시 자체는 그대로입니다. 앱은 실행 중인 프록시를 찾거나
+번들된 `ocx` 사이드카를 시작하며, 대시보드는 계속 **http://localhost:10100**에서 열립니다.
+
+현재 베타 버전입니다. 빌드는 무결성을 확인할 수 있도록 서명되어 있지만 공증되지는 않았습니다.
+따라서 macOS에서는 처음 실행할 때 마우스 오른쪽 버튼을 클릭한 뒤 **열기**를 선택해야 하고,
+Windows 설치 파일에는 SmartScreen 경고가 표시됩니다. 위젯은 macOS 14 이상에서 쓸 수 있으며,
+위젯이 그리는 스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다.
+
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하거나
+`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`로 직접 빌드하세요.
+
+설치 위치, 서비스 파일을 비롯해 디스크에 쓰는 항목은
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에 정리되어 있습니다.
+[데스크톱 앱 가이드](https://lidge-jun.github.io/opencodex/guides/desktop-app/)와
+[macOS 메뉴 막대 앱 가이드](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)에서
+플랫폼별 설치 방법과 Gatekeeper 안내를 확인할 수 있습니다.
+
+</details>
+
+### ChatGPT 계정 풀
+
+opencodex는 Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고,
+대시보드에서 5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은
+정상 계정을 쓰고, round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로
+시작한 계정에 붙어 있어서 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터
+재평가, failover, 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다.
+Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면 계정에 선택 순서를 지정하세요.
 
 ### 스폰서
 

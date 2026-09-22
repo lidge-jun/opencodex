@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../../src/codex/catalog";
 import { routeModel } from "../../src/router";
-import type { OcxConfig, OcxParsedRequest, OcxTool } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
 
 const tools: OcxTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
 
@@ -59,6 +59,73 @@ describe("parallel tool calls provider opt-in (request body)", () => {
     const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://llm.example.internal/v1", apiKey: "k", pinParallelToolCallsFalse: true });
     const body = JSON.parse(adapter.buildRequest(parsedRequest()).body) as Record<string, unknown>;
     expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
+});
+
+/**
+ * #5211 case 2. The provider knob has three states and the call site only branched on two, so
+ * the default state — a provider that never configured it — dropped the caller's own explicit
+ * `parallel_tool_calls: false` on the way to the wire while still answering normally. The
+ * assertions read the request body because a successful tool call cannot tell the difference.
+ */
+describe("caller-specified parallel_tool_calls on a provider that expresses no preference", () => {
+  const unsetProvider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://gateway.example.internal/v1", apiKey: "k" };
+
+  test("an explicit request-level false reaches the outbound request", () => {
+    const adapter = createOpenAIChatAdapter(unsetProvider);
+    const body = JSON.parse(adapter.buildRequest(parsedRequest({ parallelToolCalls: false })).body) as Record<string, unknown>;
+    expect(body.parallel_tool_calls).toBe(false);
+  });
+
+  test("an explicit request-level true still omits the knob strict hosts never had to accept", () => {
+    const adapter = createOpenAIChatAdapter(unsetProvider);
+    const body = JSON.parse(adapter.buildRequest(parsedRequest({ parallelToolCalls: true })).body) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  test("a request that says nothing leaves the key absent", () => {
+    const adapter = createOpenAIChatAdapter(unsetProvider);
+    const body = JSON.parse(adapter.buildRequest(parsedRequest()).body) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  test("a toolless request never grows the key", () => {
+    const adapter = createOpenAIChatAdapter(unsetProvider);
+    const toolless = { ...parsedRequest({ parallelToolCalls: false }), context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] } } as never;
+    const body = JSON.parse(adapter.buildRequest(toolless).body) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  // The native Chat route never projects the body, so it read the same three provider states
+  // from its own copy of the branch and lost the caller's false in exactly the same way.
+  describe("native Chat passthrough", () => {
+    function passthroughBody(provider: OcxProviderConfig, raw: Record<string, unknown>): Record<string, unknown> {
+      const request = buildOpenAIChatPassthroughRequest(provider, {
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ type: "function", function: { name: "shell", parameters: { type: "object" } } }],
+        ...raw,
+      }, "grok-4.5", false);
+      return JSON.parse(request.body) as Record<string, unknown>;
+    }
+
+    test("an explicit request-level false reaches the outbound request", () => {
+      expect(passthroughBody(unsetProvider, { parallel_tool_calls: false }).parallel_tool_calls).toBe(false);
+    });
+
+    test("an explicit true and an absent value both leave the key off", () => {
+      expect(passthroughBody(unsetProvider, { parallel_tool_calls: true })).not.toHaveProperty("parallel_tool_calls");
+      expect(passthroughBody(unsetProvider, {})).not.toHaveProperty("parallel_tool_calls");
+    });
+
+    test("the configured states keep their existing wire values", () => {
+      const optedIn = { ...unsetProvider, parallelToolCalls: true };
+      expect(passthroughBody(optedIn, {}).parallel_tool_calls).toBe(true);
+      expect(passthroughBody(optedIn, { parallel_tool_calls: false }).parallel_tool_calls).toBe(false);
+      const optedOut = { ...unsetProvider, parallelToolCalls: false };
+      expect(passthroughBody(optedOut, { parallel_tool_calls: true })).not.toHaveProperty("parallel_tool_calls");
+      expect(passthroughBody({ ...optedOut, pinParallelToolCallsFalse: true }, { parallel_tool_calls: true }).parallel_tool_calls)
+        .toBe(false);
+    });
   });
 });
 

@@ -410,7 +410,7 @@ function isMeasuredStatus(status: UsageStatus): boolean {
   return status === "reported" || status === "estimated";
 }
 
-interface UsageAttribution {
+export interface UsageAttribution {
   requestId: string;
   provider: string;
   model: string;
@@ -454,7 +454,7 @@ function usageModelKey(providerKey: string, model: string): string {
   return `${providerKey}\0${model}`;
 }
 
-function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
+export function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
   if (!entry.attempts?.length) {
     return [{
       requestId: entry.requestId,

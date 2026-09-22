@@ -52,7 +52,7 @@ import { parseRequest } from "../../responses/parser";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
-import { requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
+import { observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
@@ -110,6 +110,13 @@ import {
   CODEX_RESERVE_OPT_IN_REQUIRED_MESSAGE,
 } from "../../codex/loopback-target";
 import { checkComboTargetInputAdmission, checkInputAdmission } from "./input-admission";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  assertRouteAllowedByScope,
+  resolveAdmissionModelScope,
+  routeAllowedByScope,
+} from "../admission-model-scope";
 import { nativeContextLimits } from "../../codex/catalog";
 import { streamingContextOverflowResponse } from "./context-overflow";
 import {
@@ -150,6 +157,14 @@ export async function prepareResponsesRequest(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  observeCacheDiagnosticInbound(
+    logCtx,
+    body,
+    req.headers,
+    options.promptCacheKeyIsSharedCohort === true
+      ? "system-derived"
+      : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
+  );
   if (!options.comboAttempt && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
       endpoint: "responses",
@@ -273,10 +288,14 @@ export async function prepareResponsesRequest(
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
   // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
   // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
+  // verbatim). Structurally valid backend ciphertext stays byte-identical; encoded-looking unknown
+  // slots remain opaque only until final-route handling can preserve or strip them safely.
   {
     const rewritten = sanitizeEncryptedContentInPlace(
       (body as { input?: unknown } | undefined)?.input,
+      // The final destination is not known yet. Keep ambiguous encoded slots opaque until route
+      // selection can either strip them for a third party or apply strict native classification.
+      { preserveUnknownOpaqueSlots: true },
     );
     if (rewritten > 0)
       console.warn(
@@ -289,6 +308,10 @@ export async function prepareResponsesRequest(
   try {
     parsed = parseRequest(body);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
+    // The body may have been rebuilt since the inbound observation (previous-response
+    // expansion); alias the parsed raw body to the same draft so the outbound
+    // observation at the adapter seam still finds it.
+    rebindCacheDiagnosticBody(parsed._rawBody, logCtx.cacheDiagnosticDraft);
     // Captured before any parser mutates it, so both grammars see the client's id.
     const { fastRow, effortRow } = parseSyntheticRowId(parsed.modelId, config);
     if (fastRow) {
@@ -407,7 +430,18 @@ export async function prepareResponsesRequest(
 
   let route: RouteResult;
   let credentialDomainWasRewritten = false;
+  // The selector the caller actually sent, captured before shadow interception
+  // or a subagent fallback rewrites it, so a refusal names the client's own
+  // request rather than a destination it never asked for.
+  const inboundSelector = parsed.modelId;
+  const admissionScope = resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult): RouteResult => {
+    // Every route this request path produces passes through here: the direct
+    // name, an alias, a policy or combo selection, a compaction override, a
+    // shadow-intercept target and both subagent-fallback re-routes. Checking
+    // the key's scope at this one point is what stops a rewrite from reaching
+    // a destination the front door would have refused.
+    assertRouteAllowedByScope(admissionScope, inboundSelector, candidate);
     candidate.staticPolicy = captureRouteStaticPolicy(
       candidate.providerName,
       candidate.modelId,
@@ -470,6 +504,7 @@ export async function prepareResponsesRequest(
     }
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
+    if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
     if (err instanceof NoAvailableComboTargetsError) {
       return comboUnavailable(err.comboId);
     }
@@ -669,6 +704,7 @@ export async function prepareResponsesRequest(
         credentialDomainWasRewritten = true;
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
+        if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
         if (err instanceof NoAvailableComboTargetsError) {
           return comboUnavailable(err.comboId);
         }
@@ -869,6 +905,7 @@ export async function prepareResponsesRequest(
               credentialDomainWasRewritten = true;
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
+              if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(err);
               if (err instanceof NoAvailableComboTargetsError) {
                 return comboUnavailable(err.comboId);
               }
@@ -890,6 +927,17 @@ export async function prepareResponsesRequest(
   }
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
+
+  if (inboundWire === "responses" && isCanonicalOpenAiForwardProvider(route.provider)) {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (rewritten > 0) {
+      console.warn(
+        `[opencodex] rewrote ${rewritten} non-Fernet encrypted_content part(s) before canonical native replay`,
+      );
+    }
+  }
 
   // Encrypted child tasks may reach the canonical native backend or an explicitly trusted
   // direct Responses route. This runs against the FINAL route so native-only fallback can
@@ -1006,6 +1054,14 @@ export async function prepareResponsesRequest(
     inboundTransport: options.inboundTransport,
     claudeGoAffinity: options.claudeGoAffinity,
   });
+  // Normalization is the last thing that can move the destination: resolving an
+  // OpenAI virtual model rewrites route.modelId to the wire id that will
+  // actually be billed. A scope checked only before this would authorize the
+  // public selector and send the wire model, so the settled route is checked
+  // once more here.
+  if (!routeAllowedByScope(admissionScope, route)) {
+    return admissionModelDeniedResponse(new AdmissionModelDeniedError(inboundSelector, route));
+  }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
