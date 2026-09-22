@@ -19,7 +19,10 @@ CLI installation inspection reason codes, including Windows deferral, follow the
 `src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
 `plaintextV2AgentMessages` request compiler and response restoration. The default is unset;
 only explicit true on Responses ingress to the final canonical ChatGPT forward route activates it.
-A default top-level collaboration catalog is required. The compiler preserves caller objects,
+A default collaboration catalog is required: top-level `tools`, or, when that field is absent,
+the first input item's developer `additional_tools` catalog used by Responses Lite. Explicit
+top-level catalogs take precedence; user-role and later historical catalogs do not opt in.
+The compiler preserves caller objects,
 aliases the namespace and three message functions, and removes only their true encryption marker.
 Declaration/reference collisions refuse the whole rewrite without changing the request.
 

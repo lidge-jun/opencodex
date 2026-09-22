@@ -94,7 +94,16 @@ function collaborationCatalogInfo(catalogs: readonly unknown[][]): {
 
 export function hasPlaintextV2CollaborationCatalog(body: unknown): boolean {
   if (!isPlainObject(body)) return false;
-  return Array.isArray(body.tools) && collaborationCatalogInfo([body.tools]).hasV2Catalog;
+  if (Array.isArray(body.tools)) return collaborationCatalogInfo([body.tools]).hasV2Catalog;
+  // Responses Lite carries its default catalog as the first developer input item.
+  // An explicit top-level catalog wins; later historical catalogs are not defaults.
+  if (body.tools !== undefined || !Array.isArray(body.input)) return false;
+  const initial = body.input[0];
+  return isPlainObject(initial)
+    && initial.type === "additional_tools"
+    && initial.role === "developer"
+    && Array.isArray(initial.tools)
+    && collaborationCatalogInfo([initial.tools]).hasV2Catalog;
 }
 
 function hasOptimizedNamespaceConflict(catalogs: readonly unknown[][]): boolean {
