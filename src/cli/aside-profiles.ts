@@ -8,10 +8,12 @@ import { runtimeRequest, RuntimeApiError, type RuntimeApiDeps } from "./runtime-
 
 /** Aside policy and file writes share the running server's mutation owner. Never fall back locally. */
 export async function refreshAsideProfilesThroughServer(
-  deps: RuntimeApiDeps = {},
+  // The optional transport seam observes the real direct-local exchange in listener tests.
+  deps: RuntimeApiDeps & { directLocalFetch?: typeof directLocalHttpFetch } = {},
 ): Promise<OwnedIntegrationRefreshOutcome[]> {
   // An explicit URL is an opt-in transport used by connected callers and tests.
   if (!deps.baseUrl) {
+    const localFetch = deps.directLocalFetch ?? directLocalHttpFetch;
     const live = await (deps.findLiveProxy ?? findLiveProxy)();
     if (!live) throw new RuntimeApiError("Proxy is not running. Start it with: ocx start", 503, null);
     if (live.source !== "runtime" || live.pid === null) {
@@ -23,7 +25,7 @@ export async function refreshAsideProfilesThroughServer(
     }
     const nonce = createLocalAttestationChallenge();
     const baseUrl = `http://${probeHostname(live.hostname)}:${live.port}`;
-    const proofResponse = await directLocalHttpFetch(`${baseUrl}/healthz`, { headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: nonce } });
+    const proofResponse = await localFetch(`${baseUrl}/healthz`, { headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: nonce } });
     const health = await proofResponse.json().catch(() => null);
     if (!proofResponse.ok || !isOpencodexHealthz(health) || health?.pid !== live.pid || health?.port !== live.port
       || health?.asideSyncCapability !== LOCAL_ASIDE_SYNC_CAPABILITY_VERSION
@@ -33,7 +35,7 @@ export async function refreshAsideProfilesThroughServer(
     const expiresAt = Date.now() + LOCAL_ASIDE_SYNC_CAPABILITY_TTL_MS;
     const capability = createLocalAsideSyncCapability(runtime.attestationSecret, nonce, LOCAL_ASIDE_SYNC_METHOD, LOCAL_ASIDE_SYNC_PATH, live.pid, live.port, expiresAt);
     if (!capability) throw new RuntimeApiError("Aside profile synchronization capability was unavailable", 503, null);
-    const response = await directLocalHttpFetch(`${baseUrl}${LOCAL_ASIDE_SYNC_PATH}`, {
+    const response = await localFetch(`${baseUrl}${LOCAL_ASIDE_SYNC_PATH}`, {
       method: LOCAL_ASIDE_SYNC_METHOD,
       headers: {
         [LOCAL_ASIDE_SYNC_EXPECTED_PID_HEADER]: String(live.pid),
