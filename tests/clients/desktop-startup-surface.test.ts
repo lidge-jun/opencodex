@@ -157,6 +157,51 @@ describe("desktop startup surface", () => {
     expect(page).toContain("progress.failedPhase");
   });
 
+  test("the snapshot answers with a state rather than with nothing", () => {
+    // The page returns early on a falsy progress, so an absent answer was not a neutral one: it
+    // was a window frozen on its own markup, with no diagnostic in it and no event coming.
+    expect(lib).toContain("fn startup_snapshot(app: tauri::AppHandle) -> startup::Progress");
+    expect(lib).not.toContain("Option<startup::Progress>");
+    expect(lib).toContain("unwrap_or_else(startup::unavailable)");
+    expect(startup).toContain("pub fn unavailable() -> Progress");
+  });
+
+  test("not having started is a state of its own, and not a checklist row", () => {
+    // Seeding the state with the first phase made "has not started" render exactly like "started,
+    // and registering". A row for it would instead be a step that never completes.
+    expect(startup).toContain('Self::NotStarted => "not-started"');
+    const list = startup.indexOf("pub const PHASES");
+    expect(list).toBeGreaterThan(-1);
+    expect(startup.slice(list, startup.indexOf("];", list))).not.toContain("NotStarted");
+    expect(startup).not.toContain("Progress::new(Phase::Registering, 0)");
+  });
+
+  test("the run publishes before anything it does can return", () => {
+    // The lookup below used to come first, so a run that returned there had said nothing at all
+    // and the page could not tell that from a run still going.
+    const at = startup.indexOf("async fn run(app: &AppHandle");
+    expect(at).toBeGreaterThan(-1);
+    const body = startup.slice(at, startup.indexOf("async fn register(", at));
+    const published = body.indexOf("report(app, started, Phase::Registering, None);");
+    expect(published).toBeGreaterThan(-1);
+    expect(body.indexOf("try_state::<AppState>()")).toBeGreaterThan(published);
+  });
+
+  test("a run that reports nothing is still a run that ends", () => {
+    // Every early return in the sequence, and every step that outlives the ceiling, used to leave
+    // the surface on its last state for as long as the process lived.
+    const begin = startup.slice(startup.indexOf("pub fn begin("), startup.indexOf("fn settle("));
+    expect(begin).toContain("run(&app, started).await;");
+    expect(begin.slice(begin.indexOf("run(&app, started).await;"))).toContain("settle(");
+    expect(begin).toContain("sleep_until(started + DEADLINE + SETTLE_GRACE)");
+    // Idempotent, and bound to the run it was started for: it may not overwrite a real result,
+    // and a guard left over from an earlier run may not fail the retry that replaced it.
+    const settle = startup.slice(startup.indexOf("fn settle("), startup.indexOf("async fn run("));
+    expect(settle).toContain("startup.settled()");
+    expect(settle).toContain("generation.load(Ordering::Acquire) != generation");
+    expect(settle).toContain("Progress::new(Phase::Failed, elapsed_ms)");
+  });
+
   test("the retry, the snapshot and the phase list are reachable from the page", () => {
     const handler = lib.slice(
       lib.indexOf("generate_handler!["),
