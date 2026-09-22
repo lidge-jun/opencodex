@@ -60,6 +60,22 @@ describe("selected Codex CLI installation target derivation", () => {
     }
   });
 
+  test("a refused PATH probe stops the scan instead of attesting a later candidate", async () => {
+    const files = fixtureFiles();
+    files.add((NODE_DIR + "\\codex.cmd").toLowerCase());
+    const refused = PREFIX + "\\codex.cmd";
+    const deps = depsFor(files);
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ codexCliPath: "codex" }),
+      {
+        ...deps,
+        exists: (path: string) =>
+          path.toLowerCase() === refused.toLowerCase() ? "refused" : deps.exists(path),
+      },
+    );
+    expect(result).toEqual({ kind: "unavailable", reason: "candidate_unavailable" });
+  });
+
   test("derives the npm-global layout from the configured candidate", async () => {
     const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),

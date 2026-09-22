@@ -26,7 +26,9 @@ export type CodexCliInstallationTargetDerivation =
 
 export interface CodexCliInstallationTargetDeps {
   readonly platform?: NodeJS.Platform;
-  readonly exists?: (path: string) => boolean | Promise<boolean>;
+  /** `refused` means the probe could not decide; a PATH scan must stop rather than
+   *  attest a later candidate that the real launcher would never reach. */
+  readonly exists?: (path: string) => boolean | "refused" | Promise<boolean | "refused">;
   /** Bounded prefix read used only to recognize an OpenCodex-owned wrapper. */
   readonly fileContains?: (path: string, marker: string) =>
     boolean | "unavailable" | Promise<boolean | "unavailable">;
@@ -46,7 +48,7 @@ async function scanPath(
   name: string,
   pathValue: string | null | undefined,
   pathExt: string | null | undefined,
-  exists: (path: string) => boolean | Promise<boolean>,
+  exists: (path: string) => boolean | "refused" | Promise<boolean | "refused">,
 ): Promise<string | null> {
   const extensions = (pathExt ?? DEFAULT_PATH_EXT).split(";").map(value => value.trim()).filter(Boolean);
   const names = /\.[a-z0-9]+$/i.test(name) ? [name] : extensions.map(ext => name + ext.toLowerCase());
@@ -55,7 +57,9 @@ async function scanPath(
     if (!dir) continue;
     for (const candidateName of names) {
       const candidate = win32.join(dir, candidateName);
-      if (await exists(candidate)) return candidate;
+      const found = await exists(candidate);
+      if (found === "refused") return null;
+      if (found) return candidate;
     }
   }
   return null;
@@ -79,7 +83,11 @@ export async function deriveCodexCliInstallationInput(
     const { inspectWindowsInstallationFiles } = await import("./windows-installation-files");
     return inspectWindowsInstallationFiles([{ path, maxBytes, metadataOnly: maxBytes === 0, prefixOnly }]);
   };
-  const exists = deps.exists ?? (async (path: string) => (await safeRead(path, 0)).kind === "observed");
+  const exists = deps.exists ?? (async (path: string) => {
+    const result = await safeRead(path, 0);
+    if (result.kind === "observed") return true;
+    return result.kind === "refused" ? "refused" : false;
+  });
   const fileContains = deps.fileContains ?? (async (path: string, marker: string) => {
     const result = await safeRead(path, SHIM_PROBE_BYTES, true);
     if (result.kind !== "observed") return "unavailable";
@@ -90,7 +98,7 @@ export async function deriveCodexCliInstallationInput(
   let candidate: string | null;
   if (configured) {
     if (/^[a-z]:[\\/]/i.test(configured)) {
-      if (!await exists(configured)) return { kind: "unavailable", reason: "candidate_unavailable" };
+      if (await exists(configured) !== true) return { kind: "unavailable", reason: "candidate_unavailable" };
       candidate = win32.normalize(configured);
     } else {
       if (configured.includes("/") || configured.includes("\\")) {
@@ -111,7 +119,7 @@ export async function deriveCodexCliInstallationInput(
     if (marker === "unavailable") return { kind: "unavailable", reason: "candidate_unavailable" };
     if (marker) {
       const backing = candidate.slice(0, -".cmd".length) + ".opencodex-real.cmd";
-      if (!await exists(backing)) return { kind: "unavailable", reason: "unsupported_layout" };
+      if (await exists(backing) !== true) return { kind: "unavailable", reason: "unsupported_layout" };
       candidate = backing;
     }
   }
@@ -125,19 +133,19 @@ export async function deriveCodexCliInstallationInput(
   } else {
     return { kind: "unavailable", reason: "unsupported_layout" };
   }
-  if (!await exists(win32.join(prefix, "node_modules", "@openai", "codex", "package.json"))) {
+  if (await exists(win32.join(prefix, "node_modules", "@openai", "codex", "package.json")) !== true) {
     return { kind: "unavailable", reason: "unsupported_layout" };
   }
 
   // The npm cmd-shim itself prefers %dp0%\node.exe before falling back to PATH.
   let node = win32.join(prefix, "node.exe");
-  if (!await exists(node)) {
+  if (await exists(node) !== true) {
     const resolved = await scanPath("node.exe", snapshot.path, null, exists);
     if (!resolved) return { kind: "unavailable", reason: "toolchain_unresolved" };
     node = resolved;
   }
   const npmCli = win32.join(win32.dirname(node), "node_modules", "npm", "bin", "npm-cli.js");
-  if (!await exists(npmCli)) return { kind: "unavailable", reason: "toolchain_unresolved" };
+  if (await exists(npmCli) !== true) return { kind: "unavailable", reason: "toolchain_unresolved" };
 
   return {
     kind: "derived",
