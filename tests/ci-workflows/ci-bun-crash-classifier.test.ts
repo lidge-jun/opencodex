@@ -66,7 +66,7 @@ describe("the Bun crash classifier is shared", () => {
   const workflow = read(".github", "workflows", "ci.yml");
 
   const lanes = {
-    "macos-shard": runBlockContaining(workflow, "run_macos_suite tests"),
+    "macos-shard": runBlockContaining(workflow, "run_macos_suite ./tests"),
     "macos-control": runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests 2>&1"),
   };
 
