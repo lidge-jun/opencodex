@@ -657,7 +657,7 @@ describe("legacy pool contract goldens (#wp5)", () => {
       expect(await oauth({ provider: "google-antigravity", strategy: "round-robin" })).toBe(200);
       const cleared = await oauthJson({ provider: "google-antigravity", strategy: null });
       expect(cleared.status).toBe(200);
-      expect(cleared.body.strategy ?? null).toBeNull();
+      expect(cleared.body).toHaveProperty("strategy", null);
       // 0 and 101 sit just outside the shared bound; 1 and 100 are the edges that must pass.
       for (const stickyLimit of [0, 101, 1.5]) {
         expect(await codex({ stickyLimit })).toBe(400);
