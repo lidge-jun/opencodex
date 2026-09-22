@@ -27,6 +27,8 @@ Diff-level change map. Paths are relative to the repository root.
 - `AGENTS.md` "Issues and pull requests (agents)": after the screenshot sentence, add where the
   image goes (`pr-assets` branch, SHA-pinned raw URL) and that PR branches must not add evidence images.
 - `docs-site/src/content/docs/contributing.md:157`: same hosting rule, one sentence.
+- `docs-site/AGENTS.md:8` (A-phase blocker 1, Planck): "historical `docs/` or `devlog/` material" →
+  "`devlog/` notes or older revisions in git history".
 - D9 (architect addition): the "Structure SOT" bullet in `docs-site/src/content/docs/contributing.md:180`
   and its seven translations (`tr:193`, `fr:169`, `ko:131`, `ja:132`, `ru:133`, `zh-tw:138`, `zh-cn:120`)
   sends historical notes to `docs/`. Each becomes "`devlog/`" (the tracked home for investigation and
