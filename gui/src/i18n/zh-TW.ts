@@ -2,6 +2,13 @@ import type { TKey } from "./en";
 
 /** Traditional Chinese (Taiwan) UI strings — keys must match `en.ts` 1:1. */
 export const zhTW: Record<TKey, string> = {
+  "tray.updated": "更新於 {time} · 每60秒",
+  "tray.today": "今天",
+  "tray.input": "輸入",
+  "tray.output": "輸出",
+  "tray.cost": "預估費用",
+  "tray.cached": "快取 {percent}",
+
   "usage.incomplete": "部分用量記錄無法納入。次數、日期和排名僅反映可讀取的記錄。",
   "models.pickerOrder.usageIncomplete": "用量歷史不完整，無法儲存最常用排序。請選擇其他排序或先修復歷史記錄。",
   "api.attribution.noRecordedUse": "可讀取的記錄中沒有使用記錄",
