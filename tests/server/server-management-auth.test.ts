@@ -1357,6 +1357,13 @@ describe("management and data-plane credential separation", () => {
       .toMatchObject({ allowed: false, reason: "source" });
 
     const redeemable = createGuiPairingGrant("https://dashboard.example.test", config, state, now + 11);
+    // Redemption is a digest-keyed lookup, even after the source limiter has refused guesses.
+    // Iterating the grant map here would turn a valid redemption into a failed request.
+    Object.defineProperty(state.pairingGrants, Symbol.iterator, {
+      value: () => { throw new Error("pairing lookup scanned grants"); },
+    });
+    expect(consumeGuiPairingGrant(validOrigin, { grant: `ocx_pair_${"y".repeat(43)}` }, config, state, now + 11, guessContext))
+      .toMatchObject({ allowed: false, reason: "source" });
     expect(consumeGuiPairingGrant(validOrigin, { grant: redeemable.grant }, config, state, now + 12, guessContext))
       .toMatchObject({ browserOrigin: "https://dashboard.example.test", issuance: "pairing" });
 

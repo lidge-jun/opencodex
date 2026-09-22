@@ -15,7 +15,7 @@
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, posix, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import { commandInvocation } from "../lib/win-exec";
 
 export const STAR_REPO = "lidge-jun/opencodex";
@@ -59,7 +59,7 @@ async function spawnGh(args: string[], timeoutMs: number): Promise<{ status: num
   try {
     const executable = resolveTrustedGhExecutable();
     if (!executable) return null;
-    const trustedPath = trustedGhDirectories().join(delimiter);
+    const trustedPath = (process.platform === "win32" ? win32 : posix).dirname(executable);
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
     );
@@ -86,10 +86,9 @@ async function spawnGh(args: string[], timeoutMs: number): Promise<{ status: num
   }
 }
 
-/** Fixed install roots keep an automatically polled route from searching the project or caller-supplied PATH. */
+/** Literal system install roots keep automatic polling clear of environment-derived Windows paths and caller PATH. */
 function trustedGhDirectories(
   platform: NodeJS.Platform = process.platform,
-  env: Record<string, string | undefined> = process.env,
 ): string[] {
   if (platform !== "win32") {
     return [
@@ -103,24 +102,17 @@ function trustedGhDirectories(
       "/run/current-system/sw/bin",
     ];
   }
-  const directories: string[] = [];
-  for (const root of [env.ProgramFiles, env.ProgramW6432, env["ProgramFiles(x86)"]]) {
-    if (root && win32.isAbsolute(root)) directories.push(win32.join(root, "GitHub CLI"));
-  }
-  if (env.LOCALAPPDATA && win32.isAbsolute(env.LOCALAPPDATA)) {
-    directories.push(win32.join(env.LOCALAPPDATA, "Programs", "GitHub CLI"));
-  }
-  return directories;
+  return ["C:\\Program Files\\GitHub CLI", "C:\\Program Files (x86)\\GitHub CLI"];
 }
 
 export function resolveTrustedGhExecutable(
   platform: NodeJS.Platform = process.platform,
-  env: Record<string, string | undefined> = process.env,
+  _env: Record<string, string | undefined> = process.env,
   exists: (path: string) => boolean = existsSync,
 ): string | null {
   const filename = platform === "win32" ? "gh.exe" : "gh";
   const paths = platform === "win32" ? win32 : posix;
-  for (const directory of trustedGhDirectories(platform, env)) {
+  for (const directory of trustedGhDirectories(platform)) {
     const candidate = paths.join(directory, filename);
     if (paths.isAbsolute(candidate) && exists(candidate)) return candidate;
   }

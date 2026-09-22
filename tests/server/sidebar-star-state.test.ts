@@ -22,19 +22,29 @@ describe("trusted gh resolution", () => {
     expect(visited).not.toContain("/tmp/bin/gh");
   });
 
-  test("only considers absolute Windows installation roots", () => {
+  test("ignores canonical-shaped hostile Windows environment roots", () => {
     const visited: string[] = [];
     const resolved = resolveTrustedGhExecutable("win32", {
-      PATH: ".;C:\\workspace\\bin",
-      ProgramFiles: "C:\\Program Files",
-      LOCALAPPDATA: ".\\AppData\\Local",
+      PATH: "D:\\workspace\\bin",
+      ProgramFiles: "D:\\Program Files",
+      ProgramW6432: "D:\\Program Files",
+      "ProgramFiles(x86)": "D:\\Program Files (x86)",
+      USERPROFILE: "D:\\Users\\operator",
+      LOCALAPPDATA: "D:\\Users\\operator\\AppData\\Local",
     }, candidate => {
       visited.push(candidate);
-      return candidate === "C:\\Program Files\\GitHub CLI\\gh.exe";
+      return candidate.startsWith("D:\\");
     });
 
-    expect(resolved).toBe("C:\\Program Files\\GitHub CLI\\gh.exe");
-    expect(visited).toEqual(["C:\\Program Files\\GitHub CLI\\gh.exe"]);
+    expect(resolved).toBeNull();
+    expect(visited).toEqual([
+      "C:\\Program Files\\GitHub CLI\\gh.exe",
+      "C:\\Program Files (x86)\\GitHub CLI\\gh.exe",
+    ]);
+
+    expect(resolveTrustedGhExecutable("win32", {}, candidate =>
+      candidate === "C:\\Program Files (x86)\\GitHub CLI\\gh.exe",
+    )).toBe("C:\\Program Files (x86)\\GitHub CLI\\gh.exe");
   });
 });
 

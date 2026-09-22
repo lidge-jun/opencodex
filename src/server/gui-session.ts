@@ -239,10 +239,8 @@ function findPairingGrant(
   state: GuiSessionState,
 ): [string, GuiPairingGrantRecord] | null {
   const digest = pairingGrantDigest(grant);
-  for (const [candidate, record] of state.pairingGrants) {
-    if (equalSecret(candidate, digest)) return [candidate, record];
-  }
-  return null;
+  const record = state.pairingGrants.get(digest);
+  return record ? [digest, record] : null;
 }
 
 function consumeGrantRateSlot(state: GuiSessionState, now: number): void {
