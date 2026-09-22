@@ -179,6 +179,8 @@ export interface LogEntry extends LogFailureAttribution {
   // cannot say whether Fast was granted on a backend whose echo is not authoritative.
   tierOutcome?: ModelTitleTierOutcome;
   resolvedModel?: string;
+  servedModel?: string;
+  wireModel?: string;
   modelSupportsServiceTier?: boolean;
   status: number;
   durationMs: number;
@@ -954,7 +956,11 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log, t)}>
                   <span className="logs-model-cell">
-                   <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                   {log.servedModel && log.servedModel !== (log.wireModel ?? log.model) ? (
+                        <span title={t("logs.modelRerouteTitle")}>{modelLabel(log.wireModel ?? log.model)}{" → "}{modelLabel(log.servedModel)}</span>
+                      ) : (
+                        <span>{modelLabel(log.servedModel ?? log.resolvedModel ?? log.model)}</span>
+                      )}
                       {log.shadowCallRewrittenFrom && (
                         <span
                           className="badge badge-muted"
@@ -1141,7 +1147,7 @@ function LogDetailDialog({
                 </span>
               </>
             )}
-            <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
+            <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.servedModel ?? detail.resolvedModel ?? detail.model)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{formatProviderDisplayName(detail.provider, t)}</span>
             {(detail.requestedEffort || detail.effectiveEffort) && (
               <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>

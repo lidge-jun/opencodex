@@ -5,6 +5,7 @@ import { modelTitle, type ModelTitleEntry } from "../src/pages/logs-model-title"
 const labels: Partial<Record<TKey, string>> = {
   "logs.modelTooltip.model": "模型",
   "logs.modelTooltip.resolvedModel": "解析后模型",
+  "logs.modelTooltip.servedModel": "实际服务模型",
   "logs.modelTooltip.requestedTier": "请求层级",
   "logs.modelTooltip.configuredTier": "配置层级",
   "logs.modelTooltip.responseTier": "响应层级",
@@ -34,4 +35,10 @@ test("model diagnostics localize every label and use one Unicode middle dot betw
 
 test("model diagnostics do not include an extra Latin capital A with circumflex", () => {
   expect(modelTitle(entry({ resolvedModel: "gpt-5.6-sol" }), t)).not.toContain("\u00C2");
+});
+
+test("model diagnostics surface the upstream-served model when it differs from the wire model", () => {
+  expect(modelTitle(entry({ model: "gpt-5.6-sol", servedModel: "gpt-5.6-luna" }), t)).toBe(
+    "模型=gpt-5.6-sol · 实际服务模型=gpt-5.6-luna",
+  );
 });
