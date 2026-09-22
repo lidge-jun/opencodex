@@ -37,7 +37,7 @@ export type StaticProviderPolicyField =
   | "supportsResponsesCustomTools" | "preserveResponsesReasoningContent" | "dropResponsesReasoningItems"
   | "modelSupportsReasoningSummaries"
   | "supportsVerbosity" | "modelSupportsVerbosity" | "responsesItemIdRepair" | "autoToolChoiceOnlyModels"
-  | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels"
+  | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels"
   | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "showThinkingSummary"
   | "escapeBuiltinToolNames" | "googleMode" | "project" | "location" | "modelCapabilities"
   | "modelAutoCompactTokenLimits" | "modelSuppressSyntheticMax" | "modelReasoningSummaryDelivery"
@@ -230,6 +230,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "preserveReasoningContentModels", "requiresReasoningPlaceholderModels",
     "reasoningSplitModels", "reasoningDetailsModels", "thinkingToggleModels", "thinkingBudgetModels",
   ] as const) putUnion(key, entry?.[key]);
+  // This parser is opt-in: an explicit list, including [], overrides registry defaults.
+  putScalar("inlineThinkTagModels", entry?.inlineThinkTagModels);
   for (const directModel of entry?.directReasoningEffortModels ?? []) {
     const staleBudget = [directModel, ...(entry?.thinkingBudgetModels ?? [])];
     const routedStaleBudget = [...(entry?.thinkingBudgetModels ?? []), directModel];

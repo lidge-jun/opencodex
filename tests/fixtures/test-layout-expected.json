@@ -1,4 +1,6 @@
 {
+  "inline-think-boundaries.test.ts": "adapters/openai",
+  "reasoning-effort-summary-default.test.ts": "responses",
   "release-desktop-scripts.test.ts": "ci-workflows",
   "installed-gate-drivers.test.ts": "ci-workflows",
   "gui-desktop-sidecar-script.test.ts": "gui",
@@ -920,6 +922,7 @@
   "openai-chat-eof.test.ts": "adapters/openai",
   "openai-chat-hardening.test.ts": "adapters/openai",
   "openai-chat-image-normalization.test.ts": "adapters/openai",
+  "openai-chat-inline-think-tags.test.ts": "adapters/openai",
   "openai-chat-invalid-tool-call-diagnostics.test.ts": "adapters/openai",
   "openai-chat-model-suffix.test.ts": "adapters/openai",
   "openai-chat-native-policy.test.ts": "adapters/openai",

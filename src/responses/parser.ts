@@ -542,7 +542,8 @@ export function parseRequest(
     options.reasoning = requestedEffort;
   }
   const summaryMode = data.reasoning?.summary;
-  if (!summaryMode || summaryMode === "none") options.hideThinkingSummary = true;
+  const reasoningActive = options.reasoning !== undefined && options.reasoning !== "none";
+  if (summaryMode === "none" || (!summaryMode && !reasoningActive)) options.hideThinkingSummary = true;
   if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
   if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
   if (data.service_tier !== undefined) options.serviceTier = data.service_tier;

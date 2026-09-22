@@ -968,6 +968,10 @@ removes those controls for unknown ladders and preserves `reasoning.summary`. Kn
 ladders retain the existing per-target effort resolution. This request normalization does not
 change target order or attempt accounting; provider-400 decisions follow the [request-local target compatibility](../runtime.md#request-local-target-compatibility) contract.
 
+An injected combo default supplies `summary: "auto"` only when no summary was specified; caller
+summary choices remain intact. Raw display and hidden-envelope replay follow
+[reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
+
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
 ## Upstream key attempt accounting

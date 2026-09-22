@@ -224,7 +224,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         let reasoningContent = thinkingParts.map(p => p.thinking).join("");
         if (
           reasoningContent.length === 0
-          && toolCalls.length > 0
+          && (toolCalls.length > 0 || thinkingParts.length > 0)
           && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
         ) {
           const cached = toolCalls
@@ -235,11 +235,11 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
           } else if (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)) {
-            // Fallback (extends #950, closes #1193): the replay cache is
+            // Fallback (extends #950 and #1193; fixes #5421): the replay cache is
             // bounded (64 entries / 256 KiB / 1 h TTL) and always misses on
-            // long sessions, and some tool rounds carry no recorded reasoning
-            // at all. DeepSeek thinking mode rejects ANY tool_call assistant
-            // message missing reasoning_content with HTTP 400, so inject a
+            // long sessions, and some thinking/tool rounds carry no recorded
+            // reasoning at all. DeepSeek thinking mode rejects replay without
+            // reasoning_content with HTTP 400, so inject a
             // minimal placeholder rather than emit a bare continuation the
             // upstream will reject. Scoped to requiresReasoningPlaceholderModels
             // (defaulting to the preserve list): preserve-listed providers with

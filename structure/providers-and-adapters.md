@@ -1,5 +1,8 @@
 # Providers And Adapters
 
+The opt-in `inlineThinkTagModels` list follows static-policy override and model-rename rules;
+shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
+
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
