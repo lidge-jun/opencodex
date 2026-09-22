@@ -180,6 +180,37 @@ describe("cyber_policy error fidelity", () => {
     });
   });
 
+  test("malformed UTF-8 does not erase a cyber-policy stop", async () => {
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode(JSON.stringify(CYBER_ERROR_BODY)),
+      0xff,
+    ]);
+    const failure = await consumeComboFailure(new Response(bytes, { status: 502 }));
+    expect(failure.response.status).toBe(400);
+    expect(failure.upstreamCode).toBe(CYBER_POLICY_ERROR_CODE);
+    expect(comboFailureDecision(502, failure.classificationText, {
+      code: failure.upstreamCode,
+    })).toBe("stop");
+  });
+
+  test("malformed UTF-8 keeps the status-only fallback for a non-cyber 5xx body", async () => {
+    // Only a cyber-policy verdict may be read from replacement-decoded text. Any other code
+    // or prose from a malformed body (here a quota code that would widen the cooldown scope)
+    // must not reach classification, exactly as before the body was decoded leniently.
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode(JSON.stringify({
+        error: { message: "You exceeded your current quota", type: "insufficient_quota", code: "insufficient_quota" },
+      })),
+      0xff,
+    ]);
+    const failure = await consumeComboFailure(new Response(bytes, { status: 502 }));
+    expect(failure.response.status).toBe(502);
+    expect(failure.classificationText).toBe("Provider error 502");
+    expect(failure.upstreamCode).toBeUndefined();
+    expect(failure.resetAt).toBeUndefined();
+    expect(failure.usage).toBeUndefined();
+  });
+
   test("drops Codex reset headers as well as Retry-After for a cyber-policy failure", async () => {
     const upstream = new Response(JSON.stringify(CYBER_ERROR_BODY), {
       status: 429,
