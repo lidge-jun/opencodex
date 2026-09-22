@@ -48,15 +48,17 @@ export type SidecarOutcome = WebSearchResult & { error?: string };
  *
  * The forward backend throttles burst sidecar traffic, and without a replay the 429 becomes a
  * failed tool result that poisons the query for the whole turn (see failedQueries in loop.ts).
- * 1 initial send + 2 replays; Retry-After is honored as a lower bound and capped by
+ * 1 initial send + 2 replays, counted as physical sends: connection-reset recovery inside each
+ * send draws from the same SIDECAR_MAX_SENDS budget, so the two layers cannot multiply into nine
+ * paid requests during a degraded period. Retry-After is honored as a lower bound and capped by
  * RETRY_AFTER_CEILING_MS and the remaining sidecar deadline (an instruction past either
  * ends with the 429 instead of parking the search). Each wait releases the unread 429 body first so sockets do not
  * accumulate under a rate-limit storm. The release itself may take up to a second, so a
  * deadline landing during release or backoff ends with the 429 already in hand rather than
  * a timeout; a caller abort still ends the wait through the shared catch, exactly like an
- * abort during the SSE parse.
+ * abort during the SSE parse. An exhausted budget likewise ends with the 429 in hand.
  */
-const SIDECAR_429_MAX_ATTEMPTS = 3;
+const SIDECAR_MAX_SENDS = 3;
 const SIDECAR_429_BASE_DELAY_MS = 1_000;
 const SIDECAR_429_MAX_DELAY_MS = 10_000;
 
@@ -105,6 +107,9 @@ export async function runWebSearch(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
   try {
+    // One physical-send budget for the whole search. Each helper call receives only what is left
+    // and reports every send it makes, reset retries included.
+    let sendsLeft = SIDECAR_MAX_SENDS;
     const sendOnce = () => fetchWithResetRetry(
       // Recovery nests INSIDE the version helper: applyUpstreamRecoveryInit then always receives a
       // defined init, and withUpstreamHttpVersion spreads the result, so `protocol` and the
@@ -120,10 +125,18 @@ export async function runWebSearch(
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
       }, recovery), forwardProvider)),
-      { replaySafe: true, abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
+      {
+        replaySafe: true,
+        abortSignal: linkedSignal.signal,
+        label: "web-search-sidecar",
+        attempts: sendsLeft,
+        onSendsConsumed: sends => { sendsLeft -= sends; },
+      },
     );
     let res = await sendOnce();
-    for (let attempt = 0; res.status === 429 && attempt + 1 < SIDECAR_429_MAX_ATTEMPTS; attempt++) {
+    // Checked before the 429 body is released: a budget found spent after the release could only
+    // end in a send-budget error, recorded as a connection failure instead of the quota evidence.
+    for (let attempt = 0; res.status === 429 && sendsLeft > 0; attempt++) {
       const delay = retryBackoffDelayMs(attempt, {
         baseDelayMs: SIDECAR_429_BASE_DELAY_MS,
         maxDelayMs: SIDECAR_429_MAX_DELAY_MS,
@@ -133,7 +146,7 @@ export async function runWebSearch(
       // A deadline, not a clamp: an instruction past the ceiling ends the search with the
       // 429 instead of parking it at a provider that already said it would refuse.
       if (delay > RETRY_AFTER_CEILING_MS || delay >= settings.timeoutMs - (Date.now() - t0)) break;
-      console.warn(`[web-search] sidecar HTTP 429 — retrying (${attempt + 2}/${SIDECAR_429_MAX_ATTEMPTS}) after ${delay}ms`);
+      console.warn(`[web-search] sidecar HTTP 429 — retrying (send ${SIDECAR_MAX_SENDS - sendsLeft + 1}/${SIDECAR_MAX_SENDS}) after ${delay}ms`);
       try {
         await releaseResponseBodyBestEffort(res.body, linkedSignal.signal);
         await sleepWithAbort(delay, linkedSignal.signal);

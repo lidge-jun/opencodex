@@ -35,6 +35,7 @@ describe("web-search sidecar 429 replays", () => {
     fetchImpl: () => Promise<Response>,
     timeoutMs = 30_000,
     recordOutcome?: (outcome: number | "connect_error" | "connect_neutral" | "timeout") => void,
+    abortSignal?: AbortSignal,
   ) {
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
     return runOpenAiWebSearch(
@@ -43,9 +44,16 @@ describe("web-search sidecar 429 replays", () => {
       sidecarProvider(),
       new Headers({ authorization: "Bearer selected-token" }),
       { model: "gpt-5.6-luna", reasoning: "low", timeoutMs },
-      undefined,
+      abortSignal,
       recordOutcome,
     );
+  }
+
+  function socketReset(): Error {
+    // Shape of Bun's fetch rejection on a stale pooled socket.
+    const err = new Error("The socket connection was closed unexpectedly");
+    (err as Error & { code: string }).code = "ECONNRESET";
+    return err;
   }
 
   test("a burst 429 is replayed and the recovered answer is returned", async () => {
@@ -115,5 +123,50 @@ describe("web-search sidecar 429 replays", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("reset recovery and 429 replays share one three-send budget", async () => {
+    // Each quota leg used to open its own three-send reset allowance, so resets in front of every
+    // 429 could reach nine paid requests. The script repeats reset, reset, 429 indefinitely.
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const outcome = await searchWith(async () => {
+      calls += 1;
+      if (calls % 3 !== 0) throw socketReset();
+      return new Response("rate limited", { status: 429 });
+    }, 30_000, value => recorded.push(value));
+    expect(calls).toBe(3);
+    // The budget ran out with the 429 in hand, so the quota evidence survives rather than being
+    // replaced by a send-budget error recorded as a connection failure.
+    expect(outcome.error).toContain("429");
+    expect(recorded).toEqual([429]);
+  });
+
+  test("a reset in front of the first 429 leaves only one quota replay", async () => {
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const outcome = await searchWith(async () => {
+      calls += 1;
+      if (calls === 1) throw socketReset();
+      return new Response("rate limited", { status: 429 });
+    }, 30_000, value => recorded.push(value));
+    expect(calls).toBe(3);
+    expect(outcome.error).toContain("429");
+    expect(recorded).toEqual([429]);
+  });
+
+  test("a caller abort during 429 backoff ends the search as a cancellation", async () => {
+    let calls = 0;
+    const recorded: Array<number | string> = [];
+    const caller = new AbortController();
+    const outcome = await searchWith(async () => {
+      calls += 1;
+      setTimeout(() => caller.abort(new DOMException("caller left", "AbortError")), 20);
+      return new Response("rate limited", { status: 429, headers: { "retry-after": "1" } });
+    }, 30_000, value => recorded.push(value), caller.signal);
+    expect(calls).toBe(1);
+    expect(outcome.error).toBeDefined();
+    // A caller that left is neither a quota signal nor a connection failure.
+    expect(recorded).toEqual(["connect_neutral"]);
   });
 });
