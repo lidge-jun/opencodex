@@ -192,7 +192,8 @@ describe("every version move covers all four sources", () => {
     // New-branch path: before anything is staged, committed or pushed.
     expect(checks[1]!).toBeLessThan(run.indexOf("git add --"));
     expect(run.indexOf("git add --")).toBeLessThan(run.indexOf('git push origin "$' + '{branch}"'));
-    expect(checks[1]!).toBeLessThan(run.indexOf("gh pr create"));
+    // lastIndexOf: the step's own comments mention `gh pr create` before the command itself.
+    expect(checks[1]!).toBeLessThan(run.lastIndexOf("gh pr create"));
   });
 
   // The guard is the only thing stopping this job, which holds contents: write, from pushing or
@@ -205,10 +206,14 @@ describe("every version move covers all four sources", () => {
     expect(run).toContain('git diff --no-renames --name-only "origin/dev...origin/$' + '{branch}"');
     const start = run.indexOf("touches_package_json=false");
     const endMarker = run.indexOf("does not move package.json");
-    const end = run.indexOf("fi", endMarker) + 2;
     expect(start).toBeGreaterThanOrEqual(0);
     expect(endMarker).toBeGreaterThan(start);
-    const guard = run.slice(start, end);
+    // The first standalone `fi` line after the message closes the block; a bare "fi" search
+    // would stop inside `changed_files`.
+    const closing = /\n[ \t]*fi[ \t]*(?:\n|$)/.exec(run.slice(endMarker));
+    expect(closing).not.toBeNull();
+    const guard = run.slice(start, endMarker + closing!.index + closing![0].length);
+    expect(guard).toContain("done <<< ");
 
     const verdict = (changed: string) => Bun.spawnSync(
       ["bash", "-c", 'set -euo pipefail\nbranch=codex/dev-version-9.9.9\nchanged_files="$1"\n' + guard + "\necho accepted", "guard", changed],
