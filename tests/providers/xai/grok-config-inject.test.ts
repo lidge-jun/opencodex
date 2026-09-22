@@ -216,7 +216,6 @@ describe("Grok config injection", () => {
       ["mixed quoting with whitespace", `[ "model" . 'ocx-mine' ]`],
       ["bare (baseline)", "[model.ocx-mine]"],
       ["array of tables", "[[model.ocx-mine]]"],
-      ["sub-table", "[model.ocx-mine.extra]"],
       ["trailing comment", '[model."ocx-mine"] # mine'],
     ];
 
@@ -230,8 +229,89 @@ describe("Grok config injection", () => {
         const generated = written.slice(written.indexOf(BEGIN_MARKER));
         expect(generated).toContain("[model.ocx-mine-2]");
         expect(generated).not.toContain("[model.ocx-mine]\n");
+        expect(() => Bun.TOML.parse(written)).not.toThrow();
       });
     }
+
+    test("uses an unsuffixed alias when only a deeper user table exists", () => {
+      const userContent = "[model.ocx-mine.extra]\nx = 1\n";
+      writeFileSync(configPath(), userContent, "utf8");
+
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      const written = readFileSync(configPath(), "utf8");
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(written.startsWith(userContent)).toBe(true);
+      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine]\n");
+      expect(() => Bun.TOML.parse(written)).not.toThrow();
+    });
+
+    test("suffixes when a dotted key defines the parent of a deeper user table", () => {
+      const userContent = '[model]\n"ocx-mine".selected = true\n[model.ocx-mine.extra]\nx = 1\n';
+      writeFileSync(configPath(), userContent, "utf8");
+      expect(() => Bun.TOML.parse(userContent)).not.toThrow();
+
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      const written = readFileSync(configPath(), "utf8");
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine-2]\n");
+      expect(() => Bun.TOML.parse(written)).not.toThrow();
+    });
+
+    test("validates the final config after rewriting references to a suffixed alias", () => {
+      writeFileSync(configPath(), '[models]\ndefault = "ocx-mine"\n', "utf8");
+      injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+      const withUserCollision = readFileSync(configPath(), "utf8").replace(
+        BEGIN_MARKER,
+        '[model]\n"ocx-mine".selected = true\n[model.ocx-mine.extra]\nx = 1\n\n' + BEGIN_MARKER,
+      );
+      writeFileSync(configPath(), withUserCollision, "utf8");
+
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      const written = readFileSync(configPath(), "utf8");
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine-2]\n");
+      expect((Bun.TOML.parse(written) as { models: { default: string } }).models.default).toBe("ocx-mine-2");
+    });
+
+    test("suffixes when a user child table occupies a generated scalar field", () => {
+      const userContent = "[model.ocx-mine.model]\nx = 1\n";
+      writeFileSync(configPath(), userContent, "utf8");
+
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      const written = readFileSync(configPath(), "utf8");
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine-2]\n");
+      expect(() => Bun.TOML.parse(written)).not.toThrow();
+    });
+
+    test("keeps conservative nested-table reservation for malformed user TOML", () => {
+      const userContent = "broken = ???\n[model.ocx-mine.extra]\nx = 1\n";
+      writeFileSync(configPath(), userContent, "utf8");
+      expect(() => Bun.TOML.parse(userContent)).toThrow();
+
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      const written = readFileSync(configPath(), "utf8");
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(written.slice(written.indexOf(BEGIN_MARKER))).toContain("[model.ocx-mine-2]\n");
+    });
+
+    test("refuses a valid user file when neither alias choice parses", () => {
+      const userContent = "[model_providers.opencodex]\nx = 1\n";
+      writeFileSync(configPath(), userContent, "utf8");
+      expect(() => Bun.TOML.parse(userContent)).not.toThrow();
+
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+
+      expect(result).toMatchObject({ ok: false, changed: false });
+      expect(result.message).toContain("neither alias choice produced valid TOML");
+      expect(readFileSync(configPath(), "utf8")).toBe(userContent);
+      expect(existsSync(`${configPath()}.bak-opencodex`)).toBe(false);
+    });
 
     test("does not reserve aliases from unrelated tables", () => {
       // [models.*] and [model_providers.*] are different tables entirely — reserving from them

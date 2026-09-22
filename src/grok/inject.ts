@@ -312,15 +312,17 @@ function canonicalDottedKey(raw: string): string[] {
  * `[model.<alias>]` table headers the USER owns (outside our fence) — reserved for collisions.
  * TOML admits equivalent header spellings for BOTH segments (`["model"."ocx-mine"]`,
  * `['model'.ocx-mine]`, `[ model . ocx-mine ]`); all of them redefine the same table, so each
- * form is canonicalized before it is reserved.
+ * form is canonicalized before it is reserved. A deeper header only creates an implicit
+ * parent, so reserve it only for the conservative path used with malformed user TOML.
  */
-function userModelAliases(content: string, region: ManagedRegion | null): Set<string> {
+function userModelAliases(content: string, region: ManagedRegion | null, includeNested = false): Set<string> {
   const outsideManagedRegion = region
     ? content.slice(0, region.start) + content.slice(region.end)
     : content;
   const aliases = new Set<string>();
   for (const header of analyzeTomlStructure(outsideManagedRegion).headers) {
-    if (header.segments[0] !== "model" || header.segments.length < 2) continue;
+    if (header.segments[0] !== "model"
+      || (includeNested ? header.segments.length < 2 : header.segments.length !== 2)) continue;
     aliases.add(header.segments[1]!);
   }
   return aliases;
@@ -1166,41 +1168,65 @@ export function injectGrokConfig(
     // so the splice below cannot cut the file in the wrong place.
     const region = orphans.length > 0 ? findManagedRegion(content) : originalRegion;
 
-    const block = buildGrokManagedBlock(port, models, opts.hostname, userModelAliases(content, region), opts.excluded);
-    let nextContent: string;
-    if (region) {
-      nextContent = content.slice(0, region.start) + block + content.slice(region.end);
-    } else if (content.length === 0) {
-      nextContent = `${block}\n`;
-    } else {
-      // Exactly ONE separator newline, always. The old rule ("\n\n" when the file lacked a
-      // trailing newline) made two different originals — "X" and "X\n" — produce byte-identical
-      // files, so strip could not restore both. One newline keeps injection injective: the
-      // user's own terminator is preserved verbatim and strip can undo exactly what we added.
-      nextContent = `${content}\n${block}\n`;
-    }
+    const buildCandidate = (reservedAliases: ReadonlySet<string>): string => {
+      const block = buildGrokManagedBlock(port, models, opts.hostname, reservedAliases, opts.excluded);
+      let candidate: string;
+      if (region) {
+        candidate = content.slice(0, region.start) + block + content.slice(region.end);
+      } else if (content.length === 0) {
+        candidate = `${block}\n`;
+      } else {
+        // One separator newline preserves the user's original terminator for stripping.
+        candidate = `${content}\n${block}\n`;
+      }
 
-    // Repoint every model selector at whichever managed alias survived. Compare both swept
-    // out-of-fence tables and the PREVIOUS managed block: ordinary exclusion removes only the
-    // latter, so tying cleanup to `orphans` made the #2830 path dead code.
-    const nextManagedModels = managedModelAliases(nextContent, findManagedRegion(nextContent));
-    const survivors = new Map<string, string>();
-    for (const [alias, modelId] of nextManagedModels) {
-      if (!survivors.has(modelId)) survivors.set(modelId, alias);
+      // Repoint selectors after allocation, so parsing below checks the actual write bytes.
+      const nextManagedModels = managedModelAliases(candidate, findManagedRegion(candidate));
+      const survivors = new Map<string, string>();
+      for (const [alias, modelId] of nextManagedModels) {
+        if (!survivors.has(modelId)) survivors.set(modelId, alias);
+      }
+      const replacements = new Map<string, string | null>();
+      for (const removed of [
+        ...orphans.filter(orphan => orphan.alias !== "")
+          .map(orphan => ({ alias: orphan.alias, modelId: orphan.modelId })),
+        ...[...previousManagedModels].map(([alias, modelId]) => ({ alias, modelId })),
+      ]) {
+        if (nextManagedModels.get(removed.alias) === removed.modelId) continue;
+        const replacement = survivors.get(removed.modelId) ?? null;
+        if (replacement !== removed.alias) replacements.set(removed.alias, replacement);
+      }
+      return rewriteAliasReferences(candidate, replacements);
+    };
+
+    const userContent = region ? content.slice(0, region.start) + content.slice(region.end) : content;
+    let userContentValid = false;
+    try {
+      Bun.TOML.parse(userContent);
+      userContentValid = true;
+    } catch {
+      // Preserve the old, conservative reservation and write behavior for malformed user TOML.
     }
-    const replacements = new Map<string, string | null>();
-    for (const removed of [
-      // Provider orphans carry no alias and no model id: there is nothing to repoint, and
-      // an empty alias must never enter the rename map.
-      ...orphans.filter(orphan => orphan.alias !== "")
-        .map(orphan => ({ alias: orphan.alias, modelId: orphan.modelId })),
-      ...[...previousManagedModels].map(([alias, modelId]) => ({ alias, modelId })),
-    ]) {
-      if (nextManagedModels.get(removed.alias) === removed.modelId) continue;
-      const replacement = survivors.get(removed.modelId) ?? null;
-      if (replacement !== removed.alias) replacements.set(removed.alias, replacement);
+    let nextContent: string;
+    if (!userContentValid) {
+      nextContent = buildCandidate(userModelAliases(content, region, true));
+    } else {
+      const validCandidate = (includeNested: boolean): string | null => {
+        // Only the parse is guarded: a failure while building the block is not an alias
+        // collision and must surface unchanged.
+        const candidate = buildCandidate(userModelAliases(content, region, includeNested));
+        try {
+          Bun.TOML.parse(applyEol(candidate, eol));
+          return candidate;
+        } catch {
+          return null;
+        }
+      };
+      nextContent = validCandidate(false) ?? validCandidate(true) ?? "";
+      if (nextContent === "") {
+        throw new Error("Grok config injection refused: neither alias choice produced valid TOML after model-reference rewriting.");
+      }
     }
-    nextContent = rewriteAliasReferences(nextContent, replacements);
 
     const output = applyEol(nextContent, eol);
     if (output === rawContent) {
