@@ -234,21 +234,14 @@ export async function prepareResponsesRequest(
       && isShadowSourceModel(rawShadowModel, shadowIntercept.sourceModels)) {
       const shadowComboId = resolveComboId(config, shadowIntercept.model);
       if (shadowComboId && Object.hasOwn(config.combos ?? {}, shadowComboId)) {
-        const sourcePrefix = shadowSourceModelPrefix(rawShadowModel, shadowIntercept.sourceModels)!;
-        let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
-        try {
-          const resolvedSource = routeConcreteModel(config, rawShadowModel);
-          sourceIdentity = { providerName: resolvedSource.providerName, modelId: sourcePrefix };
-        } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
-        const targetRoute = routeModel(config, shadowIntercept.model, evidenceFromBody(body));
-        if (shouldInterceptShadowCall(rawShadowModel, shadowIntercept.sourceModels, sourceIdentity, targetRoute)) {
-          shadowCallIntercepted = true;
-          (body as Record<string, unknown>).model = shadowIntercept.model;
-          // Same rule as the late intercept site: record the operator-configured prefix that
-          // matched, never the caller's raw model string. Matching is by prefix, so the raw
-          // value is caller-controlled and reaches usage.jsonl and /api/logs.
-          logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(sourcePrefix);
-        }
+        shadowCallIntercepted = true;
+        (body as Record<string, unknown>).model = shadowIntercept.model;
+        // Same rule as the late intercept site: record the operator-configured prefix that
+        // matched, never the caller's raw model string. Matching is by prefix, so the raw
+        // value is caller-controlled and reaches usage.jsonl and /api/logs.
+        logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(
+          shadowSourceModelPrefix(rawShadowModel, shadowIntercept.sourceModels),
+        );
       }
     }
   }

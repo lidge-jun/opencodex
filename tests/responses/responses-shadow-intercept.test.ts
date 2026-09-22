@@ -397,7 +397,7 @@ describe("a combo shadow-call target enters the failover loop (#4129)", () => {
       .toEqual(["xai/grok-4.5", "alt/grok-4.5"]);
   });
 
-  test("a combo whose selected target intersects the source is not intercepted", async () => {
+  test("a combo whose first target intersects the source still routes as a combo", async () => {
     takeSpendHome();
     const urls: string[] = [];
     const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -423,10 +423,12 @@ describe("a combo shadow-call target enters the failover loop (#4129)", () => {
     // A healthy first target still costs exactly one upstream call.
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain("api.x.ai");
-    expect(logCtx.provider).toBe("xai");
-    expect(logCtx.comboId).toBeUndefined();
-    expect(logCtx.routeDecision?.routeKind).not.toBe("combo");
-    expect(logCtx.shadowCallRewrittenFrom).toBeUndefined();
+    expect(logCtx.provider).toBe("combo");
+    expect(logCtx.comboId).toBe("shadow");
+    expect(logCtx.routeDecision?.routeKind).toBe("combo");
+    // Red before the fix: shouldInterceptShadowCall saw the collapsed pick as a self-target,
+    // skipped the rewrite, and the request left as a plain native route with no marker.
+    expect(logCtx.shadowCallRewrittenFrom).toBe("custom-helper");
   });
 
   test("a non-combo replacement still takes the ordinary late intercept", async () => {
