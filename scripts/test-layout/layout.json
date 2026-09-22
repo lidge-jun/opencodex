@@ -895,6 +895,7 @@
     "kiro-usage-quota.test.ts": "providers/kiro",
     "kiro-windows-cli-db-path.test.ts": "providers/kiro",
     "kiro-windows-cli-executable-path.test.ts": "providers/kiro",
+    "kiro-wire-estimate.test.ts": "providers/kiro",
     "lab-activation.test.ts": "lab",
     "lab-automation-coderabbit-regressions.test.ts": "lab",
     "lab-automation-final-coderabbit-regressions.test.ts": "lab",
