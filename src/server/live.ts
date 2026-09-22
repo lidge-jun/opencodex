@@ -112,22 +112,36 @@ export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
  * Append one JSONL record with owner-only permissions. `appendFileSync`'s `mode` only applies
  * when it creates the file, so an existing permissive log would stay readable by other local
  * users. Open for append, harden the target, and verify that the path still names
- * the opened file before writing. A failed harden or identity check writes nothing.
+ * the opened file before writing. A failed harden or identity check writes nothing. On Windows
+ * the hardened file's identity is remembered, so a replaced file is hardened again but an
+ * unchanged one does not spawn icacls for every frame.
  */
+/** Windows ACL hardening spawns icacls; remember the file already hardened so frames do not. */
+let hardenedWindowsFrameLog: { path: string; dev: bigint; ino: bigint } | undefined;
+
 export function appendOwnerOnly(
   path: string,
   line: string,
   harden: (fd: number, path: string) => void = hardenLogDescriptor,
+  platform: NodeJS.Platform = process.platform,
 ): void {
   const fd = openSync(path, "a", 0o600);
   try {
-    harden(fd, path);
+    const before = fstatSync(fd, { bigint: true });
+    const memo = hardenedWindowsFrameLog;
+    const alreadyHardened = platform === "win32" && memo !== undefined && memo.path === path
+      && before.ino !== 0n && memo.dev === before.dev && memo.ino === before.ino;
+    if (!alreadyHardened) {
+      hardenedWindowsFrameLog = undefined;
+      harden(fd, path);
+    }
     const opened = fstatSync(fd, { bigint: true });
     const named = statSync(path, { bigint: true });
     if (!opened.isFile() || !named.isFile() || opened.ino === 0n || named.ino === 0n
       || opened.dev !== named.dev || opened.ino !== named.ino) {
       throw new Error("Frame log path changed during hardening.");
     }
+    if (platform === "win32") hardenedWindowsFrameLog = { path, dev: opened.dev, ino: opened.ino };
     writeSync(fd, line);
   } finally {
     closeSync(fd);

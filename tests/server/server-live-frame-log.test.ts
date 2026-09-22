@@ -65,6 +65,23 @@ windowsTest("a Windows ACL hardening failure appends nothing", async () => {
   expect(readFileSync(frameLogPath, "utf8")).toBe("before\n");
 });
 
+test("Windows frame-log hardening runs once per file identity, not per frame", async () => {
+  const { appendOwnerOnly } = await import("../../src/server/live");
+  const frameLogPath = join(TEST_DIR, "frames-memo.jsonl");
+  const movedPath = join(TEST_DIR, "frames-memo-moved.jsonl");
+  const hardened: string[] = [];
+  const harden = (_fd: number, openedPath: string) => { hardened.push(openedPath); };
+  appendOwnerOnly(frameLogPath, "one\n", harden, "win32");
+  appendOwnerOnly(frameLogPath, "two\n", harden, "win32");
+  expect(hardened).toEqual([frameLogPath]);
+  renameSync(frameLogPath, movedPath);
+  writeFileSync(frameLogPath, "");
+  appendOwnerOnly(frameLogPath, "three\n", harden, "win32");
+  expect(hardened).toEqual([frameLogPath, frameLogPath]);
+  expect(readFileSync(frameLogPath, "utf8")).toBe("three\n");
+  expect(readFileSync(movedPath, "utf8")).toBe("one\ntwo\n");
+});
+
 test("a path replacement after hardening appends nothing to the held file", async () => {
   if (process.platform === "win32") return;
   const { appendOwnerOnly } = await import("../../src/server/live");
