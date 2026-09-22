@@ -24,6 +24,12 @@ on:
       # produced no run and the gate dead-ended until a manual dispatch.
       - ".github/workflows/release.yml"
   push:
+    # Release lines only. release.yml needs a successful push run for the exact
+    # release SHA, and scripts/release.ts only releases from main or preview.
+    # Without a branch filter every feature-branch push whose range carried a
+    # dev merge touching these paths re-ran the macOS and Windows legs that the
+    # pull_request trigger above already runs for the same change.
+    branches: [main, preview]
     paths:
       - "src/service.ts"
       # Keep in sync with the release.yml service-gate regex (see above).

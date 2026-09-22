@@ -21,10 +21,16 @@ on:
     # because this workflow is `pull_request` (not `pull_request_target`),
     # declares `contents: read`, and reads no secrets.
     #
-    # `push:` stays pinned to the integration lines: it gates the release path,
-    # and this trigger already covers review.
+    # `push:` stays pinned to the release lines: it gates publication, and
+    # review is covered by the pull_request trigger above. dev is dropped:
+    # its integration evidence comes from the pull_request run into dev, and
+    # workflow_dispatch covers anything a maintainer wants proven by hand.
+    # main and preview MUST stay: release.yml requires a successful
+    # push-event Cross-platform CI run for the exact release SHA and states
+    # that a pull-request run does not qualify, so removing either branch
+    # breaks publication.
   push:
-    branches: [main, preview, dev]
+    branches: [main, preview]
     paths:
       - "Dockerfile"
       - "compose.yaml"
@@ -109,7 +115,7 @@ jobs:
   # honest pull requests on GitHub-hosted runners and lets trusted branch runs
   # avoid the hosted-Windows Bun crashes. It is not the security boundary.
   #
-  # `push` on dev/main/preview requires the push permission, and
+  # `push` on main/preview requires the push permission, and
   # `workflow_dispatch` requires write access, so both carry a trusted author.
   # A trusted author is not audited code: merging a contributor PR into `dev`
   # fires `push`, and its dependencies and postinstall hooks then run here.
@@ -175,6 +181,11 @@ jobs:
       # step. A missing or malformed filter output must fail this job instead
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
+      native: ${{ steps.matrices.outputs.native }}
+      # Matrix include lists for keyring-smoke and npm-global-smoke, built and
+      # shape-checked by the same validation step as `native`.
+      keyring_matrix: ${{ steps.matrices.outputs.keyring_matrix }}
+      npm_global_matrix: ${{ steps.matrices.outputs.npm_global_matrix }}
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -230,6 +241,21 @@ jobs:
               - '.github/workflows/release.yml'
               - '.github/workflows/enforce-pr-target.yml'
               - '.github/workflows/stale-needs-info.yml'
+            # Native-gated surface: platform-macos, widget and desktop-shell
+            # only run when the code they build or bundle could have changed.
+            # The listed src/ entries are what the bundled sidecar executes,
+            # package.json and bun.lock change what ships inside the bundle,
+            # and `.github/workflows/ci.yml` verifies this filter itself, the
+            # way docs and structure above do.
+            native:
+              - 'app/**'
+              - 'desktop/**'
+              - 'src/service/**'
+              - 'src/cli/index.ts'
+              - 'src/lib/bun-runtime.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/ci.yml'
             gui:
               - 'gui/**'
             # The docs site is built by nothing else on a pull request. `ci` above
@@ -307,6 +333,54 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Assert the native and matrix outputs are usable
+        id: matrices
+        shell: bash
+        env:
+          NATIVE_SELECTED: ${{ steps.filter.outputs.native }}
+        run: |
+          set -euo pipefail
+          case "$NATIVE_SELECTED" in
+            true|false)
+              printf 'native=%s\n' "$NATIVE_SELECTED" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.native was %q, expected true or false\n' "$NATIVE_SELECTED"
+              exit 1
+              ;;
+          esac
+
+          # Two unconditional legs plus the macos leg that rides the native
+          # selection. These strings are what the keyring-smoke and
+          # npm-global-smoke matrices consume through fromJSON.
+          if [ "$NATIVE_SELECTED" = "true" ]; then
+            keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"},{"name":"windows","runner":"windows-latest"},{"name":"macos","runner":"macos-latest"}]'
+            npm_global_matrix='[{"os":"ubuntu-latest"},{"os":"windows-latest"},{"os":"macos-latest"}]'
+          else
+            keyring_matrix='[{"name":"ubuntu","runner":"ubuntu-latest"},{"name":"windows","runner":"windows-latest"}]'
+            npm_global_matrix='[{"os":"ubuntu-latest"},{"os":"windows-latest"}]'
+          fi
+
+          # GitHub turns an empty matrix include list into a job with no legs
+          # that still reports success, so the emitted value itself is
+          # validated: it must parse as a JSON array carrying at least the two
+          # unconditional legs. A malformed or empty matrix fails this job
+          # instead of passing over nothing.
+          assert_matrix() {
+            local label="$1" json="$2" jq_filter="$3"
+            if ! printf '%s' "$json" | jq -e "$jq_filter" >/dev/null; then
+              printf '::error::%s matrix output was %q\n' "$label" "$json"
+              exit 1
+            fi
+          }
+          assert_matrix keyring "$keyring_matrix" \
+            'type == "array" and length >= 2 and any(.[]; .name == "ubuntu") and any(.[]; .name == "windows")'
+          assert_matrix npm-global "$npm_global_matrix" \
+            'type == "array" and length >= 2 and any(.[]; .os == "ubuntu-latest") and any(.[]; .os == "windows-latest")'
+
+          printf 'keyring_matrix=%s\n' "$keyring_matrix" >> "$GITHUB_OUTPUT"
+          printf 'npm_global_matrix=%s\n' "$npm_global_matrix" >> "$GITHUB_OUTPUT"
 
   # The suite, split by file across four Linux runners.
   #
@@ -540,7 +614,10 @@ jobs:
   platform-macos:
     name: macos ${{ matrix.shard }}/2
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    # Native-gated: these legs only run when the changes job's `native` filter
+    # says the macOS suite's inputs could have changed, so an ordinary source
+    # pull request stops paying for two macOS runners.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
     runs-on: macos-latest
     # Two shards. Unsharded, this job was the critical path on every green dev
     # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
@@ -831,13 +908,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: ubuntu
-            runner: ubuntu-latest
-          - name: windows
-            runner: windows-latest
-          - name: macos
-            runner: macos-latest
+        # The leg list arrives as JSON from the changes job: ubuntu and
+        # windows always run, macos only when the native selection is true.
+        # Entries keep the {name, runner} shape this job reads, and the
+        # changes job validates the list because an empty include matrix
+        # reports success over zero legs.
+        include: ${{ fromJSON(needs.changes.outputs.keyring_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -990,7 +1066,12 @@ jobs:
         # `npm install -g`, which writes into the machine's global prefix and
         # would leave an `ocx` on a maintainer's personal PATH. It is an
         # short job on Linux and macOS, so there is nothing to win by moving it.
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        #
+        # The leg list arrives as JSON from the changes job: ubuntu-latest and
+        # windows-latest always run, macos-latest only when the native
+        # selection is true. The changes job validates the list because an
+        # empty include matrix reports success over zero legs.
+        include: ${{ fromJSON(needs.changes.outputs.npm_global_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1045,7 +1126,9 @@ jobs:
   widget:
     name: macos widget + bundle
     needs: [changes, gates]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    # Native-gated like platform-macos: the widget extension and app bundle
+    # are rebuilt only when native-capable paths changed.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -1120,7 +1203,9 @@ jobs:
   desktop-shell:
     name: desktop shell
     needs: [changes, gates]
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    # Native-gated like platform-macos: the Rust shell is formatted, linted
+    # and tested only when native-capable paths changed.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1184,6 +1269,7 @@ jobs:
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
           CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
+          CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1203,6 +1289,15 @@ jobs:
           scoped=requested
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
             scoped=not-requested
+          fi
+          # platform-macos, widget and desktop-shell carry a compound
+          # condition: the ordinary scope gate AND the native path filter.
+          # This mirrors that expression exactly; where it disagrees with the
+          # jobs' own `if:`, the gate fails by name instead of demanding
+          # success from a job that was deliberately left unselected.
+          native=not-requested
+          if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && [ "$CHANGES_NATIVE" = "true" ]; }; then
+            native=requested
           fi
           packaging=not-requested
           if [ "$CHANGES_PACKAGING" = "true" ]; then
@@ -1237,10 +1332,10 @@ jobs:
           expected_for() {
             case "$1" in
               changes|select-windows-runner) echo requested ;;
-              test|storage-policy|api-usage|gates|platform-macos|keyring-smoke|docker-smoke|widget)
+              test|storage-policy|api-usage|gates|keyring-smoke|docker-smoke)
                 echo "$scoped" ;;
-              desktop-shell)
-                echo "$scoped" ;;
+              platform-macos|widget|desktop-shell)
+                echo "$native" ;;
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;
               structure-gate) echo "$structure" ;;

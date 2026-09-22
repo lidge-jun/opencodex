@@ -35,6 +35,8 @@ on:
       - ".github/workflows/issue-quality-tests.yml"
       - ".github/workflows/pr-hygiene.yml"
   push:
+    # Release lines only; review is covered by the pull_request trigger above.
+    branches: [main, preview]
     paths:
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/scripts/issue-quality.cjs"
