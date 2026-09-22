@@ -46,6 +46,7 @@ export interface FastPolicyAuthority {
   };
   readonly modelAdapters: Readonly<Record<string, string>>;
   readonly hardPins: Readonly<Record<string, string>>;
+  readonly hardPinPrefixes?: Readonly<Record<string, string>>;
   readonly registryWireDefaults: Readonly<Record<string, ModelWireDefault>>;
 }
 
@@ -153,6 +154,12 @@ function resolvePolicyAdapter(
     ? authority.hardPins[modelId]
     : undefined;
   if (typeof hardPin === "string") return { adapter: hardPin, hardPinned: true };
+  const foldedModelId = modelId.toLowerCase();
+  for (const [prefix, adapter] of Object.entries(authority.hardPinPrefixes ?? {})) {
+    if (foldedModelId.startsWith(prefix.toLowerCase())) {
+      return { adapter, hardPinned: true };
+    }
+  }
   if (authority.modelWireOverrideAllowed) {
     const registryDefault = MODEL_ADAPTER_OVERRIDE_ALLOWED.has(authority.providerAdapter)
       ? registryDefaultForModel(

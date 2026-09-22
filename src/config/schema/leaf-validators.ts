@@ -490,7 +490,7 @@ export function modelPreferHostedToolsConfigError(
     ? (provider.modelAdapters as Record<string, unknown>)[modelId]
     : undefined;
   const resolveEffectiveWire = (modelId: string, currentWire: unknown): unknown => {
-    const pinned = pinnedWireAdapter(providerName, modelId);
+    const pinned = pinnedWireAdapter(providerName, modelId, provider);
     if (pinned) return pinned;
     const requestedWire = requestedWireFor(modelId);
     if (typeof requestedWire === "string" && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requestedWire)) {

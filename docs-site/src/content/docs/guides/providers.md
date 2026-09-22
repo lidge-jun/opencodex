@@ -624,9 +624,14 @@ the fixed Provider API host, preserves provider-native ids, and caps discovery a
 rows. `ocx login command-code` supports OAuth via browser sign-in (with optional local CLI credential
 import from `~/.commandcode/auth.json` for existing Command Code CLI users); the model catalog is
 account-scoped and comes from the authenticated discovery endpoint after login. The Provider-API
-preset (`commandcode`) uses the active configured Bearer key for chat requests; the OAuth preset
-(`command-code`) uses the stored account bearer for authenticated discovery and chat. Create
-Provider-API keys at [Command Code Studio](https://commandcode.ai/studio/).
+preset (`commandcode`) sends the active configured key: most model ids use Chat Completions with a
+Bearer header, while `claude-*` ids use Anthropic Messages with `x-api-key`, because Command Code
+serves them only on `/provider/v1/messages`. A provider that reuses the `commandcode` name for a
+different endpoint keeps its own wire. The OAuth preset (`command-code`) uses the stored account bearer for
+authenticated discovery and streams generation from `/alpha/generate` as NDJSON. MiMo tool-call
+markup echoed by the gateway as text is removed when it duplicates a real call, or restored as a
+real call when a complete declared-tool call has no native counterpart. Create Provider-API keys at
+[Command Code Studio](https://commandcode.ai/studio/).
 
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for
 one-click browser authorization or `ocx login orcarouter` to paste an existing API key. The PKCE

@@ -48,7 +48,7 @@ wp3 — catalog re-aggregation
 wp4 — compatibility
 1. `src/types/wire.ts`: add provider-scoped prefix pins (`commandcode`: `claude-` → `anthropic`) beside the exact-id table; `isWirePinnedModel` and `pinnedWireAdapter` consult both, so `src/server/adapter-resolve.ts:35`, `src/providers/resolved-model-policy.ts:284`, `src/config/provider-validation.ts:373` and `src/config/schema/leaf-validators.ts:493` follow automatically. Export `captureWireAdapterHardPinPrefixes(providerName)` returning a frozen `Record<prefix, adapter>`, re-exported from the `src/types.ts` barrel (`tests/config/types-barrel-identity.test.ts`).
 2. `src/providers/fastwire.ts`: optional `hardPinPrefixes` on `FastPolicyAuthority`, applied after exact pins and before overrides; `src/providers/service-tier.ts:115` captures it; the no-provider authority (`service-tier.ts:155`) and the synthetic one (`:207`) keep it empty.
-3. Tests: `tests/server/adapter-resolve.test.ts` (claude id → anthropic even with a Chat `modelAdapters` entry, MiMo stays chat, other providers unaffected), `tests/routing/fastwire-policy.test.ts` (prefix pin through policy resolution), and a new sibling `tests/config/commandcode-claude-pin-validation.test.ts` (registered in layout) because `tests/server/config.test.ts` sits at its 3,828-line cap.
+3. Tests: `tests/server/adapter-resolve.test.ts` (claude id → anthropic even with a Chat `modelAdapters` entry, MiMo stays chat, other providers unaffected), `tests/routing/fastwire-policy.test.ts` (prefix pin through policy resolution), and a new sibling `tests/config/config-commandcode-claude-pin.test.ts` (registered in layout) because `tests/server/config.test.ts` sits at its 3,828-line cap.
 4. Docs: `docs-site/src/content/docs/guides/providers.md` Command Code paragraph and `reference/adapters.md` Command Code section state the real wires (key: Chat, `claude-*` on Messages; OAuth: `/alpha/generate` NDJSON) and the MiMo text handling; translations checked for contradiction. `structure/` owners for `src/adapters/` and `src/types/` reviewed via `bun run structure:check` and updated if they name the touched contracts.
 
 ## Acceptance
@@ -64,3 +64,22 @@ wp4 — compatibility
 - Intermittent upstream `The connection was closed` 502s on `/alpha/generate`.
 - Lab protocol label (D4).
 - Profile-declared vision for new ids (needs route-specific image proof before `COMMAND_CODE_IMAGE_MODELS`).
+
+## wp3 amendments (P, 2026-09-23)
+
+The W3 worker draft (`.tmp/cc-audit/wp3.patch`) is applied in B with three corrections found in review:
+restore the rationale comments it deleted (exact-id key rule and the measured index map), fix the
+remaining Muse 1.2/1.1 profile URLs (`meta-muse-spark-1.2` redirects 302; `muse-spark-1-2`,
+`muse-spark-1-2-contributor`, `muse-spark-1-1` serve the payload), and raise the refresh bound from
+256 KiB to 512 KiB because live profile pages now measure 240-259 KB. Every captured ladder matched
+the payload parser (`.tmp/cc-audit/chk/ladders.ts`); live refresh reproduces the committed rows for
+gpt-5.6-luna, GLM-5.2/5.3, deepseek-v4-flash and gemini-3.7-flash.
+
+Audit fold (reviewer, wp3): the payload parser also rejects a record whose indexed keys decode to the
+same field name twice, with a test; the 512 KiB bound gets a test with a page above 256 KiB.
+
+Audit fold (reviewer, wp4): the `claude-` prefix pin applies only when the provider's baseUrl is
+Command Code's Provider API endpoint, so a custom provider that reuses the `commandcode` name for
+another destination keeps its own wire and its Chat overrides; every consumer passes the provider
+config. The unused `ResolvedFastPolicy.hardPinned` field is dropped, and the guide says the Messages
+route authenticates with `x-api-key` (Command Code accepts it).

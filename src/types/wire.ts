@@ -70,6 +70,67 @@ export function captureWireAdapterHardPins(providerName: string): Readonly<Recor
   return Object.freeze(Object.fromEntries([...models].map(modelId => [modelId, "anthropic"])));
 }
 
+interface WirePinPrefixRule {
+  /** The registry endpoint the rule describes; another destination under the same name is not covered. */
+  readonly endpoint: string;
+  readonly prefixes: Readonly<Record<string, string>>;
+}
+
+/**
+ * Provider-local model-id prefixes whose upstream accepts only one wire, bound to the endpoint that
+ * behaves that way. Command Code's Provider API serves `claude-*` ids only on `/provider/v1/messages`
+ * (live `supported_endpoints` on 2026-09-23 list `/messages` alone; `/chat/completions` answers 400
+ * "must be called via /provider/v1/messages"). A prefix covers Claude ids Command Code adds later.
+ */
+const WIRE_ADAPTER_PIN_PREFIXES: Readonly<Record<string, WirePinPrefixRule>> = Object.freeze({
+  commandcode: Object.freeze({
+    endpoint: "https://api.commandcode.ai/provider/v1",
+    prefixes: Object.freeze({ "claude-": "anthropic" }),
+  }),
+});
+
+/** Just enough of a provider config to tell whether it still points at the pinned endpoint. */
+export interface WirePinProvider {
+  readonly baseUrl?: unknown;
+}
+
+function normalizedEndpoint(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value.trim());
+    return `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {
+  if (!provider || !Object.hasOwn(WIRE_ADAPTER_PIN_PREFIXES, providerName)) return undefined;
+  const rule = WIRE_ADAPTER_PIN_PREFIXES[providerName]!;
+  return normalizedEndpoint(provider.baseUrl) === rule.endpoint ? rule.prefixes : undefined;
+}
+
+/**
+ * Detached provider-local prefix pins for pure wire-policy resolution. Empty unless the provider
+ * still points at the endpoint the rule describes.
+ */
+export function captureWireAdapterHardPinPrefixes(
+  providerName: string,
+  provider: WirePinProvider | undefined,
+): Readonly<Record<string, string>> {
+  return Object.freeze({ ...(prefixPinsFor(providerName, provider) ?? {}) });
+}
+
+function prefixedWireAdapter(providerName: string, modelId: string, provider: WirePinProvider | undefined): string | undefined {
+  const prefixes = prefixPinsFor(providerName, provider);
+  if (!prefixes) return undefined;
+  const folded = modelId.toLowerCase();
+  for (const [prefix, adapter] of Object.entries(prefixes)) {
+    if (folded.startsWith(prefix)) return adapter;
+  }
+  return undefined;
+}
+
 /**
  * True when the upstream speaks exactly one wire for this model, so a configured
  * override must not apply.
@@ -78,11 +139,14 @@ export function captureWireAdapterHardPins(providerName: string): Readonly<Recor
  * more than once per request, and a check phrased as "pin differs from the current
  * adapter" would pass on the first pass and then let the override win on the second.
  */
-export function isWirePinnedModel(providerName: string, modelId: string): boolean {
-  return anthropicWireModelsForProvider(providerName)?.has(modelId) ?? false;
+export function isWirePinnedModel(providerName: string, modelId: string, provider?: WirePinProvider): boolean {
+  return (anthropicWireModelsForProvider(providerName)?.has(modelId) ?? false)
+    || prefixedWireAdapter(providerName, modelId, provider) !== undefined;
 }
 
 /** The wire a pinned model must use, or undefined when the model is not pinned. */
-export function pinnedWireAdapter(providerName: string, modelId: string): string | undefined {
-  return isWirePinnedModel(providerName, modelId) ? "anthropic" : undefined;
+export function pinnedWireAdapter(providerName: string, modelId: string, provider?: WirePinProvider): string | undefined {
+  return anthropicWireModelsForProvider(providerName)?.has(modelId)
+    ? "anthropic"
+    : prefixedWireAdapter(providerName, modelId, provider);
 }

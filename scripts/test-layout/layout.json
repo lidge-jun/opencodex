@@ -212,6 +212,7 @@
     "physical-send.test.ts": "adapters",
     "adapter-registry-authority.test.ts": "adapters",
     "adapter-resolve.test.ts": "server",
+    "config-commandcode-claude-pin.test.ts": "config",
     "command-code-tool-text.test.ts": "providers",
     "adapter-tool-conformance.test.ts": "adapters",
     "adapter-usage.test.ts": "adapters",

@@ -15,6 +15,7 @@ import { captureFastPolicyAuthority, fastPolicyForModel } from "../../src/provid
 import { PROVIDER_REGISTRY, providerRegistryFastWireError } from "../../src/providers/registry";
 import {
   captureWireAdapterHardPins,
+  captureWireAdapterHardPinPrefixes,
   isWirePinnedModel,
   type FastWire,
   type OcxConfig,
@@ -166,6 +167,37 @@ describe("resolveFastPolicy matrix", () => {
     expect(resolveFastPolicy(authority, "Model").adapter).toBe("openai-chat");
     expect(resolveFastPolicy(authority, "pinned").adapter).toBe("openai-responses");
     expect(resolveFastPolicy(authority, "Pinned").adapter).toBe("anthropic");
+  });
+
+  test("Command Code prefix pins outrank overrides and stay provider-scoped", () => {
+    const modelId = "Claude-Opus-5-5";
+    const canonical = { baseUrl: "https://api.commandcode.ai/provider/v1" };
+    const prefixes = captureWireAdapterHardPinPrefixes("commandcode", canonical);
+    expect(Object.isFrozen(prefixes)).toBe(true);
+    expect(prefixes).toEqual({ "claude-": "anthropic" });
+    expect(captureWireAdapterHardPinPrefixes("command-code", canonical)).toEqual({});
+    expect(captureWireAdapterHardPinPrefixes("commandcode", { baseUrl: "https://gateway.example.test/v1" })).toEqual({});
+    const authority: FastPolicyAuthority = {
+      ...authorityForMatrix({
+        source: "provider-adapter",
+        declaration: "undefined",
+        overrideAllowed: true,
+        capability: "true",
+        chatForeignTierForward: true,
+      }),
+      modelAdapters: { [modelId]: "openai-chat" },
+      hardPinPrefixes: prefixes,
+    };
+    expect(resolveFastPolicy(authority, modelId)).toMatchObject({
+      adapter: "anthropic", eligibility: "pin-unavailable",
+    });
+    expect(resolveFastPolicy(authority, "xiaomi/mimo-v2.6-flash").adapter).toBe("openai-chat");
+    expect(captureFastPolicyAuthority("commandcode", {
+      adapter: "openai-chat", baseUrl: "https://api.commandcode.ai/provider/v1",
+    }, true).hardPinPrefixes).toEqual(prefixes);
+    expect(captureFastPolicyAuthority("commandcode", {
+      adapter: "openai-chat", baseUrl: "https://gateway.example.test/v1",
+    }, true).hardPinPrefixes).toEqual({});
   });
 
   test("invalid configured overrides fall through to the captured registry default", () => {

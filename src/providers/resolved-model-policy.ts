@@ -281,7 +281,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     return exact !== "unknown" ? exact : operatorDefault !== undefined ? "operator" : registryDefault !== undefined ? "registry" : "unknown";
   };
   const configuredAdapter = provider.modelAdapters?.[input.modelId];
-  const pin = pinnedWireAdapter(input.providerName, input.modelId);
+  const pin = pinnedWireAdapter(input.providerName, input.modelId, provider);
   const normalizedModelId = input.modelId.trim().toLowerCase();
   const registryWire = wireDefault(entry?.modelWireDefaults?.[normalizedModelId], provider, entry,
     input.inboundWire ?? "responses", resolvedAuthMode);
