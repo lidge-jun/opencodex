@@ -130,3 +130,11 @@ longer claims whole-suite shared-process contamination coverage. Behavioral fixt
 membership, argument shape, special-family ownership, invalid input and failure disposition.
 Sol architecture, behavioral and explicit workflow/dependency security reviews accepted the change.
 The new cases are unrun locally; hosted execution is still required.
+
+The new macOS full-membership control passed at 9df4499dd2 (manual run 35704045906).
+The same head's PR Linux run exposed one native Anthropic reject-path fixture race: it freed
+an ephemeral upstream port before starting the proxy, allowing reuse/self-targeting instead of
+a connection refusal. The fixture now rejects only its exact synthetic upstream origin through
+the fetch boundary while retaining real HTTP ingress, an exact-one-upstream-call assertion,
+502/api_error/message assertions, and global restoration. Sol accepted the change; it is unrun
+locally and requires the next hosted candidate.
