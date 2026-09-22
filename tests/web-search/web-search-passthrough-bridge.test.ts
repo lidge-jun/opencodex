@@ -26,6 +26,7 @@ import { providerWebSearchBridgeConfigError, validateConfigCandidate } from "../
 import { mapOllamaSearchResponse } from "../../src/web-search/ollama-executor";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../src/server/responses-undeclared-tool-guard";
 import { handleResponses } from "../../src/server/responses";
+import { resolveContextPrincipal } from "../../src/server/auth-cors";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import type { ResponsesTerminalRepairScheduler } from "../../src/server/responses-terminal-repair";
@@ -1558,6 +1559,9 @@ describe("the reported turn, end to end through handleResponses", () => {
     const cfg = {
       port: 0,
       defaultProvider: "deepseek",
+      // Replay is scoped to a caller principal. On loopback a caller has one only when it presents
+      // a configured opencodex API key; a keyless caller gets no retained replay at all.
+      apiKeys: [{ id: "repair-caller", name: "repair-caller", key: "caller-inbound", createdAt: "2026-01-01T00:00:00Z" }],
       providers: {
         deepseek: {
           ...providerConfigSeed(getProviderRegistryEntry("deepseek")!),
@@ -1582,7 +1586,8 @@ describe("the reported turn, end to end through handleResponses", () => {
       for (let attempts = 0; attempts < 50 && !condition(); attempts += 1) await Bun.sleep(0);
     };
     try {
-      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      const admission = { kind: "loopback", source: "loopback" } as const;
+      const callerRequest = new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer caller-inbound", "thread-id": "thread-repaired-search" },
         body: JSON.stringify({
@@ -1591,9 +1596,12 @@ describe("the reported turn, end to end through handleResponses", () => {
           input: [{ role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] }],
           tools: [{ type: "web_search" }],
         }),
-      }), cfg, { model: "", provider: "" }, {
+      });
+      const callerPrincipal = resolveContextPrincipal(callerRequest, cfg, admission);
+      if (!callerPrincipal) throw new Error("fixture inbound API key did not resolve a principal");
+      const response = await handleResponses(callerRequest, cfg, { model: "", provider: "" }, {
         responsesTerminalRepairScheduler: scheduler,
-        admission: { kind: "loopback" },
+        admission,
       });
       const reader = response.body!.getReader();
       try {
@@ -1639,7 +1647,7 @@ describe("the reported turn, end to end through handleResponses", () => {
         const cellId = (hosted?.item as Record<string, unknown> | undefined)?.id;
         expect(typeof cellId).toBe("string");
         const scope = {
-          clientPrincipalId: "loopback", clientThreadId: "thread-repaired-search",
+          clientPrincipalId: callerPrincipal, clientThreadId: "thread-repaired-search",
           current: {
             providerName: "deepseek", adapterName: "openai-responses", modelId: "deepseek-v4-flash",
             providerDestinationIdentity: reasoningReplayDestinationIdentity(cfg.providers.deepseek!.baseUrl),
@@ -1650,6 +1658,14 @@ describe("the reported turn, end to end through handleResponses", () => {
         // ordinary search legs; knowing the emitted cell id does not widen that boundary.
         expect(peekBridgeSearchReplay(bridgeSearchReplayScope(scope), cellId as string)?.output)
           .toContain("opencodex 2.50.0");
+        // A keyless caller on the same thread resolves no principal, so it cannot form a scope.
+        const keylessPrincipal = resolveContextPrincipal(
+          new Request("http://localhost/v1/responses", { headers: { "thread-id": "thread-repaired-search" } }),
+          cfg,
+          admission,
+        );
+        expect(keylessPrincipal).toBeUndefined();
+        expect(bridgeSearchReplayScope({ ...scope, clientPrincipalId: keylessPrincipal })).toBeUndefined();
         for (const changedScope of [
           { ...scope, clientPrincipalId: "another-caller" },
           { ...scope, clientThreadId: "another-thread" },
