@@ -149,7 +149,7 @@ export async function handleResponsesWithPolicyFallback(
       if (rawBody === null && body && typeof body === "object" && !Array.isArray(body)) {
         // Recovery and other core preparation may mutate the parsed body in place. Keep an
         // immutable snapshot of the original wire body so a retry cannot serialize those
-        // mutations while losing object-identity metadata attached by the first attempt.
+        // mutations. Object-identity metadata is re-established by each attempt, not serialized.
         rawBody = structuredClone(body as Record<string, unknown>);
       }
     },

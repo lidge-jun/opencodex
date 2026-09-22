@@ -959,6 +959,16 @@ counter rather than holding a second. A replacement never widens a send budget: 
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through.
 
+OpenCode Go inference POSTs obey this same operator gate; the destination itself does not
+authorize a replay. If the granted pre-header replacement returns a transient 5xx, the reset
+layer cancels that body and returns the non-replayable refusal. Policy fallback and account
+rotation preserve that marker instead of interpreting its 429 as fresh quota evidence.
+
+`src/server/responses/policy-fallback.ts` retains one deep snapshot of the first parsed wire
+body. Candidate retries serialize that snapshot, so in-place recovery or sanitizer mutations
+from a previous attempt cannot become another provider's input. Object-identity metadata is
+not serialized and must be established independently by each attempt.
+
 The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
 request, so the grant is held to the smallest ceiling any leg has presented rather than to
@@ -1128,6 +1138,9 @@ skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompa
 build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
 backend that minted it; the conversation model would otherwise resume with an omission marker
 in place of its history.
+
+Identity checks remove synthetic fast/effort suffixes first. A stale selector that only resolves
+through the default provider cannot establish the original serving identity and stays portable.
 
 `tests/responses/responses-compaction-override.test.ts` covers trigger selection, config validation,
 native and routed handlers, same-provider credential retention, cross-provider portable summaries

@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { formatErrorResponse } from "../../src/bridge";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
+import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
+import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
 import type { OcxConfig } from "../../src/types";
 import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
@@ -49,6 +51,32 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([false, true])("reset refusal stays terminal across policy and account recovery (replacement=%s)", async replacement => {
+    let sends = 0;
+    let coreCalls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        coreCalls += 1;
+        const body = await req.json();
+        options.onRequestBodyParsed?.(body);
+        body.input = "attempt-local recovered text";
+        context.routeDecision = policyTrace();
+        return fetchWithTransientRetry(async () => {
+          sends += 1;
+          if (sends === 1) throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+          return new Response("busy", { status: 502 });
+        }, { attempts: 3, claimAmbiguousResend: () => replacement });
+      },
+    });
+
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(false);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(coreCalls).toBe(1);
+    expect(sends).toBe(replacement ? 2 : 1);
+  });
+
   test("policy hops retain only the original sidecar snapshot outside primary headers", async () => {
     const authorization = `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "sidecar-account" })}`;
     const initial = request();
