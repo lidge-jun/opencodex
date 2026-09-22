@@ -485,4 +485,5 @@ If the app reports no models, check that the base URL ends in `/v1` rather than
 listens on a non-loopback address, put a data-admission key (the token described under
 [remote access](/reference/configuration/server/#remote-access), or a dashboard-generated `ocx_…`
 key) in the app's API key field. The app sends it as `Authorization: Bearer`, which
-`/v1/chat/completions` accepts as proxy admission and never forwards upstream.
+`/v1/chat/completions` accepts as proxy admission and never forwards upstream; see the
+[authentication matrix](/reference/proxy-formats/#authentication-matrix).

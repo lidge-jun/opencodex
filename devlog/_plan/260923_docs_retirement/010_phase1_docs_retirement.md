@@ -65,6 +65,17 @@ Diff-level change map. Paths are relative to the repository root.
   drag-and-drop attachment is presented first; the PR template stays byte-identical.
 - D9 ADD accepted (above).
 
+## C-phase verifier findings
+
+- Content verifier: ADR 0007 (CLI parity), ADR 0002 (doctor proxy-env disclosure) and the CL-10
+  closure contracts had no `structure/` home; carried into `structure/ops/docs-and-release.md`,
+  `structure/config.md` and `structure/adapters/compatibility-lab.md`. ADR 0006 was already covered
+  (`structure/config.md` provider output defaults, `structure/transports/streaming-health.md` replay).
+- Follow-up outside this unit: `docs-site/.../reference/configuration/server.md` "Remote access" table
+  (English and seven translations) still says `/v1/responses` and `/v1/chat/completions` reject Bearer
+  admission. `src/server/auth-cors.ts` `AUTH_MATRIX` and `reference/proxy-formats.md` accept it since
+  #1686. The new Copilot guide links the correct matrix; the stale table predates this unit.
+
 ## Remote (outside the PR diff)
 
 1. Orphan branch `pr-assets` with one `README.md` explaining layout (`<pr-number-or-slug>/<file>`),
