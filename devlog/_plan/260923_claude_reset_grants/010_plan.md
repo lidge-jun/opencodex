@@ -118,6 +118,23 @@ CLI verb (owed; this doc is the deferred-verb owner), auto-redeem, push/merge.
   `tests/server/management-anthropic-reset-grants.test.ts`,
   `gui/tests/anthropic-reset-grants.test.tsx`.
 
+## Check-phase code review (Mill, gpt-6-sol)
+
+Round 1 found five issues; four were fixed in `13c15083d3`: the journal now
+publishes through `atomicWriteFileStreamed` (temp fsync plus parent-directory
+sync) so the open record is on disk before the claim; settlement returns the
+stored answer and a missing record fails closed; a replayed refusal renders as
+that refusal; a same-id retry refused for a transient reason keeps the attempt
+held. Trailing blank lines were removed.
+
+Round 2 residual, accepted: `syncParentDirectory` in
+`src/config/atomic-write.ts` is best-effort by platform (no directory
+descriptor on Windows; some filesystems refuse the open), and this unit does not
+change the shared primitive. Losing a just-renamed open record needs a power cut
+in that window on such a platform, and a second spend then still needs the grant
+to report `resets_left > 0` to the pre-spend gate after the first claim; every
+grant observed today has `resets_total: 1`.
+
 ## Architect reflection (MISALIGNED → folded)
 
 The same architect flagged three gaps against the first revision; all accepted:
