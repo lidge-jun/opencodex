@@ -1307,6 +1307,7 @@
   "terminal-guard-server.test.ts": "server",
   "terminal-guard.test.ts": "server",
   "test-home-guard.test.ts": "ci-workflows",
+  "test-sandbox-cleanup.test.ts": "ci-workflows",
   "test-runner.test.ts": "ci-workflows",
   "thought-signature-credential-scope.test.ts": "responses",
   "token-estimate.test.ts": "lib",

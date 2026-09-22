@@ -445,7 +445,18 @@ storage-policy and api-usage families to its dedicated jobs. The Windows step di
 user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
 dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
 the process timeout without executing tests. The per-process home isolation and live-home/service
-manager guards remain active because the preload installs them before the lock boundary. A test
+manager guards remain active because the preload installs them before the lock boundary.
+`tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases,
+then teardown awaits native-main startup releases and config hardening, followed by the sandbox's
+registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an
+undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal
+retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
+`tests/helpers/test-sandbox-cleanup.ts` also exposes case-scoped lifecycle ownership: cancellation
+starts listener stops while owned asynchronous work settles, and repeated close/stop calls share
+one promise. Expected teardown aborts are observed without hiding ordinary assertion failures.
+Callers settle that lifecycle before draining producers/reaps and restoring or removing a home;
+the helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+A test
 failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
