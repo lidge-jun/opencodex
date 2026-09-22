@@ -337,9 +337,8 @@ an open tool call is cancelled as `status: "incomplete"` without `function_call_
 the client never sees a completed call ahead of `response.failed` / `response.incomplete`.
 At the freeform boundary, `src/responses/apply-patch-envelope.ts` unwraps the contractual `input`
 field for every tool. Only bare or `default.`-prefixed `exec` and `apply_patch` calls may recover
-one recognized alternate
-body field or remove one complete outer Markdown fence; ambiguous alternate fields and every other
-freeform grammar pass through unchanged.
+one recognized alternate body field or remove one complete outer Markdown fence; ambiguous
+alternate fields and every other freeform grammar pass through unchanged.
 
 The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
