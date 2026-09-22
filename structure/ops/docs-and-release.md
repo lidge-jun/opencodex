@@ -566,7 +566,9 @@ Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the 
 `src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
 gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
 the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
-`src/reasoning-effort.ts` do not initiate network work.
+`src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
+not fetch on the request path; catalog sync owns their bootstrap.
 
 ## Bun updater ownership transaction
 

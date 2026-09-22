@@ -481,7 +481,7 @@ Regression coverage: `tests/vision/vision-cache.test.ts`, `tests/vision/vision-e
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
-Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence. The [catalog sync owner](ops/docs-and-release.md) refreshes supported destination effort metadata with a bounded wait before gathering; routed requests read the existing snapshot.
+Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence. The [catalog sync owner](ops/docs-and-release.md) bootstraps supported destination effort metadata with a bounded wait before gathering; routed reads of an existing stale ladder request a background refresh, while missing snapshots wait for catalog sync.
 
 Translated audio/file admission follows the [final-adapter input contract](adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 ## Request-local target compatibility

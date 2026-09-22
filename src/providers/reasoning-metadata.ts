@@ -12,8 +12,8 @@
  * fallback ladder, so the Codex catalog AND the wire clamp agree with the model instead of a
  * hand-written guess.
  *
- * Failure policy: the network is never on the routed-request path. A missing, stale or corrupt
- * snapshot yields undefined, which leaves every hand-written contract untouched. The second
+ * Failure policy: a missing or corrupt snapshot yields undefined, and an expired snapshot still
+ * serves its last ladder while a best-effort refresh runs in the background. The second
  * cache records rungs the upstream actually rejected (400/403 naming reasoning_effort), so an
  * entitlement gap (muse-spark max needs an active Muse Code subscription) costs one rejected
  * request instead of failing every turn that selects that rung.
@@ -579,12 +579,13 @@ export async function refreshReasoningMetadata(options: { force?: boolean; waitM
 
 /**
  * Optional background refresh for callers that do not wait for a snapshot. Catalog sync uses
- * refreshReasoningMetadata with a bounded wait; request-time ladder reads do no network work.
- * One refresh per process at a time; failures are ignored on purpose.
+ * refreshReasoningMetadata with a bounded wait; an expired ladder read can request this refresh.
+ * A classified toggle/budget model can have a fallback ladder without any snapshot, so this
+ * path must never bootstrap a missing snapshot. One refresh per process; failures are ignored.
  */
 export function ensureReasoningMetadataSnapshot(): void {
   const snapshot = loadSnapshot();
-  if (snapshot && Date.now() - snapshot.fetchedAt <= CACHE_TTL_MS) return;
+  if (!snapshot || Date.now() - snapshot.fetchedAt <= CACHE_TTL_MS) return;
   if (refreshInFlight) return;
   void refreshReasoningMetadata().catch(() => undefined);
 }
