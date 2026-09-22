@@ -136,6 +136,16 @@ describe("selected Codex CLI installation target derivation", () => {
     )).toEqual({ kind: "unavailable", reason: "unsupported_layout" });
   });
 
+  test("an unreadable wrapper probe is unavailable, not marker absence", async () => {
+    const files = fixtureFiles();
+    files.add((PREFIX + "\\codex.opencodex-real.cmd").toLowerCase());
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
+      { ...depsFor(files), fileContains: () => "unavailable" as const },
+    );
+    expect(result).toEqual({ kind: "unavailable", reason: "candidate_unavailable" });
+  });
+
   test("a fresh npm shim replacing the wrapper attests it directly, ignoring a stale backing", async () => {
     const files = fixtureFiles();
     files.add((PREFIX + "\\codex.opencodex-real.cmd").toLowerCase());

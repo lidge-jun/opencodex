@@ -31,7 +31,7 @@ export interface CodexCliUpdateCommandDeps {
   readonly inspectIdentity?: (input: CodexCliInstallationIdentityInput) => Promise<CodexCliInstallationIdentityReport>;
   readonly deriveInstallationInput?: (
     snapshot: CodexCliInstallationSnapshot,
-  ) => CodexCliInstallationTargetDerivation;
+  ) => Promise<CodexCliInstallationTargetDerivation>;
 }
 
 function identitySummary(report: CodexCliInstallationIdentityReport): string[] {

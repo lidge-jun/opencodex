@@ -28,7 +28,8 @@ export interface CodexCliInstallationTargetDeps {
   readonly platform?: NodeJS.Platform;
   readonly exists?: (path: string) => boolean | Promise<boolean>;
   /** Bounded prefix read used only to recognize an OpenCodex-owned wrapper. */
-  readonly fileContains?: (path: string, marker: string) => boolean | Promise<boolean>;
+  readonly fileContains?: (path: string, marker: string) =>
+    boolean | "unavailable" | Promise<boolean | "unavailable">;
 }
 
 const DEFAULT_PATH_EXT = ".COM;.EXE;.BAT;.CMD;.PS1";
@@ -74,14 +75,15 @@ export async function deriveCodexCliInstallationInput(
   if ((deps.platform ?? process.platform) !== "win32") {
     return { kind: "unavailable", reason: "unsupported_platform" };
   }
-  const safeRead = async (path: string, maxBytes: number) => {
+  const safeRead = async (path: string, maxBytes: number, prefixOnly = false) => {
     const { inspectWindowsInstallationFiles } = await import("./windows-installation-files");
-    return inspectWindowsInstallationFiles([{ path, maxBytes, metadataOnly: maxBytes === 0 }]);
+    return inspectWindowsInstallationFiles([{ path, maxBytes, metadataOnly: maxBytes === 0, prefixOnly }]);
   };
   const exists = deps.exists ?? (async (path: string) => (await safeRead(path, 0)).kind === "observed");
   const fileContains = deps.fileContains ?? (async (path: string, marker: string) => {
-    const result = await safeRead(path, SHIM_PROBE_BYTES);
-    return result.kind === "observed" && Buffer.from(result.files[0]!.bytes).toString("utf8").includes(marker);
+    const result = await safeRead(path, SHIM_PROBE_BYTES, true);
+    if (result.kind !== "observed") return "unavailable";
+    return Buffer.from(result.files[0]!.bytes).toString("utf8").includes(marker);
   });
   const configured = snapshot.codexCliPath;
 
@@ -104,10 +106,14 @@ export async function deriveCodexCliInstallationInput(
 
   // An OpenCodex wrapper at the npm prefix is our own launcher, not the npm
   // artifact. The renamed original beside it is the file npm wrote.
-  if (/\.cmd$/i.test(candidate) && await fileContains(candidate, SHIM_MARKER)) {
-    const backing = candidate.slice(0, -".cmd".length) + ".opencodex-real.cmd";
-    if (!await exists(backing)) return { kind: "unavailable", reason: "unsupported_layout" };
-    candidate = backing;
+  if (/\.cmd$/i.test(candidate)) {
+    const marker = await fileContains(candidate, SHIM_MARKER);
+    if (marker === "unavailable") return { kind: "unavailable", reason: "candidate_unavailable" };
+    if (marker) {
+      const backing = candidate.slice(0, -".cmd".length) + ".opencodex-real.cmd";
+      if (!await exists(backing)) return { kind: "unavailable", reason: "unsupported_layout" };
+      candidate = backing;
+    }
   }
 
   const base = win32.basename(candidate).toLowerCase();
