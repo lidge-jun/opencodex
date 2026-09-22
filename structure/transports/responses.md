@@ -11,6 +11,12 @@ Plaintext collaboration restoration treats a null namespace as absent, rejects n
 
 ## Responses HTTP/SSE
 
+`src/server/responses/core-combo-failure.ts` keeps a cyber-policy stop from bounded
+replacement-decoded error text when a 5xx body has malformed UTF-8. Every other use of a
+malformed 5xx body (usage, quota and reset evidence, ordinary classification) keeps the
+status-only fallback. Rebuilt failures retain the non-replayable marker; cyber-policy failures
+carry neither Retry-After nor quota-reset metadata.
+
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).

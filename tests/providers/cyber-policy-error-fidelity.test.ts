@@ -18,6 +18,7 @@ import { consumeComboFailure } from "../../src/server/responses/core";
 import { handleResponses } from "../../src/server/responses";
 import type { AdapterEvent, OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
@@ -191,6 +192,24 @@ describe("cyber_policy error fidelity", () => {
     expect(comboFailureDecision(502, failure.classificationText, {
       code: failure.upstreamCode,
     })).toBe("stop");
+  });
+
+  test("bounded recovery preserves a non-replayable malformed cyber stop", async () => {
+    const bytes = new Uint8Array([...new TextEncoder().encode(JSON.stringify(CYBER_ERROR_BODY)), 0xff]);
+    const upstream = new Response(bytes, {
+      status: 502,
+      headers: { "retry-after": "120", "x-codex-primary-reset-at": "2000000000" },
+    });
+    markResponseNonReplayable(upstream);
+    const failure = await consumeComboFailure(upstream);
+    expect(failure.response.status).toBe(400);
+    expect(failure.upstreamCode).toBe(CYBER_POLICY_ERROR_CODE);
+    expect(failure.nonReplayable).toBe(true);
+    expect(isNonReplayableResponse(failure.response)).toBe(true);
+    expect(failure.retryAfter).toBeUndefined();
+    expect(failure.resetAt).toBeUndefined();
+    expect(failure.response.headers.get("retry-after")).toBeNull();
+    expect(comboFailureDecision(502, failure.classificationText, { code: failure.upstreamCode })).toBe("stop");
   });
 
   test("malformed UTF-8 keeps the status-only fallback for a non-cyber 5xx body", async () => {
