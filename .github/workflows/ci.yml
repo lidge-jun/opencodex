@@ -611,12 +611,19 @@ jobs:
           source scripts/ci/bun-crash-signatures.sh
 
           run_macos_suite() {
-            local suite_log suite_status
+            local suite_log suite_status observer_pid
             suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)" || return $?
+            # Observe a silent process in place; do not retry, split, or signal the suite.
+            bash scripts/ci/sample-macos-stall.sh "$$" "$suite_log" &
+            observer_pid=$!
             # The per-test ceiling applies to every invocation, including each isolated
             # serial file. One attempt, whatever the outcome.
             bun test --isolate --timeout 60000 "$@" 2>&1 | tee "$suite_log"
             suite_status="${PIPESTATUS[0]}"
+            if jobs -pr | grep -qx "$observer_pid"; then
+              kill "$observer_pid" 2>/dev/null || true
+            fi
+            wait "$observer_pid" 2>/dev/null || true
             if [ "$suite_status" -eq 0 ]; then
               rm -f "$suite_log"
               return 0

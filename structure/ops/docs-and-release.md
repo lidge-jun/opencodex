@@ -1,5 +1,13 @@
 # Docs And Release
 
+The sharded macOS test lane runs `scripts/ci/sample-macos-stall.sh` beside the
+unchanged Bun invocation. After sustained silence it identifies the owning shell's
+single direct Bun child, records that process's descendants without argv or
+environment values, and requests one native stack sample. It never signals or
+retries the suite, and the original suite exit status still determines the job.
+Observer cleanup signals only its own identified diagnostic children. The catalog
+picker fixture also emits CI-only setup, writer and cleanup phase boundaries.
+
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
