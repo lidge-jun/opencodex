@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { PackageTreeObservation } from "../../src/lib/package-tree-integrity";
 import { createPackageTreeIntegrityGuardForServer } from "../../src/server/index/package-tree-guard";
-import { acceptSystemRestart, setSystemRestartIoForTests } from "../../src/server/management/system-restart";
+import { acceptSystemRestart, noteExplicitShutdownRequested, setSystemRestartIoForTests } from "../../src/server/management/system-restart";
 
 const original: PackageTreeObservation = {
   device: 1n, inode: 1n, contentTimeNs: 1n, size: 1n,
@@ -54,6 +54,22 @@ describe("automatic package-tree restart ownership", () => {
     fixture.guard.dispose(); // server.stop() calls this before closing the listener
     await fixture.runScheduled();
     expect(fixture.calls).toEqual(["fence"]);
+  });
+
+  test("an explicit shutdown during the automatic drain vetoes the handoff", async () => {
+    const fixture = setup(() => true, () => noteExplicitShutdownRequested());
+    await fixture.replace();
+    await fixture.runScheduled();
+    expect(fixture.calls).toEqual(["fence", "drain"]);
+    fixture.guard.dispose();
+  });
+
+  test("an explicit shutdown does not change a manually requested restart", async () => {
+    const fixture = setup(() => true, () => noteExplicitShutdownRequested());
+    expect(acceptSystemRestart().alreadyDraining).toBe(false);
+    await fixture.runScheduled();
+    expect(fixture.calls).toEqual(["fence", "drain", "exit"]);
+    fixture.guard.dispose();
   });
 
   test("disposing the guard does not veto a restart accepted by another caller", async () => {

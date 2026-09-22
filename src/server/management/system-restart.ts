@@ -142,10 +142,21 @@ function waitForBoundedSettlement(
   });
 }
 
+/**
+ * Set when an operator-initiated shutdown (signal or management stop) begins. An automatic
+ * restart that is already draining cannot tell its own listener stop from an independent one,
+ * so it consults this instead and never hands off after the process was asked to stop.
+ */
+let explicitShutdownRequested = false;
+export function noteExplicitShutdownRequested(): void {
+  explicitShutdownRequested = true;
+}
+
 /** Test seam — reset between tests. */
 export function setSystemRestartIoForTests(io: SystemRestartIo = {}): void {
   restartIo = io;
   restartAccepted = false;
+  explicitShutdownRequested = false;
 }
 
 function resolveListenPort(): number | undefined {
@@ -393,6 +404,9 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
       if (vetoed) return;
       pending = false;
       const canHandoff = () => {
+        // Only admission-bound (automatic) restarts yield to an explicit stop; manual restart
+        // requests keep their existing semantics.
+        if (admission.onAccepted && explicitShutdownRequested) return false;
         try { return admission.beforeScheduledDrain?.() ?? true; }
         catch { return false; } // Unknown ownership is not authority to restart.
       };

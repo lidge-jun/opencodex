@@ -556,7 +556,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   }
 
   const { server, serverModule, port, readinessGate, config } = boundStart;
-  const { drainAndShutdown, isRecyclingForExit } = serverModule;
+  const { drainAndShutdown, isRecyclingForExit, noteExplicitShutdownRequested } = serverModule;
   // Records are visible now; background work may observe this runtime without a gap.
   scheduleCatalogPrewarm();
   installCrashGuards();
@@ -627,6 +627,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     shuttingDown = true;
     shutdownStartedAt = now;
+    noteExplicitShutdownRequested(); // an automatic package restart must not hand off after this
     console.log("\n🛑 Shutting down opencodex proxy...");
     void (async () => {
       let shutdownSucceeded = false;
