@@ -10,3 +10,9 @@
    cancelled jobs are not success. If no cross-platform run appears after a push, close and reopen
    once.
 5. An independent security reviewer reads the final diff and posts a short verdict comment.
+
+## Outcome (wp5, in progress)
+
+PR #5608 opened to `dev` from `codex/260923-luvs-l5-responses-usage` (not draft). An
+integration review of the combined branch passed before the push. Hosted CI at the PR head is the
+verifier; local checks: NOT RUN.
