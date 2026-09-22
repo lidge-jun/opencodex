@@ -3,9 +3,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { startServer } from "../../src/server";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
-import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
@@ -13,17 +16,34 @@ import { resetProviderRequestPacingForTest } from "../../src/providers/request-p
 let previousHome: string | undefined;
 let testDir = "";
 let isolatedCodexHome: IsolatedCodexHome | null = null;
-let releaseSpendHome: (() => void) | undefined;
-const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+let activeServer: ReturnType<typeof startServer> | undefined;
+let activeUpstream: ReturnType<typeof Bun.serve> | undefined;
+let stopping: Promise<void> | undefined;
+function stopFixtureServers(): Promise<void> {
+  // A timed-out body and its afterEach join one owner instead of racing two stops.
+  return stopping ??= (async () => {
+    try { await activeServer?.stop(true); }
+    finally { await activeUpstream?.stop(true); }
+  })();
+}
 beforeEach(() => {
+  activeServer = undefined;
+  activeUpstream = undefined;
+  stopping = undefined;
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-chat-spend-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-chat-spend-"));
   process.env.OPENCODEX_HOME = testDir;
 });
-afterEach(() => {
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
+afterEach(async () => {
+  await stopFixtureServers();
+  // Stop background owners before removing the home they can still harden/open.
+  await flushNativeMainStartupReleases();
+  await flushConfigDirHardeningForTests();
+  // A caller-facing ACL timeout is not evidence that its child released the path.
+  await flushWindowsSecretAclReapsBeforeRemoval(testDir);
+  if (isolatedCodexHome) await flushWindowsSecretAclReapsBeforeRemoval(isolatedCodexHome.path);
+  expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
   resetProviderRequestPacingForTest();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -51,6 +71,7 @@ function mockChatUpstreamCapturing() {
       return new Response(frames.join(""), { headers: { "Content-Type": "text/event-stream" } });
     },
   });
+  activeUpstream = server;
   return { server, captured };
 }
 
@@ -71,12 +92,12 @@ function mockConfig(baseUrl: string, providerOverrides: Partial<OcxProviderConfi
 }
 
 test("native Chat refuses a physical send that exceeds the configured pool spend ceiling", async () => {
-  takeSpendHome();
   const upstream = mockChatUpstreamCapturing();
   const config = mockConfig(`${upstream.server.url.toString().replace(/\/$/, "")}/v1`);
   config.spend = { pool: { maxTokens: 1 } };
   saveConfig(config);
   const server = startServer(0);
+  activeServer = server;
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
       method: "POST",
@@ -87,18 +108,17 @@ test("native Chat refuses a physical send that exceeds the configured pool spend
     expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
     expect(upstream.captured).toHaveLength(0);
   } finally {
-    await server.stop(true);
-    upstream.server.stop(true);
+    await stopFixtureServers();
   }
 });
 
 test("native Chat includes tool definitions in its pre-dispatch spend reservation", async () => {
-  takeSpendHome();
   const upstream = mockChatUpstreamCapturing();
   const config = mockConfig(`${upstream.server.url.toString().replace(/\/$/, "")}/v1`);
   config.spend = { pool: { maxTokens: 500 } };
   saveConfig(config);
   const server = startServer(0);
+  activeServer = server;
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
       method: "POST",
@@ -110,7 +130,6 @@ test("native Chat includes tool definitions in its pre-dispatch spend reservatio
     expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
     expect(upstream.captured).toHaveLength(0);
   } finally {
-    await server.stop(true);
-    upstream.server.stop(true);
+    await stopFixtureServers();
   }
 });

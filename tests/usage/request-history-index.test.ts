@@ -31,6 +31,8 @@ import {
 import { InvalidCursorError } from "../../src/routing/history/cursor";
 import { HISTORY_DB_FILENAME } from "../../src/routing/history/schema";
 import { getConfigDir } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -72,8 +74,11 @@ beforeEach(() => {
   closeRequestHistoryIndex();
 });
 
-afterEach(() => {
+afterEach(async () => {
   closeRequestHistoryIndex();
+  // Management/config reads may still own a Windows ACL child after the query ends.
+  await flushConfigDirHardeningForTests();
+  await flushWindowsSecretAclReapsBeforeRemoval(testDir);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) removeTreeWithRetry(testDir);
