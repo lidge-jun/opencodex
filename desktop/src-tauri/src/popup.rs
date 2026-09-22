@@ -229,10 +229,8 @@ fn ensure(app: &AppHandle, endpoint: ProxyEndpoint) -> tauri::Result<WebviewWind
     }
     let popup = builder.build()?;
     popup.on_window_event(move |event| match event {
-        WindowEvent::Focused(false) => {
-            if !within_focus_grace() {
-                hide(&app_handle);
-            }
+        WindowEvent::Focused(false) if !within_focus_grace() => {
+            hide(&app_handle);
         }
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
