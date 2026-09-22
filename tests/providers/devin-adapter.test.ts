@@ -575,9 +575,24 @@ describe("devin adapter api-server host resolution (#4503)", () => {
       apiBaseUrl: EU_TENANT_HOST,
     });
 
-    await runOneTurn("ocx-test-literal-slot-key");
+    await runOneTurn("devin-session");
 
     expectDispatchedTo(FEDSTART_TENANT_HOST);
+  });
+
+  test("a configured key does not borrow the literal devin slot's tenant host", async () => {
+    await saveCredential("devin", {
+      access: "devin-session",
+      refresh: "devin-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth",
+      apiBaseUrl: FEDSTART_TENANT_HOST,
+    });
+
+    await runOneTurn("configured-provider-key");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
+    expect(seenUrls.some((url) => url.startsWith(FEDSTART_TENANT_HOST))).toBe(false);
   });
 
   test("with neither credential slot populated the configured baseUrl still applies", async () => {
