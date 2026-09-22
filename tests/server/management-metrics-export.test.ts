@@ -356,6 +356,7 @@ describe("request metrics aggregation", () => {
         { ...attempt(1, ["rate-limit-429"]), ordinal: 2 },
         { ...attempt(1, ["reasoning-effort-downgrade"]), ordinal: 3 },
         { ...attempt(1, ["image-413"]), ordinal: 4 },
+        { ...attempt(1, ["anthropic-fast-downgrade"]), ordinal: 5 },
       ],
     } as RequestLogContext, 400, undefined, () => {});
 
@@ -367,6 +368,9 @@ describe("request metrics aggregation", () => {
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="payload"}')).toBe(1);
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="rate_limit"}')).toBe(1);
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="effort_downgrade"}')).toBe(1);
+    // Also a rejected parameter, but the remedy is an Anthropic fast-mode entitlement, not an
+    // effort change, so it must not inflate effort_downgrade.
+    expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="fast_downgrade"}')).toBe(1);
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="quota"}')).toBe(0);
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="policy"}')).toBe(0);
     expect(sampleValue(output, 'opencodex_recoveries_total{protocol="responses",recovery="other"}')).toBe(0);

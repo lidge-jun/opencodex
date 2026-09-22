@@ -1,6 +1,8 @@
 import { ENCRYPTED_FUNCTION_OUTPUT_REJECTION, upstreamErrorMessageFromPayload } from "../../lib/errors";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isReasoningEffortRejection } from "../../providers/reasoning-metadata";
+import { isAnthropicFastRefusal } from "../../providers/anthropic-fast";
+import type { AdapterRequest } from "../../adapters/base";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import type { OcxParsedRequest } from "../../types";
 import type { RequestLogContext } from "../request-log";
@@ -311,6 +313,33 @@ export async function reasoningEffortRejectionText(
   }
 }
 
+
+/**
+ * Whether an Anthropic response refused the fast lane of a request that actually sent it.
+ *
+ * "Actually sent" is read from the adapter's own tier record for that exact request, never from
+ * the route: a request built without `speed` can be refused for other reasons and must not be
+ * downgraded. The body is read from a clone, so a refusal that is not recovered (or whose resend
+ * is not admitted) still reaches the caller intact.
+ */
+export async function anthropicFastRefused(
+  response: Response,
+  sentRequest: AdapterRequest | undefined,
+  adapterName: string,
+  alreadyAttempted: boolean,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (alreadyAttempted || adapterName !== "anthropic") return false;
+  if (response.status !== 400 && response.status !== 429) return false;
+  const outcome = sentRequest?.tierLog?.outcome;
+  if (outcome?.wireKind !== "anthropic-speed" || typeof outcome.wireValue !== "string") return false;
+  try {
+    const body = await readBoundedResponseBody(response.clone(), { signal });
+    return isAnthropicFastRefusal(response.status, response.headers, body.truncated ? undefined : body.text);
+  } catch {
+    return isAnthropicFastRefusal(response.status, response.headers, undefined);
+  }
+}
 
 export async function opaqueBlobRejectionBodyForRecovery(
   response: Response,

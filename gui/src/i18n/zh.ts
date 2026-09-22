@@ -907,6 +907,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.attempt.recovery.oauthAccount429": "账号速率受限 (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "已丢弃过期加密状态",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "已降低推理强度",
+  "logs.detail.attempt.recovery.anthropicFastDowngrade": "快速模式被拒，按标准速度重试",
   "logs.detail.outcome.label": "结果",
   "logs.detail.outcome.completed": "已完成",
   "logs.detail.outcome.failed": "失败",

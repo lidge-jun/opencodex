@@ -62,6 +62,7 @@ import {
   consoleGoUploadRejectionBody,
   CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
   reasoningEffortRejectionText,
+  anthropicFastRefused,
 } from "./core-opaque-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import {
@@ -385,6 +386,8 @@ export async function prepareAdapterExchange(
     // below for the same reason the two guards above do: a guard declared inside it is reset by
     // every `continue recovery`, which would let one turn walk the whole ladder down.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
+    // At most one Anthropic fast-mode downgrade per request, for the same reason.
+    const anthropicFastDowngradeGuard: { attempted: boolean } = { attempted: false };
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
      * it once, tagging the attempt with the given recovery kind. Rebuilds are deterministic
@@ -637,6 +640,52 @@ export async function prepareAdapterExchange(
         // stop. Re-enter the loop guard instead, which returns it unchanged.
         if (isNonReplayableResponse(upstreamResponse)) continue recovery;
      }
+
+      // Anthropic fast mode refused (no usage credits, organization not enabled, model outside
+      // the lane, fast pool empty): resend once at standard speed, as Claude Code does. This
+      // sits before every 429 arm because the refusal says nothing about the account's standard
+      // lane; waiting, cooling, or rotating on it would punish a healthy credential. The
+      // resend is reserved and confirmed exactly like the generic OAuth hop below, and the
+      // decision lives on this request, so every later rebuild of it stays standard.
+      if (await anthropicFastRefused(
+        upstreamResponse,
+        transportState.sameTargetRequest,
+        transportState.activeAdapter.name,
+        anthropicFastDowngradeGuard.attempted,
+        upstream.signal,
+      )) {
+        const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
+        const hop = reserveCredentialHop(
+          "repair",
+          `${route.providerName}|${route.modelId}|anthropic-fast-downgrade`,
+          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+        );
+        if (hop.allowed) {
+          anthropicFastDowngradeGuard.attempted = true;
+          parsed.options.tierDecision = { kind: "drop" };
+          parsed.options.serviceTier = undefined;
+          if (parsed.options.tierObservation) {
+            parsed.options.tierObservation = { ...parsed.options.tierObservation, upstreamDeclinedFast: true };
+          }
+          invalidateSameTargetRequest();
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          sendBudgetState.pendingHopPermit = hop.permit;
+          let result: Response | { failed: Response };
+          try {
+            result = await rebuildAndRefetch("anthropic-fast-downgrade", () => {
+              if (!adapterOwnsDispatch) hop.permit?.use();
+            });
+          } finally {
+            sendBudgetState.pendingHopPermit = undefined;
+          }
+          if ("failed" in result) {
+            hop.permit?.release();
+            return result.failed;
+          }
+          upstreamResponse = result;
+          continue recovery;
+        }
+      }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries
       // 429 itself (it retries 5xx only), and single-key pools cannot use the failover below,

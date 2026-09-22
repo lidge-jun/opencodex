@@ -595,6 +595,10 @@ that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends
 accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
 one attempt.
 
+Anthropic Fast pricing applies a 2x list-price multiplier only when the response confirms
+`usage.speed: "fast"`; an absent echo or standard-speed downgrade retains standard pricing.
+`tests/usage/usage-anthropic-fast-pricing.test.ts` pins that distinction.
+
 Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
 `observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
 token-detail objects on every bridged wire, so a `cached_tokens: 0` recovered from a parsed wire
@@ -663,7 +667,8 @@ The label vocabularies are closed: protocol is `responses`, `chat`, `messages`, 
 is `completed`, `failed`, `incomplete`, or `aborted`; recovery is one of the coarse classes listed in
 `REQUEST_METRICS_RECOVERY_CLASSES`, and cause is one of the shared failure causes in
 `REQUEST_METRICS_FAILURE_CAUSES`, which aliases the dictionary rather than copying it. Each is the
-roster the exporter itself iterates. The count is
+roster the exporter itself iterates. `anthropic-fast-downgrade` projects to `fast_downgrade`,
+separate from reasoning-effort `effort_downgrade`. The count is
 deliberately not restated here: it was written as eight, a bounded label value was added, and the
 documentation then contradicted the output it describes. A
 logical request increments once, physical sends sum the finalized attempt counts, and each distinct

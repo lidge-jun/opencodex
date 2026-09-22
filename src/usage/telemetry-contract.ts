@@ -36,6 +36,7 @@ export const ATTEMPT_RECOVERY_KIND_ROSTER = Object.freeze([
   "opaque-blob-rejection",
   "empty-completion",
   "reasoning-effort-downgrade",
+  "anthropic-fast-downgrade",
 ] as const);
 
 export type AttemptRecoveryKind = typeof ATTEMPT_RECOVERY_KIND_ROSTER[number];

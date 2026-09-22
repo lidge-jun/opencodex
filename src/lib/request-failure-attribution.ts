@@ -98,6 +98,7 @@ export function deriveRequestFailureStage(facts: RequestFailureFacts): RequestFa
 const STATUS_CONFIRMED_RECOVERY_KINDS: Readonly<Partial<Record<AttemptRecoveryKind, number>>> = Object.freeze({
   "opaque-blob-rejection": 400,
   "reasoning-effort-downgrade": 400,
+  "anthropic-fast-downgrade": 400,
 });
 
 function refinedFourHundredCause(

@@ -931,6 +931,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.attempt.recovery.oauthAccount429": "Hesap hız sınırına takıldı (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Eski şifreli durum bırakıldı",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Akıl yürütme düzeyi düşürüldü",
+  "logs.detail.attempt.recovery.anthropicFastDowngrade": "Hızlı mod reddedildi, standart hızda yeniden denendi",
   "logs.detail.outcome.label": "Sonuç",
   "logs.detail.outcome.completed": "Tamamlandı",
   "logs.detail.outcome.failed": "Başarısız",

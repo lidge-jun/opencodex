@@ -1,7 +1,9 @@
 {
+  "anthropic-fast-speed.test.ts": "adapters/anthropic",
   "release-desktop-scripts.test.ts": "ci-workflows",
   "installed-gate-drivers.test.ts": "ci-workflows",
   "gui-desktop-sidecar-script.test.ts": "gui",
+  "responses-anthropic-fast-downgrade.test.ts": "responses",
   "standalone-build-script.test.ts": "gui",
   "standalone-service.test.ts": "service",
   "standalone.test.ts": "lib",
@@ -25,6 +27,7 @@
   "coding-agent-tool-result-images.test.ts": "adapters",
   "cold-spawn-warmup.test.ts": "ci-workflows",
   "stepfun-provider.test.ts": "providers",
+  "usage-anthropic-fast-pricing.test.ts": "usage",
   "warmup-registration.test.ts": "ci-workflows",
   "hub-usage.test.ts": "server",
   "client-hub-usage.test.ts": "clients",

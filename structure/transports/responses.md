@@ -289,6 +289,18 @@ narrows provider defaults, and provider-level `supportsServiceTier: false` canno
 Capability is namespaced by the selected provider and model; model-name similarity and adapter type
 alone never opt a gateway in.
 
+The `anthropic` OAuth and `anthropic-apikey` registry entries use the native `anthropic-speed`
+FastWire only for `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`. They have no
+provider-wide Fast fallback; other models stay unclassified. `tests/routing/fastwire-policy.test.ts`
+pins this eligibility. In the main adapter dispatch loop, a fast refusal naming fast mode or the
+`speed` parameter (400 or 429), or a 429 with a fast-pool remaining header of zero, may use one
+shared-budget repair permit for a standard-speed resend. The request then retains the drop decision
+through later rebuilds, and records `anthropic-fast-downgrade`, cause `parameter-rejected`, and a
+`downgraded` / `response-declined` tier outcome. A spent budget leaves the original refusal intact;
+generic 429 and 529 responses keep their ordinary handling. This repair precedes same-target 429
+waiting and credential rotation. Continuation and sidecar owners do not use this repair.
+`tests/responses/responses-anthropic-fast-downgrade.test.ts` pins the refusal and budget boundaries.
+
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
