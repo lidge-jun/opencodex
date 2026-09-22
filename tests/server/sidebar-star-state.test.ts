@@ -3,10 +3,40 @@ import {
   getStarStatus,
   invalidateStarStatusCache,
   probeStarState,
+  resolveTrustedGhExecutable,
   starRepository,
   STAR_REPO,
   type StarDeps,
 } from "../../src/github/star-state";
+
+describe("trusted gh resolution", () => {
+  test("does not search a caller-controlled POSIX PATH", () => {
+    const visited: string[] = [];
+    const resolved = resolveTrustedGhExecutable("linux", { PATH: "/workspace/untrusted:/tmp/bin" }, candidate => {
+      visited.push(candidate);
+      return candidate === "/usr/bin/gh";
+    });
+
+    expect(resolved).toBe("/usr/bin/gh");
+    expect(visited).not.toContain("/workspace/untrusted/gh");
+    expect(visited).not.toContain("/tmp/bin/gh");
+  });
+
+  test("only considers absolute Windows installation roots", () => {
+    const visited: string[] = [];
+    const resolved = resolveTrustedGhExecutable("win32", {
+      PATH: ".;C:\\workspace\\bin",
+      ProgramFiles: "C:\\Program Files",
+      LOCALAPPDATA: ".\\AppData\\Local",
+    }, candidate => {
+      visited.push(candidate);
+      return candidate === "C:\\Program Files\\GitHub CLI\\gh.exe";
+    });
+
+    expect(resolved).toBe("C:\\Program Files\\GitHub CLI\\gh.exe");
+    expect(visited).toEqual(["C:\\Program Files\\GitHub CLI\\gh.exe"]);
+  });
+});
 
 type GhCall = { args: string[]; timeoutMs: number };
 

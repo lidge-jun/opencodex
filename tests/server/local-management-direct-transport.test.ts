@@ -246,11 +246,11 @@ describe("local management direct transport", () => {
     ) => {
       const pathname = new URL(rawPath, "http://127.0.0.1").pathname;
       if (pathname === "/healthz") {
-        write(200, { service: "opencodex", status: "ok", version: "test", uptime: 1, pid: PID, port: targetPort });
+        write(200, { service: "opencodex", status: "ok", version: "1.2.3-test", uptime: 1, pid: PID, port: targetPort });
         return;
       }
       if (pathname === "/readyz") {
-        write(200, { service: "opencodex", status: "ready", version: "test", uptime: 1, pid: PID, port: targetPort });
+        write(200, { service: "opencodex", status: "ready", version: "1.2.3-test", uptime: 1, pid: PID, port: targetPort });
         return;
       }
       if (pathname === "/api/system/memory") {
@@ -371,10 +371,10 @@ describe("local management direct transport", () => {
         control: { via: "proxy" },
         // `version` rides back with the identity probe now that the CLI reports version
         // skew against the running proxy (#2701). The healthz fixture above already serves
-        // `version: "test"`, so asserting it here pins that the field is threaded through
+        // valid semver `version: "1.2.3-test"`, so asserting it here pins that the field is threaded through
         // the direct transport rather than dropped -- an exact-match assertion is the point
         // of this test, so it is widened deliberately, not loosened to a subset match.
-        identity: { pid: PID, version: "test" },
+        identity: { pid: PID, version: "1.2.3-test" },
         readiness: { ready: true, status: "ready", pid: PID, port: targetPort },
         readKind: "response",
         memory: { pid: PID },

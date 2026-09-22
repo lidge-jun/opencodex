@@ -281,6 +281,23 @@ describe("socks5Fetch", () => {
       }
     });
 
+    test("a compressed body cannot expand beyond the decoded response ceiling", async () => {
+      const payload = gzipSync(Buffer.alloc(32 * 1024 * 1024 + 1, 0x61));
+      const { server: target } = codedTarget("gzip", payload);
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/gzip-bomb`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        await expect(response.arrayBuffer()).rejects.toThrow(/decoded response exceeds .* byte cap/);
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
     test("a coding this transport cannot undo fails closed instead of surfacing coded bytes", async () => {
       // Brotli is not a format `DecompressionStream` implements. Returning the bytes anyway is
       // the behavior being removed: the caller would get a SyntaxError from its own parser with

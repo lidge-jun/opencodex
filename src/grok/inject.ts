@@ -67,11 +67,15 @@ export function isDirectory(path: string): boolean {
 
 /** INTERNAL API — see `ManagedRegion` above. Not a public fence-parsing surface. */
 export function findManagedRegion(content: string): ManagedRegion | null {
-  const start = content.indexOf(BEGIN_MARKER);
-  if (start === -1) return null;
-  const endMarkerStart = content.indexOf(END_MARKER, start + BEGIN_MARKER.length);
-  if (endMarkerStart === -1) return { start, end: content.length, orphaned: true };
-  return { start, end: endMarkerStart + END_MARKER.length, orphaned: false };
+  const markerLine = (marker: string): RegExp =>
+    new RegExp(`^[ \\t]*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`, "gm");
+  const begin = markerLine(BEGIN_MARKER).exec(content);
+  if (!begin) return null;
+  const end = markerLine(END_MARKER);
+  end.lastIndex = begin.index + begin[0].length;
+  const endMatch = end.exec(content);
+  if (!endMatch) return { start: begin.index, end: content.length, orphaned: true };
+  return { start: begin.index, end: endMatch.index + endMatch[0].length, orphaned: false };
 }
 
 /**

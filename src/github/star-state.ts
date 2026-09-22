@@ -13,6 +13,9 @@
  * invalidates the cache immediately, which is why the click path never has to
  * wait for the TTL to see its own result.
  */
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { delimiter, posix, win32 } from "node:path";
 import { commandInvocation } from "../lib/win-exec";
 
 export const STAR_REPO = "lidge-jun/opencodex";
@@ -54,13 +57,17 @@ export interface StarDeps {
  */
 async function spawnGh(args: string[], timeoutMs: number): Promise<{ status: number | null } | null> {
   try {
-    // On Windows `gh` is a `.cmd` shim, and a shell-less spawn of the bare name
-    // neither consults PATHEXT nor accepts a `.cmd` target. It does not fail
-    // fast either — it hangs until the timeout below fires, which is how these
-    // sidebar tests turned into 5s timeouts on windows-latest while passing
-    // everywhere else. `commandInvocation` is the resolver the CLI already uses.
-    const invocation = commandInvocation("gh", args);
+    const executable = resolveTrustedGhExecutable();
+    if (!executable) return null;
+    const trustedPath = trustedGhDirectories().join(delimiter);
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
+    );
+    env.PATH = trustedPath;
+    const invocation = commandInvocation(executable, args);
     const proc = Bun.spawn([invocation.file, ...invocation.args], {
+      cwd: homedir(),
+      env,
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
@@ -77,6 +84,47 @@ async function spawnGh(args: string[], timeoutMs: number): Promise<{ status: num
     // `gh` is not installed / not executable.
     return null;
   }
+}
+
+/** Fixed install roots keep an automatically polled route from searching the project or caller-supplied PATH. */
+function trustedGhDirectories(
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  if (platform !== "win32") {
+    return [
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/opt/homebrew/bin",
+      "/opt/local/bin",
+      "/home/linuxbrew/.linuxbrew/bin",
+      "/snap/bin",
+      "/run/current-system/sw/bin",
+    ];
+  }
+  const directories: string[] = [];
+  for (const root of [env.ProgramFiles, env.ProgramW6432, env["ProgramFiles(x86)"]]) {
+    if (root && win32.isAbsolute(root)) directories.push(win32.join(root, "GitHub CLI"));
+  }
+  if (env.LOCALAPPDATA && win32.isAbsolute(env.LOCALAPPDATA)) {
+    directories.push(win32.join(env.LOCALAPPDATA, "Programs", "GitHub CLI"));
+  }
+  return directories;
+}
+
+export function resolveTrustedGhExecutable(
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  const filename = platform === "win32" ? "gh.exe" : "gh";
+  const paths = platform === "win32" ? win32 : posix;
+  for (const directory of trustedGhDirectories(platform, env)) {
+    const candidate = paths.join(directory, filename);
+    if (paths.isAbsolute(candidate) && exists(candidate)) return candidate;
+  }
+  return null;
 }
 
 const productionDeps: StarDeps = { runGh: spawnGh, nowMs: () => Date.now() };
