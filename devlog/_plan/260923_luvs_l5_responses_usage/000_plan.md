@@ -87,3 +87,11 @@ carry `Co-authored-by` trailers for every source author.
 #5542 hunk on the latter is already on dev). `421ba780ae` and the whole of `6b122cd2f0`/
 `6ea3a95c21` depend on the sandbox-cleanup helper that open #5549 carries; they stay out of this
 lane so no change is applied twice.
+
+## Re-pin: #5553 moved (2026-09-23)
+
+#5553's head moved from `67c4f579e4` to `cc466ed9c0` by fast-forward. The four new commits are not
+carried by this lane: `f732aa4689` and `6e6bd22f3b` are the whole of #5307, which lane L2 carries in
+#5600 (`c448a49794`); `7aaf9594ec` is the Kiro part of #5310, which belongs to lane L7; `cc466ed9c0`
+adds tests and structure notes for those two carries. The merge of `a077087b74` is already on dev.
+Every earlier #5553 commit is carried as planned.
