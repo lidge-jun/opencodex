@@ -311,6 +311,7 @@ function rootPromptMessages(
   const replayRuns = new Map<RootBlobCandidate["role"], {
     text: string;
     entry: RootBlobCandidate;
+    entryIndex: number;
     length: number;
   }>();
   const toolCallCounts = new Map<string, number>();
@@ -337,13 +338,13 @@ function rootPromptMessages(
         // half, so losing it re-primes the self-reinforcing loop the breaker exists to end.
         { ...opts, text: marked, messageIndex: previous.entry.messageIndex ?? opts.messageIndex },
       );
-      entries[entries.indexOf(previous.entry)] = replacement;
-      replayRuns.set(role, { text: normalized, entry: replacement, length: runLength });
+      entries[previous.entryIndex] = replacement;
+      replayRuns.set(role, { text: normalized, entry: replacement, entryIndex: previous.entryIndex, length: runLength });
       return;
     }
     const entry = rootBlobCandidate(payload, role, opts);
     entries.push(entry);
-    replayRuns.set(role, { text: normalized, entry, length: 1 });
+    replayRuns.set(role, { text: normalized, entry, entryIndex: entries.length - 1, length: 1 });
   };
 
   for (let i = 0; i < messages.length; i++) {

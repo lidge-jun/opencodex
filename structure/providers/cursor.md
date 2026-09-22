@@ -192,6 +192,11 @@ Translated Chat request construction uses the [inline-image budget](../transport
 
 ## Mid-stream envelope echo
 
+External root replay replaces duplicate runs at their recorded entry index, preserving the
+original message position without rescanning the accumulated roots. Construction still visits
+the complete supplied history before the existing count and byte admission rules; it does not
+cut a raw-message suffix that could lose the initiating user instruction or checkpoint offsets.
+
 Held quarantine output is bounded by the aggregate `CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES` (8 KiB)
 budget in `src/adapters/cursor.ts`. Text deltas are fed to the armed echo and
 routing-commentary sniffers BEFORE the cap check, so a single oversized first delta cannot
