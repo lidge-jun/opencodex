@@ -455,6 +455,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               provider,
             ),
           ),
+          isXaiResponsesDestination(provider),
         ),
         isXaiSchemaTarget(provider),
       );

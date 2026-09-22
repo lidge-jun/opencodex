@@ -1498,5 +1498,7 @@
   "platform-dialog-guard.test.ts": "gui",
   "api-key-catalog-authority.test.ts": "providers",
   "release-resume-identity.test.ts": "ci-workflows",
-  "update-bun-ownership-lease.test.ts": "update"
+  "update-bun-ownership-lease.test.ts": "update",
+  "cursor-request-compat.test.ts": "providers/cursor",
+  "responses-xai-request-compat.test.ts": "responses"
 }

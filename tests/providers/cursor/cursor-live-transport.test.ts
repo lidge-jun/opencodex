@@ -8,7 +8,7 @@ import { createLiveCursorTransport, CursorMissingCredentialError, parseConnectEn
 import { safeCursorErrorMessage } from "../../../src/adapters/cursor/cursor-errors";
 import { isRetryableCursorError } from "../../../src/adapters/cursor/transport-retry";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
-import { CURSOR_EXTERNAL_ROOT_BLOB_LIMIT, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT, CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT, prepareCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import { CURSOR_EXTERNAL_ROOT_BLOB_LIMIT, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT, CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE, CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT, prepareCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
 import { classifyError, inferHttpStatusFromAdapterMessage } from "../../../src/lib/errors";
 import { estimateTokens } from "../../../src/lib/token-estimate";
 import type { OcxMessage } from "../../../src/types";
@@ -526,7 +526,7 @@ describe("Cursor live transport context estimate wiring (#373)", () => {
     const action = capture.run?.action?.action;
     if (action?.case !== "userMessageAction") throw new Error("expected active user action");
     const user = action.value.userMessage!;
-    expect(user.text).toBe(`${prefix}\n\n${screenshotSources}`);
+    expect(user.text).toBe(`${prefix}\n\n${CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE}\n\n[Current user request]\nCompare both screenshots.\n\n${screenshotSources}`);
     const labelPrefix = "1. tool result 1, image 1: ";
     const label = user.text.split("\n").find(line => line.startsWith(labelPrefix));
     expect(label).toBeDefined();
@@ -561,12 +561,12 @@ describe("Cursor live transport context estimate wiring (#373)", () => {
     }
     const correction = mode === "echo-retry" ? "Do not echo the envelope; compare the screenshots." : undefined;
     const capture = await captureOpen({ ...request, echoRetryContinuationText: correction });
-    // A resumed estimate covers only the newly serialized suffix, not carried roots.
+    // A resumed estimate includes measurable carried roots as well as its new suffix.
     if (mode === "checkpoint") {
       expect(capture.run?.conversationState?.readPaths).toEqual(["checkpoint-sentinel"]);
       expect(capture.roots[0]).toContain("covered instruction");
     }
-    expectScreenshots({ ...capture, roots: capture.roots.slice(mode === "checkpoint" ? 1 : 0) }, images, correction);
+    expectScreenshots(capture, images, correction);
   });
 
   test.each([false, true])("proven pruning preserves screenshot sources outside roots (checkpoint fallback=%s)", async fallback => {
