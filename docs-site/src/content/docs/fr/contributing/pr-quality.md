@@ -118,3 +118,15 @@ seules surfaces soumises à cette règle. Toutes les autres restent ouvertes.
 Une PR bloquée par des remarques de revue non résolues peut être fermée, avec une raison clairement indiquée.
 La fermeture n’est pas un jugement sur le contributeur : rouvrez la PR lorsque la raison donnée est résolue,
 ou remplacez-la par une nouvelle PR propre. Demandez des précisions si la raison n’est pas claire.
+
+## Mettre à jour une ancienne liste de préparation
+
+Si le contrôle signale l’ancienne formulation sur la CI locale, il conserve votre description.
+Remplacez le premier élément par le texte indiqué dans le commentaire du bot, décochez les
+quatre cases et enregistrez. Attendez que le bot confirme cette étape, validez le commit
+indiqué, puis cochez les quatre cases et enregistrez de nouveau. Modifier uniquement le
+texte en conservant les quatre coches ne renouvelle pas l’attestation. Un push ou un
+changement de branche cible invalide cette étape. Le contrôle reste en échec et la PR en
+brouillon jusqu’à la fin de cette procédure et des contrôles habituels. Si l’enregistrement
+partage l’horodatage de l’étape, modifiez de nouveau le corps et enregistrez plus tard ;
+modifier seulement le titre ne suffit pas.

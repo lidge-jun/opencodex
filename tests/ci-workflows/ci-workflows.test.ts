@@ -1842,6 +1842,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -1943,6 +1944,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2035,6 +2037,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "issues.createComment",
         "issues.deleteComment",
@@ -2186,6 +2189,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2289,6 +2293,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2408,6 +2413,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2449,6 +2455,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2512,6 +2519,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2540,6 +2548,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -2895,6 +2904,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -3689,6 +3699,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -3746,6 +3757,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4046,6 +4058,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4196,6 +4209,7 @@ describe("GitHub Actions hardening", () => {
         "graphql",
         "pulls.listReviews",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4317,6 +4331,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -4409,6 +4424,7 @@ describe("GitHub Actions hardening", () => {
         expect(methodsOf(restored)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4467,6 +4483,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(loose)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",
@@ -4491,6 +4508,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(falsy)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "graphql",
         "issues.createComment",
@@ -4663,6 +4681,7 @@ describe("GitHub Actions hardening", () => {
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
         "pulls.listReviews",
+        "pulls.get",
         "issues.addLabels",
         "pulls.update",
         "graphql",

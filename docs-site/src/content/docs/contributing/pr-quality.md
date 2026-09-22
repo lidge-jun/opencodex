@@ -132,3 +132,14 @@ A PR that stalls with unresolved review feedback may be closed, with the reason
 stated plainly. Closure is not a verdict on the contributor: reopen it once the
 stated reason is resolved, or replace it with a clean one. Ask if the reason is
 not clear.
+
+## Updating an older readiness checklist
+
+If the gate reports that your checklist still uses the retired local-CI wording, it preserves
+your description and asks you to update the first item. Change that item to the wording in
+the bot notice, clear all four boxes and save. Wait for the bot to acknowledge the cleared
+checklist, validate the displayed head, then tick all four boxes and save again. Changing
+only the wording while leaving four ticks does not count as a new attestation. A push or
+retarget invalidates the checkpoint. The gate stays red and the PR stays draft until this
+sequence and the ordinary quality checks complete. If your save shares the checkpoint's
+timestamp, make another body edit and save later; editing only the title does not count.

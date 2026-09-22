@@ -143,3 +143,13 @@ değildir: belirtilen neden çözüldükten sonra yeniden açın veya temiz bir
 tanesiyle değiştirin. Neden açık değilse sorun.
 
 
+
+## Eski bir inceleme hazırlığı listesini güncelleme
+
+Denetim eski yerel CI ifadesini bulursa PR açıklamasını değiştirmez. İlk maddeyi botun
+belirttiği metinle değiştirin, dört kutunun işaretini kaldırın ve kaydedin. Bot bu adımı
+onaylayana kadar bekleyin; gösterilen commit’i doğrulayın, dört kutuyu işaretleyin ve yeniden
+kaydedin. Yalnızca metni değiştirip dört işareti korumak yeni doğrulama sayılmaz. Yeni bir
+push veya hedef dal değişikliği bu kaydı geçersiz kılar. Bu işlem ve normal kalite kontrolleri
+tamamlanana kadar denetim başarısız, PR taslak kalır. Kayıt zamanı kontrol noktasıyla aynıysa
+açıklama gövdesini tekrar düzenleyip daha sonra kaydedin; yalnızca başlığı değiştirmek yetmez.

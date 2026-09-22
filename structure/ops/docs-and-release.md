@@ -43,6 +43,20 @@ suite by default, with a documented resource exception requiring focused regress
 the old managed pre-push shim; custom hooks are preserved. Required current-head CI and
 security review remain merge requirements.
 
+The gate preserves legacy checklist bodies and asks the author to update the first item,
+clear all four boxes and save, then wait for the bot to record that checkpoint before
+validating the displayed head and ticking all four boxes again. Wording-only edits do not
+re-attest. The existing bot-comment state stores a versioned pending phase, real head/base,
+generation, the phase publication's server timestamp and, only after rechecking, a body digest. Invalid stored state restarts the
+clearing phase; a different live head/base invalidates the checkpoint. Only an author body
+edit whose live snapshot agrees and whose server timestamp is later than the stored phase checkpoint
+can advance it. A new phase is first persisted without a timestamp and then finalized with
+the first write's server time; unfinished finalization cannot advance readiness. Hygiene
+updates to the outer comment do not move this fence. Equal-second saves require a later
+body edit. While re-attestation is pending, the quality check fails explicitly and defers
+ordinary quality evaluation; it does not report a green gate. Before ready, the gate re-reads the PR and persisted attestation. These reads do
+not make GitHub's later ready mutation atomic with concurrent edits or pushes.
+
 ## Public docs
 
 The provider configuration reference and provider guide own the public Google tool-schema policy:
