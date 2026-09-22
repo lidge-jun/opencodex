@@ -366,6 +366,12 @@ readable user text, and records `conversationStateScrub: "account-change"` on th
 without account identifiers. Once the new account issues its own state, later turns carry it
 normally. `canPortConversationState` is local until `src/routing/identity-domains.ts` lands.
 
+Precommit Codex model refusals use the same bounded account recovery for HTTP `detail` and
+WebSocket-projected `error.message` bodies. Only an exact HTTP 400 refusal naming the requested
+or wire model establishes denial evidence; ordinary malformed requests and committed stream
+errors do not authorize another send. Account selectors, uploaded files and send budgets retain
+their existing restrictions.
+
 ### Uploaded files do not move between accounts
 
 An uploaded `file_id` has always been classified as account-bound, and the scrub has always

@@ -2571,6 +2571,59 @@ describe("server local API auth", () => {
     }
   });
 
+  test("Astra error-envelope refusal recovers once and avoids the refused account next turn", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? rejectionResponse(body)
+      : Response.json({ id: "alternate-success", status: "completed", output: [] }));
+    try {
+      const first = await harness.request({ model });
+      expect(first.status).toBe(200);
+      expect((await first.json() as { id: string }).id).toBe("alternate-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      const next = await harness.request({ model });
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
+  test("Astra error-envelope refusal can recover to the request-owned main account", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const seen: Array<{ account: string; authorization: string | null }> = [];
+    const harness = await startPoolRetryHarness((account, request) => {
+      seen.push({ account, authorization: request.headers.get("authorization") });
+      return account === "acct-pool-a" ? rejectionResponse(body)
+        : Response.json({ id: "main-success", status: "completed", output: [] });
+    }, { secondAccount: false });
+    try {
+      const response = await harness.request({ model, headers: { "chatgpt-account-id": "acct-caller-main" } });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("main-success");
+      expect(seen).toEqual([
+        { account: "acct-pool-a", authorization: "Bearer pool-a-token" },
+        { account: "acct-caller-main", authorization: "Bearer inbound-token" },
+      ]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
+  test("Astra error-envelope recovery still stops after one refused alternate", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request({ model }), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
   test("#2097: account-gated model selection skips an unentitled active Pool account", async () => {
     const model = "gpt-daybreak-blue-latest";
     const harness = await startPoolRetryHarness(
