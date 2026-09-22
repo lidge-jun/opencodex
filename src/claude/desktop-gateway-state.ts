@@ -34,6 +34,11 @@ export function persistCommittedDesktopGateway(
     });
     if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
     adoptPersistedClaudeCode(snapshot, outcome.value);
+    // The mode/profile pair IS the committed transaction, not mergeable state.
+    // Without an armed baseline the three-way adopt cannot prove the live leaves
+    // unchanged and keeps a stale live desktopMode over the bytes just saved, so
+    // pin both leaves to the committed subtree after the disjoint-leaf merge.
+    recordCommittedDesktopGateway(snapshot, profile, fingerprint, appliedAt);
     return { ok: true };
   } catch {
     return { ok: false, reason: "unavailable" };
