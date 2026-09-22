@@ -36,6 +36,11 @@ import {
   type ServiceStateSwapDeps,
 } from "../../src/service/state";
 import { assessServiceTakeoverCompatibility, type ManagingCliObservation } from "../../src/service/ownership-compatibility";
+import {
+  OWNERSHIP_MUTATION_LEASE_TOKEN_ENV,
+  ownershipMutationLeaseChildEnvironment,
+  unprivilegedOwnershipMutationEnvironment,
+} from "../../src/service/ownership-mutation-lease.mjs";
 
 let home: TempHome;
 /**
@@ -522,6 +527,15 @@ describe("the generation cannot be reused", () => {
 });
 
 describe("the anchor lock", () => {
+  test("delegation is granted only to selected child environments", () => {
+    const parent = { KEEP: "yes", [OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]: "stale" };
+    const delegated = ownershipMutationLeaseChildEnvironment(parent, "current");
+    const unprivileged = unprivilegedOwnershipMutationEnvironment(parent);
+    expect(delegated).toEqual({ KEEP: "yes", [OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]: "current" });
+    expect(unprivileged).toEqual({ KEEP: "yes" });
+    expect(parent[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]).toBe("stale");
+  });
+
   test("a live update lease blocks ownership mutation before the state lock is touched", () => {
     const leasePath = serviceStatePath() + ".mutation.lock";
     const processInstance = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";

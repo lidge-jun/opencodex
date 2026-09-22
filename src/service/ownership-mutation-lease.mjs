@@ -24,6 +24,16 @@ const delegatedTokens = new Map();
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 export const OWNERSHIP_MUTATION_LEASE_TOKEN_ENV = "OCX_OWNERSHIP_MUTATION_LEASE_TOKEN";
 
+export function ownershipMutationLeaseChildEnvironment(environment, token) {
+  return { ...environment, [OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]: token };
+}
+
+export function unprivilegedOwnershipMutationEnvironment(environment) {
+  const child = { ...environment };
+  delete child[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
+  return child;
+}
+
 function sleep(ms) { Atomics.wait(sleeper, 0, 0, ms); }
 function processAlive(pid) {
   try { process.kill(pid, 0); return true; }

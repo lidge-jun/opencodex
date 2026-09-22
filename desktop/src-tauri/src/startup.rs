@@ -30,12 +30,12 @@ use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex, MutexGuard, PoisonError,
     },
 };
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, sleep_until, Duration, Instant};
 
 /// The event the bootstrap page listens on.
 pub const PHASE_EVENT: &str = "startup-phase";
@@ -50,6 +50,13 @@ pub const PHASE_EVENT: &str = "startup-phase";
 pub const DEADLINE: Duration = Duration::from_secs(30);
 
 const POLL: Duration = Duration::from_millis(250);
+
+/// How long the deadline guard waits past the ceiling before speaking for a run that has not.
+///
+/// The run's own failure names the endpoint, the home and how the child ended; the guard's can
+/// only name where it stalled. The grace lets the run lose its own race first, so the better
+/// diagnostic is the one on screen.
+const SETTLE_GRACE: Duration = Duration::from_secs(2);
 
 /// Where the launch came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +98,14 @@ pub fn shows_window(origin: LaunchOrigin, tray: TrayAvailability) -> bool {
 /// A named state of the startup sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
+    /// Nothing has run yet.
+    ///
+    /// This is what the sequence's state says before its first report, and it is deliberately not
+    /// one of the [`PHASES`]: it is the absence of a run, not a step of one. Seeding the state
+    /// with `Registering` instead made "the sequence has not started" render exactly like "the
+    /// sequence is registering", so a shell that never began was indistinguishable from one that
+    /// had — on the one surface whose job is to tell those apart.
+    NotStarted,
     Registering,
     Resolving,
     Probing,
@@ -103,6 +118,9 @@ pub enum Phase {
 
 /// Every phase, in the order they run. The bootstrap page derives its checklist from this rather
 /// than restating it, so a phase cannot exist in one place and be missing from the other.
+///
+/// [`Phase::NotStarted`] is absent on purpose. It is the state of not having run, so a checklist
+/// row for it would be a step that never completes.
 pub const PHASES: [Phase; 8] = [
     Phase::Registering,
     Phase::Resolving,
@@ -118,6 +136,7 @@ impl Phase {
     /// The stable identifier the bootstrap page keys on.
     pub fn id(self) -> &'static str {
         match self {
+            Self::NotStarted => "not-started",
             Self::Registering => "registering",
             Self::Resolving => "resolving",
             Self::Probing => "probing",
@@ -131,6 +150,7 @@ impl Phase {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::NotStarted => "Waiting for the startup sequence to begin",
             Self::Registering => "Registering the tray and the login item",
             Self::Resolving => "Resolving the configuration home and port",
             Self::Probing => "Looking for a runtime that is already listening",
@@ -144,6 +164,14 @@ impl Phase {
 
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Ready | Self::Failed)
+    }
+
+    /// The phase a published id came from, for a caller that only has the wire value.
+    ///
+    /// Derived from [`PHASES`] rather than restating the mapping, so a phase cannot be resolvable
+    /// here and missing from the checklist.
+    pub fn from_id(id: &str) -> Option<Self> {
+        PHASES.into_iter().find(|phase| phase.id() == id)
     }
 }
 
@@ -203,6 +231,27 @@ impl Progress {
     }
 }
 
+/// What the page is told when the sequence's own state is not registered.
+///
+/// The command used to answer `None` here, and the page dropped it: `apply` returns early on a
+/// falsy progress, so the surface kept its initial markup, no event ever arrived, and nothing on
+/// screen distinguished that from a run still in progress. A shell that cannot find its own
+/// startup state is a defect, and a defect the user can read and copy beats a window that looks
+/// like it is still working.
+pub fn unavailable() -> Progress {
+    let reason =
+        "the shell's startup state is not registered, so it cannot report on its own startup";
+    let mut progress = Progress::new(Phase::Failed, 0);
+    progress.diagnostic = Some(format!(
+        "OpenCodex desktop {} on {}\nstate: {}\nreason: {reason}",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        Phase::NotStarted.id(),
+    ));
+    progress.detail = Some(reason.to_owned());
+    progress
+}
+
 /// Where the sequence is pointed, once the CLI has said.
 #[derive(Clone)]
 struct Target {
@@ -228,6 +277,11 @@ struct Live {
 pub struct Startup {
     live: Mutex<Live>,
     running: AtomicBool,
+    /// Which run the state belongs to.
+    ///
+    /// A run's deadline guard outlives the run it was started for, and a retry that begins before
+    /// the old guard fires would otherwise be failed by it.
+    generation: AtomicU64,
     /// The outcome of the one-time registration, once it has happened.
     registered: Mutex<Option<Registration>>,
 }
@@ -236,10 +290,11 @@ impl Startup {
     pub fn new() -> Self {
         Self {
             live: Mutex::new(Live {
-                latest: Progress::new(Phase::Registering, 0),
+                latest: Progress::new(Phase::NotStarted, 0),
                 reported: Vec::new(),
             }),
             running: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
             registered: Mutex::new(None),
         }
     }
@@ -270,7 +325,16 @@ impl Startup {
     fn restart(&self) {
         let mut live = self.live();
         live.reported.clear();
-        live.latest = Progress::new(Phase::Registering, 0);
+        live.latest = Progress::new(Phase::NotStarted, 0);
+    }
+
+    /// Whether the run has already said how it ended.
+    ///
+    /// A terminal state is the page's only promise that the screen has stopped changing, so it is
+    /// also what tells a late guard there is nothing left to report.
+    fn settled(&self) -> bool {
+        let phase = self.live().latest.phase;
+        phase == Phase::Ready.id() || phase == Phase::Failed.id()
     }
 
     fn publish(&self, progress: &mut Progress, failed_in: Option<Phase>) {
@@ -311,22 +375,82 @@ pub fn begin(app: &AppHandle) {
         return;
     }
     startup.restart();
+    let generation = startup.generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let started = Instant::now();
     let app = app.clone();
+
+    // The ceiling is a promise to the page, and something has to keep it when the run does not.
+    // Every `return` below that reports nothing, and every step that outlives the ceiling, used to
+    // leave the surface on whatever it was last told — or on its own initial markup when nothing
+    // had been published at all — for as long as the process lived. That screen is the one a user
+    // cannot tell from a hung application, which is the whole thing this surface exists to avoid.
+    let guard = app.clone();
     tauri::async_runtime::spawn(async move {
-        run(&app).await;
+        sleep_until(started + DEADLINE + SETTLE_GRACE).await;
+        settle(
+            &guard,
+            started,
+            generation,
+            format!(
+                "the startup sequence did not finish within {} seconds",
+                DEADLINE.as_secs()
+            ),
+        );
+    });
+
+    tauri::async_runtime::spawn(async move {
+        run(&app, started).await;
+        settle(
+            &app,
+            started,
+            generation,
+            "the startup sequence ended without reporting a result".to_owned(),
+        );
         if let Some(startup) = app.try_state::<Startup>() {
             startup.running.store(false, Ordering::Release);
         }
     });
 }
 
-async fn run(app: &AppHandle) {
-    let started = Instant::now();
+/// Report a terminal state for a run that did not report one itself.
+///
+/// Idempotent and bound to the run it was started for: a run that already said Ready or Failed is
+/// left alone, and a guard whose run has been superseded by a retry says nothing.
+fn settle(app: &AppHandle, started: Instant, generation: u64, reason: String) {
+    let Some(startup) = app.try_state::<Startup>() else {
+        return;
+    };
+    if startup.generation.load(Ordering::Acquire) != generation || startup.settled() {
+        return;
+    }
+    let stalled_in = startup.latest().phase;
+    let elapsed_ms = elapsed(started);
+    let mut progress = Progress::new(Phase::Failed, elapsed_ms);
+    progress.diagnostic = Some(
+        [
+            format!(
+                "OpenCodex desktop {} on {}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS
+            ),
+            format!("state: {stalled_in}"),
+            format!("reason: {reason}"),
+            format!("elapsed: {elapsed_ms}ms"),
+        ]
+        .join("\n"),
+    );
+    progress.detail = Some(reason);
+    emit(app, progress, Phase::from_id(stalled_in));
+}
+
+async fn run(app: &AppHandle, started: Instant) {
     let deadline = started + DEADLINE;
+    // Publishing comes before any lookup that can fail. A sequence that returns before it has
+    // said anything leaves the page unable to tell "not started" from "still going".
+    report(app, started, Phase::Registering, None);
     let Some(watch) = app.try_state::<AppState>().map(|state| state.watch.clone()) else {
         return;
     };
-    report(app, started, Phase::Registering, None);
     let registration = register(app, deadline).await;
     report(
         app,
@@ -800,9 +924,59 @@ fn elapsed(started: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{shows_window, LaunchOrigin, Phase, AUTOSTART_FLAG, DEADLINE, PHASES, POLL};
+    use super::{
+        shows_window, unavailable, LaunchOrigin, Phase, Progress, Startup, AUTOSTART_FLAG,
+        DEADLINE, PHASES, POLL,
+    };
     use crate::tray_availability::TrayAvailability;
     use tokio::time::Duration;
+
+    #[test]
+    fn not_having_started_is_not_a_step_of_the_run() {
+        // A checklist row for it would be a step that never completes, and resolving it out of a
+        // published id would name a phase the page has nowhere to draw.
+        assert!(!PHASES.contains(&Phase::NotStarted));
+        assert_eq!(Phase::from_id(Phase::NotStarted.id()), None);
+        for phase in PHASES {
+            assert_eq!(Phase::from_id(phase.id()), Some(phase));
+        }
+    }
+
+    #[test]
+    fn a_sequence_that_has_not_run_says_so() {
+        // Seeding the state with Registering made "has not started" render exactly like "started,
+        // and registering" — on the one surface whose job is to tell those apart.
+        let startup = Startup::new();
+        assert_eq!(startup.latest().phase, Phase::NotStarted.id());
+        assert!(!startup.latest().can_retry);
+        assert!(!startup.settled());
+    }
+
+    #[test]
+    fn the_snapshot_never_answers_with_nothing() {
+        // The page returns early on a falsy progress, so answering None here was a window frozen
+        // on its own markup with no diagnostic in it and no event coming.
+        let progress = unavailable();
+        assert_eq!(progress.phase, Phase::Failed.id());
+        assert!(progress.can_retry);
+        assert!(progress.detail.is_some());
+        assert!(progress
+            .diagnostic
+            .is_some_and(|text| text.contains("reason:")));
+    }
+
+    #[test]
+    fn only_a_terminal_state_settles_a_run() {
+        // This is what stops the deadline guard from overwriting a run that already reported, and
+        // what makes it speak for one that never did.
+        let startup = Startup::new();
+        let mut running = Progress::new(Phase::Waiting, 1);
+        startup.publish(&mut running, None);
+        assert!(!startup.settled());
+        let mut done = Progress::new(Phase::Ready, 2);
+        startup.publish(&mut done, None);
+        assert!(startup.settled());
+    }
 
     #[test]
     fn only_the_autostart_argument_marks_a_login_launch() {
