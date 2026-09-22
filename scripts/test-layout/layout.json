@@ -886,6 +886,7 @@
     "kiro-auth-context-continuation.test.ts": "providers/kiro",
     "kiro-builder-id-profile.test.ts": "providers/kiro",
     "kiro-calibration.test.ts": "providers/kiro",
+    "kiro-fallback-error-body.test.ts": "providers/kiro",
     "kiro-images.test.ts": "providers/kiro",
     "kiro-oauth.test.ts": "providers/kiro",
     "kiro-pool-rank.test.ts": "providers/kiro",

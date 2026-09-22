@@ -353,6 +353,13 @@ decrypt/decode identity enters one request-budgeted sanitize-and-rebuild attempt
 pre-commit SSE/WebSocket terminal envelopes; the single-shot guard remains armed on the rebuilt
 send.
 
+A mixed `encrypted_content` slot may contain structurally valid Fernet runs alongside text.
+`src/server/responses/encrypted-payload.ts` recognizes at most 64 runs per slot. Finding a
+65th marks the slot as overflow: sanitization and agent-message stripping replace that
+whole slot with `[encrypted content omitted]`, while unreadable-task detection remains
+fail-closed. The scanner never emits an unexamined suffix as text. The limit constrains
+part expansion without changing single-token replay or the separate 32-part task-recovery cap.
+
 > Decision record: [ADR-5236](../decisions/ADR-5236-responses-http-sse.md)
 
 Codex pool account changes are a separate portability question from destination serving identity.

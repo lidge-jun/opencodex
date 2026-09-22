@@ -369,38 +369,6 @@ describe("kiro adapter — parseStream", () => {
     });
   });
 
-  test("fallback HTTP errors stop reading oversized upstream bodies", async () => {
-    const chunk = new TextEncoder().encode("A".repeat(32 * 1024));
-    let pulls = 0;
-    let cancelled = false;
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        cancelled = true;
-      },
-    }), {
-      status: 400,
-      headers: { "content-type": "text/plain" },
-    })) as typeof fetch;
-    const adapter = createKiroAdapter(provider);
-    await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
-
-    const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
-      eventFrame({ content: "I am checking." }),
-    ))));
-
-    expect(cancelled).toBe(true);
-    expect(pulls).toBeLessThan(10);
-    expect(events.at(-1)).toMatchObject({
-      type: "error",
-      status: 400,
-      retryable: false,
-    });
-  });
-
   test("large first-attempt text stays charged through fallback construction and releases after parse", async () => {
     const budget = createTranslatorBudget();
     const firstText = "x".repeat(10 * 1024 * 1024);
