@@ -1177,7 +1177,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       const { claudeDesktopPolicyWarning, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
       const policyState = deps.probeClaudeDesktopPolicy
-        ? deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
+        ? await deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
         : await getCachedClaudeDesktopPolicy({ platform: deps.platform ?? process.platform });
       const policyWarning = claudeDesktopPolicyWarning(policyState);
       const warning = [modeWarning, policyWarning].filter(Boolean).join(" ");
@@ -1230,7 +1230,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const { getDesktopHealth } = await import("../../claude/desktop-health");
       const { claudeDesktopPolicyHealth, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
       const policyState = deps.probeClaudeDesktopPolicy
-        ? deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
+        ? await deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
         : await getCachedClaudeDesktopPolicy({ platform: deps.platform ?? process.platform });
       // Managed-policy conflicts only matter for the gateway profile; first-party mode never
       // touches Desktop's own configuration.

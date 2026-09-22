@@ -1,4 +1,4 @@
-import { mutatePersistedConfig } from "../config";
+import { adoptPersistedClaudeCode, mutatePersistedConfig } from "../config";
 import type { OcxConfig } from "../types";
 import { emptyDesktopProfile, type DesktopProfile } from "./desktop-profile";
 
@@ -30,10 +30,10 @@ export function persistCommittedDesktopGateway(
   try {
     const outcome = mutatePersistedConfig(current => {
       recordCommittedDesktopGateway(current, profile, fingerprint, appliedAt);
-      return { changed: true, value: true };
+      return { changed: true, value: structuredClone(current.claudeCode) };
     });
     if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
-    recordCommittedDesktopGateway(snapshot, profile, fingerprint, appliedAt);
+    adoptPersistedClaudeCode(snapshot, outcome.value);
     return { ok: true };
   } catch {
     return { ok: false, reason: "unavailable" };
