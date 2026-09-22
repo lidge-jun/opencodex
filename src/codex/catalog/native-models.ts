@@ -72,11 +72,11 @@ const NATIVE_OPENAI_CAPABILITY_SOURCES: Readonly<Record<string, string>> = Objec
  *
  * Membership authorizes `upstreamNativeEntryForSlug` to return the pinned entry directly. It is
  * an explicit list, not a structural `PINNED_UPSTREAM_MODELS.has(slug)` predicate: the pin also
- * holds `gpt-5.5`, `gpt-5.2` and `codex-auto-review`, and admitting those into
+ * holds `gpt-5.5`, `codex-auto-review` and the Daybreak rows, and admitting those into
  * `UPSTREAM_NATIVE_ENTRIES` would newly authorize replacing their persisted catalog rows during
  * sync — an invariant that map's own comment reserves for the GPT-5.6 family. The snapshot
  * keeps rows this runtime does not expose, which is exactly why presence in the pin cannot be
- * the predicate: `gpt-5.4` and `gpt-5.4-mini` are still pinned after their retirement.
+ * the predicate: `gpt-5.4` is still pinned (hidden, with an upgrade to Terra) after its retirement.
  */
 export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
   NATIVE_GPT6_ASTRA_MODEL,

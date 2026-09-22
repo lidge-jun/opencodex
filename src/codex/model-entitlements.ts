@@ -90,9 +90,10 @@ export function deriveGatedClientVersionFloor(
 /**
  * Lowest `client_version` MEASURED to actually return the account-gated rows.
  *
- * The bundled snapshot is not sufficient on its own. It records `0.142.2` for the gpt-5.6
- * rows, and `0.142.2` is a version upstream answers with 200 and five models, none of them
- * gpt-5.6; `0.144.0` and above answer with the gated rows present
+ * The bundled snapshot was not sufficient on its own. Until the 2026-09-23 re-pin it recorded
+ * `0.142.2` for the gpt-5.6 rows (upstream now records `0.144.0`), and `0.142.2` is a version
+ * upstream answers with 200 and five models, none of them gpt-5.6; `0.144.0` and above answer
+ * with the gated rows present
  * (devlog/_fin/260817_native_gpt56_1m_context/001_measurement_evidence.md, independently
  * reproduced by the #2886 and #3022 reporters). So a floor derived from the snapshot alone
  * asks a question whose honest answer is an empty gated set — and the fail-closed gate then
@@ -107,9 +108,9 @@ const MEASURED_GATED_CLIENT_VERSION_MINIMUM = "0.144.0";
 /**
  * Lowest versions measured to return each account-gated model when the account owns it.
  *
- * This is deliberately independent of the bundled upstream snapshot. The snapshot still
- * records 0.142.2 for sol/terra/luna, while live measurements show that upstream omits them
- * below 0.144.0. Daybreak has no snapshot row or independent minimum, so its omission remains
+ * This is deliberately independent of the bundled upstream snapshot, which can lag or lead the
+ * live roster: live measurements show that upstream omits sol/terra/luna below 0.144.0.
+ * Daybreak's shipped row records 0.142.2 and has no independent measured minimum, so its omission remains
  * authoritative instead of inheriting a guessed floor from another model.
  */
 export const ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS: ReadonlyMap<string, string> = new Map([
@@ -121,8 +122,8 @@ export const ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS: ReadonlyMap<str
 /**
  * Fallback when the snapshot records no usable gated floor.
  *
- * Not every gated slug carries a `minimal_client_version` — `gpt-daybreak-blue-latest` has no
- * row in the current snapshot at all — so the derivation can legitimately come back empty as the
+ * Not every gated slug is guaranteed a `minimal_client_version` — `gpt-daybreak-blue-latest` had
+ * no row until the 2026-09-23 re-pin — so the derivation can legitimately come back empty as the
  * gated set changes. This is the last resort behind it, and it is still a version upstream can
  * filter on rather than the placeholder that caused #2886.
  */

@@ -181,7 +181,11 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
 
 const PINNED_UPSTREAM_MODELS: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
-    .flatMap(model => typeof model.slug === "string" ? [[model.slug, model] as const] : []),
+    // Upstream stopped shipping top-level `base_instructions` (openai/codex #43604); every row
+    // still carries `model_messages.instructions_template`. Derive at projection time so the
+    // pinned JSON stays byte-identical to upstream while `hasNativeCatalogRowShape` and the alias
+    // rewrite in `upstreamNativeEntryForSlug` keep seeing the field they test for.
+    .flatMap(model => typeof model.slug === "string" ? [[model.slug, withDerivedBaseInstructions(model)] as const] : []),
 );
 
 function pinnedNativeCapabilityEntry(slug: string): RawEntry | undefined {
