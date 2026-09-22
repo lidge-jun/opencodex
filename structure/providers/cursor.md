@@ -116,6 +116,8 @@ a small replay would otherwise clip a completed call's arguments with nearly the
 unused. After every pruning and truncation decision is final, a second pass re-widens clipped
 invocation lines out of the leftover aggregate bytes only: newest tool result first, skipping a root
 whose own output was already elided, and never dropping, shrinking or reordering a retained root.
+Before materializing a widened root, the pass uses a bounded UTF-8 scan to reject arguments whose
+raw byte growth alone cannot fit the spare budget, and reuses its single argument serialization.
 The elision skip is load bearing, reached through initiator recovery rather than through truncation
 alone: a truncated root undershoots its own budget by far less than a restoration costs, but after
 the equal-share pass elides a trailing run, recovery drops an elided sibling to fit the user turn and
@@ -191,6 +193,29 @@ An incomplete client-tool stream is fail-closed for the current turn: `finalizeT
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 ## Mid-stream envelope echo
+
+External root replay replaces duplicate runs at their recorded entry index, preserving the
+original message position without rescanning the accumulated roots. Construction still visits
+the complete supplied history before the existing count and byte admission rules; it does not
+cut a raw-message suffix that could lose the initiating user instruction or checkpoint offsets.
+
+Held quarantine output is bounded by the aggregate `CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES` (8 KiB)
+budget in `src/adapters/cursor.ts`. Text deltas are fed to the armed echo and
+routing-commentary sniffers BEFORE the cap check, so a single oversized first delta cannot
+disarm the guards without being classified; each sniffer reads only the bounded leading window
+its decision needs. Retained bytes are projected from payload length before any serialized
+copy exists, so a multi-megabyte frame cannot force a same-size encoded allocation. An event
+that cannot fit the remaining budget settles both sniffers, releases the held events, and is
+emitted directly.
+Each adapter feed is limited to 512 UTF-16 code units for envelope detection and 2,048 for
+routing-commentary detection. Matches beyond that frame prefix intentionally do not trigger a
+corrective retry; the complete text still reaches the client and the diagnostic midstream
+observer. These feed limits bound temporary copies and do not promise frame-independent parsing.
+
+Adjacent midstream markers retain separate findings, capped at eight. A new marker closes the
+previous corruption window before consuming its line, including a call-id on the marker's own
+line. Only marker identities, offsets and corruption booleans survive; held reasoning is released
+in order before terminal errors, preserving upstream error visibility.
 
 The prefix sniffer only watches the opening bytes of a turn. An external model that writes real
 prose first and then pastes a replayed `[Tool Result]` envelope defeats it, so that text reaches

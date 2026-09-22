@@ -195,6 +195,15 @@ marker, which the GUI detects to identify the shell without using IPC.
 
 ## Release packaging and updater
 
+Linux AppImage packaging uses `desktop/scripts/appimage-patchelf.py` to preserve
+the compiled Bun CLI when linuxdeploy sets the executable RPATH. Only the exact
+AppDir sidecar, still byte-identical to the prepared CLI, is exempt; other ELF
+operations use the system patchelf. `desktop/scripts/verify-linux-sidecar.sh`
+extracts the completed AppImage, compares its CLI bytes and runs its version command
+on the hosted runner before any release asset is collected.
+The macOS release combines both prepared CLI architectures with `lipo` into the
+universal external binary Tauri expects, and checks that both slices are present.
+
 The release workflow packages the desktop shell as `OpenCodex-<version>-macos.dmg`,
 `OpenCodex-<version>-windows-x64.msi`, `OpenCodex-<version>-linux-x86_64.AppImage`, and
 `OpenCodex-<version>-linux-amd64.deb`. Each artifact is collected with a `.sha256` file;
@@ -205,6 +214,9 @@ packaging matrices, verifies every checksum and every updater signature, and wri
 platforms to have updater signatures. Publication waits for that verification, and the
 attachment job uploads the verified bundle only after the verification receipt names
 the same version and commit.
+Updater signature verification decodes Tauri’s outer-base64 minisign box, checks the
+`ED` signature over the BLAKE2b-512 digest against the pinned key, and verifies the
+trusted-comment signature. Missing or malformed fields fail before publication.
 On macOS, in-app updates download `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for
 the first installation.
 

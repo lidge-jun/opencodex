@@ -1,3 +1,4 @@
+import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 /**
  * Toggle routes for the integrations that are NOT file-merged clients.
  *
@@ -754,14 +755,15 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
         nativeContextLimits(latest),
       );
       if (!result.written) return postCommitRefusal(500, "claude-desktop", "write_failed", "Claude Desktop apply failed.", { desiredEnabled: latestDesiredEnabled });
+      const committed = persistCommittedDesktopGateway(ctx.config, latest.claudeCode?.desktopProfile, result.fingerprint);
+      const stateWarning = committed.ok ? "" : " The committed gateway mode/profile state was not saved.";
       const removed = removeDesktopFirstParty();
-      if (!removed.ok) return postCommitRefusal(500, "claude-desktop", "write_failed", "Gateway applied, but first-party settings cleanup did not complete.", { desiredEnabled: latestDesiredEnabled });
-      const modeSaved = persistDesktopModeMarker("gateway");
+      if (!removed.ok) return postCommitRefusal(500, "claude-desktop", "write_failed", "Gateway applied, but first-party settings cleanup did not complete." + stateWarning, { desiredEnabled: latestDesiredEnabled });
       return jsonResponse({
         ok: true, clientId: "claude-desktop", changed: true, state: "current", desiredEnabled: latestDesiredEnabled,
         message: [
           "Claude Desktop integration enabled.",
-          modeSaved ? "" : "The gateway mode marker could not be saved to config; status may report the mode as unsaved.",
+          stateWarning,
         ].filter(Boolean).join(" "),
       } satisfies NativeToggleEnvelope);
     } catch {
