@@ -38,9 +38,9 @@ function snapshot(extra: Partial<CodexCliInstallationSnapshot> = {}): CodexCliIn
 }
 
 describe("selected Codex CLI installation target derivation", () => {
-  test("refuses non-Windows platforms before touching the filesystem", () => {
+  test("refuses non-Windows platforms before touching the filesystem", async () => {
     let probed = 0;
-    const result = deriveCodexCliInstallationInput(snapshot(), {
+    const result = await deriveCodexCliInstallationInput(snapshot(), {
       platform: "linux",
       exists: () => { probed += 1; return true; },
     });
@@ -48,20 +48,36 @@ describe("selected Codex CLI installation target derivation", () => {
     expect(probed).toBe(0);
   });
 
-  test("reports candidate_unavailable when nothing identifies a candidate", () => {
+  test("reports candidate_unavailable when nothing identifies a candidate", async () => {
     for (const snap of [
       {},
       { codexCliPath: null, path: null },
       { codexCliPath: "C:\\missing\\codex.cmd", path: PREFIX },
       { codexCliPath: null, path: "C:\\empty" },
     ]) {
-      expect(deriveCodexCliInstallationInput(snap, depsFor(fixtureFiles())))
+      expect(await deriveCodexCliInstallationInput(snap, depsFor(fixtureFiles())))
         .toEqual({ kind: "unavailable", reason: "candidate_unavailable" });
     }
   });
 
-  test("derives the npm-global layout from the configured candidate", () => {
-    const result = deriveCodexCliInstallationInput(
+  test("a refused PATH probe stops the scan instead of attesting a later candidate", async () => {
+    const files = fixtureFiles();
+    files.add((NODE_DIR + "\\codex.cmd").toLowerCase());
+    const refused = PREFIX + "\\codex.cmd";
+    const deps = depsFor(files);
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ codexCliPath: "codex" }),
+      {
+        ...deps,
+        exists: (path: string) =>
+          path.toLowerCase() === refused.toLowerCase() ? "refused" : deps.exists(path),
+      },
+    );
+    expect(result).toEqual({ kind: "unavailable", reason: "candidate_unavailable" });
+  });
+
+  test("derives the npm-global layout from the configured candidate", async () => {
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(fixtureFiles()),
     );
@@ -77,11 +93,11 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
-  test("resolves the first PATH codex.cmd and prefers a prefix-local node.exe", () => {
+  test("resolves the first PATH codex.cmd and prefers a prefix-local node.exe", async () => {
     const files = fixtureFiles();
     files.add((PREFIX + "\\node.exe").toLowerCase());
     files.add((PREFIX + "\\node_modules\\npm\\bin\\npm-cli.js").toLowerCase());
-    const result = deriveCodexCliInstallationInput(
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ path: "C:\\nowhere;" + PREFIX + ";C:\\later;" + NODE_DIR }),
       depsFor(files),
     );
@@ -97,22 +113,22 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
-  test("an earlier PATH codex.exe is the selected launcher and refuses the layout", () => {
+  test("an earlier PATH codex.exe is the selected launcher and refuses the layout", async () => {
     const files = fixtureFiles();
     files.delete((PREFIX + "\\codex.cmd").toLowerCase());
     files.add("c:\\bin\\codex.exe");
-    const result = deriveCodexCliInstallationInput(
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ path: "C:\\bin;" + PREFIX }),
       depsFor(files),
     );
     expect(result).toEqual({ kind: "unavailable", reason: "unsupported_layout" });
   });
 
-  test("an OpenCodex wrapper attests the renamed npm artifact, not the wrapper", () => {
+  test("an OpenCodex wrapper attests the renamed npm artifact, not the wrapper", async () => {
     const files = fixtureFiles();
     files.add((PREFIX + "\\codex.opencodex-real.cmd").toLowerCase());
     const marked = new Set([(PREFIX + "\\codex.cmd").toLowerCase()]);
-    const result = deriveCodexCliInstallationInput(
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(files, marked),
     );
@@ -128,19 +144,29 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
-  test("a wrapper without its npm backing refuses instead of attesting our own launcher", () => {
+  test("a wrapper without its npm backing refuses instead of attesting our own launcher", async () => {
     const marked = new Set([(PREFIX + "\\codex.cmd").toLowerCase()]);
-    expect(deriveCodexCliInstallationInput(
+    expect(await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(fixtureFiles(), marked),
     )).toEqual({ kind: "unavailable", reason: "unsupported_layout" });
   });
 
-  test("a fresh npm shim replacing the wrapper attests it directly, ignoring a stale backing", () => {
+  test("an unreadable wrapper probe is unavailable, not marker absence", async () => {
+    const files = fixtureFiles();
+    files.add((PREFIX + "\\codex.opencodex-real.cmd").toLowerCase());
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
+      { ...depsFor(files), fileContains: () => "unavailable" as const },
+    );
+    expect(result).toEqual({ kind: "unavailable", reason: "candidate_unavailable" });
+  });
+
+  test("a fresh npm shim replacing the wrapper attests it directly, ignoring a stale backing", async () => {
     const files = fixtureFiles();
     files.add((PREFIX + "\\codex.opencodex-real.cmd").toLowerCase());
     // codex.cmd does NOT contain the marker: npm install -g overwrote the wrapper.
-    const result = deriveCodexCliInstallationInput(
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(files),
     );
@@ -150,9 +176,9 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
-  test("a direct package bin/codex.js candidate derives its owning prefix", () => {
+  test("a direct package bin/codex.js candidate derives its owning prefix", async () => {
     const bin = PREFIX + "\\node_modules\\@openai\\codex\\bin\\codex.js";
-    const result = deriveCodexCliInstallationInput(
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: bin }),
       depsFor(fixtureFiles()),
     );
@@ -168,42 +194,42 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
-  test("a candidate outside the npm package layout is unsupported", () => {
+  test("a candidate outside the npm package layout is unsupported", async () => {
     const files = fixtureFiles();
     files.add("c:\\tools\\codex.cmd");
-    expect(deriveCodexCliInstallationInput(
+    expect(await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: "C:\\tools\\codex.cmd" }),
       depsFor(files),
     )).toEqual({ kind: "unavailable", reason: "unsupported_layout" });
   });
 
-  test("a prefix without the codex package manifest is unsupported", () => {
+  test("a prefix without the codex package manifest is unsupported", async () => {
     const files = fixtureFiles();
     files.delete((PREFIX + "\\node_modules\\@openai\\codex\\package.json").toLowerCase());
-    expect(deriveCodexCliInstallationInput(
+    expect(await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(files),
     )).toEqual({ kind: "unavailable", reason: "unsupported_layout" });
   });
 
-  test("missing node.exe or npm-cli.js refuses the toolchain, not the candidate", () => {
+  test("missing node.exe or npm-cli.js refuses the toolchain, not the candidate", async () => {
     const noNode = fixtureFiles();
     noNode.delete((NODE_DIR + "\\node.exe").toLowerCase());
-    expect(deriveCodexCliInstallationInput(
+    expect(await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(noNode),
     )).toEqual({ kind: "unavailable", reason: "toolchain_unresolved" });
 
     const noNpm = fixtureFiles();
     noNpm.delete((NODE_DIR + "\\node_modules\\npm\\bin\\npm-cli.js").toLowerCase());
-    expect(deriveCodexCliInstallationInput(
+    expect(await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),
       depsFor(noNpm),
     )).toEqual({ kind: "unavailable", reason: "toolchain_unresolved" });
   });
 
-  test("a bare configured command name resolves through the captured PATH", () => {
-    const result = deriveCodexCliInstallationInput(
+  test("a bare configured command name resolves through the captured PATH", async () => {
+    const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: "codex" }),
       depsFor(fixtureFiles()),
     );
@@ -216,9 +242,9 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
-  test("a relative path-shaped configured candidate refuses instead of substituting PATH codex", () => {
+  test("a relative path-shaped configured candidate refuses instead of substituting PATH codex", async () => {
     for (const configured of ["tools\\codex.cmd", "tools/codex.cmd"]) {
-      expect(deriveCodexCliInstallationInput(
+      expect(await deriveCodexCliInstallationInput(
         snapshot({ codexCliPath: configured }),
         depsFor(fixtureFiles()),
       )).toEqual({ kind: "unavailable", reason: "candidate_unavailable" });

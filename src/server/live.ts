@@ -27,7 +27,7 @@ import { codexCompatibleUrl } from "../codex/context-compat";
  * - `GET /v1/realtime?model=` — RealtimeV2 standalone (no intent)
  * - `GET /v1/live?model=` — Frameless standalone
  */
-import { appendFileSync } from "node:fs";
+import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
@@ -103,9 +103,38 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
  * JSONL record: direction, frame kind, byte length, and whether the payload contains U+FFFD.
  * Privacy: no frame content is written, including excerpts around replacement characters.
  * For binary frames, U+FFFD may also be introduced by UTF-8 decoding; the flag alone does not
- * identify the source of corruption. Disabled entirely when the env var is unset.
+ * identify the source of corruption. The log is created with owner-only permissions and is
+ * disabled entirely when the env var is unset.
  */
 export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
+/**
+ * Append one JSONL record with owner-only permissions. `appendFileSync`'s `mode` only applies
+ * when it creates the file, so an existing permissive log would stay readable by other local
+ * users. Open for append, harden the opened descriptor, then write — a failed harden on POSIX
+ * must not leave the record in a file other local users can read.
+ */
+export function appendOwnerOnly(
+  path: string,
+  line: string,
+  harden: (fd: number) => void = hardenLogDescriptor,
+): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    harden(fd);
+    writeSync(fd, line);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function hardenLogDescriptor(fd: number): void {
+  if (process.platform === "win32") {
+    try { fchmodSync(fd, 0o600); } catch { /* Windows lacks POSIX fchmod */ }
+    return;
+  }
+  fchmodSync(fd, 0o600);
+}
+
 export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
   const logPath = process.env[LIVE_FRAME_LOG_ENV];
   if (!logPath) return;
@@ -134,7 +163,7 @@ export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
       bytes,
       fffd,
     };
-    appendFileSync(logPath, `${JSON.stringify(record)}\n`);
+    appendOwnerOnly(logPath, `${JSON.stringify(record)}\n`);
   } catch {
     // Frame forensics must never break the relay.
   }
@@ -168,7 +197,7 @@ export function logLiveSidebandStage(
     const record: Record<string, unknown> = { ts: new Date().toISOString(), stage };
     if (detail?.status !== undefined) record.status = detail.status;
     if (detail?.code !== undefined) record.code = detail.code;
-    appendFileSync(logPath, JSON.stringify(record) + "\n");
+    appendOwnerOnly(logPath, JSON.stringify(record) + "\n");
   } catch {
     // Diagnostics must never break the relay.
   }

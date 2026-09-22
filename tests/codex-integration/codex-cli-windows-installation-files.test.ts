@@ -127,4 +127,39 @@ describe("explicit Windows installation file snapshot", () => {
     expect(result.files[0]!.identity.size).toBe(3 * 1024 * 1024);
     expect(result.files[0]!.digest).toBe(expected.digest("hex"));
   });
+
+  nativeTest("metadataOnly observes an oversized file's identity without reading or hashing", async () => {
+    const path = join(fixture, "oversized.fixture");
+    writeFileSync(path, Buffer.alloc(2048, 0x6f));
+    const result = await inspectWindowsInstallationFiles([{ path, maxBytes: 0, metadataOnly: true }]);
+    expect(result.kind).toBe("observed");
+    if (result.kind !== "observed") return;
+    const file = result.files[0]!;
+    expect(file.path).toBe(path);
+    expect(file.identity.size).toBe(2048);
+    expect(file.identity.fileId).toMatch(/^[a-f0-9]{32}$/);
+    expect(file.bytes).toHaveLength(0);
+    expect(file.digest).toBe("");
+  });
+
+  nativeTest("prefixOnly returns a bounded prefix of an oversized file without a digest", async () => {
+    const path = join(fixture, "wrapper.cmd");
+    const prefix = Buffer.from("@echo off\r\nrem marker\r\n");
+    const tail = Buffer.alloc(4096, 0x20);
+    writeFileSync(path, Buffer.concat([prefix, tail]));
+    const result = await inspectWindowsInstallationFiles([{ path, maxBytes: prefix.length, prefixOnly: true }]);
+    expect(result.kind).toBe("observed");
+    if (result.kind !== "observed") return;
+    const file = result.files[0]!;
+    expect(Buffer.from(file.bytes)).toEqual(prefix);
+    expect(file.identity.size).toBe(prefix.length + tail.length);
+    expect(file.digest).toBe("");
+    const small = join(fixture, "small.cmd");
+    writeFileSync(small, prefix);
+    const full = await inspectWindowsInstallationFiles([{ path: small, maxBytes: 1024, prefixOnly: true }]);
+    expect(full.kind).toBe("observed");
+    if (full.kind !== "observed") return;
+    expect(Buffer.from(full.files[0]!.bytes)).toEqual(prefix);
+    expect(full.files[0]!.digest).toBe(createHash("sha256").update(prefix).digest("hex"));
+  });
 });
