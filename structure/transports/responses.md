@@ -1251,7 +1251,10 @@ during this process's lifetime can still be released for free.
 Settlement follows what the request learned. The terminal usage belongs to the last send that
 left, so that one settles with the real figure; every earlier send failed without reporting usage
 of its own and may still have been billed, so it becomes unresolved spend rather than free. A
-request that reports no usage at all leaves all of them unresolved.
+request that reports no usage at all leaves all of them unresolved. A settlement deferred past
+the ledger's ownership window — a post-cancel drain that outlives `server.stop` and its owner
+release — drops the outstanding sends with the closed journal instead of throwing, because there
+is nothing durable left to book against and no caller alive to refuse.
 
 Replay resolves what nobody is left to settle, and resolves it as unresolved spend whatever state
 it was in. Giving an undispatched one its tokens back would assume the journal is complete up to

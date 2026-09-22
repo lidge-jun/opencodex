@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import { sharedSpendLedger, type SpendReservationLedger } from "../../lib/spend-reservation-ledger";
+import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { recordWorkflowRefusalEvent, workflowDenialSummary } from "../../lib/workflow-budget";
 
@@ -137,19 +138,28 @@ export function createRequestSpendTracker(
       if (resolved) return;
       resolved = true;
       const terminal = live.pop();
-      if (terminal !== undefined) {
-        const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
-        if (reported) {
-          ledger().settle(terminal, {
-            inputTokens: usage?.inputTokens ?? 0,
-            outputTokens: usage?.outputTokens ?? 0,
-          });
-        } else {
-          // The response never reported usage. It may still have been billed.
-          ledger().markLost(terminal);
+      try {
+        if (terminal !== undefined) {
+          const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
+          if (reported) {
+            ledger().settle(terminal, {
+              inputTokens: usage?.inputTokens ?? 0,
+              outputTokens: usage?.outputTokens ?? 0,
+            });
+          } else {
+            // The response never reported usage. It may still have been billed.
+            ledger().markLost(terminal);
+          }
         }
+        for (const sendId of live.splice(0)) ledger().markLost(sendId);
+      } catch (error) {
+        // Settlement is the last thing a request does, and a deferred one can outlive the
+        // ledger's ownership window: a post-cancel drain that finishes after server.stop
+        // released the owner finds the journal already closed, leaving the outstanding
+        // sends nobody to book against and no caller alive to refuse. They die with the
+        // discarded ledger; anything that is not an ownership lapse still propagates.
+        if (!(error instanceof SpendLedgerOwnerError)) throw error;
       }
-      for (const sendId of live.splice(0)) ledger().markLost(sendId);
     },
     get refusals(): number { return refusals; },
   };

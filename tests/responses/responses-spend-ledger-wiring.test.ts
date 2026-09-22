@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createSpendReservationLedger,
   DEFAULT_SPEND_RESERVATION_POLICY,
@@ -6,6 +9,8 @@ import {
 } from "../../src/lib/spend-reservation-ledger";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * The durable spend ledger had no production caller (#4707).
@@ -210,5 +215,30 @@ describe("the request path books every physical send on the durable ledger", () 
       createRequestSpendTracker(logContext(), "root-h", createSpendReservationLedger({ journal: unwritableJournal() })),
     );
     expect(observing.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(true);
+  });
+
+  test("a settle deferred past the ledger's ownership window drops the sends instead of throwing", () => {
+    // addFinalRequestLog settles the tracker when the terminal row is written, and a
+    // post-cancel drain can defer that write past server.stop, which releases the owner.
+    // The released journal is already closed to this process, so the outstanding sends die
+    // with it rather than crashing a finalize that has no caller left to refuse.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-spend-wiring-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = dir;
+    const release = acquireOwnedSpendHome();
+    try {
+      const tracker = createRequestSpendTracker(logContext(), "root-i");
+      const budget = createRequestExecutionBudget(undefined, "lr-released", tracker);
+      expect(budget.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(true);
+
+      release();
+      tracker.settle({ inputTokens: 10, outputTokens: 5 });
+      tracker.settle(undefined);
+    } finally {
+      release();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(dir);
+    }
   });
 });
