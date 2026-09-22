@@ -166,3 +166,42 @@ test("a pending attempt held by the server is resumed instead of starting a new 
   await act(async () => { root.unmount(); });
 });
 
+test("a refused same-id retry keeps holding the attempt instead of offering a new id", async () => {
+  const posts: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/anthropic/reset-grants?")) return Response.json(SNAPSHOT);
+    posts.push(JSON.parse(String(init?.body)));
+    if (posts.length === 1) throw new TypeError("connection reset");
+    return Response.json({ error: { code: "ledger_busy", message: "busy" } }, { status: 503 });
+  }) as typeof fetch;
+
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await click(container, "[data-anthropic-grant-use]");
+  await click(container, "[data-anthropic-grant-confirm]");
+  await click(container, "[data-anthropic-grant-retry]");
+  expect(posts).toHaveLength(2);
+  expect(posts[1]).toEqual(posts[0]);
+  expect(container.querySelector("[data-anthropic-grant-retry]")).not.toBeNull();
+  expect(container.querySelector("[data-anthropic-grant-use]")).toBeNull();
+  expect(container.textContent).toContain("journal is busy");
+  await act(async () => { root.unmount(); });
+});
+
+test("a replayed refusal reads as that refusal, not as a success", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/anthropic/reset-grants?")) return Response.json(SNAPSHOT);
+    return Response.json({ code: "rate_limited", replayed: true, resetsLeft: null });
+  }) as typeof fetch;
+
+  const { container, root } = await mount();
+  await click(container, "[data-anthropic-grant-badge]");
+  await click(container, "[data-anthropic-grant-use]");
+  await click(container, "[data-anthropic-grant-confirm]");
+  expect(container.textContent).toContain("Too many requests. Nothing was used");
+  expect(container.textContent).not.toContain("already settled earlier");
+  expect(container.querySelector(".pws-status-warn")).not.toBeNull();
+  await act(async () => { root.unmount(); });
+});

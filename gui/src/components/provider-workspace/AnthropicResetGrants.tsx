@@ -146,7 +146,9 @@ type Held = { grantId: string; operationId: string };
 
 function outcomeOf(result: AnthropicSpendOutcome): Outcome {
   if (result.kind === "settled") {
-    if (result.replayed) return { tone: "ok", key: "anthropicGrant.replayed" };
+    // A replay reports the stored code like a fresh answer would, so a replayed
+    // refusal never reads as a success.
+    if (result.replayed && result.code === "reset") return { tone: "ok", key: "anthropicGrant.replayed" };
     return {
       tone: result.code === "reset" ? "ok" : "warn",
       key: SETTLED_KEYS[result.code] ?? "anthropicGrant.failed",
@@ -155,6 +157,13 @@ function outcomeOf(result: AnthropicSpendOutcome): Outcome {
   }
   return { tone: "warn", key: REFUSED_KEYS[result.code] ?? "anthropicGrant.failed" };
 }
+
+/**
+ * Refusals that settle a held attempt for good. Any other refusal of a same-id
+ * retry (journal busy, auth, session) leaves the attempt open, so the dialog
+ * keeps holding it rather than offering a fresh id.
+ */
+const RELEASES_HELD = new Set(["unknown_outcome_expired", "operation_identity_mismatch"]);
 
 export function AnthropicResetGrantModal({ accountId, accountLabel, entry, controller, onClose }: {
   accountId: string;
@@ -209,13 +218,14 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
 
   const post = async (request: Held) => {
     if (busy) return;
+    const retryingHeld = unresolved !== null && unresolved.operationId === request.operationId;
     setBusy(true);
     const result = await controller.spend(accountId, request);
     setBusy(false);
     setConfirming(null);
-    if (result.kind === "unknown") {
+    if (result.kind === "unknown" || (result.kind === "refused" && retryingHeld && !RELEASES_HELD.has(result.code))) {
       setHeld(request);
-      setOutcome(null);
+      setOutcome(result.kind === "refused" ? outcomeOf(result) : null);
       return;
     }
     setHeld(null);
@@ -253,6 +263,7 @@ export function AnthropicResetGrantModal({ accountId, accountLabel, entry, contr
               <div className="confirm-icon"><IconAlert width={22} /></div>
               <h3 id="anthropic-grant-title">{t("anthropicGrant.title")}</h3>
               <p className="pws-status-warn" role="alert">{t("anthropicGrant.unknownOutcome")}</p>
+              {outcome && message(outcome)}
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-ghost" onClick={onClose}>{t("common.close")}</button>

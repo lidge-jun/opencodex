@@ -17,9 +17,9 @@
  */
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFile } from "../config/atomic-write";
+import { atomicWriteFileStreamed } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
 
 export const ANTHROPIC_RESET_LEASE_MS = 90_000;
@@ -117,8 +117,14 @@ function writeJournal(filePath: string, journal: Journal, now: number): void {
   journal.operations = Object.fromEntries(
     Object.entries(journal.operations).filter(([, record]) => record.updatedAt > cutoff),
   );
+  const bytes = Buffer.from(JSON.stringify(journal, null, 2));
   try {
-    atomicWriteFile(filePath, JSON.stringify(journal, null, 2));
+    // The streamed form fsyncs the temp file and the parent directory, so an
+    // open record is on disk before the claim that depends on it is sent.
+    atomicWriteFileStreamed(filePath, descriptor => {
+      let offset = 0;
+      while (offset < bytes.length) offset += writeSync(descriptor, bytes, offset, bytes.length - offset);
+    });
   } catch {
     throw new AnthropicResetLedgerError("write_failed");
   }
@@ -213,23 +219,35 @@ export function beginAnthropicResetOperation(
   });
 }
 
-/** Records a terminal answer. First settlement wins; a later one is ignored. */
+export interface AnthropicResetSettlement {
+  code: string;
+  resetsLeft: number | null;
+}
+
+/**
+ * Records a terminal answer and returns the settlement the journal now holds.
+ * First settlement wins: a later answer for an already-settled operation gets the
+ * stored one back, so the caller reports what the journal says. A missing record
+ * throws, because an answer with no journal entry cannot be reported as durable.
+ */
 export function settleAnthropicResetOperation(
   settlement: { operationId: string; code: string; resetsLeft: number | null },
   options: AnthropicResetLedgerOptions = {},
-): void {
+): AnthropicResetSettlement {
   const now = options.now ?? Date.now();
   const filePath = options.journalPath ?? anthropicResetJournalPath();
-  withJournalLock(filePath, () => {
+  return withJournalLock(filePath, () => {
     const journal = readJournal(filePath);
     const existing = journal.operations[settlement.operationId];
-    if (!existing || existing.status === "settled") return;
+    if (!existing) throw new AnthropicResetLedgerError("unavailable");
+    if (existing.status === "settled") return { code: existing.code ?? "unavailable", resetsLeft: existing.resetsLeft ?? null };
     existing.status = "settled";
     existing.code = settlement.code;
     existing.resetsLeft = settlement.resetsLeft;
     existing.leaseUntil = 0;
     existing.updatedAt = now;
     writeJournal(filePath, journal, now);
+    return { code: settlement.code, resetsLeft: settlement.resetsLeft };
   });
 }
 
@@ -268,4 +286,3 @@ export function pendingAnthropicResetOperation(
   }
   return pending;
 }
-

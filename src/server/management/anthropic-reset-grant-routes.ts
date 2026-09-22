@@ -208,8 +208,9 @@ async function handleConsume(ctx: ManagementContext, deps: AnthropicResetGrantRo
     } catch { /* the lease expires on its own */ }
     return fail(ctx, 502, "unknown_outcome", { operationId, grantId });
   }
+  let settled;
   try {
-    settleAnthropicResetOperation(
+    settled = settleAnthropicResetOperation(
       { operationId, code: answer.code, resetsLeft: answer.resetsLeft },
       { journalPath: deps.journalPath, now: deps.now?.() },
     );
@@ -217,8 +218,19 @@ async function handleConsume(ctx: ManagementContext, deps: AnthropicResetGrantRo
     // Fail closed: the caller must not read this as a durable result.
     return fail(ctx, 500, "journal_write_failed", { operationId, grantId });
   }
+  // Report what the journal holds. An overlapping same-id attempt may have
+  // settled first; its answer is the canonical one.
+  const replayed = settled.code !== answer.code || settled.resetsLeft !== answer.resetsLeft;
   return jsonResponse(
-    { code: answer.code, replayed: false, resetsLeft: answer.resetsLeft, cleared: answer.cleared, accountId, grantId, operationId },
+    {
+      code: settled.code,
+      replayed,
+      resetsLeft: settled.resetsLeft,
+      cleared: replayed ? [] : answer.cleared,
+      accountId,
+      grantId,
+      operationId,
+    },
     200, ctx.req, ctx.config,
   );
 }

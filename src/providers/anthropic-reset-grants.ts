@@ -327,4 +327,3 @@ export async function claimAnthropicResetGrant(options: AnthropicResetClaimOptio
     cleared: parseWindows(body.cleared) ?? [],
   };
 }
-

@@ -230,11 +230,18 @@ describe("reset-grant journal", () => {
     expect(beginAnthropicResetOperation(id(OP), { journalPath, now: T0 + 2 })).toMatchObject({ kind: "replay", code: "reset", resetsLeft: 0 });
   });
 
-  test("the first settlement wins", () => {
+  test("the first settlement wins and a later settle gets the stored one back", () => {
     beginAnthropicResetOperation(id(OP), { journalPath, now: T0 });
-    settleAnthropicResetOperation({ operationId: OP, code: "reset", resetsLeft: 0 }, { journalPath, now: T0 + 1 });
-    settleAnthropicResetOperation({ operationId: OP, code: "unavailable", resetsLeft: null }, { journalPath, now: T0 + 2 });
+    expect(settleAnthropicResetOperation({ operationId: OP, code: "reset", resetsLeft: 0 }, { journalPath, now: T0 + 1 }))
+      .toEqual({ code: "reset", resetsLeft: 0 });
+    expect(settleAnthropicResetOperation({ operationId: OP, code: "unavailable", resetsLeft: null }, { journalPath, now: T0 + 2 }))
+      .toEqual({ code: "reset", resetsLeft: 0 });
     expect(beginAnthropicResetOperation(id(OP), { journalPath, now: T0 + 3 })).toMatchObject({ kind: "replay", code: "reset" });
+  });
+
+  test("settling an operation the journal does not hold fails instead of pretending to be durable", () => {
+    expect(() => settleAnthropicResetOperation({ operationId: OP, code: "reset", resetsLeft: 0 }, { journalPath, now: T0 }))
+      .toThrow(AnthropicResetLedgerError);
   });
 
   test("an open operation is single-flight inside its lease and retryable with the same id after it", () => {
@@ -305,4 +312,3 @@ describe("reset-grant journal", () => {
     }
   });
 });
-
