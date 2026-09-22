@@ -95,7 +95,7 @@ export function releaseMatrixTargets(workflowText: string): {
 
 /**
  * Every recorded checksum against the bytes on disk, in exactly the producers'
- * format (64 hex, two spaces, bare name, one trailing newline). The recorded name
+ * format (64 hex, a space, text/binary marker, bare name, newline). The recorded name
  * must equal the checksum file's own name minus the suffix: a foo.sha256 naming
  * bar would leave foo's bytes unchecked while bar's are checked twice.
  */
@@ -104,7 +104,7 @@ export function verifyChecksums(dir: string): number {
   if (checksumFiles.length === 0) throw new Error(`No .sha256 files found in ${dir}`);
   for (const checksumFile of checksumFiles) {
     const content = readFileSync(join(dir, checksumFile), "utf8");
-    const match = /^([0-9a-f]{64})  (\S+)\n$/.exec(content);
+    const match = /^([0-9a-f]{64}) [ *](\S+)\r?\n$/.exec(content);
     if (!match) throw new Error(`Malformed checksum record in ${checksumFile}: ${JSON.stringify(content)}`);
     const digest = match[1]!;
     const recorded = match[2]!;
