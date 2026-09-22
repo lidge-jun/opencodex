@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import CodexAccountPool from "../src/components/CodexAccountPool";
 import { useCodexAccountPool } from "../src/hooks/useCodexAccountPool";
@@ -457,8 +457,9 @@ async function mountThresholdPool(entry = account, initial: number | null = 50) 
     },
   });
   function Pool() {
-    controller = useCodexAccountPool(apiBase);
-    return <CodexAccountPool apiBase={apiBase} controller={controller} />;
+    const live = useCodexAccountPool(apiBase);
+    useLayoutEffect(() => { controller = live; }, [live]);
+    return <CodexAccountPool apiBase={apiBase} controller={live} />;
   }
   const { createRoot } = await import("react-dom/client");
   await act(async () => {

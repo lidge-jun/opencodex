@@ -137,6 +137,11 @@ export default function CustomLayerDialog({
   const draft: Draft = { id: layer?.id ?? null, title, body, enabled: layer?.enabled ?? true };
   const problem = validateDraft(draft, others);
   const normalized = normalizeBody(body);
+  const normalizationApplied = normalized !== body;
+  const findings = useMemo(() => lintPromptLayer(normalized), [normalized]);
+  const bodyBytes = utf8Length(normalized);
+  // Declared after the memo: a closure that hands `normalized` to onSave must not
+  // precede it, or the compiler cannot keep the lint memoization.
   const saveCurrent = (targetId: string | null) => {
     if (busy || problem !== null || targetId !== editingId) return;
     onSave({ ...draft, body: normalized });
@@ -146,9 +151,6 @@ export default function CustomLayerDialog({
     if (parkedDirty) { setDiscardAction({ kind: "save", targetId: editingId }); return; }
     saveCurrent(editingId);
   };
-  const normalizationApplied = normalized !== body;
-  const findings = useMemo(() => lintPromptLayer(normalized), [normalized]);
-  const bodyBytes = utf8Length(normalized);
 
   const problemMessage = !problem ? null
     : problem.kind === "title-empty" ? t("codexSet.custom.titleRequired")

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { useCodexAccountPool, type CodexAccountPoolController } from "../src/hooks/useCodexAccountPool";
@@ -215,7 +215,8 @@ afterEach(async () => {
 async function mountController(enabled = true) {
   const seen: { current: CodexAccountPoolController | null } = { current: null };
   function Probe() {
-    seen.current = useCodexAccountPool("", enabled);
+    const controller = useCodexAccountPool("", enabled);
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
     return null;
   }
   // Lazy import: see the note on the Root type import above.
@@ -861,9 +862,11 @@ test("a first attempt that fails settles initialLoading instead of hanging on th
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: failing });
 
   const seen: { current: CodexAccountPoolController | null } = { current: null };
+  // A fresh apiBase keeps this cold: the module-level last-good map is keyed by it.
+  const coldApiBase = `cold-${Date.now()}`;
   function Probe() {
-    // A fresh apiBase keeps this cold: the module-level last-good map is keyed by it.
-    seen.current = useCodexAccountPool(`cold-${Date.now()}`, true);
+    const controller = useCodexAccountPool(coldApiBase, true);
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
     return null;
   }
   const { createRoot } = await import("react-dom/client");
