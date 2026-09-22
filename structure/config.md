@@ -550,7 +550,8 @@ SOCKS proxy is the only inherited proxy; whenever Bun applies an inherited HTTP(
 matches by domain suffix, it adds only the loopback addresses (never `localhost`); a proxy-free
 process is left untouched. The in-process
 matcher treats a bare `localhost` or IP-literal entry as one host, never a suffix. An inherited non-empty
-lowercase `no_proxy`, which Bun fetch reads first, receives the same entries. When the
+lowercase `no_proxy`, which Bun fetch reads first with suffix matching, receives the same entries
+except a bare `localhost`. When the
 environment no longer selects SOCKS, activation
 restores the native fetch; removing a saved field alone does not erase inherited
 process environment variables.

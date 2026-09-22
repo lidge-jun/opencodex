@@ -133,10 +133,13 @@ function withNoProxyEntries(existing: string, configured: readonly string[], loo
 function mergeNoProxyEntries(configured: readonly string[] = [], loopback: readonly string[] = LOOPBACK_NO_PROXY): void {
   process.env.NO_PROXY = withNoProxyEntries(process.env.NO_PROXY ?? process.env.no_proxy ?? "", configured, loopback);
   // Bun's native fetch reads a non-empty lowercase no_proxy before NO_PROXY
-  // (src/codex/catalog/remote.ts), so an inherited one would shadow the entries above.
+  // (src/codex/catalog/remote.ts), so an inherited one would shadow the entries above. Only
+  // the loopback addresses join it: Bun matches entries as domain suffixes, and a bare
+  // "localhost" there would send any *.localhost name past a proxy the inherited value
+  // previously kept it on.
   const inherited = process.env.no_proxy;
   if (inherited !== undefined && inherited.trim() !== "") {
-    process.env.no_proxy = withNoProxyEntries(inherited, configured, loopback);
+    process.env.no_proxy = withNoProxyEntries(inherited, configured, loopback.filter(host => host !== "localhost"));
   }
 }
 
