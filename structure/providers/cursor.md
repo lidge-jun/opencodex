@@ -192,6 +192,20 @@ Translated Chat request construction uses the [inline-image budget](../transport
 
 ## Mid-stream envelope echo
 
+Held quarantine output is bounded by the aggregate `CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES` (8 KiB)
+budget in `src/adapters/cursor.ts`. Text deltas are fed to the armed echo and
+routing-commentary sniffers BEFORE the cap check, so a single oversized first delta cannot
+disarm the guards without being classified; each sniffer reads only the bounded leading window
+its decision needs. Retained bytes are projected from payload length before any serialized
+copy exists, so a multi-megabyte frame cannot force a same-size encoded allocation. An event
+that cannot fit the remaining budget settles both sniffers, releases the held events, and is
+emitted directly.
+
+Adjacent midstream markers retain separate findings, capped at eight. A new marker closes the
+previous corruption window before consuming its line, including a call-id on the marker's own
+line. Only marker identities, offsets and corruption booleans survive; held reasoning is released
+in order before terminal errors, preserving upstream error visibility.
+
 The prefix sniffer only watches the opening bytes of a turn. An external model that writes real
 prose first and then pastes a replayed `[Tool Result]` envelope defeats it, so that text reaches
 the client and is stored as assistant output. `CursorMidstreamEchoObserver` records those
