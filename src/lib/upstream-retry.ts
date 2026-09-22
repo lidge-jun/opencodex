@@ -430,12 +430,13 @@ export function cancelResponseBodyBestEffort(res: Response): void {
  * the client, whose retry table covers 408, 409, 429 and every 5xx (the Codex client retries 5xx
  * whatever the headers say; see {@link REPLAY_REFUSED_STATUS}), and this proxy, whose credential
  * and quota recovery resends on 401 (token refresh, key and pool rotation) and on 402/429
- * (account rotation). {@link isTransientUpstreamStatus} is only the gateway subset of that
- * set: 429 and 529 escaped it. These statuses settle as the refusal instead.
+ * (account rotation). A client that follows a 307 or 308 sends the same POST body again, so those
+ * belong here too. {@link isTransientUpstreamStatus} is only the gateway subset of that set: 429
+ * and 529 escaped it. These statuses settle as the refusal instead.
  */
 function invitesResendAfterReplacement(status: number): boolean {
   return status === 401 || status === 402 || status === 408 || status === 409 || status === 429
-    || status >= 500;
+    || status === 307 || status === 308 || status >= 500;
 }
 
 export async function fetchWithAttemptDeadline(

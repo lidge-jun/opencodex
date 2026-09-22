@@ -5,6 +5,7 @@ import {
   fetchWithTransientRetry,
   isConnectionResetError,
   isNonReplayableResponse,
+  isReplayRefusalResponse,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   prepareSameTarget429Wait,
   releaseResponseBodyBestEffort,
@@ -602,7 +603,7 @@ describe("operator-granted replacement of an ambiguous reset", () => {
 
   // 429 and 529 are the cases the gateway-only transient set let through: the client retry table
   // and the proxy's own quota rotation both resend them. 401 and 402 are proxy recovery triggers.
-  test.each([401, 402, 408, 409, 429, 500, 503, 529])(
+  test.each([307, 308, 401, 402, 408, 409, 429, 500, 501, 503, 507, 529])(
     "a %d answer to a spent replacement settles as the refusal and releases its body",
     async (status) => {
       silenceWarn();
@@ -616,6 +617,7 @@ describe("operator-granted replacement of an ambiguous reset", () => {
       });
       expect(response.status).toBe(429);
       expect(isNonReplayableResponse(response)).toBe(true);
+      expect(isReplayRefusalResponse(response)).toBe(true);
       expect(response.headers.get("x-should-retry")).toBe("false");
       expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
       expect(cancelled).toBe(true);
@@ -623,7 +625,7 @@ describe("operator-granted replacement of an ambiguous reset", () => {
     },
   );
 
-  test.each([400, 404, 422])(
+  test.each([400, 403, 404, 413, 422])(
     "a %d answer to a spent replacement keeps its status but can no longer trigger recovery",
     async (status) => {
       silenceWarn();
@@ -635,6 +637,9 @@ describe("operator-granted replacement of an ambiguous reset", () => {
       });
       expect(response.status).toBe(status);
       expect(isNonReplayableResponse(response)).toBe(true);
+      // Still the upstream's own answer: quota and credential recorders must not treat it as a
+      // refusal this proxy synthesized.
+      expect(isReplayRefusalResponse(response)).toBe(false);
       expect(await response.text()).toBe("request defect");
       expect(mock.calls).toHaveLength(2);
     },
