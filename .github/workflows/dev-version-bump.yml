@@ -210,9 +210,13 @@ jobs:
               echo "::error::${branch} does not move package.json: ${changed_files:-<none>}"
               exit 1
             fi
+            # The decide step already rewrote the version sources in this working tree. Put them
+            # back first: git refuses to switch over local edits, and the check below must read
+            # what the branch commits, not what this run wrote.
+            git checkout -- package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git checkout -B "${branch}" "origin/${branch}"
-            # The diff above proved every other file matches dev's history, so this is dev's
-            # checker reading the branch's four version sources.
+            # The diff above proved every other file matches the merge base with dev, so this is
+            # the merge base's checker reading the branch's four committed version sources.
             bun scripts/release-version-sources.ts check "${NEXT_VERSION}" || {
               echo "::error::${branch} does not carry ${NEXT_VERSION} in every version source"
               exit 1

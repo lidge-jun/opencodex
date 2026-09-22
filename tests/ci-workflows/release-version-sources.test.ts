@@ -184,6 +184,11 @@ describe("every version move covers all four sources", () => {
     expect(checks.length).toBe(2);
     // Existing-branch path: after the checkout it validates, before the pull request is opened.
     expect(checks[0]!).toBeGreaterThan(run.indexOf('git checkout -B "$' + '{branch}"'));
+    // The decide step left its own rewrite in the working tree. It must be discarded before the
+    // switch, or git refuses to switch and the check would read this run's edits, not the branch.
+    const restore = run.indexOf("git checkout -- " + VERSION_SOURCE_PATHS.join(" "));
+    expect(restore).toBeGreaterThanOrEqual(0);
+    expect(restore).toBeLessThan(run.indexOf('git checkout -B "$' + '{branch}"'));
     // New-branch path: before anything is staged, committed or pushed.
     expect(checks[1]!).toBeLessThan(run.indexOf("git add --"));
     expect(run.indexOf("git add --")).toBeLessThan(run.indexOf('git push origin "$' + '{branch}"'));
