@@ -33,6 +33,7 @@ export interface TimelineSeries {
 }
 
 export interface UsageTimeline {
+  appliedFilters?: { models: string[] | null; hiddenProviders: string[] };
   start: number;
   end: number;
   bucketSeconds: number;
@@ -44,6 +45,37 @@ export interface UsageTimeline {
   availableModels: string[];
   missingMeasurements: number;
   truncated: boolean;
+}
+
+type TimelineSettings = Pick<CompanionSettings, 'chartHours' | 'bucketMinutes' | 'tokenMetric' | 'aggregation' | 'chartGrouping' | 'models' | 'hiddenProviders'>;
+export function companionTimelineQuery(settings: TimelineSettings): URLSearchParams {
+  const query = new URLSearchParams({ hours: String(settings.chartHours), bucketMinutes: String(settings.bucketMinutes),
+    metric: settings.tokenMetric, aggregation: settings.aggregation, grouping: settings.chartGrouping });
+  if (settings.models?.length) query.set('models', settings.models.join(','));
+  for (const provider of settings.hiddenProviders) query.append('hiddenProvider', provider);
+  return query;
+}
+
+function canonicalFilter(value: unknown): string | undefined {
+  return Array.isArray(value) && value.length <= 100 && value.every(item => typeof item === 'string')
+    ? JSON.stringify([...new Set(value)].sort()) : undefined;
+}
+
+/** Older servers cannot attest that hidden traffic was removed before their series fold. */
+export function companionTimelineProjection(data: UsageTimeline, settings: Pick<CompanionSettings, 'models' | 'hiddenProviders'>): UsageTimeline {
+  const hidden = new Set(settings.hiddenProviders);
+  const availableModels = data.availableModels.filter(id => !hidden.has(id.slice(0, id.indexOf('/'))));
+  if (settings.models?.length === 0) return { ...data, series: [], availableModels };
+  const models = settings.models === null ? null : new Set(settings.models);
+  const active = models !== null || hidden.size > 0;
+  const echo = data.appliedFilters;
+  const matches = !!echo && canonicalFilter(echo.hiddenProviders) === canonicalFilter(settings.hiddenProviders)
+    && (settings.models === null ? echo.models === null : canonicalFilter(echo.models) === canonicalFilter(settings.models));
+  const series = data.series.filter(row => {
+    if (row.id === 'other' && row.provider === '') return !active || matches;
+    return !hidden.has(row.provider) && (models === null || models.has(`${row.provider}/${row.model}`) || models.has(row.model));
+  });
+  return { ...data, series, availableModels, truncated: data.truncated || ((active || echo !== undefined) && !matches) };
 }
 
 export interface CompanionSettingsResponse {

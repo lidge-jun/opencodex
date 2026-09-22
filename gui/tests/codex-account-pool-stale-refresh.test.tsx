@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import CodexAccountPool from "../src/components/CodexAccountPool";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
@@ -149,7 +149,8 @@ async function mountController() {
   const apiBase = `stale-${Date.now()}-${baseCounter}`;
   const seen: { current: CodexAccountPoolController | null } = { current: null };
   function Probe() {
-    seen.current = useCodexAccountPool(apiBase, true);
+    const controller = useCodexAccountPool(apiBase, true);
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
     return null;
   }
   const { createRoot } = await import("react-dom/client");

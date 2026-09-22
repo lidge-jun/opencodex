@@ -67,7 +67,6 @@ describe("the Bun crash classifier is shared", () => {
 
   const lanes = {
     "macos-shard": runBlockContaining(workflow, "run_macos_suite tests"),
-    "macos-control": runBlockContaining(workflow, "bun test --isolate --timeout 60000 tests 2>&1"),
   };
 
   test("the signatures exist in the classifier", () => {
@@ -97,7 +96,7 @@ describe("the Bun crash classifier is shared", () => {
     }
     expect(batchScript).toContain("bun-crash-signatures.sh");
     expect(batchScript).toContain('is_bun_runtime_crash "$status" "$log_file"');
-    expect(workflow.match(/run: bash scripts\/ci\/run-bun-test-batches\.sh/g)).toHaveLength(2);
+    expect(workflow.match(/run: bash scripts\/ci\/run-bun-test-batches\.sh/g)).toHaveLength(3);
   });
 
   test("the thread-numbered panic form is the anchor nowhere", () => {

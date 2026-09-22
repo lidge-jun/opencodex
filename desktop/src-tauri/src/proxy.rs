@@ -174,7 +174,7 @@ impl ProxyClient {
         self.get(&format!("/api/usage/timeline?{query}")).await
     }
 
-    async fn get(&self, path: &str) -> Result<Value, ProxyError> {
+    pub(crate) async fn get(&self, path: &str) -> Result<Value, ProxyError> {
         self.request(Method::GET, path).await
     }
 

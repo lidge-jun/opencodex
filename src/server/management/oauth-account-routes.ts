@@ -956,8 +956,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
-    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const existing = (config.apiKeys ?? []).find(k => k.id === body.id);
+    if (!existing) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const entry = { ...existing };
     // Rename and scope are independent edits. A scope-only PATCH must not have
     // to restate the name, and a rename must not silently widen a scope, so
     // each field is applied only when the caller actually sent it.
@@ -986,6 +987,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (normalized.length === 0) delete entry[field];
       else entry[field] = normalized;
     }
+    // Publish the validated replacement only after every field is accepted.
+    config.apiKeys = config.apiKeys!.map(key => key === existing ? entry : key);
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     // Never echo key material from a rename.

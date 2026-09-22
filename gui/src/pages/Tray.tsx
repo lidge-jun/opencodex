@@ -3,7 +3,7 @@ import { useI18n } from '../i18n/shared';
 import { formatTokens } from '../format-tokens';
 import { formatProviderDisplayName } from '../provider-icons';
 import { UsageCompanionChart } from './usage-companion-chart';
-import { type CompanionSettings, type CompanionSettingsResponse, type UsageTimeline } from './usage-companion-utils';
+import { companionTimelineQuery, companionTimelineProjection, type CompanionSettings, type CompanionSettingsResponse, type UsageTimeline } from './usage-companion-utils';
 import { fetchTrayJson, parseTrayUsage, filterUsage, measuredTotals, finite, parseAccounts, providerSources, quotaWindows, relativeReset, type TrayProvider, type TrayTotals, type TrayUsage } from './tray-data';
 
 declare global { interface Window { __OPENCODEX_TRAY_VISIBLE__?: boolean } }
@@ -84,14 +84,10 @@ export default function Tray() {
           });
           const chart = (async () => {
             if (!config.showChart) return;
-            const query = new URLSearchParams({ hours: String(config.chartHours), bucketMinutes: String(config.bucketMinutes), metric: config.tokenMetric, aggregation: config.aggregation, grouping: config.chartGrouping });
-            if (config.models?.length) query.set('models', config.models.join(','));
+            const query = companionTimelineQuery(config);
             try {
               const data = await json<UsageTimeline>(`/api/usage/timeline?${query}`);
-              const hiddenProviders = new Set(config.hiddenProviders);
-              const configuredModels = config.models === null ? null : new Set(config.models);
-              const series = data.series.filter(row => !hiddenProviders.has(row.provider) && (configuredModels === null || configuredModels.has(`${row.provider}/${row.model}`) || configuredModels.has(row.model)));
-              if (active()) { setTimeline({ ...data, series }); setChartError(false); }
+              if (active()) { setTimeline(companionTimelineProjection(data, config)); setChartError(false); }
             } catch { if (active()) { setTimeline(null); setChartError(true); } }
           })();
           await Promise.allSettled([totals, chart]);

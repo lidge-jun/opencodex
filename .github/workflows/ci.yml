@@ -691,23 +691,10 @@ jobs:
     needs: changes
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
-    # The unsharded control for the sharded Linux lane: the only place the whole
-    # suite runs in one pool, so it is the place that catches what sharding
-    # hides. The flakes it keeps surfacing are timing, not logic, and the fix
-    # is the tests, not a fourth lane.
-    #
-    # Sized to measured work, not to a guess. At 30 this lane never once finished:
-    # every run was cancelled slightly past halfway and the cancellations were read
-    # as runner capacity for months (#4905). An authorized one-off measurement let it
-    # complete for the first time and it took 50m39s wall, Bun reporting 3034.18s over
-    # 26526 tests in 1343 files. 75 leaves roughly 24 minutes of headroom on that
-    # number, which is the growth room the suite needs without letting a genuine hang
-    # sit for an hour before anyone sees it.
-    #
-    # This bound is not a fix for anything the run reports. That first complete run
-    # surfaced four tests that exceed their own timeouts under shared-process pressure,
-    # tracked separately in #4997; raising this budget is what made them observable and
-    # must not be mistaken for resolving them.
+    # Unsharded full-membership control, one worker in sequential fresh batches.
+    # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
+    # child processes. Batching bounds that lifetime without retrying failures or
+    # excluding tests. This no longer claims one whole-suite process as evidence.
     timeout-minutes: 75
     steps:
       - name: Checkout
@@ -744,37 +731,21 @@ jobs:
           cd gui
           bun run build
 
-      # This is the lane that exists to see what sharding hides, so it is the last place a
-      # repeated attempt belongs. One execution, whatever the outcome; the shared classifier
-      # decides which message is printed, never whether the leg fails.
-      - name: Test
+      - name: Setup bounded batch utilities
         run: |
-          # GitHub Actions starts bash `run:` blocks with `-e`. Disable
-          # errexit so a Bun crash reaches PIPESTATUS and the classifier below,
-          # instead of aborting the step before either can be read.
-          set +e
-          set -uo pipefail
-          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
-          source scripts/ci/bun-crash-signatures.sh
-          suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
-          # --timeout: Bun's default 5s per-test ceiling is the recurring flake
-          # class on this loaded shared runner (real retry windows + server
-          # round-trips exceed 5s under contention; a 10s-floor in-test
-          # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
-          # job timeout is the outer backstop) while removing the timing
-          # flakes — assertions are untouched. Pairs with the 30s CI floor in
-          # tests/helpers/ci-watchdog.ts.
-          bun test --isolate --timeout 60000 tests 2>&1 | tee "$suite_log"
-          suite_status="${PIPESTATUS[0]}"
-          if [ "$suite_status" -eq 0 ]; then
-            exit 0
-          fi
-          if is_bun_runtime_crash "$suite_status" "$suite_log"; then
-            echo "::error::Bun runtime crash in the macOS control suite (exit ${suite_status}); a crash is process death, not a test result, and it fails this leg on the first occurrence."
-          else
-            echo "::error::macOS control suite failed (exit ${suite_status})."
-          fi
-          exit "$suite_status"
+          brew list coreutils >/dev/null 2>&1 || brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Test in unsharded fresh-process batches
+        env:
+          TEST_SHARD: 1/1
+          BUN_TEST_FILE_SCOPE: all
+          BUN_TEST_BATCH_SIZE: '12'
+          BUN_TEST_PARALLEL: '1'
+          BUN_TEST_BATCH_TIMEOUT_SECONDS: '300'
+          OCX_TEST_NO_QUEUE: '1'
+          OCX_TEST_FULL_SUITE: '1'
+        run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
@@ -1180,7 +1151,9 @@ jobs:
           toolchain: stable
 
       - name: Test MenuBarCore
-        run: bun run test:macos
+        run: |
+          bun run test:macos
+          swift run --package-path app NativeTrayTests
 
       - name: Build dashboard
         run: bun run build:gui
@@ -1200,7 +1173,7 @@ jobs:
         # build has no business holding the release key. Updater artifacts are therefore off
         # here and the signing path stays in release.yml, which already reads the secret and
         # refuses to publish a manifest when it is absent.
-        run: bunx tauri build --ci --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: bunx tauri build --ci --bundles app --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}'
 
       - name: Verify WidgetKit appex and desktop app
         run: |
@@ -1214,6 +1187,8 @@ jobs:
           test -x "$app/Contents/MacOS/$executable"
           test -x "$app/Contents/PlugIns/OpenCodexWidget.appex/Contents/MacOS/OpenCodexWidget"
           test -x "$app/Contents/MacOS/ocx"
+          # Verify actual entitlements and execute the signed Bun sidecar as well as the seal.
+          bash desktop/scripts/verify-macos-runtime.sh "$app"
           codesign -dv "$app/Contents/PlugIns/OpenCodexWidget.appex"
           # The widget is only offered in the gallery when its bundle is actually linked in, and
           # nothing else here would notice its absence: the appex builds, signs and registers

@@ -18,8 +18,10 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 let home = "";
 let configDir = "";
 let trustedSystem32 = "";
+let priorHomes: Record<string, string | undefined> = {};
 
 beforeEach(() => {
+  priorHomes = { CODEX_HOME: process.env.CODEX_HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME };
   home = mkdtempSync(join(tmpdir(), "ocx-probe-hardening-"));
   configDir = join(home, "custom-opencodex");
   trustedSystem32 = join(home, "System32");
@@ -32,6 +34,10 @@ beforeEach(() => {
 
 afterEach(() => {
   setTrustedWindowsSystemDirectoryResolverForTests(null);
+  for (const [key, value] of Object.entries(priorHomes)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   removeTreeWithRetry(home);
 });
 
@@ -241,9 +247,14 @@ describe("Windows ownership probe hardening regressions", () => {
       return raw(1, "", "unexpected query");
     };
     const ownerships: string[] = [];
+    // Server startup needs real trusted Windows identity/ACL tools. Limit the
+    // synthetic System32 to the scheduler inspection being exercised.
+    setTrustedWindowsSystemDirectoryResolverForTests(null);
     const server = startServer(0, {
       resolveServiceHomes: () => ({ codexHome, opencodexHome: configDir }),
       inspectNativeCodexOwnership: scope => {
+        setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+        try {
         const answer = inspectNativeCodexOwnership({
           ...scope,
           // `startServer` derives statePaths from the sandbox home AND the default
@@ -259,6 +270,9 @@ describe("Windows ownership probe hardening regressions", () => {
         });
         ownerships.push(answer.ownership);
         return answer;
+        } finally {
+          setTrustedWindowsSystemDirectoryResolverForTests(null);
+        }
       },
     });
     try {

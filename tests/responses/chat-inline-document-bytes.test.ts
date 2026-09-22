@@ -4,7 +4,7 @@ import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../../src/chat/inbound";
 import { anthropicToResponsesBody } from "../../src/claude/inbound";
 import { parseRequest } from "../../src/responses/parser";
-import { inlineDocumentDataUrl, inlineDocumentMarker } from "../../src/responses/inline-document";
+import { inlineDocumentDataUrl, inlineDocumentMarker, inlineDocumentFromDataUrl, isInlineDocumentDataUrl } from "../../src/responses/inline-document";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
 /**
@@ -70,6 +70,24 @@ function parsedContent(body: Record<string, unknown>): unknown {
 }
 
 describe("inline document bytes survive the inbound parse", () => {
+  test.each(["A", "A=", "AA=", "AAA=="])("malformed base64 quantum %s is refused before translation", (payload) => {
+    const url = `data:application/pdf;base64,${payload}`;
+    expect(isInlineDocumentDataUrl(url)).toBe(false);
+    expect(inlineDocumentFromDataUrl(url, "doc.pdf")).toBeUndefined();
+    expect(() => chatCompletionsToResponsesBody(chatRequest({
+      type: "file", file: { filename: "doc.pdf", file_data: url },
+    }))).toThrow(ChatCompletionsRequestError);
+  });
+
+  test.each(["AA", "AAA", "AA==", "AAA=", "AAAA"])("valid padded or unpadded bytes %s survive unchanged", (payload) => {
+    const url = `data:application/pdf;base64,${payload}`;
+    expect(isInlineDocumentDataUrl(url)).toBe(true);
+    const content = parsedContent(chatCompletionsToResponsesBody(chatRequest({
+      type: "file", file: { filename: "doc.pdf", file_data: url },
+    })));
+    expect(content).toEqual([expect.objectContaining({ type: "document", data: payload })]);
+  });
+
   test("a Chat file part becomes a document carrying its bytes", () => {
     const content = parsedContent(chatCompletionsToResponsesBody(chatRequest({
       type: "file",

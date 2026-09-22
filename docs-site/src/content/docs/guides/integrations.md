@@ -389,7 +389,9 @@ provider keeps for a model id that also appears under ours. A rule carrying the 
 opencodex did not write is a conflict rather than something to take over; resolve it in ZCode, or
 use the explicit overwrite.
 
-Two situations still refuse rather than write. A block opencodex applied before ZCode moved its
+An unreadable or non-file provider store also refuses writes; it is not treated as an absent store that permits the legacy import.
+
+Two other situations still refuse rather than write. A block opencodex applied before ZCode moved its
 store keeps the integration on `config.json`: disable it there first, then enable it again to write
 the new store. And a `provider_config.json` whose `schemaVersion` is not one opencodex has observed
 is reported rather than merged into, because that file holds every provider ZCode has and asserting

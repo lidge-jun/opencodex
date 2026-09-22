@@ -744,6 +744,7 @@ jobs:
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
       # only AFTER the package's first version exists (do the first publish locally, see the runbook).
       - name: Preflight release metadata
+        id: metadata
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -792,6 +793,12 @@ jobs:
           fi
           if npm view "${pkg_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
             if [ "$RESUME" = "true" ]; then
+              resume_git_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+                echo "::error::Cannot verify the existing npm package source; resume refused"
+                exit 1
+              }
+              bun scripts/verify-release-resume.ts "$GITHUB_SHA" "$resume_git_head"
+              echo "resume_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
               echo "::notice::${pkg_name}@${RELEASE_VERSION} is acknowledged on npm; resuming after the recorded partial publication"
             elif [ "$dry_run" = "true" ]; then
               echo "::notice::${pkg_name}@${RELEASE_VERSION} already exists on npm; dry-run only"
@@ -846,10 +853,15 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag }}
           RESUME: ${{ inputs.resume-after-npm-publish }}
           RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_RESUME_SHA: ${{ steps.metadata.outputs.resume_sha }}
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
           if [ "$RESUME" = "true" ]; then
+            if [ -z "$VERIFIED_RESUME_SHA" ] || [ "$VERIFIED_RESUME_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::Resume has no matching registry source verification; publication remains unacknowledged"
+              exit 1
+            fi
             # npm publication was acknowledged by the earlier run and confirmed by the
             # preflight above; completing the GitHub side must never republish.
             echo "::notice::RESUME — npm publish skipped; publication already acknowledged"

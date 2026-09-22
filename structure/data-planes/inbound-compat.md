@@ -368,7 +368,10 @@ The native Chat path retains provider-native file/audio blocks. When a request i
 Chat-to-Responses projection, `src/chat/inbound.ts` rejects recognized audio/file content
 before it can become empty text. The one exception is a `file` part carrying inline base64
 bytes in a `user` message: that projection builds an `input_file` block and the bytes survive
-to any wire with a counterpart. The same part in a `system`, `developer`, `assistant` or
+to any wire with a counterpart. `src/responses/inline-document.ts` checks the base64 alphabet
+and quantum/padding lengths without decoding the payload; valid unpadded bytes remain valid,
+while malformed one-character or incomplete padded encodings follow the explicit refusal.
+The same part in a `system`, `developer`, `assistant` or
 `tool` message is still refused, because those branches flatten their content to a string.
 Legacy `function`-role images
 also return an explicit error; their call/result pairing is not implemented by this projection.

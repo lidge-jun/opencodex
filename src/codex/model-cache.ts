@@ -199,6 +199,20 @@ export function getStaleCached(provider: string, authorityIdentity?: string): Ca
   return entry.models;
 }
 
+/** Selector decoding may use unscoped rows, but scoped rows need current authority. */
+export function getRoutingCached(
+  provider: string, resolveAuthority: () => string | undefined,
+): CatalogModel[] | null {
+  const entry = cache.get(provider);
+  if (!entry) return null;
+  if (entry.authorityIdentity !== undefined) {
+    try {
+      if (resolveAuthority() !== entry.authorityIdentity) return null;
+    } catch { return null; }
+  }
+  return entry.models;
+}
+
 /** Capture the cache generation before an asynchronous provider discovery starts. */
 export function captureModelCacheGeneration(provider: string): string {
   if (!providerCacheGenerations.has(provider)) providerCacheGenerations.set(provider, 0);

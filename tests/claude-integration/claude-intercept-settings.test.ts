@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyClaudeInterceptSettings,
+  captureClaudeInterceptSettingsRollback,
   buildClaudeInterceptEnv,
   inspectClaudeInterceptSettings,
   removeClaudeInterceptSettings,
@@ -109,4 +110,25 @@ test("claudeCode.intercept is validated by the config schema", () => {
   expect(configSchema.safeParse({ ...base, claudeCode: { intercept: "off" } }).success).toBe(false);
   expect(configSchema.safeParse({ ...base, claudeCode: { intercept: { enabled: "no" } } }).success).toBe(false);
   expect(configSchema.safeParse({ ...base, claudeCode: { intercept: { port: 70000 } } }).success).toBe(false);
+});
+
+test("settings rollback restores managed values while preserving unrelated newer edits", () => {
+  const configDir = dir();
+  const previous = { HTTPS_PROXY: "http://127.0.0.1:9000", NODE_EXTRA_CA_CERTS: CA };
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: previous }));
+  const rollback = captureClaudeInterceptSettingsRollback(env, configDir);
+  expect(applyClaudeInterceptSettings(env, configDir).ok).toBe(true);
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ theme: "dark", env: { ...env, NEW: "kept" } }));
+  expect(rollback()).toBe(true);
+  expect(readSettings(configDir)).toEqual({ theme: "dark", env: { ...previous, NEW: "kept" } });
+});
+
+test("settings rollback refuses a newer managed proxy choice", () => {
+  const configDir = dir();
+  const rollback = captureClaudeInterceptSettingsRollback(env, configDir);
+  applyClaudeInterceptSettings(env, configDir);
+  const newer = { ...env, HTTPS_PROXY: "http://127.0.0.1:12000" };
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ env: newer }));
+  expect(rollback()).toBe(false);
+  expect(readSettings(configDir)).toEqual({ env: newer });
 });

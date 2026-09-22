@@ -1,4 +1,6 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
+import { createHash } from "node:crypto";
+import { peekAuthStore } from "./oauth/store";
 import {
   getCombo,
   isComboTargetInCooldown,
@@ -36,7 +38,7 @@ import {
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { effectiveProviderAliasDecision, resolveModelAlias } from "./providers/default-aliases";
 import { resolveBlockedModelRedirect } from "./lib/shadow-call";
-import { getStaleCached } from "./codex/model-cache";
+import { getRoutingCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
   buildRouteDecisionTrace,
@@ -149,7 +151,20 @@ export function knownModelIdsForProvider(
   // only in a map this function forgot is no longer undecodable, and a new model-keyed field
   // fails typecheck until its keys are given a meaning.
   for (const id of registry ? registryModelIdKeys(registry) : []) ids.add(id);
-  for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
+  const cachedModels = getRoutingCached(provName, () => {
+    // This callback runs only for a scoped entry, not for each provider in an alias scan.
+    const routed = routedProviderConfig(provName, prov);
+    let key = routed.apiKey;
+    if (routed.authMode === "oauth") {
+      const set = peekAuthStore()[provName];
+      const account = set?.accounts.find(row => row.id === set.activeAccountId);
+      if (!account || account.needsReauth || !Number.isFinite(account.credential.expires)
+        || account.credential.expires <= Date.now()) return undefined;
+      key = account.credential.access;
+    }
+    return key ? createHash("sha256").update(key).digest("hex") : undefined;
+  });
+  for (const cached of cachedModels ?? []) ids.add(cached.id);
   for (const model of config?.customModels ?? []) {
     if (model.provider === provName && model.modelId) ids.add(model.modelId);
   }

@@ -41,6 +41,18 @@ describe('tray data', () => {
     expect(result.summary.requests).toBe(1);
     expect(result.models).toHaveLength(1);
   });
+  test('active filters cannot redistribute an unknown folded model total', () => {
+    const usage = { summary: { requests: 99, totalTokens: 999 }, models: [
+      { provider: 'visible', model: 'm', requests: 2, totalTokens: 3 },
+      { provider: 'other', model: 'other', requests: 97, totalTokens: 996 },
+    ] };
+    const filtered = filterUsage(usage, { models: null, hiddenProviders: ['hidden'] } as CompanionSettings);
+    expect(filtered.summary).toEqual({});
+    expect(filtered.usageIncomplete).toBe(true);
+    expect(filtered.models).toHaveLength(1);
+    expect(filterUsage(usage, { models: null, hiddenProviders: [] } as CompanionSettings).summary).toEqual(usage.summary);
+    expect(filterUsage(usage, { models: [], hiddenProviders: [] } as CompanionSettings).usageIncomplete).toBeUndefined();
+  });
 });
 
 test('tray rejects HTTP-200 read failures before filtering but accepts genuine zero usage', () => {

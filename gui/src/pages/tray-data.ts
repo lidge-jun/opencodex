@@ -92,6 +92,9 @@ export function filterUsage(usage: TrayUsage, settings: CompanionSettings): Tray
   const models = usage.models.filter(row => !hiddenProviders.has(row.provider)
     && (configuredModels === null || configuredModels.has(`${row.provider}/${row.model}`) || configuredModels.has(row.model)));
   if (settings.models === null && settings.hiddenProviders.length === 0) return { ...usage, models };
+  if (settings.models?.length !== 0 && usage.models.some(row => !row.provider || !row.model || (row.provider === 'other' && row.model === 'other'))) {
+    return { ...usage, models: models.filter(row => row.provider !== 'other' || row.model !== 'other'), summary: {}, usageIncomplete: true };
+  }
   const summary: TrayTotals = {};
   for (const key of ['requests', 'totalTokens', 'inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheReadInputTokens', 'estimatedCostUsd', 'measuredRequests', 'pricedRequests'] as const) {
     if (models.length && models.every(row => finite(row[key]))) summary[key] = models.reduce((sum, row) => sum + row[key]!, 0);
