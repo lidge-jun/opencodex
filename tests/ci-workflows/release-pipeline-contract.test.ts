@@ -93,6 +93,9 @@ describe("release pipeline contract", () => {
       const output = />\s+"([^"]+)"/.exec(line)?.[1];
       expect(output, line).toBeDefined();
       expect(output!).not.toContain("/");
+      // verifyChecksums binds each record to its own payload by removing only
+      // the final .sha256 suffix, including the archive extension in the name.
+      expect(output, line).toBe(`${argument}.sha256`);
     }
 
     // The bare names above only resolve end to end if the step checksums from the directory
@@ -148,6 +151,22 @@ describe("release pipeline contract", () => {
     const upload = steps.findIndex(candidate => candidate.run?.includes("gh release upload"));
     expect(receiptCheck).toBeGreaterThanOrEqual(0);
     expect(upload).toBeGreaterThan(receiptCheck);
+  });
+
+  test("the release is a draft until the verified assets are attached", () => {
+    // GitHub freezes a release the moment it is published: every later asset upload
+    // comes back HTTP 422 "Cannot upload assets to an immutable release". Creating
+    // the release published and uploading afterwards is what left v2.55.0 through
+    // v2.60.0 with zero assets and the desktop updater with nothing to fetch.
+    const releaseText = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
+    const createStep = releaseText.split("- name: Create GitHub release")[1] ?? "";
+    expect(createStep).toMatch(/gh release create "\$release_tag" --draft/);
+
+    const attachRun = (release.jobs?.["attach-release"]?.steps ?? [])
+      .map(candidate => candidate.run ?? "")
+      .find(run => run.includes("gh release upload")) ?? "";
+    expect(attachRun).toContain("--draft=false");
+    expect(attachRun.indexOf("gh release upload")).toBeLessThan(attachRun.indexOf("--draft=false"));
   });
 
   test("a partial publication has a recorded, explicit recovery path", () => {
