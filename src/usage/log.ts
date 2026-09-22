@@ -825,6 +825,24 @@ export function sanitizeServedModel(value: unknown): string | undefined {
     : undefined;
 }
 
+/**
+ * Model identity fields for a log row. The served model is sanitized, and a resolvedModel that
+ * only echoed a dropped served model is dropped with it, so the rejected value cannot survive
+ * under the other name.
+ */
+export function modelIdentityLogFields(source: { resolvedModel?: string; servedModel?: unknown; wireModel?: string }): {
+  resolvedModel?: string; servedModel?: string; wireModel?: string;
+} {
+  const servedModel = sanitizeServedModel(source.servedModel);
+  const resolvedModel = source.servedModel !== undefined && source.resolvedModel === source.servedModel && !servedModel
+    ? undefined : source.resolvedModel;
+  return {
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(source.wireModel ? { wireModel: source.wireModel } : {}),
+  };
+}
+
 /** Test seam: the normalization branch old rows take is worth asserting directly. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
