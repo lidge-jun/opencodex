@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
@@ -165,6 +166,124 @@ describe("CI review lanes", () => {
     }
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
-    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
   });
+
+  test("manual release-gates keeps ordinary jobs and skips only diagnostic suites", async () => {
+    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+      jobs: Record<string, { if?: string; needs?: string | string[] }>;
+    };
+    // These job conditions use boolean operators and lowercase string comparisons.
+    // Evaluate the checked-in expressions, rather than a second implementation of them.
+    const enabled = (job: string, event: string, lane: string, scope = "true", packaging = "true", native = "true") => {
+      const condition = ci.jobs[job]!.if ?? "true";
+      const evaluate = new Function("github", "needs", `return (${condition});`);
+      return evaluate(
+        { event_name: event, event: { inputs: { lane } } },
+        { changes: { outputs: { ci: scope, packaging, native } } },
+      );
+    };
+    for (const [event, lane, windows, control] of [
+      ["push", "", false, false],
+      ["pull_request", "", false, false],
+      ["push", "release-gates", false, false],
+      ["pull_request", "release-gates", false, false],
+      ["workflow_dispatch", "", true, true],
+      ["workflow_dispatch", "all", true, true],
+      ["workflow_dispatch", "macos-control", false, true],
+      ["workflow_dispatch", "release-gates", false, false],
+      // Diagnostic-only lanes stay off ordinary release-gates; unknown lanes
+      // must not opt into a diagnostic suite when more choices are introduced.
+      ["workflow_dispatch", "future-lane", false, false],
+    ] as const) {
+      expect(enabled("select-windows-runner", event, lane)).toBe(true);
+      expect(enabled("platform-windows", event, lane)).toBe(windows);
+      expect(enabled("macos-control", event, lane)).toBe(control);
+      for (const job of ["test", "gates", "storage-policy", "api-usage", "keyring-smoke", "docker-smoke"]) {
+        expect(enabled(job, event, lane)).toBe(true);
+        expect(enabled(job, event, lane, "false")).toBe(event !== "pull_request");
+      }
+      for (const job of ["platform-macos", "widget", "desktop-shell"]) {
+        for (const scope of ["true", "false"]) {
+          for (const native of ["true", "false"]) {
+            expect(enabled(job, event, lane, scope, "true", native))
+              .toBe(event !== "pull_request" || (scope === "true" && native === "true"));
+          }
+        }
+      }
+      expect(enabled("npm-global-smoke", event, lane, "true", "true")).toBe(true);
+      expect(enabled("npm-global-smoke", event, lane, "true", "false")).toBe(false);
+    }
+    expect(ci.jobs["select-windows-runner"]!.if).toBeUndefined();
+    expect(ci.jobs["platform-windows"]!.needs).toBe("select-windows-runner");
+    expect(ci.jobs.ci!.if).toBe("always()");
+    expect(ci.jobs.ci!.needs).toEqual(expect.arrayContaining([
+      "changes", "select-windows-runner",
+      "test", "platform-macos", "gates", "storage-policy", "api-usage",
+      "keyring-smoke", "docker-smoke", "npm-global-smoke", "platform-windows", "macos-control",
+    ]));
+  });
+
+  // The aggregate step runs under bash with jq, as ci-scope-reduction.test.ts guards.
+  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("release-gates aggregate accepts diagnostic skips but rejects producer failures", async () => {
+    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+      jobs: Record<string, {
+        needs?: string[];
+        steps?: { name?: string; shell?: string; env?: Record<string, string>; run?: string }[];
+      }>;
+    };
+    const aggregate = ci.jobs.ci!;
+    const step = aggregate.steps?.find(step => step.name === "Assert every job this event requested succeeded");
+    expect(step?.shell).toBe("bash");
+    expect(step?.env?.RESULTS).toBe("${{ toJSON(needs) }}");
+    expect(step?.run).toBeDefined();
+    expect(step?.run).not.toContain("${{");
+    const results: Record<string, { result: string }> = Object.fromEntries(
+      (aggregate.needs ?? []).map(job => [job, { result: "success" }]),
+    );
+    results["platform-windows"] = { result: "skipped" };
+    results["macos-control"] = { result: "skipped" };
+    results["docs-site-build"] = { result: "skipped" };
+    results["structure-gate"] = { result: "skipped" };
+    const run = (value: typeof results, packaging = "true") => spawnSync("bash", ["-c", step!.run!], {
+      encoding: "utf8",
+      env: {
+        ...process.env, RESULTS: JSON.stringify(value),
+        EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
+        CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
+        CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
+      },
+      timeout: 5_000,
+    });
+    for (const packaging of ["success", "skipped"]) {
+      const result = run({ ...results, "npm-global-smoke": { result: packaging } }, packaging === "success" ? "true" : "false");
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+    }
+    // Execute the checked-in Bash/jq gate, not a duplicate JS allowlist. The
+    // selector must remain visible even though its Windows consumer is skipped.
+    for (const producer of Object.keys(results)) {
+      for (const status of ["failure", "cancelled"]) {
+        const result = run({ ...results, [producer]: { result: status } });
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain(producer);
+        expect(result.stdout).toContain(status);
+      }
+    }
+    // A requested producer cannot disappear behind the intentional diagnostic skips.
+    for (const producer of Object.keys(results).filter(job => results[job]!.result === "success")) {
+      const result = run({ ...results, [producer]: { result: "skipped" } });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(producer);
+    }
+    for (const status of ["timed_out", "unexpected-status"]) {
+      const result = run({ ...results, "select-windows-runner": { result: status } });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("select-windows-runner");
+      expect(result.stdout).toContain(status);
+    }
+  }, 30_000);
 });

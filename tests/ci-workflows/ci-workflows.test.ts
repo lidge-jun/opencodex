@@ -295,7 +295,7 @@ describe("GitHub Actions hardening", () => {
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
-    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
@@ -328,10 +328,10 @@ describe("GitHub Actions hardening", () => {
     // cannot fail the unsharded macOS control run. A plain dispatch still runs
     // everything, including Windows, which is what empty-or-all encodes.
     expect(ci.on?.workflow_dispatch?.inputs?.lane).toEqual({
-      description: "all (default) or macos-control",
+      description: "all (default), release-gates, or macos-control",
       type: "choice",
       default: "all",
-      options: ["all", "macos-control"],
+      options: ["all", "release-gates", "macos-control"],
     });
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
