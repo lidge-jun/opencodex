@@ -86,6 +86,10 @@ one that cannot be observed, retires the memo and the pre-rename call performs t
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 
+A schema-invalid top-level JSON value is repairable only when it is a non-array object.
+`loadConfig` backs up arrays, primitives, and null before using defaults, so the repair
+merge cannot turn them into a valid config while discarding the original bytes.
+
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
 | Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
