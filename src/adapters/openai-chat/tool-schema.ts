@@ -393,18 +393,27 @@ function normalizeMoonshotSchemaNode(
         state.inlineSizeCache.set(target, inlineBytes);
       }
       if (inlineBytes > state.inlineByteBudget.remaining) return { $ref: ref };
+      const bytesBefore = state.inlineByteBudget.remaining;
+      const expansionsBefore = state.remainingExpansions;
+      const nodesBefore = state.remainingNodes;
       state.inlineByteBudget.remaining -= inlineBytes;
       state.remainingExpansions -= 1;
       state.activeRefs.add(ref);
       const resolvedTarget = normalizeMoonshotSchemaNode(target, root, state, depth + 1);
       state.activeRefs.delete(ref);
-      // Type inference and nested normalization can enlarge the raw target we reserved.
-      // Charge that growth before retaining the copy; nested expansions share this allowance.
+      // Nested copies have already spent from the shared allowance. Charge only
+      // growth that their own charges do not cover.
+      const nestedCharges = bytesBefore - inlineBytes - state.inlineByteBudget.remaining;
       const normalizedBytes = serializedJsonBytesUpTo(
-        resolvedTarget, inlineBytes + state.inlineByteBudget.remaining,
+        resolvedTarget, bytesBefore,
       );
-      const growthBytes = Math.max(0, normalizedBytes - inlineBytes);
-      if (growthBytes > state.inlineByteBudget.remaining) return { $ref: ref };
+      const growthBytes = Math.max(0, normalizedBytes - inlineBytes - nestedCharges);
+      if (growthBytes > state.inlineByteBudget.remaining) {
+        state.inlineByteBudget.remaining = bytesBefore;
+        state.remainingExpansions = expansionsBefore;
+        state.remainingNodes = nodesBefore;
+        return { $ref: ref };
+      }
       state.inlineByteBudget.remaining -= growthBytes;
       const merged: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       if (isXaiObjectSchema(resolvedTarget)) {

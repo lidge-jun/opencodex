@@ -310,8 +310,14 @@ their wire rejects that valid JSON Schema 2020-12 shape. Inlining preserves conj
 minimum, and overlapping `properties` recurse with the same rules. The walk remains depth-, node-,
 expansion-, and inline-byte-bounded: each inlined reference is charged its serialized size against
 one 1 MiB allowance shared by every tool in the request. Raw target bytes are reserved before
-normalization; inferred types and nested normalization must also fit the remaining allowance
-before their copy is retained. An over-budget reference keeps the existing bare-`$ref` fallback.
+normalization. A candidate expansion restores its byte, node, and expansion allowances when
+it falls back; nested retained copies spend the allowance once, and only additional outer growth
+is charged. Moonshot's validator requires an explicit object termination type for recursive
+unions, so a schema carrying `properties` or `additionalProperties`, or an `allOf` with such a
+member, is emitted with `type: "object"`. This narrows scalar instances that JSON Schema would
+permit; tool-argument schemas do not rely on those scalar instances. Non-object `allOf`
+compositions, such as string constraints, remain untyped. An over-budget reference keeps the
+bare-`$ref` fallback.
 Unresolvable or cyclic references do the same, and unrelated OpenAI-compatible providers
 retain the caller's schema unchanged.
 

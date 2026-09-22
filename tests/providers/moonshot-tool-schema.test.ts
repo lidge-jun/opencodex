@@ -413,6 +413,71 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     expect(definition.properties.p0).toMatchObject({ const: "v", type: "string" });
   });
 
+  test("restores a rejected outer candidate before later sibling and tool expansions", async () => {
+    const outer = {
+      properties: {
+        child: { $ref: "#/$defs/Inner", minLength: 1 },
+        ...Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`p${index}`, { const: "v" }])),
+      },
+      description: "",
+    };
+    outer.description = "x".repeat(1024 * 1024 - JSON.stringify(outer).length - 96);
+    const small = { type: "string", description: "small".repeat(24) };
+    const first: OcxTool = {
+      name: "first",
+      parameters: {
+        type: "object",
+        properties: {
+          rejected: { $ref: "#/$defs/Outer", required: ["child"] },
+          later: { $ref: "#/$defs/Small", minLength: 1 },
+        },
+        $defs: { Outer: outer, Inner: { type: "string", minLength: 2 }, Small: small },
+      },
+    };
+    const second: OcxTool = {
+      name: "second",
+      parameters: {
+        type: "object",
+        properties: { later: { $ref: "#/$defs/Small", minLength: 1 } },
+        $defs: { Small: small },
+      },
+    };
+    const request = await adapterFor(MOONSHOT_HOSTS[0]!).buildRequest(parsedRequest([first, second]));
+    const tools = (JSON.parse(request.body) as {
+      tools: { function: { parameters: { properties: Record<string, Record<string, unknown>> } } }[];
+    }).tools;
+    const firstProps = tools[0]!.function.parameters.properties;
+    const secondProps = tools[1]!.function.parameters.properties;
+    expect(firstProps.rejected).toEqual({ $ref: "#/$defs/Outer" });
+    expect(firstProps.later?.type).toBe("string");
+    expect(firstProps.later?.description).toBe(small.description);
+    expect(secondProps.later?.description).toBe(small.description);
+    expect(siblingRefPaths(tools)).toEqual([]);
+  });
+
+  test("does not charge nested inline bytes again as outer growth", async () => {
+    const parameters = await emittedParameters(MOONSHOT_HOSTS[0]!, {
+      name: "nested_growth",
+      parameters: {
+        type: "object",
+        properties: { value: { $ref: "#/$defs/Outer", required: ["child"] } },
+        $defs: {
+          Outer: {
+            type: "object",
+            description: "o".repeat(500_000),
+            properties: { child: { $ref: "#/$defs/Inner", minLength: 1 } },
+          },
+          Inner: { type: "string", description: "i".repeat(300_000) },
+        },
+      },
+    });
+    const value = (parameters!.properties as Record<string, Record<string, unknown>>).value!;
+    const child = (value.properties as Record<string, Record<string, unknown>>).child!;
+    expect(value.type).toBe("object");
+    expect(child.type).toBe("string");
+    expect(child.description).toBe("i".repeat(300_000));
+  });
+
   test("composed-property re-normalization spends the shared catalog byte allowance", async () => {
     const bigProperties = Object.fromEntries(Array.from({ length: 30_000 }, (_, index) => [`property_${index}`, true]));
     const tool = (name: string): OcxTool => ({ name, parameters: {
