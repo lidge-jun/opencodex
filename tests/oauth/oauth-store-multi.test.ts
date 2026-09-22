@@ -347,6 +347,46 @@ describe("multi-account auth store", () => {
     expect(readFileSync(target, "utf-8")).toBe(outside);
   });
 
+  test.skipIf(process.platform === "win32")("a dangling backup link is never written through", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    const missing = join(TEST_DIR, "not-yet-created.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, JSON.stringify({
+      xai: { access: "legacy-access", refresh: "legacy-refresh", expires: Date.now() + 1000 },
+    }));
+    symlinkSync(missing, backup);
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(existsSync(missing)).toBe(false);
+    expect(() => lstatSync(backup)).toThrow();
+  });
+
+  test("scrubbing a backup this install never registered leaves it unclaimed", async () => {
+    const dir = join(TEST_DIR, "unclaimed-backup");
+    const path = join(dir, "auth.json");
+    const backup = `${path}.pre-multiauth`;
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      expect(recordOwnedConfigPath(dir, path)).toBe(true);
+      await saveCredential("xai", cred({ email: "a@example.test" }));
+      writeFileSync(backup, JSON.stringify({
+        xai: { access: "stale", refresh: "stale", expires: 1 },
+        anthropic: { access: "kept", refresh: "kept", expires: 1 },
+      }));
+
+      expect(await removeCredential("xai")).toBe("removed");
+      expect(Object.keys(JSON.parse(readFileSync(backup, "utf8")))).toEqual(["anthropic"]);
+
+      await flushConfigDirHardeningForTests();
+      removeOwnedConfigState(dir);
+      expect(readFileSync(backup, "utf8")).toContain("kept");
+    } finally {
+      process.env.OPENCODEX_HOME = TEST_DIR;
+    }
+  });
+
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {
     // Legacy stores are re-normalized on EVERY load without being persisted, so the
     // derived id must be stable: a time-salted id would make getAccountSet and

@@ -20,10 +20,9 @@
  *   both append distinct identified accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync } from "../config";
-import { atomicWriteFileNoFollow } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
@@ -437,9 +436,11 @@ export function createOAuthRefreshIntentLock(provider:string,accountId:string,ov
 function backupLegacyOnce(): void {
   const path = getAuthStorePath();
   const backup = `${path}.pre-multiauth`;
-  if (!existsSync(path) || existsSync(backup)) return;
+  // Any existing entry, including a dangling symlink existsSync would call absent, is left
+  // alone, and the copy is exclusive, so credentials are never written through a link.
+  if (!existsSync(path) || directoryEntryExists(backup)) return;
   try {
-    copyFileSync(path, backup);
+    copyFileSync(path, backup, fsConstants.COPYFILE_EXCL);
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
     try {
       // Register only the copy we just created. An unowned home still needs downgrade recovery.
@@ -469,7 +470,7 @@ function scrubLegacyBackup(providers: readonly string[]): void {
   try {
     const remaining = readLegacyBackupEntries(backup);
     for (const provider of providers) delete remaining[provider];
-    if (Object.keys(remaining).length > 0) atomicWriteFileNoFollow(backup, `${JSON.stringify(remaining, null, 2)}\n`);
+    if (Object.keys(remaining).length > 0) replaceBackupEntry(backup, `${JSON.stringify(remaining, null, 2)}\n`);
     else unlinkSync(backup);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") {
@@ -486,6 +487,36 @@ function readLegacyBackupEntries(backup: string): Record<string, unknown> {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...(parsed as Record<string, unknown>) } : {};
   } catch {
     return {};
+  }
+}
+
+/**
+ * Replace the backup entry itself through an exclusive private temp and a rename: an entry
+ * at the path is replaced, never followed, and uninstall ownership is left exactly as it was
+ * (the shared atomic writer would claim a backup this install never registered).
+ */
+function replaceBackupEntry(backup: string, content: string): void {
+  const temp = `${backup}.${process.pid}.${randomUUID()}.tmp`;
+  const fd = openSync(temp, "wx", 0o600);
+  try {
+    writeFileSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(temp, backup);
+  } catch (error) {
+    try { unlinkSync(temp); } catch { /* best-effort */ }
+    throw error;
+  }
+}
+
+function directoryEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== "ENOENT";
   }
 }
 
