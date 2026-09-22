@@ -263,7 +263,9 @@ export function isClientClosedMessage(text: string): boolean {
  * provider-sent message is never relabeled by it.
  */
 export function isUpstreamResetReplayRefusedMessage(text: string): boolean {
-  return text.toLowerCase().includes("did not complete reliably");
+  return text.toLowerCase().includes(
+    "the upstream exchange did not complete reliably. the request may already have been processed",
+  );
 }
 
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {
