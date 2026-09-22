@@ -12,6 +12,7 @@ import {
   isAllowListedCodexAccountModel400,
   shouldRetryCodexPoolAccountModel400,
 } from "../../src/server/responses/core-codex-account";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 
 /** Credential generation these fixtures record under (#4952). */
 const GEN = 1;
@@ -181,6 +182,15 @@ describe("unsupported-model refusal detection", () => {
       new Response(refusalBody(SOL), { status: 200 }),
       SOL,
     )).toBe(false);
+  });
+
+  test("a non-replayable refusal never opens an alternate-account retry", async () => {
+    // The answer to a spent ambiguous-reset replacement arrives marked: the turn may already
+    // have run, so even the exact unsupported-model refusal cannot send it from another account.
+    const marked = refusalResponse(SOL);
+    markResponseNonReplayable(marked);
+    expect(await shouldRetryCodexPoolAccountModel400(marked, SOL)).toBe(false);
+    expect(await shouldRetryCodexPoolAccountModel400(refusalResponse(SOL), SOL)).toBe(true);
   });
 });
 

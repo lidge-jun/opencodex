@@ -212,6 +212,10 @@ export async function codexPoolAccountModel400Denial(
   wireModelId?: string,
 ): Promise<string | undefined> {
   if (response.status !== 400) return undefined;
+  // A response that must not be sent again cannot open an alternate-account retry either. The
+  // reset helper marks the answer to a spent operator replacement this way, and that turn may
+  // already have run on the first send. Same rule as the quota and transient ladders below.
+  if (isNonReplayableResponse(response)) return undefined;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal });
     if (!body.displaySafe || body.truncated) return undefined;
