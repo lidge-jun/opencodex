@@ -109,7 +109,8 @@ does not expose authoritative cache_read_tokens.
 ## External tool continuations
 
 `src/adapters/cursor/protobuf-request.ts` repeats the latest actual user request in the active
-external-model tool continuation. Canonical compaction summaries, opaque-compaction notes and
+external-model tool continuation; `src/adapters/cursor/current-request.ts` selects that request.
+Canonical compaction summaries, opaque-compaction notes and
 standalone ambient-browser wrappers stay in history without being promoted to that request.
 Those wrappers are recognized by their exact canonical shape, the same prefix rule the Codex
 client uses to detect a stored summary; the wire carries no other provenance, so a user message

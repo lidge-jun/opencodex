@@ -9,7 +9,7 @@ import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, i
 import { stripAssistantEchoedToolEnvelope } from "./envelope-echo";
 import { normalizeCursorToolResultText } from "./tool-result-normalize";
 import { debugProviderDiagnostic } from "../../lib/debug";
-import { OPAQUE_COMPACTION_NOTE, SUMMARY_PREFIX } from "../../responses/compaction";
+import { latestUserRequestText } from "./current-request";
 import {
   createCursorBlobRequestScope,
   cursorBlobByteLength,
@@ -774,38 +774,6 @@ function contentText(message: OcxMessage): string {
     })
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
-}
-
-function isAmbientBrowserContext(text: string): boolean {
-  if (!/^<in-app-browser-context\s/.test(text) || !text.endsWith("</in-app-browser-context>")) return false;
-  const openingEnd = text.indexOf(">");
-  if (openingEnd < 0) return false;
-  // Inspect one opening tag, not overlapping greedy scans over arbitrary user text.
-  return /\ssource=(["'])ambient-ui-state\1(?=\s|>)/.test(text.slice(0, openingEnd + 1));
-}
-
-function latestUserRequestText(rawMessages: CursorRunRequest["rawMessages"]): string {
-  if (!Array.isArray(rawMessages) || rawMessages.length === 0) return "";
-  try {
-    for (let i = rawMessages.length - 1; i >= 0; i--) {
-      const message = rawMessages[i];
-      if (message?.role !== "user") continue;
-      const text = contentText(message);
-      const trimmed = text.trim();
-      // Host-generated context remains in history, but is not a new user instruction.
-      // Match whole canonical wrappers; a user quoting a marker must keep their scope.
-      if (trimmed.startsWith(SUMMARY_PREFIX + "\n") || trimmed.startsWith(SUMMARY_PREFIX + "\r\n")
-        || trimmed === OPAQUE_COMPACTION_NOTE || isAmbientBrowserContext(trimmed)) continue;
-      // Blank/image-only input is still a real boundary: never revive an older goal.
-      return text;
-    }
-    return "";
-  } catch {
-    debugProviderDiagnostic("cursor", "current-user-request-unreadable", {
-      rawMessages: rawMessages.length,
-    });
-    return "";
-  }
 }
 
 function contentToText(content: OcxToolResultMessage["content"]): string {
@@ -1619,7 +1587,7 @@ function buildPreparedCursorRunRequest(
       ? `${text}\n\n[correction] ${request.echoRetryContinuationText}`
       : text;
   if (lastRawIsToolResult && isCursorExternalWireModel(request.modelId)) {
-    const currentRequest = latestUserRequestText(request.rawMessages);
+    const currentRequest = latestUserRequestText(request.rawMessages, contentText);
     if (currentRequest.trim()) {
       actionText += '\n\n' + CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE + '\n\n[Current user request]\n' + currentRequest;
     }
