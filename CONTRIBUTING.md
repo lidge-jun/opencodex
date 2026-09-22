@@ -56,21 +56,22 @@ A ready-for-review PR is the author's claim that the change is complete, underst
   stated. A closed PR can be reopened once the stated reason is resolved, or
   replaced with a clean one.
 
-## Pre-push hook
+## Local validation and hooks
 
-After cloning, run once to install a local pre-push hook that runs the typecheck,
-unit-test, privacy-scan, and (when `gui/` changed) GUI eslint and React Doctor
-portions of the CI gate:
+Run `bun run test` before review readiness. If the full local suite is too costly
+for the task or available resources, run at least focused regression tests for
+the changed behavior. Document the reason, commands, results, and remaining
+coverage in the PR. Follow [AGENTS.md](./AGENTS.md#commands) for the complete
+validation policy; required CI must pass on the current PR head before merge.
+`bun run prepush` remains an optional comprehensive local check.
 
 ```sh
 bun run setup:hooks
 ```
 
-This installs a `pre-push` hook (into the hooks dir git reports, so worktrees and
-`core.hooksPath` work) that runs `bun run prepush` — `typecheck`,
-`lint:gui:if-changed`, `test`, `privacy:scan`, and `doctor:gui:if-changed` —
-before every `git push`. Both `lint:gui:if-changed` and `doctor:gui:if-changed`
-run their check only when the push touches `gui/`.
-The same checks run on ubuntu-latest, macos-latest, and windows-latest in CI (CI
-additionally builds the GUI and smoke-tests the CLI). Skip in an emergency with
-`git push --no-verify`.
+This installs the `post-merge` hook, which rebuilds the packaged dashboard when a
+merge changes its source. It also removes the unmodified, retired repository
+pre-push hook from Git's resolved hooks directory, including linked worktrees
+and `core.hooksPath` setups. Custom pre-push hooks are preserved. Validation no
+longer runs automatically on every push; existing contributors should rerun the
+setup command once to migrate their hooks.

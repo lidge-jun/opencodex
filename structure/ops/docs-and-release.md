@@ -29,6 +29,12 @@ The account reference documents the [Orca source-owned import](../codex-home.md#
 Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
 lists its required source/registry paths and preview/apply flags.
 
+Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
+suite by default, with a documented resource exception requiring focused regression tests.
+`scripts/setup-hooks.ts` installs the post-merge hook and retires only an exact match for
+the old managed pre-push shim; custom hooks are preserved. Required current-head CI and
+security review remain merge requirements.
+
 ## Public docs
 
 The provider configuration reference and provider guide own the public Google tool-schema policy:

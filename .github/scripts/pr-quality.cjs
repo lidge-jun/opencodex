@@ -25,7 +25,7 @@ const REVIEW_READINESS_END = "<!-- pr-quality-readiness-checklist:end -->";
  * so the "ready" claim reads as the closing confirmation, not a fourth task.
  */
 const REVIEW_READINESS_ITEMS = [
-  "All CI tests are green on my local testing.",
+  "Required local validation passed; commands, results, and any full-suite exception are documented.",
   "I pushed my PR to the latest dev commit.",
   "I resolved all correct Codex and CodeRabbit findings.",
   "My PR is ready for review.",

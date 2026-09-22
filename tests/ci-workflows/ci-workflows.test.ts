@@ -1668,7 +1668,7 @@ describe("GitHub Actions hardening", () => {
     const CHECKLIST_START = "<!-- pr-quality-readiness-checklist:start -->";
     const CHECKLIST_END = "<!-- pr-quality-readiness-checklist:end -->";
     const CHECKLIST_ITEMS = [
-      "All CI tests are green on my local testing.",
+      "Required local validation passed; commands, results, and any full-suite exception are documented.",
       "I pushed my PR to the latest dev commit.",
       "I resolved all correct Codex and CodeRabbit findings.",
       "My PR is ready for review.",
@@ -1794,7 +1794,7 @@ describe("GitHub Actions hardening", () => {
       const [injected] = callsTo(result, "pulls.update") as [{ body: string }];
       expect(injected.body).toContain(CHECKLIST_START);
       expect(injected.body).toContain(CHECKLIST_END);
-      expect(injected.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(injected.body).toContain("- [ ] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(injected.body).toContain("- [ ] My PR is ready for review.");
 
       const [draft] = callsTo(result, "graphql") as [{ query: string }];
@@ -2002,7 +2002,7 @@ describe("GitHub Actions hardening", () => {
       ]));
       const [resetBody] = callsTo(result, "pulls.update") as [{ body: string }];
       expect(resetBody.body).toContain(CHECKLIST_START);
-      expect(resetBody.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(resetBody.body).toContain("- [ ] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(resetBody.body).toContain("- [ ] My PR is ready for review.");
       expect(resetBody.body).not.toContain("- [x]");
 
@@ -2269,7 +2269,7 @@ describe("GitHub Actions hardening", () => {
       ]));
       const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
       // Only the latest-dev box is unticked; local CI stays checked.
-      expect(bodyUpdate.body).toContain("- [x] All CI tests are green on my local testing.");
+      expect(bodyUpdate.body).toContain("- [x] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(bodyUpdate.body).toContain("- [ ] I pushed my PR to the latest dev commit.");
       expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
       const drafts = callsTo(result, "graphql") as [{ query: string }];
@@ -2363,7 +2363,7 @@ describe("GitHub Actions hardening", () => {
       ]));
       const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
       // Only the findings box is unticked; CI and latest-dev stay checked.
-      expect(bodyUpdate.body).toContain("- [x] All CI tests are green on my local testing.");
+      expect(bodyUpdate.body).toContain("- [x] Required local validation passed; commands, results, and any full-suite exception are documented.");
       expect(bodyUpdate.body).toContain("- [x] I pushed my PR to the latest dev commit.");
       expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
       expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
@@ -5422,8 +5422,8 @@ describe("lint-gui-if-changed", () => {
 
 describe("gui exhaustive-deps suppression stays scoped and effective", () => {
   // `bun run doctor:gui` exited 1 on dev for one deliberate exception at
-  // gui/src/pages/Models.tsx, and doctor:gui runs inside `prepush`, so every
-  // gui-touching push needed --no-verify. Two config edits fixed it, and each has a
+  // gui/src/pages/Models.tsx, blocking explicit comprehensive validation.
+  // Two config edits fixed it, and each has a
   // failure mode that is silent rather than loud, which is what these assertions cover.
 
   test("the oxlint override carries its own react plugin, or it resolves to nothing", async () => {

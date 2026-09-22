@@ -409,7 +409,7 @@ describe("review readiness checklist", () => {
 
   it("treats a reworded but complete section as complete", () => {
     const reworded = SECTION
-      .replace("All CI tests are green on my local testing.", "Local suite green.")
+      .replace("Required local validation passed; commands, results, and any full-suite exception are documented.", "Local suite green.")
       .replaceAll("- [ ] ", "- [x] ");
     const result = extractReviewReadiness(reworded);
     assert.equal(result.present, true);
@@ -585,7 +585,7 @@ describe("uncheckReviewReadinessBoxes", () => {
     "<!-- pr-quality-readiness-checklist:start -->",
     "## Review readiness checklist",
     "",
-    "- [x] All CI tests are green on my local testing.",
+    "- [x] Required local validation passed; commands, results, and any full-suite exception are documented.",
     "- [x] I pushed my PR to the latest dev commit.",
     "- [x] I resolved all correct Codex and CodeRabbit findings.",
     "- [x] My PR is ready for review.",
@@ -596,7 +596,7 @@ describe("uncheckReviewReadinessBoxes", () => {
     const body = uncheckReviewReadinessBoxes(checkedBody, [
       REVIEW_READINESS_CLAIM_INDEX.latest_dev,
     ]);
-    assert.ok(body.includes("- [x] All CI tests are green on my local testing."));
+    assert.ok(body.includes("- [x] Required local validation passed; commands, results, and any full-suite exception are documented."));
     assert.ok(body.includes("- [ ] I pushed my PR to the latest dev commit."));
     assert.ok(body.includes("- [x] My PR is ready for review."));
   });
@@ -606,7 +606,7 @@ describe("uncheckReviewReadinessBoxes", () => {
       0,
       REVIEW_READINESS_CLAIM_INDEX.latest_dev,
     ]);
-    assert.ok(body.includes("- [ ] All CI tests are green on my local testing."));
+    assert.ok(body.includes("- [ ] Required local validation passed; commands, results, and any full-suite exception are documented."));
     assert.ok(body.includes("- [ ] I pushed my PR to the latest dev commit."));
     assert.ok(body.includes("- [x] I resolved all correct Codex and CodeRabbit findings."));
     assert.ok(body.includes("- [x] My PR is ready for review."));

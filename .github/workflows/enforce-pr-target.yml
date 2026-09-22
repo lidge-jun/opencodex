@@ -1217,7 +1217,7 @@ jobs:
                     "This pull request is being kept as a draft automatically. Once every issue above is resolved, it will be marked ready for review again.",
                     ...(checklistRequired && !checklistComplete
                       ? [
-                          `@${pr.user.login} Tick the boxes once your local CI is green, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
+                          `@${pr.user.login} Tick the boxes once required local validation has passed with commands, results, and any full-suite exception documented, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
                         ]
                       : [])
                   ]);
@@ -1242,7 +1242,7 @@ jobs:
                     "This pull request was already a draft. Its draft status will be preserved after every issue above is resolved.",
                     ...(checklistRequired && !checklistComplete
                       ? [
-                          `@${pr.user.login} Tick the boxes once your local CI is green, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
+                          `@${pr.user.login} Tick the boxes once required local validation has passed with commands, results, and any full-suite exception documented, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
                         ]
                       : [])
                   ]);
