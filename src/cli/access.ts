@@ -22,6 +22,19 @@ const USAGE = `Usage:
   ocx access models [--json]
   ocx access test <model> [--protocol <chat|responses|messages>] [--json]`;
 
+const UTC_ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+/**
+ * The server emits `attributionSince` with `toISOString()`. `Date.parse` alone also accepts
+ * strings such as "0", so require the ISO-8601 UTC shape and an instant that round-trips to the
+ * same second, which also rejects impossible dates the parser would roll over.
+ */
+function isUtcIsoInstant(value: unknown): value is string {
+  if (typeof value !== "string" || !UTC_ISO_INSTANT_RE.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19);
+}
+
 /**
  * Render the key table with the usage fields the API already returns (#2705).
  *
@@ -38,12 +51,9 @@ const USAGE = `Usage:
  */
 function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<string, unknown>>): string[] {
   const cells: string[][] = [["ID", "NAME", "PREFIX", "REQ 7D", "TOTAL", "LAST USED"]];
-  // A string that does not parse is not attribution data: treat it like an absent
-  // field so malformed payloads still render "unavailable" instead of usage values.
-  const attributionSince = typeof payload.attributionSince === "string"
-    && !Number.isNaN(Date.parse(payload.attributionSince))
-    ? payload.attributionSince
-    : undefined;
+  // A string that is not an ISO-8601 UTC instant is not attribution data: treat it like an
+  // absent field so malformed payloads still render "unavailable" instead of usage values.
+  const attributionSince = isUtcIsoInstant(payload.attributionSince) ? payload.attributionSince : undefined;
   const usageAvailable = attributionSince !== undefined;
   for (const entry of keys) {
     const usage = (entry.usage ?? {}) as Record<string, unknown>;

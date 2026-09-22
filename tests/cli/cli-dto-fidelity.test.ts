@@ -253,14 +253,28 @@ describe("#2705 access key usage columns", () => {
     expect(out).not.toContain("never");
   });
 
-  test("a malformed attributionSince string stays unavailable", async () => {
+  // "0" parses with Date.parse; an impossible calendar date parses by rolling over. Neither is
+  // the ISO instant the server emits, so both must read as unavailable.
+  test.each(["not-a-timestamp", "0", "2026-02-30T00:00:00Z"])(
+    "a malformed attributionSince string stays unavailable: %p",
+    async attributionSince => {
+      const out = await listOutput({
+        keys: [{ id: "k_bad", name: "bad", prefix: "ocx_data_mno...", usage: { requests7d: 0, totalRequests: 0 } }],
+        attributionSince,
+      });
+      expect(out).toContain("unavailable");
+      expect(out).not.toContain("attribution since");
+      expect(out).not.toMatch(/\b0\b/);
+    },
+  );
+
+  test("the server's toISOString attributionSince stays available", async () => {
     const out = await listOutput({
-      keys: [{ id: "k_bad", name: "bad", prefix: "ocx_data_mno...", usage: { requests7d: 0, totalRequests: 0 } }],
-      attributionSince: "not-a-timestamp",
+      keys: [{ id: "k_ms", name: "ms", prefix: "ocx_data_pqr...", usage: { requests7d: 3, totalRequests: 3 } }],
+      attributionSince: new Date(Date.UTC(2026, 6, 29)).toISOString(),
     });
-    expect(out).toContain("unavailable");
-    expect(out).not.toContain("attribution since");
-    expect(out).not.toMatch(/\b0\b/);
+    expect(out).toContain("attribution since 2026-07-29T00:00:00.000Z");
+    expect(out).not.toContain("unavailable");
   });
 
   test("dataset-level attribution and truncation print ONCE as a footer", async () => {
