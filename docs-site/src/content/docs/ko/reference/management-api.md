@@ -54,7 +54,7 @@ Authorization: Bearer <admin-token>
 
 ### 에이전트 및 클라이언트 설정
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET, PUT /api/v2` | native multi-agent v2 모드와 thread 설정을 읽거나 변경합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
 | `GET, PUT /api/injection-model` | 주입된 sub-agent 모델, effort, prompt, guidance 설정을 읽거나 설정합니다 | 400 잘못된 모델, effort, 또는 본문 |
@@ -133,7 +133,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 콤보
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/combos` | 정규화된 combo와 공개 model id를 나열합니다 | catalog 작업이 `catalog_busy`를 반환할 수 있습니다 |
 | `PUT /api/combos` | 하나의 combo를 생성, 대체, 또는 이름 변경합니다 | 400 잘못된 id, target, config, rename, 또는 일반 충돌; 409 Codex-account namespace 충돌 |
@@ -143,7 +143,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### Codex 프롬프트 레이어
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/codex-prompt` | 프롬프트 레이어 스냅샷(레이어, 기본 변형, 선택, drift 상태)을 읽습니다 | — |
 | `GET /api/codex-prompt/text` | `codex debug prompt-input`으로 모델에 표시되는 프롬프트 텍스트를 조사합니다 | fail-soft: 사용할 수 없는 probe는 HTTP 오류가 아니라 본문의 상태로 저하됩니다 |
@@ -158,7 +158,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 구성, 시작, 동기화, 업데이트
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/config` | redacted된 management-safe configuration DTO를 반환합니다 | — |
 | `PUT /api/config` | 전체 구성 교체 방지 기능이 비활성화되어 있습니다 | 405; 대신 집중된 엔드포인트를 사용하십시오 |
@@ -176,7 +176,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 로그, 사용량, 저장소
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/logs` | 필터링된 인메모리 요청 로그를 조회합니다 | — |
 | `GET, PUT /api/debug` | debug 플래그를 읽거나, capture 범주를 설정, 해제, 초기화합니다 | 400 잘못되었거나 비어 있는 업데이트 |
@@ -209,7 +209,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 모델 및 catalog
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/catalog` | 설치된 Codex catalog 문서를 반환합니다 | 404 catalog 없음 |
 | `GET /api/models` | 대시보드/CLI model 행을 반환합니다 | 수집이 포화 상태이면 `catalog_busy` |
@@ -228,7 +228,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### OAuth 계정, provider key, 데이터 평면 키
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/oauth/providers` | 공개 OAuth 로그인 흐름이 있는 provider를 나열합니다 | — |
 | `GET /api/key-providers` | API-key 로그인으로 구성된 provider를 나열합니다 | — |
@@ -252,7 +252,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 제공자
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/providers` | redacted된 provider 구성과 discovery 상태를 나열합니다 | — |
 | `POST /api/providers` | 검증된 provider 하나를 추가하거나 교체하고, 선택적으로 기본 provider로 설정합니다 | 400 잘못되었거나 위험한 대상 또는 구성; 409 namespace 충돌 |
@@ -276,7 +276,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 ### 사이드바 및 동의가 필요한 작업
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/github/star` | 사용자의 `gh` 세션을 통해 저장소 star 상태를 읽습니다 | 상태별 고정 결과 코드 |
 | `POST /api/github/star` | 인증된 사람의 작업에서만 저장소를 star합니다 | 대시보드 세션 증거가 없는 agent-driven 호출에는 403 `agent_consent_required` |
@@ -288,7 +288,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 ### 시스템 수명 주기
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 프로세스, heap, stream, response-state, watchdog, active-turn의 스칼라 메트릭을 반환합니다 | — |
 | `POST /api/system/restart` | 클라이언트 injection을 제거하지 않고 drain-aware 프로세스 재시작을 시작합니다 | 202 반환; 반복 호출은 기존 drain을 보고합니다 |
@@ -303,7 +303,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 루트 management dispatcher는 모든 `/api/codex-auth/*` 요청을 Codex account manager에 위임합니다. 해당 route는 다음과 같습니다.
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신하거나 삭제합니다. POST는 비활성화된 호환성 endpoint로만 유지되며, 성공한 DELETE는 `catalogRefreshPending`를 포함합니다. | POST는 항상 403 `manual_import_disabled`; DELETE 입력이 잘못되면 400 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |

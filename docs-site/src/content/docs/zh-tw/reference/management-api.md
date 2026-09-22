@@ -38,7 +38,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 ## 常見錯誤
 
-下方所有端點列繼承這些邊界錯誤。「Notable errors」欄列出額外的路由專屬結果，而非重複此表。
+下方所有端點列繼承這些邊界錯誤。「主要錯誤」欄列出額外的路由專屬結果，而非重複此表。
 
 | 狀態 | 型別或代碼 | 意義 |
 | --- | --- | --- |
@@ -54,7 +54,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 ### 代理與客戶端設定
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET, PUT /api/v2` | 讀取或變更原生多代理 v2 模式與執行緒設定 | 400 無效設定；502 轉換或持久化失敗 |
 | `GET, PUT /api/injection-model` | 讀取或設定注入的子代理模型、effort、prompt 與 guidance 設定 | 400 無效模型、effort 或 body |
@@ -124,7 +124,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### 組合
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/combos` | 列出正規化的組合及其公開模型 id | 目錄工作可回傳 `catalog_busy` |
 | `PUT /api/combos` | 建立、取代或重新命名一個組合 | 400 無效 id、目標、設定、重新命名或普通碰撞；409 Codex 帳號命名空間碰撞 |
@@ -134,7 +134,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### Codex 提示詞層
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/codex-prompt` | 讀取提示詞層快照：層、基礎變體、選擇與 drift 狀態 | — |
 | `GET /api/codex-prompt/text` | 透過 `codex debug prompt-input` 探測模型可見的提示詞文字 | Fail-soft：不可用的探測降級為本文中的狀態，而非 HTTP 錯誤 |
@@ -149,7 +149,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### 設定、啟動、同步與更新
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/config` | 回傳遮罩後、管理安全的設定 DTO | — |
 | `PUT /api/config` | 停用的全設定取代防護 | 405；請改用聚焦端點 |
@@ -167,7 +167,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### 日誌、用量與儲存
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/logs` | 查詢過濾的記憶體內請求日誌 | — |
 | `GET, PUT /api/debug` | 讀取除錯旗標；設定、清除或重置擷取類別 | 400 無效或空更新 |
@@ -197,7 +197,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### 模型與目錄
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/catalog` | 回傳已安裝的 Codex 目錄檔案 | 404 目錄未找到 |
 | `GET /api/models` | 回傳儀表板／CLI 模型列 | 收集飽和時 `catalog_busy` |
@@ -216,7 +216,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/oauth/providers` | 列出有公開 OAuth 登入流程的供應商 | — |
 | `GET /api/key-providers` | 列出透過 API-key 登入設定的供應商 | — |
@@ -239,7 +239,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### 供應商
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/providers` | 列出遮罩後的供應商設定與探索狀態 | — |
 | `POST /api/providers` | 新增或取代一個已驗證的供應商並可選擇設為預設 | 400 無效／危險目的地或設定；409 命名空間碰撞 |
@@ -262,7 +262,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 
 ### 側邊欄與同意約束動作
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/github/star` | 透過使用者的 `gh` session 讀取 repository 加星狀態 | 狀態專屬的固定結果代碼 |
 | `POST /api/github/star` | 僅從已認證的人類動作為 repository 加星 | 403 `agent_consent_required`，針對無儀表板 session 證據的 agent 驅動呼叫者 |
@@ -274,7 +274,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 
 ### 系統生命週期
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 回傳純量行程、heap、串流、回應狀態、看門狗與活躍回合指標 | — |
 | `POST /api/system/restart` | 在不移除客戶端注入的情況下開始感知排空的行程重啟 | 回傳 202；重複呼叫回報既有的排空 |
@@ -284,7 +284,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 
 根管理分派器將每個 `/api/codex-auth/*` 請求委派給 Codex 帳號管理員。其路由為：
 
-| 方法與路徑 | 用途 | Notable errors |
+| 方法與路徑 | 用途 | 主要錯誤 |
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | 列出／重新整理或刪除 Codex 帳號。POST 僅保留為已停用的相容 endpoint；成功的 DELETE 回應包含 `catalogRefreshPending`。 | POST 一律回傳 403 `manual_import_disabled`；DELETE 輸入無效時回傳 400 |
 | `PUT /api/codex-auth/accounts/alias` | 設定或清除帳號別名 | 400 無效帳號／別名 |
