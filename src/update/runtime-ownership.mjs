@@ -73,3 +73,50 @@ export function planUpdateRuntimeHandling({ ownership, ownershipUnknown = false,
     notice: null,
   };
 }
+
+/** Decide recovery after this updater already stopped the prior CLI-owned runtime. */
+export function planStoppedRuntimeRecovery({
+  stopAttempted,
+  ownership,
+  ownershipUnknown = false,
+  sameOwner,
+  liveness,
+  serviceInstalled,
+  launcherUsable,
+  hadRuntimeState,
+}) {
+  if (!stopAttempted) return { action: "none", reason: "not-stopped" };
+  if (ownershipUnknown) return { action: "manual", reason: "ownership-unknown" };
+  if (!sameOwner || (ownership && ownership.owner !== "cli")) {
+    return { action: "none", reason: "ownership-transferred" };
+  }
+  if (liveness !== "dead") return { action: "manual", reason: `runtime-${liveness}` };
+  if (!launcherUsable) return { action: "manual", reason: "launcher-unavailable" };
+  if (serviceInstalled) return { action: "service", reason: "same-cli-owner" };
+  if (hadRuntimeState) return { action: "direct", reason: "same-cli-owner" };
+  return { action: "none", reason: "nothing-to-restore" };
+}
+
+/**
+ * Re-read the current package runtime before probing. The result keeps an absent current
+ * record distinct from a dead captured endpoint while still projecting one fail-closed
+ * liveness verdict for replacement and recovery decisions.
+ */
+export function inspectPackageRuntimeLiveness({ capturedTarget, readCurrentTarget, probe }) {
+  const currentTarget = readCurrentTarget();
+  const observations = new Map();
+  const inspect = target => {
+    const key = `${target.hostname}:${target.port}`;
+    if (!observations.has(key)) observations.set(key, probe(target));
+    return observations.get(key);
+  };
+  // Probe the fresh record first. It is the address a replacement runtime may have
+  // published while the updater was waiting on the ownership lease.
+  const current = currentTarget.kind === "target" ? inspect(currentTarget.target) : currentTarget.kind;
+  const captured = inspect(capturedTarget);
+  const verdicts = current === "absent" ? [captured] : [current, captured];
+  const overall = verdicts.includes("live")
+    ? "live"
+    : verdicts.includes("unknown") ? "unknown" : "dead";
+  return { current, captured, overall };
+}
