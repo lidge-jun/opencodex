@@ -414,7 +414,9 @@ traversing their targets. Unknown files remain in place and make the command rep
 uninstall with their exact paths.
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
-includes it. Invalid-config recovery copies are deliberately NOT registered: their names carry
+includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
+no-follow writer variant that leaves the owner manifest untouched, so a copy an earlier install
+left unregistered stays unclaimed. Invalid-config recovery copies are deliberately NOT registered: their names carry
 a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
 the manifest stops validating past its path ceiling. A manifest that stops validating makes
 uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name

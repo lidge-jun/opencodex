@@ -20,9 +20,10 @@
  *   both append distinct identified accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync } from "../config";
+import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
@@ -470,7 +471,7 @@ function scrubLegacyBackup(providers: readonly string[]): void {
   try {
     const remaining = readLegacyBackupEntries(backup);
     for (const provider of providers) delete remaining[provider];
-    if (Object.keys(remaining).length > 0) replaceBackupEntry(backup, `${JSON.stringify(remaining, null, 2)}\n`);
+    if (Object.keys(remaining).length > 0) atomicWriteFileNoFollowUnclaimed(backup, `${JSON.stringify(remaining, null, 2)}\n`);
     else unlinkSync(backup);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") {
@@ -487,27 +488,6 @@ function readLegacyBackupEntries(backup: string): Record<string, unknown> {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...(parsed as Record<string, unknown>) } : {};
   } catch {
     return {};
-  }
-}
-
-/**
- * Replace the backup entry itself through an exclusive private temp and a rename: an entry
- * at the path is replaced, never followed, and uninstall ownership is left exactly as it was
- * (the shared atomic writer would claim a backup this install never registered).
- */
-function replaceBackupEntry(backup: string, content: string): void {
-  const temp = `${backup}.${process.pid}.${randomUUID()}.tmp`;
-  const fd = openSync(temp, "wx", 0o600);
-  try {
-    writeFileSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    renameSync(temp, backup);
-  } catch (error) {
-    try { unlinkSync(temp); } catch { /* best-effort */ }
-    throw error;
   }
 }
 
