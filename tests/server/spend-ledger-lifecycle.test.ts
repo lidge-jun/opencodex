@@ -64,7 +64,7 @@ test("a failed start keeps the lease until every listener has actually stopped",
   lifecycle.track(second.server);
   expect(spendLedgerOwnerSnapshot().ownership).toBe("held");
 
-  lifecycle.releaseAfterFailedStart();
+  const rollback = lifecycle.releaseAfterFailedStart();
   // Newest first, and both asked before anything is awaited.
   expect(stopOrder).toEqual(["second", "first"]);
   await drainContinuations();
@@ -76,7 +76,7 @@ test("a failed start keeps the lease until every listener has actually stopped",
   expect(spendLedgerOwnerSnapshot().ownership).toBe("held");
 
   second.settle();
-  await drainContinuations();
+  await rollback;
   expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
 });
 
@@ -87,7 +87,7 @@ test("a listener whose stop rejects still stops the rest and still returns the d
   lifecycle.track(healthy.server);
   lifecycle.track(failing.server);
 
-  lifecycle.releaseAfterFailedStart();
+  const rollback = lifecycle.releaseAfterFailedStart();
   expect(stopOrder).toEqual(["failing", "healthy"]);
 
   failing.settle();
@@ -96,6 +96,10 @@ test("a listener whose stop rejects still stops the rest and still returns the d
   expect(spendLedgerOwnerSnapshot().ownership).toBe("held");
 
   healthy.settle();
-  await drainContinuations();
+  await expect(rollback).rejects.toThrow("failed-start listener rollback was uncertain");
+  expect(spendLedgerOwnerSnapshot().ownership).toBe("held");
+  // Explicit test cleanup. Production keeps this owner until process exit because the
+  // rejected stop cannot prove the listener released its socket.
+  lifecycle.release();
   expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
 });

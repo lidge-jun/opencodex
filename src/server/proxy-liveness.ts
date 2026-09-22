@@ -32,6 +32,8 @@ export interface HealthzIdentity {
   guiPairCapability?: unknown;
 }
 
+export type EndpointLiveness = "live" | "dead" | "unknown";
+
 export interface LivenessIo {
   fetchFn?: typeof fetch;
   readPidFn?: () => number | null;
@@ -84,6 +86,11 @@ export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"
   timeoutMs: 1500,
   attempts: 3,
 };
+
+type LivenessFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export interface LiveProxy {
   pid: number | null;
@@ -146,6 +153,74 @@ export function isOpencodexHealthz(body: HealthzIdentity | null): boolean {
   if (body.service === "opencodex") return true;
   if (body.service !== undefined) return false;
   return body.status === "ok" && typeof body.version === "string" && typeof body.uptime === "number";
+}
+
+/**
+ * "Nothing is listening" is narrower than "the probe failed". Only a connect-phase refusal
+ * proves the endpoint is free; a timeout, reset, or other transport failure leaves the
+ * question open.
+ */
+export function isConnectionRefused(error: unknown): boolean {
+  const visit = (current: unknown, depth: number): boolean => {
+    if (depth >= 4) return false;
+    if (current === null || (typeof current !== "object" && typeof current !== "function")) return false;
+    const record = current as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (record.code === "ECONNREFUSED" || record.code === "ConnectionRefused") return true;
+    if (typeof record.code === "string" && record.code.endsWith("ECONNREFUSED")) return true;
+    if (Array.isArray(record.errors) && record.errors.length > 0) {
+      // One connect attempt fanned out over several addresses reports a single AggregateError.
+      // Only a unanimous refusal proves the endpoint is free: a bundle that mixes ECONNREFUSED
+      // with a timeout means one address answered nothing at all, and an address whose state is
+      // unreadable is unknown, not absence. Collapsing it to "refused" is how a second runtime
+      // gets started on a port that already has one.
+      return record.errors.every(error => visit(error, depth + 1));
+    }
+    return visit(record.cause, depth + 1);
+  };
+  return visit(error, 0);
+}
+
+async function classifyHealthz(
+  url: string,
+  fetchFn: LivenessFetch,
+  timeoutMs: number,
+): Promise<EndpointLiveness> {
+  try {
+    const response = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (response.status !== 200) return "unknown";
+    const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
+    if (body === undefined) return "unknown";
+    return isOpencodexHealthz(body) ? "live" : "dead";
+  } catch (error) {
+    return isConnectionRefused(error) ? "dead" : "unknown";
+  }
+}
+
+/**
+ * Tri-state probe of one endpoint, the in-process counterpart of
+ * `src/update/proxy-liveness-probe.mjs`. Only a connect-phase refusal or a clean 200 that is
+ * not ours proves "dead"; a timeout, reset, non-200 or unreadable body leaves the question
+ * open. Loopback endpoints are checked on both IPv4 and IPv6 because a listener may bind only
+ * one family. Runs in-process because a compiled standalone binary cannot fork `execPath -e`.
+ */
+export async function probeEndpointLiveness(
+  endpoint: { port: number; hostname?: string },
+  io: Pick<LivenessIo, "fetchFn" | "timeoutMs"> = {},
+): Promise<EndpointLiveness> {
+  if (!Number.isFinite(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535) return "dead";
+  const fetchFn = io.fetchFn ?? directLocalHttpFetch;
+  const timeoutMs = io.timeoutMs ?? 1500;
+  let sawUnknown = false;
+  for (const hostname of loopbackProbeHosts(endpoint.hostname)) {
+    const result = await classifyHealthz(
+      `http://${hostname}:${endpoint.port}/healthz`,
+      fetchFn,
+      timeoutMs,
+    );
+    if (result === "live") return "live";
+    if (result === "unknown") sawUnknown = true;
+  }
+  return sawUnknown ? "unknown" : "dead";
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */
