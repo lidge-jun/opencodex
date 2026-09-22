@@ -86,7 +86,13 @@ describe("desktop CLI contracts", () => {
 
   test("the startup sequence refuses to start on anything but a proven absence", () => {
     const startup = code(STARTUP);
-    const run = startup.slice(startup.indexOf("async fn run(app: &AppHandle)"));
+    // Anchor on the name, not the full signature: a parameter added to the sequence is not a
+    // change to the order this case is about, and `indexOf` returning -1 silently slices the
+    // last character instead of failing, so every index below reads -1 and the case passes
+    // vacuously. That is exactly what it did when `run` gained its start instant.
+    const at = startup.indexOf("async fn run(app: &AppHandle");
+    expect(at).toBeGreaterThan(-1);
+    const run = startup.slice(at);
     const unknown = run.indexOf("let Some(answer) = resolution.resolved() else {");
     const attach = run.indexOf("match resolve::live_verdict(&resolution) {");
     const guard = run.indexOf("if !resolve::may_start(&resolution) {");

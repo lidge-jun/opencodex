@@ -10,7 +10,11 @@ webview to the proxy's loopback dashboard (`/#/usage`) rather than bundling or s
 itself. The page renders what the shell tells it and probes nothing on its own; it asks
 `startup_phases` for the state list rather than restating it, takes the current state from
 `startup_snapshot` on load because the first states finish in milliseconds, and then follows the
-`startup-phase` event. It uses no `alert`, `confirm` or `prompt`: the embedded webview implements
+`startup-phase` event. `startup_snapshot` always answers with a state; it used to be able to
+answer with nothing, and the page returns early on a falsy progress, so the one case it could not
+render — a shell with no startup state — arrived as silence rather than as a diagnostic. A shell
+that cannot find its own startup state now reports that as a failure the user can read and copy.
+It uses no `alert`, `confirm` or `prompt`: the embedded webview implements
 none of the matching WKUIDelegate panel methods on macOS, so a platform dialog is declined without
 drawing anything.
 `withGlobalTauri` is on so that page can invoke without a bundler. Only the local app origin
@@ -29,6 +33,20 @@ and the runtime's last output; `desktop/src-tauri/src/sidecar.rs` consumes the s
 into that record instead of discarding it, which is what makes an immediate sidecar exit
 distinguishable from a slow start. The page asks for the state list and the run's progress rather
 than reconstructing either, because the early states finish faster than a listener can attach.
+
+The deadline is a promise that the screen stops changing, so something keeps it when the run does
+not. The sequence publishes its first state before any lookup that can fail, and a guard bound to
+that run reports a terminal state for it if the run returns without one or outlives the ceiling.
+The guard is idempotent and generation-scoped: it will not overwrite a result the run reported,
+and one left over from an earlier run will not fail the retry that replaced it. It waits a short
+grace past the ceiling so the run's own failure, which names the endpoint, the home and how the
+child ended, is the diagnostic on screen rather than the guard's thinner one.
+
+"Has not started" is a state of its own rather than the first phase. The sequence's state used to
+be seeded with `registering`, so a shell that never began rendered exactly like one that had just
+begun — on the surface whose whole job is to tell those apart. `not-started` is deliberately
+absent from the phase list the page draws its checklist from: it is the absence of a run, so a row
+for it would be a step that never completes.
 
 The shell resolves nothing itself. Resolving runs the bundled `ocx resolve --json` and reads one
 `ocx-resolve/1` document: the configuration home, the effective port, and a liveness verdict with
