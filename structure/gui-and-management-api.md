@@ -1,5 +1,10 @@
 # GUI And Management API
 
+`src/server/request-log.ts` preserves upstream `servedModel` independently of route-derived
+`resolvedModel`; `src/usage/log.ts` persists it with `wireModel`. The Logs model column and detail
+view compare `servedModel` with `wireModel ?? model` through `gui/src/pages/logs-model-title.ts`.
+An absent upstream model stays absent; the tooltip retains all available model identities.
+
 The companion settings contract in `src/companion/` persists menu-bar and widget display
 preferences, while `src/server/management/companion-routes.ts` exposes those settings and the
 usage timeline assembled by `src/usage/timeline.ts` to local clients. Query, filter-echo and

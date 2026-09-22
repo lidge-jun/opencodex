@@ -158,7 +158,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET /api/logs` | 查询经过过滤的内存请求日志 | — |
+| `GET /api/logs` | 查询经过过滤的内存请求日志；`servedModel` 记录上游返回的模型，`wireModel` 记录与客户端模型不同的实际发送模型。两者不同时，仪表板显示 `wire → served`，提示信息保留两者；缺少上游证据时不推断模型。 | — |
 | `GET, PUT /api/debug` | 读取调试标志；设置、清除或重置捕获类别 | 400 无效或空更新 |
 | `GET /api/debug/logs` | 读取有上限的 provider/debug 日志条目 | — |
 | `GET /api/debug/usage-logs` | 读取有上限的 usage-debug 条目 | — |

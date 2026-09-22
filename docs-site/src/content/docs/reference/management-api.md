@@ -248,6 +248,11 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 
 ### Logs, usage, and storage
 
+Request logs retain `servedModel` when the upstream identifies the model that answered, and
+`wireModel` when the model sent upstream differs from the client-facing model. The dashboard
+shows `wire → served` when those identities differ; its tooltip preserves both values. Missing
+upstream model evidence remains absent rather than being inferred from the requested model.
+
 `GET /api/logs` accepts an optional opaque `cursor` from its previous response. The envelope preserves
 `logs`, `total`, `generatedAt` and `timeZone`, and adds `cursor` and `reset`. Without a cursor it returns
 the full filtered window. A valid unchanged prefix returns only appended rows; `reset: true` replaces
