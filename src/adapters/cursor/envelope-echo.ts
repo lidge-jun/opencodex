@@ -76,7 +76,7 @@ export const MAX_MIDSTREAM_SCAN_LENGTH = 512 * 1024;
 const MAX_MIDSTREAM_FINDINGS = 8;
 const MAX_ROUTING_COMMENTARY_BYTES = 512;
 /** Aggregate quarantine cap: past this, flush and disarm. */
-const MAX_HOLD_BYTES = 8 * 1024;
+export const CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES = 8 * 1024;
 const encoder = new TextEncoder();
 
 export class CursorToolResultEchoError extends Error {
@@ -130,16 +130,19 @@ export class CursorMidstreamEchoObserver {
   private totalLength = 0;
   private disarmed = false;
   private lineDisarmed = false;
-  private corruptionWatch: { finding: MidstreamEchoFinding; remaining: number; window: string } | undefined;
+  private readonly corruptionWatches: Array<{
+    finding: MidstreamEchoFinding;
+    remaining: number;
+    window: string;
+  }> = [];
   private readonly recorded: MidstreamEchoFinding[] = [];
 
   feed(textDelta: string): void {
-    if (this.disarmed && !this.corruptionWatch) return;
+    if (this.disarmed && this.corruptionWatches.length === 0) return;
     let index = 0;
     while (index < textDelta.length) {
       const newline = textDelta.indexOf("\n", index);
       const segment = newline === -1 ? textDelta.slice(index) : textDelta.slice(index, newline);
-      if (this.corruptionWatch) this.watchCorruption(segment + (newline === -1 ? "" : "\n"));
       if (!this.disarmed && !this.lineDisarmed && segment.length > 0) {
         this.lineBuffer += segment;
         if (this.lineBuffer.length > MAX_MIDSTREAM_LINE_INDENT + 32) {
@@ -148,6 +151,11 @@ export class CursorMidstreamEchoObserver {
           this.lineBuffer = this.lineBuffer.slice(0, MAX_MIDSTREAM_LINE_INDENT + 32);
         }
         this.checkLine();
+      }
+      // Recognize the next marker before charging its line to a corruption window.
+      // A call-id on the marker's own line belongs to the new finding as well.
+      if (this.corruptionWatches.length > 0) {
+        this.watchCorruption(segment + (newline === -1 ? "" : "\n"));
       }
       if (newline === -1) break;
       this.lineBuffer = "";
@@ -160,9 +168,7 @@ export class CursorMidstreamEchoObserver {
   }
 
   findings(): readonly MidstreamEchoFinding[] {
-    if (this.corruptionWatch) {
-      this.settleCorruption();
-    }
+    while (this.corruptionWatches.length > 0) this.settleCorruption(0);
     return this.recorded;
   }
 
@@ -187,12 +193,24 @@ export class CursorMidstreamEchoObserver {
           this.lineDisarmed = true;
           return;
         }
-        const finding: MidstreamEchoFinding = {
-          marker,
-          offset: this.lineStartOffset,
-          callIdCorrupt: false,
-        };
-        this.corruptionWatch = { finding, remaining: MIDSTREAM_CORRUPTION_WINDOW, window: "" };
+        // A new marker ends the previous marker's corruption window: the text
+        // between two markers belongs to the earlier finding only. Without this,
+        // every open watch consumed the same following text, so one corrupt
+        // call-id after a second marker also marked the first, clean finding
+        // corrupt (clean-then-corrupt cross-contamination).
+        while (this.corruptionWatches.length > 0) this.settleCorruption(0);
+        if (this.recorded.length + this.corruptionWatches.length < MAX_MIDSTREAM_FINDINGS) {
+          const finding: MidstreamEchoFinding = {
+            marker,
+            offset: this.lineStartOffset,
+            callIdCorrupt: false,
+          };
+          this.corruptionWatches.push({
+            finding,
+            remaining: MIDSTREAM_CORRUPTION_WINDOW,
+            window: "",
+          });
+        }
         this.lineDisarmed = true;
         return;
       }
@@ -203,24 +221,28 @@ export class CursorMidstreamEchoObserver {
   }
 
   private watchCorruption(text: string): void {
-    const watch = this.corruptionWatch;
-    if (!watch) return;
-    const take = Math.min(watch.remaining, text.length);
-    watch.window += text.slice(0, take);
-    watch.remaining -= take;
-    if (watch.remaining <= 0) this.settleCorruption();
+    for (const watch of this.corruptionWatches) {
+      const take = Math.min(watch.remaining, text.length);
+      watch.window += text.slice(0, take);
+      watch.remaining -= take;
+    }
+    let index = 0;
+    while (index < this.corruptionWatches.length) {
+      if (this.corruptionWatches[index]!.remaining <= 0) this.settleCorruption(index);
+      else index += 1;
+    }
   }
 
-  private settleCorruption(): void {
-    const watch = this.corruptionWatch;
+  private settleCorruption(index: number): void {
+    const watch = this.corruptionWatches[index];
     if (!watch) return;
     const window = watch.window;
     watch.finding.callIdCorrupt =
       /fc_[0-9a-f]+[ \t]+mar-/.test(window)
       || /call_id: \S+[ \t]+\S+_0\b/.test(window);
-    if (this.recorded.length < MAX_MIDSTREAM_FINDINGS) this.recorded.push(watch.finding);
+    this.recorded.push(watch.finding);
     // Window text is discarded here; only booleans/offsets survive.
-    this.corruptionWatch = undefined;
+    this.corruptionWatches.splice(index, 1);
   }
 }
 
@@ -251,7 +273,11 @@ export class CursorEnvelopeEchoSniffer {
     const stillPrefix = ECHO_MARKERS.some(marker =>
       probe.length < marker.length && marker.startsWith(probe),
     );
-    if (stillPrefix && this.byteCount <= MAX_SNIFF_BYTES && this.buffered.length < MAX_HOLD_BYTES) {
+    if (
+      stillPrefix
+      && this.byteCount <= MAX_SNIFF_BYTES
+      && this.buffered.length < CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES
+    ) {
       return { kind: "hold" };
     }
     this.done = true;
@@ -316,7 +342,7 @@ export class CursorRoutingCommentarySniffer {
       && lineBreakCount < 2;
     if (
       this.byteCount < MAX_ROUTING_COMMENTARY_BYTES
-      && this.buffered.length < MAX_HOLD_BYTES
+      && this.buffered.length < CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES
       && (lineBreakCount === 0 || pendingFailureClaim)
       && (hasRoutingHint || this.byteCount < 64)
     ) {

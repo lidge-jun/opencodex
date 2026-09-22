@@ -349,6 +349,8 @@
   "codex-home-wsl.test.ts": "codex-integration",
   "codex-inject-history-wording.test.ts": "codex-integration",
   "codex-inject-integration.test.ts": "codex-integration",
+  "codex-inject-retained-table.test.ts": "codex-integration",
+  "codex-provider-table-retention.test.ts": "codex-integration",
   "codex-inject-write-lock.test.ts": "codex-integration",
   "codex-inject.test.ts": "codex-integration",
   "codex-injected-marker.test.ts": "codex-integration",

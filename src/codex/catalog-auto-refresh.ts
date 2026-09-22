@@ -65,11 +65,17 @@ async function tick(): Promise<void> {
   const entryGeneration = generation;
   try {
     const {
+      armDetachedConfigBaseline,
       loadConfig,
       isCatalogAutoRefreshEnabled,
       resolveCatalogAutoRefreshIntervalMs,
     } = await import("../config");
     const config = loadConfig();
+    // Convergence can persist model-discovery fields after awaiting provider /models.
+    // Arm this independently loaded snapshot as detached so the save rebases every
+    // field — listener binding and disk-only keys included — against what is on disk
+    // by then, and concurrent hand edits survive the tick.
+    armDetachedConfigBaseline(config);
     if (!isCatalogAutoRefreshEnabled(config)) return;
     const configured = resolveCatalogAutoRefreshIntervalMs(config);
     // 0 is dormant: the section stays configured but this tick must not converge,
