@@ -248,7 +248,7 @@ jobs:
           lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin \
             desktop/src-tauri/binaries/ocx-x86_64-apple-darwin \
             -output desktop/src-tauri/binaries/ocx-universal-apple-darwin
-          lipo -verify_arch arm64 x86_64 desktop/src-tauri/binaries/ocx-universal-apple-darwin
+          lipo desktop/src-tauri/binaries/ocx-universal-apple-darwin -verify_arch arm64 x86_64
 
       - name: Prepare sidecar
         if: runner.os != 'macOS'

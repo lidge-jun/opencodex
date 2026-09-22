@@ -436,7 +436,7 @@ describe("widget extension signing", () => {
     const sidecars = steps.find(step => step.name === "Prepare macOS sidecars");
     expect(sidecars?.run).toContain("lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin");
     expect(sidecars?.run).toContain("-output desktop/src-tauri/binaries/ocx-universal-apple-darwin");
-    expect(sidecars?.run).toContain("lipo -verify_arch arm64 x86_64");
+    expect(sidecars?.run).toContain("lipo desktop/src-tauri/binaries/ocx-universal-apple-darwin -verify_arch arm64 x86_64");
     const prepare = steps.find(step => step.name === "Prepare Windows installer version");
     expect(prepare?.if).toBe("runner.os == 'Windows'");
     expect(prepare?.env?.RELEASE_VERSION).toBe("${{ inputs.version }}");
