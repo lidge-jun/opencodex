@@ -129,22 +129,36 @@ export interface MinisignPublicKey {
   publicKey: KeyObject;
 }
 
-function minisignPayload(text: string, expectedBytes: number, what: string): Buffer {
-  const encoded = text
-    .split("\n")
-    .filter(line => line.trim().length > 0 && !line.trimStart().startsWith("untrusted comment:"))
-    .join("")
-    .trim();
-  const payload = Buffer.from(encoded, "base64");
-  if (payload.length !== expectedBytes) {
-    throw new Error(`Malformed ${what}: expected ${expectedBytes} decoded bytes, got ${payload.length}`);
+function decodeBase64(text: string, what: string, expectedBytes?: number): Buffer {
+  const payload = Buffer.from(text, "base64");
+  // Buffer.from is intentionally permissive; release metadata must be canonical.
+  if (!text || payload.toString("base64") !== text
+    || (expectedBytes !== undefined && payload.length !== expectedBytes)) {
+    throw new Error(`Malformed ${what}: invalid base64 or decoded length`);
   }
   return payload;
 }
 
+function decodeBox(text: string, what: string): string {
+  // Transport whitespace is harmless (the updater manifest also trims it).
+  // The encoded payload itself must still be canonical and valid UTF-8.
+  const payload = decodeBase64(text.trim(), what);
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload);
+}
+
+function boxLines(text: string): string[] {
+  // Accept minisign text with LF or CRLF and an optional terminal newline;
+  // signatures authenticate decoded bytes/comments, not transport line endings.
+  return text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n");
+}
+
 /** minisign public key: base64 of algorithm ("Ed") || key id (8) || raw key (32). */
 export function parseMinisignPublicKey(text: string): MinisignPublicKey {
-  const payload = minisignPayload(text, 42, "minisign public key");
+  const lines = boxLines(text);
+  if (lines.length !== 2 || !lines[0]!.startsWith("untrusted comment: ")) {
+    throw new Error("Malformed minisign public key box");
+  }
+  const payload = decodeBase64(lines[1]!, "minisign public key", 42);
   const algorithm = payload.subarray(0, 2).toString("utf8");
   if (algorithm !== "Ed") {
     throw new Error(`Unsupported minisign public key algorithm: ${JSON.stringify(algorithm)}`);
@@ -166,29 +180,41 @@ export function loadUpdaterPublicKey(tauriConfPath: string): MinisignPublicKey {
   };
   const pubkey = conf.plugins?.updater?.pubkey;
   if (!pubkey) throw new Error(`No plugins.updater.pubkey in ${tauriConfPath}`);
-  return parseMinisignPublicKey(Buffer.from(pubkey, "base64").toString("utf8"));
+  return parseMinisignPublicKey(decodeBox(pubkey, "Tauri public key"));
 }
 
-/**
- * minisign signature: base64 of algorithm || key id (8) || signature (64).
- * "Ed" is a pure Ed25519 signature over the raw file bytes — the form the Tauri
- * bundler emits. "ED" (BLAKE2b-prehashed) or anything else fails loudly rather
- * than being silently mis-verified.
- */
+/** Tauri CLI 2.11.1 wraps a minisign 0.7.3 prehashed signature box in base64. */
 export function verifyUpdaterSignature(filePath: string, key: MinisignPublicKey): void {
   const signaturePath = `${filePath}.sig`;
   if (!existsSync(signaturePath)) throw new Error(`Missing signature: ${signaturePath}`);
-  const payload = minisignPayload(readFileSync(signaturePath, "utf8"), 74, `signature ${signaturePath}`);
+  const lines = boxLines(decodeBox(readFileSync(signaturePath, "utf8"), "Tauri signature"));
+  const trustedPrefix = "trusted comment: ";
+  if (lines.length !== 4 || !lines[0]!.startsWith("untrusted comment: ")
+    || !lines[2]!.startsWith(trustedPrefix)) {
+    throw new Error(`Malformed signature box in ${signaturePath}`);
+  }
+  const payload = decodeBase64(lines[1]!, "signature packet", 74);
+  const globalSignature = decodeBase64(lines[3]!, "comment signature", 64);
   const algorithm = payload.subarray(0, 2).toString("utf8");
-  if (algorithm !== "Ed") {
+  if (algorithm !== "ED") {
     throw new Error(`Unsupported signature algorithm in ${signaturePath}: ${JSON.stringify(algorithm)}`);
   }
   const keyId = payload.subarray(2, 10).toString("hex");
   if (keyId !== key.keyId) {
     throw new Error(`Signature ${signaturePath} was made by key ${keyId}, not the pinned updater key ${key.keyId}`);
   }
-  if (!ed25519Verify(null, readFileSync(filePath), key.publicKey, payload.subarray(10, 74))) {
+  const signature = payload.subarray(10, 74);
+  // ED is ordinary Ed25519 over the BLAKE2b-512 digest, not Ed25519ph.
+  const digest = createHash("blake2b512").update(readFileSync(filePath)).digest();
+  if (!ed25519Verify(null, digest, key.publicKey, signature)) {
     throw new Error(`Signature verification failed for ${filePath}`);
+  }
+  // minisign signs the raw signature + trimmed trusted comment, without its
+  // prefix or line terminator. The original filename may differ after collection.
+  const trustedComment = lines[2]!.slice(trustedPrefix.length).trim();
+  const message = Buffer.concat([signature, Buffer.from(trustedComment, "utf8")]);
+  if (!ed25519Verify(null, message, key.publicKey, globalSignature)) {
+    throw new Error(`Comment signature verification failed for ${filePath}`);
   }
 }
 

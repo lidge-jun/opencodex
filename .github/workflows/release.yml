@@ -165,8 +165,8 @@ jobs:
           # dist/release, where the artifact download lands these files flat; the
           # checksum therefore records the bare file name, which sha256sum takes
           # verbatim from its argument.
-          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
-          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip.sha256"
+          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz.sha256"
           fi
 
       - name: Upload standalone release

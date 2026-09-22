@@ -93,6 +93,9 @@ describe("release pipeline contract", () => {
       const output = />\s+"([^"]+)"/.exec(line)?.[1];
       expect(output, line).toBeDefined();
       expect(output!).not.toContain("/");
+      // verifyChecksums binds each record to its own payload by removing only
+      // the final .sha256 suffix, including the archive extension in the name.
+      expect(output, line).toBe(`${argument}.sha256`);
     }
 
     // The bare names above only resolve end to end if the step checksums from the directory

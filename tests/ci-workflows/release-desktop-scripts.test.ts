@@ -530,16 +530,43 @@ describe("release asset verification", () => {
   function makeMinisignKeypair(keyIdHex: string): {
     pubkeyText: string;
     keyId: Buffer;
-    signPayload: (payload: Buffer) => string;
+    signPayload: (payload: Buffer, rawBytes?: boolean) => string;
   } {
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
     const raw = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32);
     const keyId = Buffer.from(keyIdHex, "hex");
     const pubkeyText = `untrusted comment: test public key\n${Buffer.concat([Buffer.from("Ed"), keyId, raw]).toString("base64")}\n`;
-    const signPayload = (payload: Buffer): string =>
-      `untrusted comment: test signature\n${Buffer.concat([Buffer.from("Ed"), keyId, ed25519Sign(null, payload, privateKey)]).toString("base64")}\n`;
+    const signPayload = (payload: Buffer, rawBytes = false): string => {
+      const signed = rawBytes ? payload : createHash("blake2b512").update(payload).digest();
+      const signature = ed25519Sign(null, signed, privateKey);
+      const trusted = "timestamp:1\tfile:original-before-collection.msi";
+      const packet = Buffer.concat([Buffer.from("ED"), keyId, signature]).toString("base64");
+      const global = ed25519Sign(null, Buffer.concat([signature, Buffer.from(trusted)]), privateKey).toString("base64");
+      return Buffer.from(`untrusted comment: test signature\n${packet}\ntrusted comment: ${trusted}\n${global}\n`).toString("base64");
+    };
     return { pubkeyText, keyId, signPayload };
   }
+
+  test("accepts the upstream minisign 0.7.3 prehashed vector in Tauri encoding", () => {
+    const fixture = JSON.parse(readFileSync(repoPath("tests/fixtures/minisign/prehashed-vector.json"), "utf8")) as {
+      payload: string; publicKeyBase64: string; signatureBox: string;
+    };
+    const dir = temporaryDirectory();
+    try {
+      const asset = join(dir, "renamed-release.bin");
+      const key = parseMinisignPublicKey(`untrusted comment: upstream key\n${fixture.publicKeyBase64}\n`);
+      writeFileSync(asset, fixture.payload);
+      writeFileSync(`${asset}.sig`, Buffer.from(fixture.signatureBox).toString("base64"));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+      writeFileSync(asset, "tampered");
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      writeFileSync(asset, fixture.payload);
+      writeFileSync(`${asset}.sig`, Buffer.from(fixture.signatureBox.replace("file:test", "file:changed")).toString("base64"));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Comment signature verification failed/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("derives the expected set from the real release matrices and producer tables", () => {
     const workflow = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
@@ -624,9 +651,43 @@ describe("release asset verification", () => {
       writeFileSync(`${asset}.sig`, other.signPayload(payload));
       expect(() => verifyUpdaterSignature(asset, key)).toThrow(/not the pinned updater key/);
 
-      const hashed = `untrusted comment: test\n${Buffer.concat([Buffer.from("ED"), other.keyId, Buffer.alloc(64)]).toString("base64")}\n`;
-      writeFileSync(`${asset}.sig`, hashed);
+      const valid = signPayload(payload);
+      writeFileSync(`${asset}.sig`, signPayload(payload, true));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      const lines = Buffer.from(valid, "base64").toString("utf8").trimEnd().split("\n");
+      const encode = (box: string[]) => Buffer.from(`${box.join("\n")}\n`).toString("base64");
+      const packet = Buffer.from(lines[1]!, "base64");
+      packet[10] = packet[10]! ^ 1;
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, packet.toString("base64"), lines[2]!, lines[3]!]));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      packet[10] = packet[10]! ^ 1;
+      packet.write("Ed", 0);
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, packet.toString("base64"), lines[2]!, lines[3]!]));
       expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Unsupported signature algorithm/);
+
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, lines[1]!, "trusted comment: changed", lines[3]!]));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Comment signature verification failed/);
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, lines[1]!, lines[2]!, Buffer.alloc(64).toString("base64")]));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Comment signature verification failed/);
+      const sameIdOtherKey = parseMinisignPublicKey(makeMinisignKeypair("0123456789abcdef").pubkeyText);
+      writeFileSync(`${asset}.sig`, valid);
+      expect(() => verifyUpdaterSignature(asset, sameIdOtherKey)).toThrow(/Signature verification failed/);
+
+      for (const malformed of [valid + "!", encode(lines.slice(0, 3)), encode([...lines, "extra"]),
+        encode([lines[0]!, Buffer.alloc(73).toString("base64"), lines[2]!, lines[3]!]),
+        encode([lines[0]!, lines[1]!, lines[2]!, Buffer.alloc(65).toString("base64")]),
+        Buffer.from([0xff]).toString("base64"),
+        Buffer.from(`\uFEFF${lines.join("\n")}`).toString("base64"),
+        lines.slice(0, 2).join("\n")]) {
+        writeFileSync(`${asset}.sig`, malformed);
+        expect(() => verifyUpdaterSignature(asset, key)).toThrow();
+      }
+      writeFileSync(`${asset}.sig`, encode(["untrusted comment: changed", ...lines.slice(1)]));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+      writeFileSync(`${asset}.sig`, Buffer.from(`${lines.join("\r\n")}\r\n`).toString("base64"));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+      writeFileSync(`${asset}.sig`, ` \n${valid}\n`);
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
