@@ -6,6 +6,7 @@ import {
   safeGoogleHttpErrorMessage,
   safeVertexHttpErrorMessage,
 } from "../../../src/adapters/google-errors";
+import { classifyError } from "../../../src/lib/errors";
 
 describe("google error classification & quota exhaustion", () => {
   const antigravityPhrases = [
@@ -136,7 +137,26 @@ describe("google location denial classification (#3467)", () => {
     const denied = JSON.stringify({
       error: { code: 403, status: "PERMISSION_DENIED", message: "location is not supported for this project" },
     });
-    expect(safeAntigravityHttpErrorMessage(403, denied)).toContain("Antigravity access denied");
+    expect(safeAntigravityHttpErrorMessage(403, denied)).toContain("Antigravity access denied (PERMISSION_DENIED)");
+  });
+
+  test("preserves an explicit permission enum through downstream error classification", () => {
+    const body = JSON.stringify({
+      error: {
+        code: 400,
+        status: "PERMISSION_DENIED",
+        message: "User location is not supported for this project",
+      },
+    });
+    const message = safeAntigravityHttpErrorMessage(400, body);
+
+    expect(message).toBe(
+      "Antigravity access denied (PERMISSION_DENIED): User location is not supported for this project",
+    );
+    expect(classifyError(400, "upstream_error", message)).toMatchObject({
+      type: "permission_error",
+      code: "permission_denied",
+    });
   });
 
   test("server statuses and explicit non-location enums do not infer a location reason", () => {
@@ -150,7 +170,7 @@ describe("google location denial classification (#3467)", () => {
       );
     }
     for (const [status, prefix] of [
-      ["PERMISSION_DENIED", "access denied"],
+      ["PERMISSION_DENIED", "access denied (PERMISSION_DENIED)"],
       ["INVALID_ARGUMENT", "invalid request"],
       ["UNAVAILABLE", "server overloaded"],
     ]) {

@@ -10,6 +10,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod menu;
 mod ownership;
+mod popup;
 mod proxy;
 mod resolve;
 mod runtime_stop;
@@ -119,6 +120,7 @@ impl Default for AppState {
 
 #[tauri::command]
 fn show_dashboard(app: tauri::AppHandle) {
+    popup::hide(&app);
     if let Some(window) = app.get_webview_window("main") {
         window::show(&window);
     }
@@ -135,10 +137,15 @@ fn hide_dashboard(app: tauri::AppHandle) {
 ///
 /// The page asks for this when it loads rather than relying only on the event stream: the first
 /// states finish in milliseconds and an event emitted before the listener exists is simply gone.
+///
+/// It always answers with a state. Answering `None` put the one case the page cannot render — a
+/// shell with no startup state — behind a value the page silently discards, which is a frozen
+/// window with no diagnostic and no way to tell it from a slow start.
 #[tauri::command]
-fn startup_snapshot(app: tauri::AppHandle) -> Option<startup::Progress> {
+fn startup_snapshot(app: tauri::AppHandle) -> startup::Progress {
     app.try_state::<startup::Startup>()
         .map(|startup| startup.latest())
+        .unwrap_or_else(startup::unavailable)
 }
 
 /// The named states the startup sequence moves through, in order.
@@ -160,6 +167,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
+                popup::hide(app);
                 window::show(&window);
             }
         }))
