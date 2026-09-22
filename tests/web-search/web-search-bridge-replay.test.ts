@@ -252,6 +252,11 @@ describe("bridged web_search replay to the destination", () => {
     expect(bridgeSearchReplayScope(undefined)).toBeUndefined();
     expect(bridgeSearchReplayScope({ clientThreadId: "thread-a" })).toBeUndefined();
     expect(bridgeSearchReplayScope({ clientPrincipalId: "principal-a", clientThreadId: "thread-a" })).toBeUndefined();
+    // A bound serving identity is not enough on its own: without a caller principal there is no
+    // owner, so the recorded cell above must stay unreachable and no new cell can be recorded.
+    const unowned: OcxReasoningReplayScopeRef = { clientThreadId: "thread-a", current: replayScope().current };
+    expect(bridgeSearchReplayScope(unowned)).toBeUndefined();
+    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(unowned))).toBe(body);
   });
 
   test("an expired entry behaves exactly like a miss", async () => {

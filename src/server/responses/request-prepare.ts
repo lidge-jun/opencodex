@@ -411,10 +411,14 @@ export async function prepareResponsesRequest(
   if (parsed._reasoningReplayScope) {
     // Scope replay cells to the caller principal. On loopback, admission carries no identity,
     // so resolve it from an opencodex API key the caller volunteered (same rule as context
-    // history ownership); keyless loopback callers still share the "loopback" bucket.
-    const clientPrincipalId = resolveContextPrincipal(req, config, options.admission)
-      ?? (options.admission?.kind === "loopback" ? "loopback" : undefined);
-    parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
+    // history ownership). A caller that presents none has no principal, and none is invented:
+    // every keyless local process would otherwise share one bucket, and a client-visible cell id
+    // would become enough to read another caller's retained search result. Without a principal
+    // bridgeSearchReplayScope yields no scope, so nothing is recorded or restored for it.
+    const clientPrincipalId = resolveContextPrincipal(req, config, options.admission);
+    if (clientPrincipalId) {
+      parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
+    }
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
   // absent or synthetically injected (session_id from prompt_cache_key).
