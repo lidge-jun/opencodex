@@ -278,6 +278,40 @@ describe("multi-account auth store", () => {
     expect(existsSync(`${authPath}.pre-multiauth`)).toBe(true);
   });
 
+  test("provider deletion drops the downgrade backup; a no-op clear or a replacement keeps it", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    writeFileSync(backup, JSON.stringify({ xai: { access: "stale", refresh: "stale", expires: 1 } }));
+
+    await replaceProviderAccountSet("anthropic", null);
+    expect(existsSync(backup)).toBe(true);
+    await replaceProviderAccountSet("xai", getAccountSet("xai")!);
+    expect(existsSync(backup)).toBe(true);
+
+    // The management provider-delete route clears credentials this way.
+    await replaceProviderAccountSet("xai", null);
+    expect(getAccountSet("xai")).toBeUndefined();
+    expect(existsSync(backup)).toBe(false);
+  });
+
+  test("a backup that cannot be removed warns without failing the completed logout", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    // A directory in the backup's place makes unlink fail with a non-ENOENT code on every OS.
+    mkdirSync(`${authPath}.pre-multiauth`);
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await removeCredential("xai")).toBe("removed");
+      expect(getAccountSet("xai")).toBeUndefined();
+      expect(warning.mock.calls.some(call => String(call[0]).includes("could not remove legacy credential backup"))).toBe(true);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {
     // Legacy stores are re-normalized on EVERY load without being persisted, so the
     // derived id must be stable: a time-salted id would make getAccountSet and

@@ -1062,15 +1062,21 @@ export async function removeAccount(provider: string, accountId: string): Promis
   return removed;
 }
 
-/** Replace or clear a provider account set (used for transactional Kiro add-account rollback). */
+/**
+ * Replace or clear a provider account set (provider deletion, transactional Kiro add-account
+ * rollback). Clearing a provider that had credentials is a destructive mutation, so it also drops
+ * the legacy downgrade backup, like logout and account deletion. A non-empty replacement keeps it:
+ * a future caller that removes accounts through a replacement needs its own decision here.
+ */
 export async function replaceProviderAccountSet(
   provider: string,
   set: ProviderAccountSet | null,
 ): Promise<void> {
   await mutateStore(store => {
     if (!set || set.accounts.length === 0) {
+      const cleared = store[provider] !== undefined;
       delete store[provider];
-      return;
+      return cleared;
     }
     store[provider] = {
       activeAccountId: set.activeAccountId,
@@ -1082,7 +1088,8 @@ export async function replaceProviderAccountSet(
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
       })),
     };
-  }, [provider, set]);
+    return false;
+  }, [provider, set], { removeLegacyBackup: cleared => cleared });
 }
 
 export type ProviderCredentialRekeyOutcome = "moved" | "absent" | "conflict";
