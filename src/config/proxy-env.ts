@@ -115,8 +115,7 @@ function ambientProxyStateExists(): boolean {
   return false;
 }
 
-function mergeNoProxyEntries(configured: string[] = []): void {
-  const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
+function withNoProxyEntries(existing: string, configured: readonly string[]): string {
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
   const seen = new Set(entries.map(entry => entry.toLowerCase()));
   for (const host of [...configured, "localhost", "127.0.0.1", "::1", "[::1]"]) {
@@ -126,7 +125,17 @@ function mergeNoProxyEntries(configured: string[] = []): void {
       seen.add(key);
     }
   }
-  process.env.NO_PROXY = entries.join(",");
+  return entries.join(",");
+}
+
+function mergeNoProxyEntries(configured: string[] = []): void {
+  process.env.NO_PROXY = withNoProxyEntries(process.env.NO_PROXY ?? process.env.no_proxy ?? "", configured);
+  // Bun's native fetch reads a non-empty lowercase no_proxy before NO_PROXY
+  // (src/codex/catalog/remote.ts), so an inherited one would shadow the entries above.
+  const inherited = process.env.no_proxy;
+  if (inherited !== undefined && inherited.trim() !== "") {
+    process.env.no_proxy = withNoProxyEntries(inherited, configured);
+  }
 }
 
 /**

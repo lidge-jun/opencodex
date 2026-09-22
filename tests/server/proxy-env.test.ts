@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { applyProxyEnv } from "../../src/config";
-import { configuredOutboundFetch, resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
+import { configuredOutboundFetch, noProxyMatches, resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
@@ -243,17 +244,40 @@ describe("applyProxyEnv", () => {
   });
 
   test.each(["ALL_PROXY", "all_proxy"])("inherited SOCKS %s still owns non-loopback fetches", async key => {
-    process.env[key] = "socks5://untrusted-proxy.invalid:1080";
+    // A local proxy that drops every connection: the SOCKS handshake fails at once, with no
+    // DNS lookup for the proxy or the IP-literal target, on every runner.
+    const refusing = createTcpServer(socket => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      refusing.once("error", reject);
+      refusing.listen(0, "127.0.0.1", resolve);
+    });
+    const address = refusing.address();
+    if (!address || typeof address === "string") throw new Error("proxy fixture did not bind a TCP port");
+    process.env[key] = `socks5://127.0.0.1:${address.port}`;
     applyProxyEnv(configWithProxy());
     // The bypass must be scoped to loopback only: a non-loopback URL still routes through
-    // the inherited SOCKS proxy, which fails here because the proxy is unreachable. The
-    // direct fallback must NOT be consulted — if it were, the bypass leaked.
+    // the inherited SOCKS proxy, which fails here. The direct fallback must NOT be
+    // consulted — if it were, the bypass leaked.
     let directCalls = 0;
-    await expect(configuredOutboundFetch("http://api.example.com/v1/chat/completions", undefined, async () => {
-      directCalls += 1;
-      return new Response("direct");
-    })).rejects.toThrow();
-    expect(directCalls).toBe(0);
+    try {
+      await expect(configuredOutboundFetch("http://203.0.113.10/v1/chat/completions", undefined, async () => {
+        directCalls += 1;
+        return new Response("direct");
+      })).rejects.toThrow();
+      expect(directCalls).toBe(0);
+    } finally {
+      await new Promise<void>(resolve => refusing.close(() => resolve()));
+    }
+  });
+
+  test("an inherited lowercase no_proxy also receives the loopback entries", () => {
+    // Bun's native fetch consults a non-empty lowercase no_proxy before NO_PROXY.
+    process.env.HTTP_PROXY = "http://proxy.invalid:3128";
+    process.env.no_proxy = "internal.example";
+    applyProxyEnv(configWithProxy());
+    expect(process.env.no_proxy).toBe("internal.example,localhost,127.0.0.1,::1,[::1]");
+    const loopback = new URL("http://127.0.0.1:11434/v1/models");
+    expect(noProxyMatches(loopback, { no_proxy: process.env.no_proxy })).toBe(true);
   });
 
   test("merges configured comma-separated noProxy entries", () => {
