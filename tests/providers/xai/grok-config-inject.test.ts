@@ -246,6 +246,28 @@ describe("Grok config injection", () => {
       expect(() => Bun.TOML.parse(written)).not.toThrow();
     });
 
+    test("repeated injection and strip restore a deeper user table exactly", () => {
+      const userContent = "[model.ocx-mine.extra]\nx = 1\n";
+      writeFileSync(configPath(), userContent, "utf8");
+
+      const first = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+      const firstContent = readFileSync(configPath(), "utf8");
+      expect(first).toMatchObject({ ok: true, changed: true });
+      expect(() => Bun.TOML.parse(firstContent)).not.toThrow();
+
+      const second = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+      const secondContent = readFileSync(configPath(), "utf8");
+      expect(second.ok).toBe(true);
+      expect(secondContent).toBe(firstContent);
+      expect(() => Bun.TOML.parse(secondContent)).not.toThrow();
+
+      const stripped = stripGrokConfig({ grokHome });
+      const restored = readFileSync(configPath(), "utf8");
+      expect(stripped).toMatchObject({ ok: true, changed: true });
+      expect(restored).toBe(userContent);
+      expect(() => Bun.TOML.parse(restored)).not.toThrow();
+    });
+
     test("suffixes when a dotted key defines the parent of a deeper user table", () => {
       const userContent = '[model]\n"ocx-mine".selected = true\n[model.ocx-mine.extra]\nx = 1\n';
       writeFileSync(configPath(), userContent, "utf8");
