@@ -1268,6 +1268,7 @@
     "request-history-index.test.ts": "usage",
     "request-log-conversation.test.ts": "usage",
     "request-log-estimate-cap.test.ts": "usage",
+    "request-log-served-model.test.ts": "usage",
     "request-log.test.ts": "usage",
     "request-outcome-agreement.test.ts": "usage",
     "usage-failure-fingerprint.test.ts": "usage",

@@ -810,6 +810,16 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+const MAX_SERVED_MODEL_LENGTH = 200;
+/** An upstream model is an identifier, never free-form text to truncate into one. */
+export function sanitizeServedModel(value: unknown): string | undefined {
+  return typeof value === "string"
+    && value.length <= MAX_SERVED_MODEL_LENGTH
+    && /^[A-Za-z0-9._:/@+-]+$/.test(value)
+    ? value
+    : undefined;
+}
+
 /** Test seam: the normalization branch old rows take is worth asserting directly. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
@@ -821,6 +831,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
   const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const servedModel = sanitizeServedModel(entry.servedModel);
+  const resolvedModel = entry.servedModel !== undefined && entry.resolvedModel === entry.servedModel && !servedModel
+    ? undefined : entry.resolvedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const transportPhase = isKnownTransportPhase(entry.transportPhase) ? entry.transportPhase : undefined;
   const terminalSource = isKnownTerminalSource(entry.terminalSource) ? entry.terminalSource : undefined;
@@ -859,8 +872,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-    ...(entry.servedModel ? { servedModel: entry.servedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
     ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),

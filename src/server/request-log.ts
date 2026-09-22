@@ -43,6 +43,7 @@ import {
   normalizeRequestFailureAttribution,
   normalizeRequestSpend,
   readRecentUsageEntries,
+  sanitizeServedModel,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
@@ -423,6 +424,9 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const routeDecision = normalizeRouteDecisionTraceForLog(entry.routeDecision);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const spend = normalizeRequestSpend(entry.spend);
+  const servedModel = sanitizeServedModel(entry.servedModel);
+  const resolvedModel = entry.servedModel !== undefined && entry.resolvedModel === entry.servedModel && !servedModel
+    ? undefined : entry.resolvedModel;
   return {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
@@ -454,8 +458,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       : {}),
     ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
     ...(entry.tierOutcome ? { tierOutcome: entry.tierOutcome } : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-    ...(entry.servedModel ? { servedModel: entry.servedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
     ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
@@ -568,11 +572,17 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const servedModel = sanitizeServedModel(entry.servedModel);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
-  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined
+  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
+    && servedModel === entry.servedModel && entry.claudeCompatibility === undefined
     ? entry
     : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  if (!servedModel && retained !== entry) {
+    delete retained.servedModel;
+    if (retained.resolvedModel === entry.servedModel) delete retained.resolvedModel;
+  }
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
   else if (retained !== entry) delete retained.claudeCompatibility;
   entry = retained;
@@ -896,9 +906,10 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
     : payload;
   if (!source || typeof source !== "object") return;
   const model = (source as { model?: unknown }).model;
-  if (typeof model === "string" && model.trim()) {
-    logCtx.servedModel = model;
-    if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = model;
+  const servedModel = sanitizeServedModel(model);
+  if (servedModel) {
+    logCtx.servedModel = servedModel;
+    if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = servedModel;
   }
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) {
@@ -1497,6 +1508,9 @@ export function addFinalRequestLog(
   // means a future caller cannot reintroduce the hole by forgetting to sanitize first, and
   // the in-memory /api/logs row matches what usage.jsonl already stores.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(logCtx.shadowCallRewrittenFrom);
+  const servedModel = sanitizeServedModel(logCtx.servedModel);
+  const resolvedModel = logCtx.servedModel !== undefined && logCtx.resolvedModel === logCtx.servedModel && !servedModel
+    ? undefined : logCtx.resolvedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(logCtx.claudeCompatibility);
   addLog({
     requestId,
@@ -1532,8 +1546,8 @@ export function addFinalRequestLog(
     ...((attempts?.at(-1)?.tierOutcome ?? logCtx.tierOutcome)
       ? { tierOutcome: attempts?.at(-1)?.tierOutcome ?? { ...logCtx.tierOutcome! } }
       : {}),
-    ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
-    ...(logCtx.servedModel ? { servedModel: logCtx.servedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
     ...(logCtx.wireModel ? { wireModel: logCtx.wireModel } : {}),
     status: effectiveStatus,
     durationMs,
