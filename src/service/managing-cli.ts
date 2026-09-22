@@ -13,9 +13,9 @@
  * it for its version under `ocx --version` semantics is the recursion #5418 closed. When
  * the located file IS this binary, its version is already known.
  */
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { delimiter, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { delimiter, posix, win32 } from "node:path";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { packageVersion } from "../lib/package-version";
 import {
@@ -38,6 +38,8 @@ export interface ManagingCliDeps {
   ownVersion?: () => string;
   /** Filesystem existence seam. */
   exists?: (path: string) => boolean;
+  /** Validate the selected candidate as a regular file. */
+  isFile?: (path: string) => boolean;
   /** Host platform override for tests. */
   platform?: NodeJS.Platform;
 }
@@ -60,6 +62,9 @@ function probeVersion(
   try {
     const windowsShim =
       deps.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
+    if (windowsShim && /[&|<>^%!"()]/.test(executable)) {
+      return { status: "unknown", reason: "the selected Windows command shim path cannot be probed safely" };
+    }
     result = deps.spawn(
       windowsShim ? (deps.env?.ComSpec ?? "cmd.exe") : executable,
       windowsShim ? ["/c", executable, ...args, "--version"] : [...args, "--version"],
@@ -99,14 +104,15 @@ function findOcxOnPath(
 ): string | null {
   const pathValue = env.PATH ?? env.Path ?? env.path;
   if (!pathValue) return null;
+  const pathApi = platform === "win32" ? win32 : posix;
   const extensions = platform === "win32"
-    ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map(ext => ext.toLowerCase())]
+    ? [...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(ext => /^\.[A-Za-z0-9]+$/.test(ext)), ""]
     : [""];
-  for (const directory of pathValue.split(delimiter)) {
+  for (const directory of pathValue.split(platform === "win32" ? ";" : delimiter)) {
     if (!directory) continue;
     for (const extension of extensions) {
-      const candidate = join(directory, `ocx${extension}`);
-      if (exists(candidate)) return resolvePath(candidate);
+      const candidate = pathApi.join(directory, `ocx${extension}`);
+      if (exists(candidate)) return pathApi.resolve(candidate);
     }
   }
   return null;
@@ -122,11 +128,14 @@ function observeServiceRegistration(
 }
 
 function observePathCli(
-  deps: Required<Pick<ManagingCliDeps, "spawn" | "platform" | "env" | "execPath" | "ownVersion" | "exists">>,
+  deps: Required<Pick<ManagingCliDeps, "spawn" | "platform" | "env" | "execPath" | "ownVersion" | "exists" | "isFile">>,
 ): ManagingCliObservation {
   const found = findOcxOnPath(deps.env, deps.exists, deps.platform);
   if (!found) return { status: "absent" };
-  const self = resolvePath(deps.execPath);
+  if (!deps.isFile(found)) {
+    return { status: "unknown", reason: "the selected managing CLI is not a readable file" };
+  }
+  const self = (deps.platform === "win32" ? win32 : posix).resolve(deps.execPath);
   if (found === self || found.toLowerCase() === self.toLowerCase()) {
     // Never spawn ourselves for our own version: the answer is already in hand, and the
     // recursion that produced it is the #5418 regression.
@@ -150,6 +159,9 @@ export function observeManagingClis(
     execPath: deps.execPath ?? process.execPath,
     ownVersion: deps.ownVersion ?? packageVersion,
     exists: deps.exists ?? existsSync,
+    isFile: deps.isFile ?? ((path: string) => {
+      try { return statSync(path).isFile(); } catch { return false; }
+    }),
   };
   return {
     "service-registration": observeServiceRegistration(state, resolved),

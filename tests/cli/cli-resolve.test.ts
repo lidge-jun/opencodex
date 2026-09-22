@@ -117,6 +117,32 @@ function ioOwnership(
 }
 
 describe("runResolve", () => {
+  test("an unreadable second state read blocks takeover before manager observation", async () => {
+    const lines: string[] = [];
+    let observed = false;
+    const code = await runResolve({ json: true }, {
+      configDir: () => "/sandbox",
+      readDiagnostics: () => ({ config: { port: 10100 }, source: "file", error: null } as ConfigDiagnostics),
+      findLive: async () => fakeLive(),
+      cliVersion: () => "2.61.0",
+      resolveOwnership: () => ({ kind: "none", revision: 0 }),
+      resolveState: () => ({ kind: "unknown", reason: "state unreadable" }),
+      observeManagers: () => {
+        observed = true;
+        return {
+          "service-registration": { status: "absent" },
+          path: { status: "observed", version: "2.61.0", identity: "path-manager" },
+        };
+      },
+      stdout: { log: value => lines.push(value) },
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      ownership: { kind: "none", revision: 0 },
+      takeover: { kind: "blocked", reason: "ownership-unknown", detail: "state unreadable" },
+    });
+    expect(observed).toBe(false);
+  });
   test("prints exactly one JSON document and exits 0 for a live proxy", async () => {
     const lines: string[] = [];
     const errors: string[] = [];

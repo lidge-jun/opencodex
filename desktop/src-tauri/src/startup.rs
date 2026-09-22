@@ -758,7 +758,7 @@ async fn run(app: &AppHandle, started: Instant) {
                     .await;
                     return;
                 }
-                AttachPlan::Ask(token) => {
+                AttachPlan::Ask(_) => {
                     // The prompt has to be visible even when this launch started hidden.
                     if let Some(window) = app.get_webview_window("main") {
                         crate::window::show(&window);
@@ -817,8 +817,7 @@ async fn run(app: &AppHandle, started: Instant) {
                         &registration,
                         &watch,
                         &proxy,
-                        &answer.ownership,
-                        &token,
+                        answer,
                     )
                     .await
                     .is_err()
@@ -1002,6 +1001,50 @@ async fn attach_as_guest(
     finish(app, started, endpoint);
 }
 
+fn approval_still_current(approved: &resolve::Resolved, fresh: &resolve::Resolution) -> bool {
+    let Some(now) = fresh.resolved() else {
+        return false;
+    };
+    matches!(resolve::live_verdict(fresh), resolve::LiveVerdict::Attach)
+        && matches!(&now.takeover, resolve::Takeover::Supported { .. })
+        && approved.ownership == now.ownership
+        && approved.takeover == now.takeover
+        && approved.config_home == now.config_home
+        && approved.cli_version == now.cli_version
+        && approved.port == now.port
+        && approved.liveness == now.liveness
+}
+
+async fn stop_after_approval<F, Fut>(
+    approved: &resolve::Resolved,
+    fresh: &resolve::Resolution,
+    stop: F,
+) -> Option<runtime_stop::StopResult>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = runtime_stop::StopResult>,
+{
+    if !approval_still_current(approved, fresh) {
+        return None;
+    }
+    Some(stop().await)
+}
+
+async fn claim_after_silence<F, Fut>(
+    stopped: &runtime_stop::StopResult,
+    silent: bool,
+    claim: F,
+) -> Option<claim::ClaimResult>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = claim::ClaimResult>,
+{
+    if !silent || !stopped.may_check_silence() {
+        return None;
+    }
+    Some(claim().await)
+}
+
 /// Stop the runtime that answered, wait for its silence, and record this installation as
 /// the owner. An `Err` has already been reported; `Ok` means the Starting branch may run.
 #[allow(clippy::too_many_arguments)]
@@ -1013,20 +1056,50 @@ async fn take_over(
     registration: &Registration,
     watch: &SidecarWatch,
     proxy: &ProxyClient,
-    recorded: &ownership::Recorded,
-    token: &str,
+    approved: &resolve::Resolved,
 ) -> Result<(), ()> {
-    report(
-        app,
-        started,
-        Phase::TakingOver,
-        Some("stopping the runtime that was already listening".to_owned()),
-    );
-    let stopped = runtime_stop::run(app, *deadline).await;
+    let fresh = resolve::run(app, *deadline).await;
+    let stopped = stop_after_approval(approved, &fresh, || async {
+        report(
+            app,
+            started,
+            Phase::TakingOver,
+            Some("stopping the runtime that was already listening".to_owned()),
+        );
+        runtime_stop::run(app, *deadline, approved).await
+    })
+    .await;
+    let Some(stopped) = stopped else {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::TakingOver,
+            "the runtime or its managing CLI changed after approval; retry to review it".to_owned(),
+        );
+        return Err(());
+    };
+    if stopped.is_approval_changed() || !stopped.may_check_silence() {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::TakingOver,
+            format!(
+                "the guarded stop could not confirm the approved runtime: {}",
+                stopped.describe()
+            ),
+        );
+        return Err(());
+    }
     // A refused connection, not exit 0 and not the probe's deadline, is the receipt: `ocx stop`
     // reports exit 79 when the proxy stopped but history cleanup failed after it exited, and a
-    // `None` from alive_within is only the clock running out — neither is silence. So whatever
-    // the stop reported, the claim is made only once the port actively refuses.
+    // `None` from alive_within is only the clock running out — neither is silence. Only a
+    // validated stop result reaches this loop, and claim still requires active refusal.
     let mut silent = false;
     let mut still_answering = false;
     while Instant::now() < *deadline {
@@ -1086,7 +1159,10 @@ async fn take_over(
     let install_id = registration.install_id.clone().unwrap_or_default();
     // An unknown record reaches here only off the UI path, and the claim has to refuse rather
     // than fabricate the subject it is claiming against.
-    let Some(argv) = claim::args(&install_id, recorded, token) else {
+    let resolve::Takeover::Supported { token, .. } = &approved.takeover else {
+        return Err(());
+    };
+    let Some(argv) = claim::args(&install_id, &approved.ownership, token) else {
         fail(
             app,
             started,
@@ -1098,8 +1174,8 @@ async fn take_over(
         );
         return Err(());
     };
-    match claim::run(app, argv, *deadline).await {
-        claim::ClaimResult::Recorded(ownership) => {
+    match claim_after_silence(&stopped, silent, || claim::run(app, argv, *deadline)).await {
+        Some(claim::ClaimResult::Recorded(ownership)) => {
             report(
                 app,
                 started,
@@ -1111,7 +1187,7 @@ async fn take_over(
             );
             Ok(())
         }
-        claim::ClaimResult::Failed(message) => {
+        Some(claim::ClaimResult::Failed(message)) => {
             // The runtime is stopped either way. Refusing here leaves the next launch an
             // ordinary absence to start into, which is the acceptable end state.
             fail(
@@ -1124,6 +1200,18 @@ async fn take_over(
                 format!(
                     "the runtime was stopped, but this installation could not be recorded as its owner: {message}"
                 ),
+            );
+            Err(())
+        }
+        None => {
+            fail(
+                app,
+                started,
+                Some(target),
+                registration,
+                watch,
+                Phase::TakingOver,
+                "the approved runtime changed, so no ownership claim was attempted".to_owned(),
             );
             Err(())
         }
@@ -1401,12 +1489,16 @@ fn elapsed(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_plan, shows_window, unavailable, AttachPlan, ConsentState, Expiry, LaunchOrigin,
-        Phase, Progress, Startup, AUTOSTART_FLAG, DEADLINE, PHASES, POLL,
+        approval_still_current, attach_plan, claim_after_silence, shows_window,
+        stop_after_approval, unavailable, AttachPlan, ConsentState, Expiry, LaunchOrigin, Phase,
+        Progress, Startup, AUTOSTART_FLAG, DEADLINE, PHASES, POLL,
     };
-    use crate::ownership::Consent;
-    use crate::resolve::Takeover;
+    use crate::claim::ClaimResult;
+    use crate::ownership::{Claim, Consent, Owner, Recorded};
+    use crate::resolve::{Liveness, Port, Resolution, Resolved, Status, Takeover};
+    use crate::runtime_stop::{self, StopResult};
     use crate::tray_availability::TrayAvailability;
+    use std::cell::Cell;
     use std::sync::atomic::Ordering;
     use tokio::time::{Duration, Instant};
 
@@ -1423,6 +1515,108 @@ mod tests {
             reason: "managing-cli-unsupported".to_owned(),
             detail: "path uses 2.59.0".to_owned(),
         }
+    }
+
+    fn approved_answer() -> Resolved {
+        Resolved {
+            schema: "ocx-resolve/1".to_owned(),
+            cli_version: "2.61.0".to_owned(),
+            config_home: "/sandbox/a".to_owned(),
+            port: Port { effective: 10100, configured: 10100 },
+            liveness: Liveness {
+                status: Status::Live,
+                pid: Some(42),
+                port: Some(10100),
+                hostname: None,
+                version: Some("2.61.0".to_owned()),
+                role: None,
+            },
+            ownership: Recorded::Owned {
+                ownership: Claim {
+                    owner: Owner::Cli,
+                    install_id: "cli-a".to_owned(),
+                    consent_generation: 2,
+                },
+                revision: 7,
+            },
+            takeover: supported(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_changed_answer_never_invokes_stop() {
+        let approved = approved_answer();
+        let mut changed = approved.clone();
+        changed.ownership = Recorded::None { revision: 8 };
+        let called = Cell::new(false);
+        let refused = stop_after_approval(
+            &approved,
+            &Resolution::Answered(Box::new(changed)),
+            || async { called.set(true); StopResult::Failed("called".to_owned()) },
+        ).await;
+        assert!(refused.is_none());
+        assert!(!called.get());
+        let accepted = stop_after_approval(
+            &approved,
+            &Resolution::Answered(Box::new(approved.clone())),
+            || async { called.set(true); StopResult::Failed("called".to_owned()) },
+        ).await;
+        assert!(accepted.is_some());
+        assert!(called.get());
+        let mut moved = approved.clone();
+        moved.liveness.pid = Some(43);
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        let mut moved = approved.clone();
+        moved.port.effective = 10101;
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        let mut moved = approved.clone();
+        moved.config_home = "/sandbox/b".to_owned();
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        let mut moved = approved.clone();
+        moved.cli_version = "2.62.0".to_owned();
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        let mut moved = approved.clone();
+        moved.liveness.hostname = Some("localhost".to_owned());
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        let mut moved = approved.clone();
+        if let Takeover::Supported { token, .. } = &mut moved.takeover {
+            *token = "changed".to_owned();
+        }
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        let mut moved = approved.clone();
+        moved.takeover = blocked();
+        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(&approved, &Resolution::Unknown("unreadable".to_owned())));
+    }
+
+    #[tokio::test]
+    async fn terminal_stop_results_never_invoke_claim_after_silence() {
+        let approved = approved_answer();
+        let answer = Resolution::Answered(Box::new(approved.clone()));
+        let called = Cell::new(false);
+        for result in [
+            StopResult::ApprovalChanged("moved".to_owned()),
+            StopResult::ManagerStillActive("active".to_owned()),
+            runtime_stop::read(Some(1), b"{", b""),
+            StopResult::Failed("the bundled CLI timed out".to_owned()),
+        ] {
+            let stopped = stop_after_approval(&approved, &answer, || async { result })
+                .await.expect("matching answer");
+            assert!(!stopped.may_check_silence());
+            let claimed = claim_after_silence(&stopped, true, || async {
+                called.set(true);
+                ClaimResult::Failed("called".to_owned())
+            }).await;
+            assert!(claimed.is_none());
+            assert!(!called.get());
+        }
+        let history = StopResult::HistoryIncomplete("history-incomplete".to_owned());
+        let claimed = claim_after_silence(&history, true, || async {
+            called.set(true);
+            ClaimResult::Failed("called".to_owned())
+        }).await;
+        assert!(matches!(claimed, Some(ClaimResult::Failed(_))));
+        assert!(called.get());
     }
 
     #[test]

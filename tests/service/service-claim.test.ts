@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, statSync } from "node:fs";
 import { parseClaimArgs, runServiceClaim, CLAIM_SCHEMA } from "../../src/service/claim";
-import { ServiceOwnershipSubjectMismatchError } from "../../src/service/state";
+import { ServiceOwnershipSubjectMismatchError, serviceStatePath, serviceStatePaths } from "../../src/service/state";
 import type { ServiceOwnershipSubject } from "../../src/service/state";
+import { createTempHome } from "../helpers/temp-home";
 
 const VALID = [
   "--owner", "desktop",
@@ -140,16 +142,22 @@ describe("runServiceClaim", () => {
     });
   });
 
-  test("an observation that cannot resolve its state refuses instead of claiming", async () => {
-    const lines: string[] = [];
-    const code = await runServiceClaim([...VALID, "--json"], {
-      recordOwner: (request, deps) => {
-        expect(() => deps.observeManagers()).toThrow("state unreadable");
-        return { kind: "owned", ownership: { owner: request.owner, installId: request.installId, consentGeneration: 1 }, revision: 1 };
-      },
-      resolveState: () => ({ kind: "unknown", reason: "state unreadable" }),
-      stdout: { log: value => lines.push(value) },
-    });
-    expect(code).toBe(0);
+  test("an unreadable sandbox state refuses a real claim", async () => {
+    const home = createTempHome("ocx-claim-refusal-");
+    try {
+      expect(serviceStatePaths().every(path => path.startsWith(home.root))).toBe(true);
+      mkdirSync(serviceStatePath());
+      const lines: string[] = [];
+      const code = await runServiceClaim([...VALID, "--json"], {
+        stdout: { log: value => lines.push(value) },
+      });
+      expect(code).toBe(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({
+        schema: CLAIM_SCHEMA, ok: false, code: "service-ownership-subject-unknown",
+      });
+      expect(statSync(serviceStatePath()).isDirectory()).toBe(true);
+    } finally {
+      home.remove();
+    }
   });
 });

@@ -161,13 +161,19 @@ comparison, all of which are defined by
 here. The shell does not read the record: resolving a claim means reading every state path and
 failing closed on an unreadable one, on a corrupt anchor and on paths that disagree, and a second
 weaker implementation of a question core already answers is the mistake this tree has made before.
-The bundled CLI answers it through `ocx resolve --json`, including ownership and takeover
-compatibility. Unknown or unavailable ownership never means "nobody owns it". A supported
-takeover asks for consent with the endpoint, configuration home and owner visible. Approval
-stops through the bundled CLI, requires a refused probe as the stop receipt, claims with the
-approved subject, then starts the owned runtime. Declining attaches as a guest. An incompatible
-managing CLI blocks durable takeover; a failed claim does not pretend that a stopped runtime was
-restored. `src/service/claim.ts` owns the write-side subject and compatibility revalidation.
+The bundled CLI answers ownership and takeover compatibility through `ocx resolve --json`.
+Unknown ownership never means "nobody owns it". A supported offer shows the endpoint, home
+and owner. After consent, the shell resolves again and refuses a changed answer without
+invoking stop. It passes the approved token, endpoint and PID to the CLI's opt-in guarded stop.
+That command checks the evidence and manager-to-PID binding under its ownership mutation lease
+before action; it stops the manager or approved PID, waits within a bounded deadline for PID
+exit and endpoint silence, and only then requires definitive manager inactivity. A manager
+that remains active or becomes unreadable produces terminal `manager-still-active`, not a stop
+receipt. The shell also treats `approval-changed`, unreadable output and child timeout as
+terminal before its own silence wait or claim. Only parsed `stopped` or validated exit-79
+`history-incomplete` proceeds to the refused-probe receipt and `ocx service claim`, which
+rechecks the approved subject and compatibility. Declining attaches as a guest; a failed claim
+does not pretend a stopped runtime was restored.
 
 ### Desktop runtime ownership acceptance
 

@@ -302,12 +302,21 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
   } else {
     try {
       const resolved = resolveState();
-      const resolvedState = resolved.kind === "state" ? resolved.state : null;
-      takeover = assessServiceTakeoverCompatibility({
-        state: resolvedState,
-        subject: ownership,
-        managers: observeManagers(resolvedState),
-      });
+      if (resolved.kind === "unknown") {
+        takeover = {
+          kind: "blocked",
+          reason: "ownership-unknown",
+          detail: resolved.reason,
+          minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+        };
+      } else {
+        const resolvedState = resolved.kind === "state" ? resolved.state : null;
+        takeover = assessServiceTakeoverCompatibility({
+          state: resolvedState,
+          subject: ownership,
+          managers: observeManagers(resolvedState),
+        });
+      }
     } catch (error) {
       takeover = {
         kind: "blocked",

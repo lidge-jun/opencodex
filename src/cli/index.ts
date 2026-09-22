@@ -96,7 +96,17 @@ import {
 import { createReadinessGate } from "../server/readiness";
 import { isApiAuthRequired } from "../server/auth-cors";
 import { runReady, type ReadyArgs } from "./ready";
-import { runResolve, type ResolveArgs } from "./resolve";
+import { runResolve, type ResolveArgs, type ResolveJson } from "./resolve";
+import {
+  guardFinalStopSummary,
+  managerStillActive,
+  runApprovedStop,
+  runGuardedManagerStep,
+  settleApprovedTarget,
+  type GuardedStopSnapshot,
+  type StopApproval,
+} from "./stop-approval";
+import { inspectGuardedManagerTarget, observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
@@ -990,13 +1000,37 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
   return { historyOnly, historyDeferred, other };
 }
 
-async function handleStop() {
+async function handleStop(approval?: StopApproval) {
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
-  try { return await handleStopUnlocked(); }
+  try {
+    if (!approval) return await handleStopUnlocked();
+    return await runApprovedStop(
+      approval,
+      async () => {
+        const lines: string[] = [];
+        const code = await runResolve({ json: true }, {
+          stdout: { log: line => { lines.push(line); } },
+          stderr: { error: () => {} },
+        });
+        if (code !== 0 || lines.length !== 1) return null;
+        try { return JSON.parse(lines[0]!) as ResolveJson; }
+        catch { return null; }
+      },
+      () => {
+        const pid = readPid();
+        const runtime = pid === null ? null : readRuntimePort(pid);
+        return pid && runtime?.port ? {
+          pid, port: runtime.port, hostname: runtime.hostname ?? "",
+        } : null;
+      },
+      () => inspectGuardedManagerTarget(approval.pid, approval.port),
+      snapshot => handleStopUnlocked(snapshot),
+    );
+  }
   finally { lease.release(); }
 }
 
-async function handleStopUnlocked() {
+async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // The receipt must name the endpoint the owner was stopping — an obligation nobody can
   // locate cannot be proven discharged. Only the runtime record knows it; a proxy started
   // with an explicit --port is not on the configured one.
@@ -1137,8 +1171,22 @@ async function handleStopUnlocked() {
     // to this process.
     return graceful && !teardownNonce;
   };
+  const approvedEndpoint = snapshot
+    ? { hostname: probeHostname(snapshot.approval.hostname || undefined), port: snapshot.approval.port }
+    : null;
+  if (snapshot?.manager.kind === "bound" && approvedEndpoint) {
+    claimTeardown(approvedEndpoint, "exact");
+  }
+  let guardedStep: Awaited<ReturnType<typeof runGuardedManagerStep>> | null = null;
   try {
-    const serviceStop = stopServiceIfInstalledDetailed();
+    const serviceStop = snapshot
+      ? (guardedStep = await runGuardedManagerStep(snapshot, {
+          stopManager: stopServiceIfInstalledDetailed,
+          signalApproved: () => stopWithDeferral(snapshot.approval.pid, approvedEndpoint),
+          settle: () => settleApprovedTarget(snapshot.approval),
+          managerState: () => observeGuardedManagerStopped(snapshot.manager),
+        })).service
+      : stopServiceIfInstalledDetailed();
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
     schedulerCanRespawn = serviceStop === "stopped-respawnable";
@@ -1171,6 +1219,22 @@ async function handleStopUnlocked() {
     }
   }
 
+  if (snapshot) {
+    if (guardedStep?.effect === "manager-still-active") {
+      return managerStillActive(record.service, record);
+    }
+    if (guardedStep?.effect === "stopped") {
+      record.proxy = guardedStep.proxy;
+      nativeRestoreHandledByProxy = guardedStep.handledByProxy;
+      removePid(snapshot.approval.pid);
+      removeRuntimePort(snapshot.approval.pid);
+    } else {
+      stopFailed = true;
+      ownershipBlocked = true;
+      record.proxy = "unknown";
+      console.error("The approved runtime could not be verified after the guarded stop step.");
+    }
+  } else {
   const pid = readPid();
   if (pid) {
     try {
@@ -1259,6 +1323,7 @@ async function handleStopUnlocked() {
       removePidIfValueIs(stalePidValue);
       removeRuntimePortIfPidIs(staleRuntimePid);
     }
+  }
   }
   // Environment ownership is independent from service ownership. Always roll back
   // current-home variables; the helper refuses foreign markers on its own.
@@ -1429,13 +1494,16 @@ async function handleStopUnlocked() {
       ? STOP_HISTORY_DEFERRED_EXIT_CODE
       : 1;
   }
-  const summary = summarizeStopRun(record, {
+  const signals = {
     failed: stopFailed,
     historyOnly: historyOnlyFailure,
     historyDeferred: historyDeferredNonces !== null,
     exitCode: Number(process.exitCode ?? 0),
-  });
-  return { ok: !stopFailed, summary };
+  };
+  const finish = () => ({ ok: !stopFailed, summary: summarizeStopRun(record, signals) });
+  return snapshot && !stopFailed
+    ? await guardFinalStopSummary(record, () => observeGuardedManagerStopped(snapshot.manager), finish)
+    : finish();
 }
 
 async function handleUninstall() {
