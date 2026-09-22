@@ -28,6 +28,12 @@ export interface ConsumedComboFailure {
   resetAt?: string[];
   /** Reserved for 040 usage attribution without adding another body read. */
   usage?: OcxUsage;
+  /**
+   * The failed attempt's response was marked non-replayable, such as the answer to a spent
+   * ambiguous-reset replacement. The re-wrapped {@link response} cannot carry that in-memory
+   * marker, so the combo loop reads it here and stops instead of sending the turn to a later target.
+   */
+  nonReplayable?: boolean;
 }
 
 

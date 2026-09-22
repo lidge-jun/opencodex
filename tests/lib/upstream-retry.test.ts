@@ -603,7 +603,7 @@ describe("operator-granted replacement of an ambiguous reset", () => {
 
   // 429 and 529 are the cases the gateway-only transient set let through: the client retry table
   // and the proxy's own quota rotation both resend them. 401 and 402 are proxy recovery triggers.
-  test.each([307, 308, 401, 402, 408, 409, 429, 500, 501, 503, 507, 529])(
+  test.each([307, 308, 401, 402, 408, 409, 413, 429, 500, 501, 503, 507, 529])(
     "a %d answer to a spent replacement settles as the refusal and releases its body",
     async (status) => {
       silenceWarn();
@@ -625,7 +625,7 @@ describe("operator-granted replacement of an ambiguous reset", () => {
     },
   );
 
-  test.each([400, 403, 404, 413, 422])(
+  test.each([400, 403, 404, 422])(
     "a %d answer to a spent replacement keeps its status but can no longer trigger recovery",
     async (status) => {
       silenceWarn();

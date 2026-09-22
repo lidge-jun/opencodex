@@ -196,3 +196,77 @@ test("the same client still resends an ordinary upstream rate limit", async () =
     await server.stop(true);
   }
 });
+
+/**
+ * The same refusal has to hold inside a combo. The answer to a spent replacement can keep its real
+ * status (a 400 naming a context overflow) with only an in-memory marker, and the combo rebuilds a
+ * failed attempt as a new response. If that dropped the marker, the combo would read the overflow
+ * as target-local and send the same turn to its next target, although the first send may already
+ * have run it.
+ */
+const COMBO_FIRST_HOST = "replay-combo-first.example.test";
+const COMBO_SECOND_HOST = "replay-combo-second.example.test";
+
+function comboReplayConfig(): OcxConfig {
+  const provider = (host: string, apiKey: string, extra: Record<string, unknown> = {}) => ({
+    adapter: "openai-responses",
+    baseUrl: `https://${host}/v1`,
+    authMode: "key",
+    apiKey,
+    models: ["model"],
+    ...extra,
+  });
+  return {
+    port: 0,
+    defaultProvider: "first",
+    providers: {
+      // The first target opts in to one ambiguous-reset replacement; the second never should be sent.
+      first: provider(COMBO_FIRST_HOST, "sk-combo-first", { retryOnReset: {} }),
+      second: provider(COMBO_SECOND_HOST, "sk-combo-second"),
+    },
+    combos: { pair: { strategy: "failover", targets: [
+      { provider: "first", model: "model" },
+      { provider: "second", model: "model" },
+    ] } },
+  } as unknown as OcxConfig;
+}
+
+test.each([
+  { name: "a context overflow", status: 400, expectedStatus: 400 },
+  { name: "a 413", status: 413, expectedStatus: REPLAY_REFUSED_STATUS },
+])("a combo never sends a spent replacement's $name to its next target", async ({ status, expectedStatus }) => {
+  saveConfig(comboReplayConfig());
+  let firstSends = 0;
+  let secondSends = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes(COMBO_FIRST_HOST)) {
+      firstSends += 1;
+      // The first send leaves and resets before any header; the granted replacement is answered.
+      if (firstSends === 1) preHeaderReset();
+      return new Response(JSON.stringify({ error: {
+        message: "context_length_exceeded", type: "invalid_request_error", code: "context_length_exceeded",
+      } }), { status, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes(COMBO_SECOND_HOST)) {
+      secondSends += 1;
+      return Response.json({
+        id: "resp_second", object: "response", status: "completed", model: "model",
+        output: [{ type: "message", id: "msg_second", role: "assistant", status: "completed",
+          content: [{ type: "output_text", text: "duplicate", annotations: [] }] }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }
+    return originalFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+  const server = startServer(0);
+  try {
+    const { response, attempts } = await sendWithClientRetries(new URL("/v1/responses", server.url), {
+      model: "combo/pair", store: false, stream: false, ...RESPONSES_TURN,
+    });
+    expect({ firstSends, secondSends, attempts }).toEqual({ firstSends: 2, secondSends: 0, attempts: 1 });
+    expect(response.status).toBe(expectedStatus);
+  } finally {
+    await server.stop(true);
+  }
+});

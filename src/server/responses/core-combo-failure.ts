@@ -13,6 +13,7 @@ import {
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { formatErrorResponse } from "../../bridge";
+import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
 
@@ -30,6 +31,9 @@ export async function consumeComboFailure(
   signal?: AbortSignal,
   now = Date.now(),
 ): Promise<ConsumedComboFailure> {
+  // Read before the body: the marker lives on this Response object, and the failure below is
+  // rebuilt as a new one that would otherwise lose it.
+  const nonReplayable = isNonReplayableResponse(response);
   const fallback = `Provider error ${response.status}`;
   let classificationText = fallback;
   let usage: OcxUsage | undefined;
@@ -97,16 +101,19 @@ export async function consumeComboFailure(
     now,
     includeDefault: false,
   });
+  const failureResponse = formatErrorResponse(
+    response.status,
+    cyberFailure ? (upstreamType ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
+    message,
+    {
+      ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
+      ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
+    },
+  );
+  if (nonReplayable) markResponseNonReplayable(failureResponse);
   return {
-    response: formatErrorResponse(
-      response.status,
-      cyberFailure ? (upstreamType ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
-      message,
-      {
-        ...(normalizedUpstreamCode !== undefined ? { code: normalizedUpstreamCode } : {}),
-        ...(clientRetryAfter !== undefined ? { retryAfter: clientRetryAfter } : {}),
-      },
-    ),
+    response: failureResponse,
+    ...(nonReplayable ? { nonReplayable: true } : {}),
     classificationText,
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
