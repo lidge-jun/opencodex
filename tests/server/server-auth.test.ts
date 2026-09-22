@@ -1,4 +1,5 @@
 import { createPoolRetryHarness, POOL_RETRY_MODEL } from "../helpers/codex-pool-retry";
+import * as boundedBody from "../../src/lib/bounded-body";
 import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -3413,29 +3414,42 @@ describe("server local API auth", () => {
     }
   });
 
-  // Stall past BOUNDED_BODY_TIMEOUT_MS (5s). The old 7s test budget left ~1.9s of
-  // headroom and timed out on windows-latest under runner contention.
+  // Release only after the real inspector reports timeout. A producer's 5.1s
+  // clock can expire before a contended Windows consumer starts its 5s clock.
   test("stalled 400 body timeout never authorizes a pool retry", async () => {
     const prefix = unsupportedModelBody().slice(0, -1);
     const suffix = "}";
     const body = prefix + suffix;
+    const releases: Array<() => void> = [];
+    let observedTimeout = false;
     const harness = await startPoolRetryHarness(() => rejectionResponse(new ReadableStream({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(prefix));
-        setTimeout(() => {
+        releases.push(() => {
           controller.enqueue(new TextEncoder().encode(suffix));
           controller.close();
-        }, 5_100);
+        });
       },
     })));
+    const inspectBody = boundedBody.readBoundedResponseBody;
+    const inspection = spyOn(boundedBody, "readBoundedResponseBody").mockImplementation(async (response, options) => {
+      const result = await inspectBody(response, options);
+      if (response.headers.get("x-pool-retry-test") === "original" && result.timedOut) {
+        observedTimeout = true;
+        for (const release of releases.splice(0)) release();
+      }
+      return result;
+    });
     try {
       const response = await harness.request();
       expect(response.status).toBe(400);
       expect(response.headers.get("x-pool-retry-test")).toBe("original");
       expect(await response.text()).toBe(body);
       expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(observedTimeout).toBe(true);
     } finally {
-      await stopPoolRetryHarness(harness);
+      try { for (const release of releases.splice(0)) release(); }
+      finally { inspection.mockRestore(); await stopPoolRetryHarness(harness); }
     }
   }, { timeout: SERVER_BUDGET_MS });
 
