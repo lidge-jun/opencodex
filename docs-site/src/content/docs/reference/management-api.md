@@ -80,6 +80,8 @@ route-specific results rather than repeating this table.
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
 | `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
 | `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `identity_mismatch`; 502 upstream error; 503 ledger capacity |
+| `GET /api/anthropic/reset-grants?accountId=...` | Read the Claude usage-limit reset grants of one Anthropic OAuth account: eligibility, each grant's resets left, validity window, and the windows it clears, plus any unconfirmed attempt still retryable | 400 no matching account; 401 re-authentication needed; 502 upstream unavailable |
+| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
@@ -91,6 +93,14 @@ badge opens a dialog that lists validity windows and redeems the coupon closest 
 expiry. The dialog sends a client-minted `operationId`, and it stops sending after a
 timeout instead of retrying, because a redemption whose journal record is still open
 would execute again. `ocx account grok-reset-coupons` remains the terminal equivalent.
+
+Claude usage resets work the same way from **Providers > Anthropic > Accounts**. Each
+signed-in account row carries a ticket badge with its remaining resets, and the dialog
+spends one after a second confirmation. A reset refills the 5-hour and weekly limits
+without moving the weekly reset day. When a claim does not answer, the dialog keeps its
+`operationId` and offers a retry with that same ID for ten minutes, which is how the
+Claude Code client itself recovers; a new operation for the same grant is refused
+until then. Spending is dashboard-only: the admin token alone gets `403 session_required`.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).

@@ -66,12 +66,16 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `POST /api/grok/apply` | 透過受管同步套用持久化的 Grok 設定 | 409 `grok_apply_busy`；400/500 套用失敗 |
 | `GET /api/grok/reset-coupons?accountId=...` | 讀取活躍或指定 xAI 帳號剩餘的 Grok 計費重置 token 與有效期間 | 400 缺失帳號；401 未認證；502 上游 gRPC-Web 錯誤 |
 | `POST /api/grok/reset-coupons/consume` | 兌換一個合格的 reset coupon。請求主體為 `{ accountId?, tokenId?, operationId? }`。選用的 `operationId`（UUIDv4）可讓兌換具備冪等性：重複相同 id 會重播持久化結果，而不會重複兌換。 | 400 無效的 JSON/UUID；401 未認證；409 `identity_mismatch`；502 上游錯誤；503 ledger 容量 |
+| `GET /api/anthropic/reset-grants?accountId=...` | 讀取單一 Anthropic OAuth 帳號的 Claude 用量額度重設機會：資格、每次重設的剩餘次數、有效期間及可清除的用量視窗，以及任何尚未確認但仍可重試的使用嘗試 | 400 找不到相符帳號；401 需要重新認證；502 上游無法使用 |
+| `POST /api/anthropic/reset-grants/consume` | 使用一次重設機會。請求主體為 `{ accountId, grantId, operationId }`；`operationId` 是傳送至上游作為請求 ID 的 UUIDv4，重複傳送即可重試同一次使用請求。需要儀表板工作階段。 | 400 無效的請求主體；401 需要重新認證；403 `session_required`；409 `grant_not_usable`、`in_flight`、`unresolved_prior_operation`、`unknown_outcome_expired`、`operation_identity_mismatch`；500 `journal_write_failed`；502 `unknown_outcome`；503 日誌忙碌、無法使用或已滿 |
 | `GET, PUT /api/claude-desktop` | 讀取或持久化 Claude Desktop 路由／原生設定檔 | 400 無效或不可用指派 |
 | `POST /api/claude-desktop/apply` | 將儲存的設定檔寫入 Claude Desktop 的受管設定 | 400/500 寫入失敗 |
 | `GET /api/claude-desktop/status` | 檢查已儲存 vs 已套用設定檔與 Desktop 健康 | 400 狀態讀取失敗 |
 | `GET, PUT /api/claude-code` | 讀取或更新 Claude Code 閘道、auth-mode、model-map、context、agent 與 sidecar 設定 | 400 無效欄位或結構 |
 
 儀表板從 **Providers > xAI Grok > Accounts** 驅動這兩條 coupon 路徑：每個已登入帳號列都帶有票券徽章，顯示剩餘的 reset coupon 數量，徽章會開啟對話框，列出有效期間並兌換最接近到期的 reset coupon。該對話框會送出由客戶端鑄造的 `operationId`，並在逾時後停止送出而不重試，因為日誌記錄仍為開啟的兌換會再次執行。`ocx account grok-reset-coupons` 仍是終端機等價指令。
+
+Claude 用量重設也可從 **Providers > Anthropic > Accounts** 以相同方式操作。每個已登入帳號列都有票券徽章，顯示剩餘重設次數；對話框會在第二次確認後使用一次重設機會。重設會補滿 5 小時與每週額度，但不會改變每週重設日。如果使用請求未收到回應，對話框會保留其 `operationId`，並在十分鐘內提供使用相同 ID 重試的選項；Claude Code 用戶端也以此方式復原。在此期間，系統會拒絕對同一重設機會發起新操作。重設機會只能透過儀表板使用：僅持有管理員權杖會收到 `403 session_required`。
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 

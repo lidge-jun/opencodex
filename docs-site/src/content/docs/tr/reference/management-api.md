@@ -85,6 +85,8 @@ hatalar" sütunu bu tabloyu tekrarlamak yerine rotaya özgü ek sonuçları list
 | `POST /api/grok/apply` | Kalıcı hale getirilen Grok yapılandırmasını yönetilen senkronizasyon aracılığıyla uygulayın | 409 `grok_apply_busy`; 400/500 uygulama hatası |
 | `GET /api/grok/reset-coupons?accountId=...` | Aktif veya belirtilen xAI hesabı için kalan Grok faturalandırma sıfırlama jetonlarını ve geçerlilik pencerelerini okuyun | 400 eksik hesap; 401 kimlik doğrulaması yok; 502 yukarı akış gRPC-Web hatası |
 | `POST /api/grok/reset-coupons/consume` | Uygun bir sıfırlama kuponunu kullanın. Gövde `{ accountId?, tokenId?, operationId? }`. İsteğe bağlı `operationId` (UUIDv4) kullanımı idempotent yapar: aynı kimliği yinelemek, çift kullanım olmadan kalıcı sonucu yeniden oynatır. | 400 geçersiz JSON/UUID; 401 kimlik doğrulaması yok; 409 `identity_mismatch`; 502 yukarı akış hatası; 503 kayıt defteri kapasitesi |
+| `GET /api/anthropic/reset-grants?accountId=...` | Bir Anthropic OAuth hesabının Claude kullanım limiti sıfırlama haklarını okuyun: uygunluk durumu, her hakkın kalan sıfırlama sayısı, geçerlilik aralığı ve sıfırladığı pencereler ile hâlâ yeniden denenebilen doğrulanmamış girişimler | 400 eşleşen hesap yok; 401 yeniden kimlik doğrulaması gerekli; 502 yukarı akış kullanılamıyor |
+| `POST /api/anthropic/reset-grants/consume` | Bir sıfırlama hakkı kullanın. Gövde `{ accountId, grantId, operationId }`; `operationId`, istek kimliği olarak yukarı akışa gönderilen bir UUIDv4'tür; aynı kimliği yinelemek aynı talebi yeniden dener. Kontrol paneli oturumu gerektirir. | 400 geçersiz gövde; 401 yeniden kimlik doğrulaması gerekli; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 günlük meşgul, kullanılamıyor veya dolu |
 | `GET, PUT /api/claude-desktop` | Claude Desktop yönlendirilen/yerel profilini okuyun veya kalıcı hale getirin | 400 geçersiz veya kullanılamaz atama |
 | `POST /api/claude-desktop/apply` | Kaydedilen profili Claude Desktop'ın yönetilen yapılandırmasına yazın | 400/500 yazma hatası |
 | `GET /api/claude-desktop/status` | Kaydedilen ve uygulanan profili ve Desktop sağlığını inceleyin | 400 durum okuma hatası |
@@ -98,6 +100,17 @@ istemci tarafından üretilen bir `operationId` gönderir ve yeniden denemek yer
 zaman aşımından sonra göndermeyi durdurur; çünkü günlük kaydı hâlâ açık olan
 bir kullanım yeniden yürütülür. `ocx account grok-reset-coupons` uçbirim
 eşdeğeri olarak kalır.
+
+Claude kullanım sıfırlamaları **Providers > Anthropic > Accounts** üzerinden aynı
+şekilde çalışır. Oturum açmış her hesap satırında kalan sıfırlamaları gösteren
+bir bilet rozeti bulunur; iletişim kutusu ikinci bir onaydan sonra bir sıfırlama
+kullanır. Sıfırlama, haftalık sıfırlama gününü değiştirmeden 5 saatlik ve
+haftalık limitleri yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
+`operationId` değerini korur ve on dakika boyunca aynı kimlikle yeniden deneme
+olanağı sunar; Claude Code istemcisi de bu şekilde toparlanır. Bu süre içinde
+aynı sıfırlama hakkı için yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
+panelinden kullanılabilir: tek başına yönetici belirteci `403 session_required`
+yanıtını alır.
 
 Model kadrosunun ve şifrelenmiş çalışan görevi davranışının arkasındaki
 kavramlar için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına
