@@ -267,6 +267,38 @@ describe("Command Code MiMo tool-call text", () => {
     expect(calls(events)).toEqual([]);
   });
 
+  test("a block that keeps streaming after its call is resolved loses nothing and leaks no budget", () => {
+    const markup = "<tool_call><function=exec>" + JS + "</function></tool_call>";
+    for (const input of [JS, "text('other');"]) {
+      const budget = createTestTranslatorBudget();
+      const filter = new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+      filter.toolInputStart("a", "exec");
+      expect(filter.textStart("t")).toEqual([]);
+      expect(filter.textDelta("t", markup)).toEqual([]);
+      const beforeCall = filter.toolCall("a", "exec", input);
+      // Text arriving after the verdict, before text-end, streams instead of being held.
+      expect(filter.textDelta("t", " trailing")).toEqual([{ type: "text_delta", text: " trailing" }]);
+      expect(filter.textEnd("t")).toEqual([]);
+      expect(filter.finish()).toEqual({ events: [], salvaged: false });
+      expect(beforeCall).toEqual(input === JS ? [] : [{ type: "text_delta", text: markup }]);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    }
+  });
+
+  test("restored arguments honour numeric safety, enum and bounds", () => {
+    const tool = { freeform: false, schema: { type: "object", required: ["mode"], properties: {
+      mode: { type: "string", enum: ["read", "write"] },
+      count: { type: "integer", minimum: 1, maximum: 10 },
+    } } };
+    const markup = (body: string) => parseToolCallMarkup("<tool_call><function=t>" + body + "</function></tool_call>")!;
+    expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>3</parameter>"), tool))
+      .toBe(JSON.stringify({ mode: "read", count: 3 }));
+    expect(salvagedArguments(markup("<parameter=mode>delete</parameter>"), tool)).toBeUndefined();
+    expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>0</parameter>"), tool)).toBeUndefined();
+    expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>" + "9".repeat(400) + "</parameter>"), tool)).toBeUndefined();
+    expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>9007199254740993</parameter>"), tool)).toBeUndefined();
+  });
+
   test("releases held text when the turn fails", () => {
     const filter = new CommandCodeToolTextFilter(createTestTranslatorBudget(), new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
     const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;

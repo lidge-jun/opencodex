@@ -127,7 +127,11 @@ const DECODE_FAILED = Symbol("decode-failed");
 function decodeTyped(raw: string, type: string): unknown {
   switch (type) {
     case "string": return raw;
-    case "integer": return /^-?\d+$/.test(raw.trim()) ? Number(raw.trim()) : DECODE_FAILED;
+    case "integer": {
+      // An integer past 2^53 would serialize as a different number (or null once it overflows).
+      const parsed = /^-?\d+$/.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
+      return Number.isSafeInteger(parsed) ? parsed : DECODE_FAILED;
+    }
     case "number": {
       const trimmed = raw.trim();
       const parsed = trimmed === "" ? Number.NaN : Number(trimmed);
@@ -152,15 +156,35 @@ function decodeParameter(raw: string, schema: unknown): unknown {
   const types = schemaTypes(schema);
   if (!types) {
     const parsed = tryJson(raw);
-    return parsed === undefined ? raw : parsed;
+    const value = parsed === undefined ? raw : parsed;
+    return satisfiesConstraints(value, schema) ? value : DECODE_FAILED;
   }
   // Non-string types first: MiMo writes them as JSON, and a string type would accept anything.
   const ordered = [...types.filter(type => type !== "string"), ...types.filter(type => type === "string")];
   for (const type of ordered) {
     const decoded = decodeTyped(raw, type);
-    if (decoded !== DECODE_FAILED) return decoded;
+    if (decoded !== DECODE_FAILED && satisfiesConstraints(decoded, schema)) return decoded;
   }
   return DECODE_FAILED;
+}
+
+/**
+ * The value constraints a restored call must honour at the top level: `enum`, `const` and numeric
+ * bounds. A restored call is one the model never successfully sent, so it is held to the declared
+ * shape rather than left for the tool to reject; nested schemas are not walked.
+ */
+function satisfiesConstraints(value: unknown, schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return true;
+  const record = schema as Record<string, unknown>;
+  if (Array.isArray(record.enum) && !record.enum.some(option => deepEqual(option, value))) return false;
+  if (Object.hasOwn(record, "const") && !deepEqual(record.const, value)) return false;
+  if (typeof value === "number") {
+    if (typeof record.minimum === "number" && value < record.minimum) return false;
+    if (typeof record.maximum === "number" && value > record.maximum) return false;
+    if (typeof record.exclusiveMinimum === "number" && value <= record.exclusiveMinimum) return false;
+    if (typeof record.exclusiveMaximum === "number" && value >= record.exclusiveMaximum) return false;
+  }
+  return true;
 }
 
 /**
@@ -277,11 +301,17 @@ export class CommandCodeToolTextFilter {
       const markup = parseToolCallMarkup(block.text);
       if (markup && markup.name === name && markupMatchesInput(markup, input)) {
         this.drop(block);
+        // A block still open keeps streaming whatever else it carries; nothing more is held.
+        block.state = "streaming";
         continue;
       }
       block.candidates.delete(id);
-      if (block.candidates.size === 0) events.push(...this.release(block));
-      else remaining.push(block);
+      if (block.candidates.size === 0) {
+        events.push(...this.release(block));
+        block.state = "streaming";
+      } else {
+        remaining.push(block);
+      }
     }
     this.held = remaining;
     return events;

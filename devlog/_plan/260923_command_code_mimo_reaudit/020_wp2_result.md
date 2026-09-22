@@ -32,3 +32,9 @@ The plan first carried the declared catalog on `AdapterRequest` and a `WeakMap<R
 Responses bridge test showed the server hands `parseStream` a wrapped response, so the map never
 hit; the shared `AdapterRequest` field was removed and the per-instance catalog is the only source.
 
+## Pre-push review fold (wp5)
+
+A final review found that a block resolved by `toolCall` stayed `held` in the open-block map, so
+text arriving before its `text-end` was retained and never released. Resolved blocks now switch to
+streaming, and a test asserts the translator budget returns to zero. Restored arguments also reject
+unsafe integers and values outside a declared `enum`, `const` or numeric bound.
