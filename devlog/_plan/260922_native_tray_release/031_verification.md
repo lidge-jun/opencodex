@@ -93,3 +93,17 @@ ACL reaps before draining native-main startup releases, allowing the latter to f
 registered a later reap. Teardown now drains native-main releases, all config-directory hardening,
 then ACL child reaps before deleting the temporary home. Sol reviewed this ordering; removal
 retry budgets and all management-auth assertions remain unchanged.
+
+At b5529c5bb2, Windows shards 1, 3, 4, 5, 6 and 8 passed, and both macOS shards plus the
+widget/bundle job passed in the manual run. PR macOS shard 1 independently wedged after the
+injection-write-lock zero-byte case and reached its job timeout; source review identifies the
+next case's synchronous child spawn/reap boundary as the likely blocked point. That file joins
+the existing fresh-process roster without changing assertions or deadlines.
+
+The manual Windows run found two further fixture lifetime failures. Five native-profile crash
+phases shared one 90-second test; they now run as five independently bounded cases, preserving
+every transaction/recovery assertion, with TERM/SIGKILL/reap bounds on switch-child cleanup.
+A passthrough-cancellation fixture left its second pull pending forever despite request abort,
+then deleted its accounting home before late cancellation finalized. Its fetch-shaped helper
+now settles the pending pull on abort, and the case waits for the 499 cancellation log before
+teardown. Sol reviewed both corrections; ownership enforcement is unchanged. No local tests ran.

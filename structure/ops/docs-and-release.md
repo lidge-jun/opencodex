@@ -170,7 +170,8 @@ full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` exec
 alone with fresh process homes. Hosted batches preserve sorted round-robin shard membership
 and split only process boundaries; every selected file still runs once. The macOS control
 keeps its ordinary tests in one unsharded process with explicit isolated exceptions. The structure
-SSOT test runs in a fresh process to keep its synchronous Git child out of the long-lived isolate pool. Manifest
+SSOT and injection-write-lock tests run in fresh processes to keep synchronous child spawning
+and reaping out of the long-lived isolate pool. Manifest
 errors, assertion failures, timeouts and crashes remain failures; attribution never turns a
 failed primary run green. The macOS control sets `OCX_TEST_MAIN_TIMEOUT_MS=3600000` for its
 measured long main process, within its 75-minute job budget; the wrapper validates that override
