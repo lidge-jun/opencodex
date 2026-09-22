@@ -64,32 +64,35 @@ export class InlineThinkTagParser {
   feed(text: string): AdapterEvent[] {
     if (!text) return [];
     if (this.state === "streaming") return [{ type: "text_delta", text }];
-    if (this.state === "thinking") {
-      this.replaceCarry("thinkingBuffer", this.thinkingBuffer + text);
-      return this.drain();
-    }
-    if (this.state === "scanning") {
-      this.replaceCarry("preBuffer", this.preBuffer + text);
-      return this.drain();
-    }
-    this.replaceCarry("preBuffer", this.preBuffer + text);
-    const stripped = this.preBuffer.trimStart();
-    const openTag = OPEN_TAGS.find(tag => stripped.startsWith(tag));
-    if (openTag) {
-      const leading = this.interleaved ? this.preBuffer.slice(0, this.preBuffer.length - stripped.length) : "";
-      this.state = "thinking";
-      this.closeTag = closeTagFor(openTag);
-      this.replaceCarry("thinkingBuffer", stripped.slice(openTag.length));
+    let input = text;
+    if (this.state === "pre") {
+      input = this.preBuffer + text;
       this.replaceCarry("preBuffer", "");
-      const events: AdapterEvent[] = leading ? [{ type: "text_delta", text: leading }] : [];
-      for (const event of this.drain()) events.push(event);
-      return events;
+      const stripped = input.trimStart();
+      const openTag = OPEN_TAGS.find(tag => stripped.startsWith(tag));
+      if (openTag) {
+        const leadingLength = input.length - stripped.length;
+        const leading = this.interleaved ? input.slice(0, leadingLength) : "";
+        this.state = "thinking";
+        this.closeTag = closeTagFor(openTag);
+        const events: AdapterEvent[] = leading ? [{ type: "text_delta", text: leading }] : [];
+        return this.drainChunk(input, leadingLength + openTag.length, events);
+      }
+      if (stripped.length <= MAX_OPEN_TAG && isPossibleOpenTagPrefix(stripped)) {
+        this.replaceCarry("preBuffer", input);
+        return [];
+      }
+      this.state = "streaming";
+      return input ? [{ type: "text_delta", text: input }] : [];
     }
-    if (stripped.length <= MAX_OPEN_TAG && isPossibleOpenTagPrefix(stripped)) return [];
-    this.state = "streaming";
-    const out = this.preBuffer;
-    this.replaceCarry("preBuffer", "");
-    return out ? [{ type: "text_delta", text: out }] : [];
+    if (this.state === "thinking") {
+      input = this.thinkingBuffer + text;
+      this.replaceCarry("thinkingBuffer", "");
+    } else {
+      input = this.preBuffer + text;
+      this.replaceCarry("preBuffer", "");
+    }
+    return this.drainChunk(input, 0, []);
   }
 
   flush(): AdapterEvent[] {
@@ -116,78 +119,52 @@ export class InlineThinkTagParser {
     this.state = "streaming";
   }
 
-  private drain(): AdapterEvent[] {
-    const events: AdapterEvent[] = [];
-    // State transitions consume a complete tag; incomplete carry ends this feed.
-    // Do not recurse for each block in one upstream chunk.
+  private drainChunk(input: string, start: number, events: AdapterEvent[]): AdapterEvent[] {
+    let offset = start;
     for (;;) {
-      const before = this.state;
-      const next = before === "thinking" ? this.drainThinking() : this.drainScanning();
-      for (const event of next) events.push(event);
-      if (this.state === before || this.state === "streaming") return events;
-    }
-  }
-
-  private drainThinking(): AdapterEvent[] {
-    const close = this.closeTag;
-    const idx = this.thinkingBuffer.indexOf(close);
-    if (idx >= 0) {
-      const thinking = this.thinkingBuffer.slice(0, idx);
-      const remainder = this.thinkingBuffer.slice(idx + close.length);
-      // Opt-in Chat answers are byte-preserving; keep Kiro's legacy normalization.
-      const after = this.interleaved ? remainder : remainder.trimStart();
-      this.replaceCarry("thinkingBuffer", "");
-      const events: AdapterEvent[] = [];
-      if (thinking) events.push({ type: "reasoning_raw_delta", text: thinking });
-      if (this.interleaved) {
-        this.state = "scanning";
-        this.replaceCarry("preBuffer", after);
-      } else {
-        this.state = "streaming";
-        if (after) events.push({ type: "text_delta", text: after });
+      if (this.state === "thinking") {
+        const idx = input.indexOf(this.closeTag, offset);
+        if (idx >= 0) {
+          if (idx > offset) events.push({ type: "reasoning_raw_delta", text: input.slice(offset, idx) });
+          offset = idx + this.closeTag.length;
+          if (!this.interleaved) {
+            // Opt-in Chat answers are byte-preserving; keep Kiro's legacy normalization.
+            const after = input.slice(offset).trimStart();
+            this.state = "streaming";
+            if (after) events.push({ type: "text_delta", text: after });
+            return events;
+          }
+          this.state = "scanning";
+          continue;
+        }
+        // Keep only a possible close tag, and do not split a surrogate pair.
+        const cut = Math.max(offset, surrogateSafeCut(input, input.length - MAX_CLOSE_TAG));
+        if (cut > offset) events.push({ type: "reasoning_raw_delta", text: input.slice(offset, cut) });
+        this.replaceCarry("thinkingBuffer", input.slice(cut));
+        return events;
       }
+
+      // Interleaved mode has already seen a leading tag; later tags delimit anywhere.
+      let openIndex = input.indexOf("<", offset);
+      let openTag: ThinkingTag | undefined;
+      while (openIndex >= 0) {
+        openTag = OPEN_TAGS.find(tag => input.startsWith(tag, openIndex));
+        if (openTag) break;
+        openIndex = input.indexOf("<", openIndex + 1);
+      }
+      if (openIndex >= 0 && openTag) {
+        if (openIndex > offset) events.push({ type: "text_delta", text: input.slice(offset, openIndex) });
+        offset = openIndex + openTag.length;
+        this.state = "thinking";
+        this.closeTag = closeTagFor(openTag);
+        continue;
+      }
+      // Hold back only a possible open-tag prefix, with a surrogate-safe boundary.
+      const cut = Math.max(offset, surrogateSafeCut(input, input.length - (MAX_OPEN_TAG - 1)));
+      if (cut > offset) events.push({ type: "text_delta", text: input.slice(offset, cut) });
+      this.replaceCarry("preBuffer", input.slice(cut));
       return events;
     }
-    if (this.thinkingBuffer.length <= MAX_CLOSE_TAG) return [];
-    // Hold back a possible partial close tag, and never split a surrogate pair
-    // at the send boundary: a lone high surrogate encodes as U+FFFD.
-    const cut = surrogateSafeCut(this.thinkingBuffer, this.thinkingBuffer.length - MAX_CLOSE_TAG);
-    const send = this.thinkingBuffer.slice(0, cut);
-    this.replaceCarry("thinkingBuffer", this.thinkingBuffer.slice(cut));
-    return send ? [{ type: "reasoning_raw_delta", text: send }] : [];
-  }
-
-  /**
-   * Interleaved mode only: the response already proved it carries inline thinking, so a later
-   * block can open anywhere in the answer text rather than only at the start.
-   */
-  private drainScanning(): AdapterEvent[] {
-    const events: AdapterEvent[] = [];
-    let openIndex = -1;
-    let openTag: ThinkingTag | undefined;
-    for (const tag of OPEN_TAGS) {
-      const index = this.preBuffer.indexOf(tag);
-      if (index >= 0 && (openIndex < 0 || index < openIndex)) {
-        openIndex = index;
-        openTag = tag;
-      }
-    }
-    if (openIndex >= 0 && openTag) {
-      const before = this.preBuffer.slice(0, openIndex);
-      if (before) events.push({ type: "text_delta", text: before });
-      this.state = "thinking";
-      this.closeTag = closeTagFor(openTag);
-      this.replaceCarry("thinkingBuffer", this.preBuffer.slice(openIndex + openTag.length));
-      this.replaceCarry("preBuffer", "");
-      return events;
-    }
-    // Hold back only as much as a partial open tag could occupy.
-    const cut = surrogateSafeCut(this.preBuffer, this.preBuffer.length - (MAX_OPEN_TAG - 1));
-    if (cut > 0) {
-      events.push({ type: "text_delta", text: this.preBuffer.slice(0, cut) });
-      this.replaceCarry("preBuffer", this.preBuffer.slice(cut));
-    }
-    return events;
   }
 }
 

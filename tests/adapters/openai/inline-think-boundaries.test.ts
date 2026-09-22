@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { InlineThinkTagParser, splitInlineThinkContent } from "../../../src/adapters/inline-think-tags";
 import type { AdapterEvent } from "../../../src/types";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
@@ -46,6 +46,22 @@ describe("inline thinking format boundaries", () => {
     expect(split([block.repeat(count)])).toEqual(expected);
     expect(split(Array(count).fill(block))).toEqual(expected);
   });
+  test("single-chunk blocks reserve carry in proportion to input size", () => {
+    const count = 12000;
+    const input = "<think>r</think>a".repeat(count);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 1_000_000 });
+    const reserve = spyOn(budget, "reserveTransient");
+    const parser = new InlineThinkTagParser(budget, { interleaved: true });
+    try {
+      const events = [...parser.feed(input), ...parser.flush()];
+      expect(projection(events)).toEqual({ answer: "a".repeat(count), reasoning: "r".repeat(count) });
+      const reservedBytes = reserve.mock.calls.reduce((total, [bytes]) => total + bytes, 0);
+      expect(reservedBytes).toBeLessThanOrEqual(4 * Buffer.byteLength(input));
+    } finally {
+      parser.dispose();
+      reserve.mockRestore();
+    }
+  });
   test("partial tags and unterminated reasoning flush without loss", () => {
     expect(split(["<thi"])).toEqual({ answer: "<thi", reasoning: "" });
     expect(split(["<think>why😀</thi"])).toEqual({ answer: "", reasoning: "why😀</thi" });
@@ -56,11 +72,11 @@ describe("inline thinking format boundaries", () => {
     expect(projection(splitInlineThinkContent(["other"], "model", undefined, content)))
       .toEqual({ answer: content, reasoning: "" });
   });
-  test("dispose releases partial carry and an overflow does not relax the budget", () => {
+  test("dispose releases pending prefix after a retained-carry overflow", () => {
     const budget = createTestTranslatorBudget({ maxTurnBytes: 128 });
     const parser = new InlineThinkTagParser(budget, { interleaved: true });
-    parser.feed("<think>partial");
-    expect(() => parser.feed("x".repeat(129))).toThrow();
+    parser.feed(" ".repeat(100));
+    expect(() => parser.feed(" ".repeat(29))).toThrow();
     parser.dispose();
     expect(budget.snapshot().currentBytes).toBe(0);
   });

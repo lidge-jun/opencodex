@@ -61,8 +61,9 @@ and after every closing tag remains answer text;
 after it engages it keeps splitting later blocks, because M-series models interleave thinking with
 answer segments, including same-line interleaving. Once engaged, tags are protocol delimiters even
 inside subsequent code fences or quoted examples: this explicit opt-in does not parse Markdown.
-Gateways producing ambiguous literals should use structured reasoning instead. Iterative draining
-keeps stack depth independent of the number of blocks in an upstream chunk.
+Gateways producing ambiguous literals should use structured reasoning instead. A moving cursor
+scans each upstream chunk without copying the remaining response after every block. Only undecided
+leading input or a trailing tag fragment is retained and charged to the translator budget.
 A block left unterminated at end of stream flushes as reasoning rather than being
 dropped. In interleaved Chat mode, whitespace after the leading block and after later blocks
 remains answer text, including indentation and blank lines. Kiro uses single-block mode and
