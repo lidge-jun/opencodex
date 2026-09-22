@@ -440,6 +440,14 @@ export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
     verifiedAt: "2026-08-18",
     status: "verified",
   },
+  {
+    provider: "xai",
+    modelId: "grok-4.7",
+    cost4: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    source: "https://docs.x.ai/developers/models/grok-4.7",
+    verifiedAt: "2026-09-23",
+    status: "verified",
+  },
 ];
 
 export function findVerifiedPriceOverride(
@@ -529,13 +537,13 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
     source: "https://developers.openai.com/api/docs/pricing (derived from the virtual selection's base wire model)",
     verifiedAt: "2026-09-05",
   })),
-  ...["grok-4.5", "grok-4.6"].map((modelId): PriorityPricingRule => ({
+  ...["grok-4.5", "grok-4.6", "grok-4.7"].map((modelId): PriorityPricingRule => ({
     provider: "xai",
     modelId,
     multiplier: 2,
     requiresResponseConfirmation: true,
     source: XAI_PRIORITY_PRICING,
-    verifiedAt: "2026-08-18",
+    verifiedAt: modelId === "grok-4.7" ? "2026-09-23" : "2026-08-18",
   })),
 ];
 
@@ -661,6 +669,19 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
     confirmedPriorityRelation: "lower-bound",
     source: "https://docs.x.ai/developers/pricing",
     verifiedAt: "2026-08-18",
+  },
+  {
+    // xAI documents the same whole-request >=200k band for grok-4.7;
+    // priority stacking remains a lower bound. See
+    // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+    provider: "xai",
+    modelId: "grok-4.7",
+    thresholdInputTokens: 200_000,
+    inclusive: true,
+    multiplier: UNIFORM_DOUBLE,
+    confirmedPriorityRelation: "lower-bound",
+    source: "https://docs.x.ai/developers/models/grok-4.7",
+    verifiedAt: "2026-09-23",
   },
   ...["minimax", "minimax-cn"].map((provider): ContextTier => ({
     provider,

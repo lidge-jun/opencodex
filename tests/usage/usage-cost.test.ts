@@ -936,11 +936,12 @@ describe("xAI Priority Processing pricing", () => {
 
   test("xAI rules declare exact 2x premiums with official provenance", () => {
     const xaiRules = PRIORITY_PRICING_RULES.filter(rule => rule.provider === "xai");
-    expect(xaiRules.map(rule => rule.modelId)).toEqual(["grok-4.5", "grok-4.6"]);
+    expect(xaiRules.map(rule => rule.modelId)).toEqual(["grok-4.5", "grok-4.6", "grok-4.7"]);
     expect(xaiRules.every(rule => rule.multiplier === 2)).toBe(true);
     expect(xaiRules.every(rule => rule.requiresResponseConfirmation === true)).toBe(true);
     expect(xaiRules.every(rule => rule.source === "https://docs.x.ai/developers/advanced-api-usage/priority-processing")).toBe(true);
     expect(findPriorityPricingRule("xai", "grok-4.6")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("xai", "grok-4.7")?.verifiedAt).toBe("2026-09-23");
     expect(findPriorityPricingRule("openrouter", "grok-4.6")).toBeUndefined();
     expect(resolveMatchedPrice("openrouter", "grok-4.6")?.cost4).toEqual({
       input: 2,
@@ -973,6 +974,14 @@ describe("xAI Priority Processing pricing", () => {
     expect(confirmed.cost.total).toBeCloseTo(0.46, 9);
     expect(confirmed.cost.cacheRead).toBeCloseTo(0.02, 9);
     expect(confirmed.priorityMultiplier).toBe(2);
+  });
+
+  test("grok-4.7 uses the published base price and whole-request long-context band", () => {
+    expect(resolveMatchedPrice("xai", "grok-4.7")?.cost4).toEqual({
+      input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0,
+    });
+    expect(CONTEXT_TIERS.find(tier => tier.provider === "xai" && tier.modelId === "grok-4.7"))
+      .toMatchObject({ thresholdInputTokens: 200_000, inclusive: true, confirmedPriorityRelation: "lower-bound" });
   });
 
   test("an assumed priority outcome stays at the standard price", () => {
