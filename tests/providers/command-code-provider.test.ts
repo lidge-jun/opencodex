@@ -11,7 +11,8 @@ import { budgetOwner } from "../helpers/send-budget-owner";
 import type { OcxConfig } from "../../src/types";
 import { commandCodeSessionId, createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../../src/oauth/command-code";
-import { buildModelsRequest, OAUTH_PROVIDERS } from "../../src/oauth";
+import { buildModelsRequest, OAUTH_PROVIDERS, submitManualLoginCode } from "../../src/oauth";
+import { clearManualCodeSlot, loginState, waitForManualLoginCode } from "../../src/oauth/login-flow-state";
 import {
   commandCodeReasoningEfforts,
   refreshCommandCodeReasoningEfforts,
@@ -297,6 +298,61 @@ describe("Command Code provider", () => {
       expect(whoamiCalls).toBeGreaterThan(0);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("callback JSON pasted through the shared submit path: wrong state re-prompts, hashes survive", async () => {
+    const controller = new AbortController();
+    const originalFetch = globalThis.fetch;
+    const whoamiKeys: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const href = String(input);
+      if (href.includes("whoami")) {
+        whoamiKeys.push(new Headers(init?.headers).get("authorization") ?? "");
+        return new Response(JSON.stringify({ ok: true, user: { id: "u-1", userName: "alice#1" } }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${href}`);
+    }) as typeof globalThis.fetch;
+    loginState.set("command-code", { done: false });
+    const prompts: string[] = [];
+    const promptCount = async (count: number) => {
+      for (let i = 0; prompts.length < count && i < 400; i++) await Bun.sleep(5);
+      expect(prompts.length).toBeGreaterThanOrEqual(count);
+    };
+    const callback = (state: string) => JSON.stringify({
+      apiKey: "sk-key#segment",
+      state,
+      userId: "u-1",
+      userName: "alice#1",
+      keyName: "cli",
+    });
+    try {
+      const login = loginCommandCode({
+        onAuth: () => {},
+        onProgress: () => {},
+        onManualCodeInput: state => {
+          prompts.push(state);
+          return waitForManualLoginCode("command-code", controller.signal, state);
+        },
+        signal: controller.signal,
+      }, { importLocal: "off" });
+      await promptCount(1);
+      const state = prompts[0]!;
+
+      // The shared gate lets Command Code JSON through; the provider parser owns the state check.
+      expect(submitManualLoginCode("command-code", callback(`${state}-other`))).toEqual({ ok: true });
+      await promptCount(2);
+      expect(whoamiKeys).toHaveLength(0);
+
+      // A "#" inside a JSON field must not be read as a code#state suffix.
+      expect(submitManualLoginCode("command-code", callback(state))).toEqual({ ok: true });
+      expect(await login).toMatchObject({ access: "sk-key#segment", accountId: "u-1", source: "oauth" });
+      expect(whoamiKeys).toEqual(["Bearer sk-key#segment"]);
+    } finally {
+      controller.abort(new Error("test complete"));
+      globalThis.fetch = originalFetch;
+      loginState.delete("command-code");
+      clearManualCodeSlot("command-code");
     }
   });
 
