@@ -4,6 +4,13 @@ import type { TKey } from "./en";
  * Japanese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const ja: Record<TKey, string> = {
+  "tray.updated": "更新 {time} · 60秒ごと",
+  "tray.today": "今日",
+  "tray.input": "入力",
+  "tray.output": "出力",
+  "tray.cost": "推定費用",
+  "tray.cached": "キャッシュ {percent}",
+
   "usage.incomplete": "一部の使用履歴を集計できませんでした。回数、日付、順位は読み取れる記録のみを反映しています。",
   "models.pickerOrder.usageIncomplete": "使用履歴が不完全なため、使用回数順を保存できません。別の順序を選ぶか、履歴を修復してください。",
   "api.attribution.noRecordedUse": "読み取れる記録に使用履歴なし",

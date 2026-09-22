@@ -6,6 +6,13 @@
  * `{var}` are plain interpolations.
  */
 export const en = {
+  "tray.updated": "Updated {time} · every 60s",
+  "tray.today": "Today",
+  "tray.input": "Input",
+  "tray.output": "Output",
+  "tray.cost": "Cost · est.",
+  "tray.cached": "{percent} cached",
+
   "usage.incomplete": "Some usage records could not be included. Counts, dates, and rankings reflect readable records only.",
   "models.pickerOrder.usageIncomplete": "Cannot save most-used order because usage history is incomplete. Choose another order or repair the history first.",
   "api.attribution.noRecordedUse": "No use in readable records",

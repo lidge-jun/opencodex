@@ -66,7 +66,13 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
   if (status === 401 || enumStatus === "UNAUTHENTICATED" || lower.includes("unauthenticated") || lower.includes("invalid authentication") || lower.includes("expired")) {
     return `${label} authentication failed`;
   }
-  if (status === 403 || enumStatus === "PERMISSION_DENIED" || lower.includes("permission_denied") || lower.includes("permission denied") || lower.includes("access denied")) {
+  // Keep Google's explicit enum in the normalized text. Responses/combo handling receives
+  // only this string, so dropping it would let location wording override the authoritative
+  // permission reason during downstream classification.
+  if (enumStatus === "PERMISSION_DENIED") {
+    return `${label} access denied (PERMISSION_DENIED)`;
+  }
+  if (status === 403 || lower.includes("permission_denied") || lower.includes("permission denied") || lower.includes("access denied")) {
     return `${label} access denied`;
   }
   // Google rejects unsupported geographic / datacenter locations with HTTP 400
