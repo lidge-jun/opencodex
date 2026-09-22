@@ -308,10 +308,15 @@ First-party Kimi and Moonshot Chat destinations normalize a `$ref` with sibling 
 their wire rejects that valid JSON Schema 2020-12 shape. Inlining preserves conjunction semantics:
 `required` members are unioned, lower numeric bounds take the maximum, upper numeric bounds take the
 minimum, and overlapping `properties` recurse with the same rules. The walk remains depth-, node-,
-and expansion-bounded. Unresolvable or cyclic references keep the existing bare-`$ref` fallback,
-and unrelated OpenAI-compatible providers retain the caller's schema unchanged.
+expansion-, and inline-byte-bounded: each inlined reference is charged its serialized size against
+one 1 MiB allowance shared by every tool in the request. Raw target bytes are reserved before
+normalization; inferred types and nested normalization must also fit the remaining allowance
+before their copy is retained. An over-budget reference keeps the existing bare-`$ref` fallback.
+Unresolvable or cyclic references do the same, and unrelated OpenAI-compatible providers
+retain the caller's schema unchanged.
 
 > Decision record: [ADR-0064](../decisions/ADR-0064-chat-structured-output-compatibility.md)
+> Decision record: [ADR-0355](../decisions/ADR-0355-chat-structured-output-compatibility.md)
 
 The `openai-chat` adapter translates Responses `text.format` and Chat Completions
 `response_format` through one internal format, then emits `response_format` on the upstream chat
