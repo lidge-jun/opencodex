@@ -202,7 +202,9 @@ async function handleChatCompletionsWithBudget(
     if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) {
       chatNativeRoute = route;
       if (logCtx.usageLogInputTokens === undefined) {
-        logCtx.usageLogInputTokens = Math.max(1, estimateTokens(JSON.stringify(chatBody.messages ?? []), requestedModel));
+        const parts = [JSON.stringify(chatBody.messages ?? [])];
+        if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
+        logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
       }
       const outputCeiling = chatBody.max_completion_tokens ?? chatBody.max_tokens;
       if (typeof outputCeiling === "number" && outputCeiling > 0) {

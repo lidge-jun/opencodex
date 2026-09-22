@@ -1280,8 +1280,8 @@ and parked on the log context so `addFinalRequestLog` can settle it. Native Chat
 same tracker before its independent physical-send ladder and charges it immediately before each
 dispatch, so taking that fast path cannot bypass root, identity, or provider-pool ceilings.
 
-It books by observing the budget's own send counter rather than by being called from each
-dispatch site. That counter moves exactly once per physical send — a reservation increments it, a
+The Responses path books by observing its budget's own send counter rather than calling each
+dispatch site; Native Chat directly charges messages, tool definitions and the output ceiling. That counter moves exactly once per physical send — a reservation increments it, a
 refund decrements it, and an externally reported send settles against a booking already counted —
 so one ledger entry per increment is one entry per send, and a dispatch path added later cannot
 forget to book. The previous attempt at this wiring shipped the whole reserve/dispatch/settle

@@ -541,6 +541,11 @@ status, so an unexpected management response cannot add raw upstream material.
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
 `src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`
+Requested selectors longer than 130 characters persist as a prefix plus a digest of the complete
+selector; the request-history exact-match filter applies the same idempotent encoding. Serving-model
+identities remain unchanged. Only historical Codex `openai`, `chatgpt` and `openai-multi` main labels
+collapse for reporting; configured provider names ending in `-main` remain separate. CLI access-key
+usage is unavailable without a valid attribution timestamp, rather than a measured zero or never-used key.
 inside an owner-only `0o700` directory. Consecutive appends reuse the directory and permission
 check for at most one second; the first append at or after that boundary attempts to reapply both
 modes, and an `ENOENT` append invalidates the cache and recreates the path immediately. This is a

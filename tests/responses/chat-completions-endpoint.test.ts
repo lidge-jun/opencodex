@@ -192,6 +192,29 @@ test("native Chat refuses a physical send that exceeds the configured pool spend
   }
 });
 
+test("native Chat includes tool definitions in its pre-dispatch spend reservation", async () => {
+  takeSpendHome();
+  const upstream = mockChatUpstreamCapturing();
+  const config = mockConfig(`${upstream.server.url.toString().replace(/\/$/, "")}/v1`);
+  config.spend = { pool: { maxTokens: 500 } };
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", messages: [{ role: "user", content: "hello" }],
+        max_tokens: 1, tools: [{ type: "function", function: { name: "large_tool", description: "large schema ".repeat(2_000), parameters: { type: "object" } } }] }),
+    });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+    expect(upstream.captured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    upstream.server.stop(true);
+  }
+});
+
 type StreamedToolCall = {
   index?: number;
   id?: string;
