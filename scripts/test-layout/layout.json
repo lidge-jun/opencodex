@@ -629,7 +629,7 @@
     "config-catalog-auto-refresh.test.ts": "config",
     "config-load-degrade.test.ts": "config",
     "config-mutation-lock.test.ts": "config",
-    "config-non-object-backup.test.ts": "server",
+    "config-non-object-backup.test.ts": "config",
     "config-ownership-uninstall.test.ts": "config",
     "config-rebase-provenance-writers.test.ts": "config",
     "config-save-boundary.test.ts": "config",
