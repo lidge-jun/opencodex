@@ -1006,8 +1006,11 @@ export const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Objec
 // catalogue snapshot supplied by the original provider author
 // (https://api.opper.ai/v3/models?limit=2000, captured 2026-09-14); `vendor/model` ids
 // (anthropic/claude-sonnet-4-6) pin one route and stay valid, they are just not seeded.
+// 260923: `claude-opus-5-5` pool (anthropic, aws eu, vertex, vertex-eu members; all 1M / 128K,
+// vision) read from the same catalogue endpoint the day after Anthropic's release.
 export const OPPER_MODELS = [
   "claude-sonnet-4-6",
+  "claude-opus-5-5",
   "claude-opus-5",
   "gpt-5.5",
   "gpt-5.4-mini",
@@ -1020,6 +1023,7 @@ export const OPPER_MODELS = [
 // (kimi-k3 output); live discovery owns which models exist.
 export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "gpt-5.5": 1_050_000,
   "gpt-5.4-mini": 400_000,
@@ -1030,6 +1034,7 @@ export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 export const OPPER_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-sonnet-4-6": 64_000,
+  "claude-opus-5-5": 128_000,
   "claude-opus-5": 128_000,
   "gpt-5.5": 128_000,
   "gpt-5.4-mini": 128_000,

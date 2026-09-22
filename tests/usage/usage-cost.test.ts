@@ -209,6 +209,14 @@ describe("resolveMatchedPrice", () => {
     }
     // Aggregators spell it with a dot; their bundled rows carry the same list rate.
     expect(resolveMatchedPrice("openrouter", "anthropic/claude-opus-5.5")?.cost4).toEqual(COST4);
+    // Live-only or pooled providers with no bundle row of their own follow the vendor price.
+    for (const provider of ["command-code", "opper", "github-copilot"]) {
+      expect(resolveMatchedPrice(provider, "claude-opus-5-5"), provider).toMatchObject({
+        cost4: COST4,
+        jawcodeProvider: "anthropic",
+        status: "verified-derived",
+      });
+    }
   });
 
   test("17. model-level fallback: kiro's claude opus follows the anthropic price", () => {
