@@ -29,6 +29,7 @@ bun run test        # 完整测试套件（默认）
 
 ```bash
 bun run typecheck                 # 严格 TypeScript 检查
+bun run test:changed              # 针对解析出的 dev merge-base 的导入图测试
 bun run test                      # 完整 tests/ suite
 bun test tests/routing/router.test.ts     # 聚焦单个测试文件
 bun run build:gui                 # Vite GUI 构建 + package 准备

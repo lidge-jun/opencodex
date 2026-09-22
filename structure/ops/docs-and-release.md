@@ -4,7 +4,9 @@ macOS shards and control use the shared fresh-process batch runner described bel
 `scripts/ci/sample-macos-stall.sh` remains a standalone diagnostic helper with isolated
 observer regression coverage; it is not wired into those bounded batch steps. It samples
 only a single identified direct Bun child after silence and cleans up only its own
-diagnostic children. The catalog picker fixture retains CI-only phase boundaries.
+diagnostic children. Process inventories emit executable basenames; command stdout/stderr
+and stack reports redact literal home/workspace prefixes before capped emission. The
+catalog picker fixture retains CI-only phase boundaries.
 
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 

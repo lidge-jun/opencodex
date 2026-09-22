@@ -31,6 +31,7 @@ bun run test        # 全テストスイート（既定）
 
 ```bash
 bun run typecheck                 # 厳密な TypeScript 検査
+bun run test:changed              # 解決した dev マージベースに対する import graph テスト
 bun run test                      # tests/ の全体スイート
 bun test tests/routing/router.test.ts     # 特定テストファイル
 bun run build:gui                 # Vite GUI ビルド + パッケージ準備

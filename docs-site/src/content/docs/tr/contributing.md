@@ -37,6 +37,7 @@ Yerel komutların CI ile eşleşmesi için depodaki betikleri kullanın:
 
 ```bash
 bun run typecheck                 # katı TypeScript denetimi
+bun run test:changed              # çözümlenen dev merge-base için import grafiği testleri
 bun run test                      # tests/ paketinin tamamı
 bun test tests/routing/router.test.ts     # odaklanmış test dosyası
 bun run build:gui                 # Vite GUI derlemesi + paket hazırlığı

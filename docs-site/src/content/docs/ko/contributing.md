@@ -31,6 +31,7 @@ bun run test        # 전체 테스트 스위트 (기본)
 
 ```bash
 bun run typecheck                 # 엄격한 TypeScript 검사
+bun run test:changed              # dev merge base 기준 import graph 테스트
 bun run test                      # tests/ 전체 스위트
 bun test tests/routing/router.test.ts     # 특정 테스트 파일
 bun run build:gui                 # Vite GUI 빌드 + 패키지 준비

@@ -30,6 +30,7 @@ bun run test        # полный набор тестов (по умолчан�
 
 ```bash
 bun run typecheck                 # строгая проверка TypeScript
+bun run test:changed              # тесты графа импортов относительно найденного merge-base dev
 bun run test                      # полный набор tests/
 bun test tests/routing/router.test.ts     # отдельный тестовый файл
 bun run build:gui                 # сборка GUI на Vite + подготовка пакета
