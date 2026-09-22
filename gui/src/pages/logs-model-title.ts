@@ -17,6 +17,11 @@ export interface ModelTitleEntry {
   tierOutcome?: ModelTitleTierOutcome;
 }
 
+/** The upstream answered with a model other than the one sent on the wire. */
+export function isModelRerouted(log: Pick<ModelTitleEntry, "model" | "servedModel" | "wireModel">): boolean {
+  return log.servedModel !== undefined && log.servedModel !== (log.wireModel ?? log.model);
+}
+
 /**
  * #2455: the echoed tier alone does not say whether Fast was granted. The ChatGPT
  * backend answers `default` on turns it in fact scheduled as priority, so its echo is
@@ -40,6 +45,7 @@ function tierConfirmationSuffix(outcome: ModelTitleEntry["tierOutcome"], t: TFn)
 
 export function modelTitle(log: ModelTitleEntry, t: TFn): string {
   const details = [
+    isModelRerouted(log) ? t("logs.modelRerouteTitle") : undefined,
     `${t("logs.modelTooltip.model")}=${log.model}`,
     log.resolvedModel ? `${t("logs.modelTooltip.resolvedModel")}=${log.resolvedModel}` : undefined,
     log.servedModel ? `${t("logs.modelTooltip.servedModel")}=${log.servedModel}` : undefined,

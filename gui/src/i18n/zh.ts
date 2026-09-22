@@ -964,7 +964,7 @@ export const zh: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "解析后模型",
   "logs.modelTooltip.servedModel": "实际服务模型",
   "logs.modelTooltip.wireModel": "线路上模型",
-  "logs.modelRerouteTitle": "上游实际服务的模型与请求的模型不同",
+  "logs.modelRerouteTitle": "上游实际服务的模型与发送的模型不同",
   "logs.modelTooltip.requestedTier": "请求层级",
   "logs.modelTooltip.configuredTier": "配置层级",
   "logs.modelTooltip.responseTier": "响应层级",

@@ -759,7 +759,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "解析後模型",
   "logs.modelTooltip.servedModel": "實際服務模型",
   "logs.modelTooltip.wireModel": "線路上模型",
-  "logs.modelRerouteTitle": "上游實際服務的模型與請求的模型不同",
+  "logs.modelRerouteTitle": "上游實際服務的模型與發送的模型不同",
   "logs.modelTooltip.requestedTier": "請求層級",
   "logs.modelTooltip.configuredTier": "設定層級",
   "logs.modelTooltip.responseTier": "回應層級",
