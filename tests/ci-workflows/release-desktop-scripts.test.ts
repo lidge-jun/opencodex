@@ -433,6 +433,10 @@ describe("widget extension signing", () => {
     const rust = steps.find(step => step.name === "Setup Rust");
     expect(rust?.with?.targets).toContain("aarch64-apple-darwin,x86_64-apple-darwin");
     expect(rust?.with?.targets).toContain("runner.os == 'macOS'");
+    const sidecars = steps.find(step => step.name === "Prepare macOS sidecars");
+    expect(sidecars?.run).toContain("lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin");
+    expect(sidecars?.run).toContain("-output desktop/src-tauri/binaries/ocx-universal-apple-darwin");
+    expect(sidecars?.run).toContain("lipo -verify_arch arm64 x86_64");
     const prepare = steps.find(step => step.name === "Prepare Windows installer version");
     expect(prepare?.if).toBe("runner.os == 'Windows'");
     expect(prepare?.env?.RELEASE_VERSION).toBe("${{ inputs.version }}");
@@ -442,6 +446,18 @@ describe("widget extension signing", () => {
     expect(build?.run).toContain("format('{0}/opencodex-msi.json', runner.temp)");
     expect(build?.run).toContain("runner.os == 'Windows'");
     expect(indexOfStep("Prepare Windows installer version")).toBeLessThan(indexOfStep("Build desktop bundles"));
+  });
+
+  test("Linux verifies the packaged CLI before collecting release assets", () => {
+    const preserve = steps.find(step => step.name === "Preserve the compiled Linux sidecar");
+    const verify = steps.find(step => step.name === "Verify the packaged Linux sidecar");
+    expect(preserve?.if).toBe("runner.os == 'Linux'");
+    expect(preserve?.run).toContain("PATCHELF=$GITHUB_WORKSPACE/desktop/scripts/appimage-patchelf.py");
+    expect(verify?.if).toBe("runner.os == 'Linux'");
+    expect(verify?.run).toBe("bash desktop/scripts/verify-linux-sidecar.sh");
+    expect(indexOfStep(preserve!.name!)).toBeLessThan(indexOfStep("Build desktop bundles"));
+    expect(indexOfStep(verify!.name!)).toBeGreaterThan(indexOfStep("Build desktop bundles"));
+    expect(indexOfStep(verify!.name!)).toBeLessThan(indexOfStep("Rename release assets"));
   });
 
   test("the release build hands the widget a signing identity and forbids an ad-hoc fallback", () => {

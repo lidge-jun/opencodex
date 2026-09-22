@@ -195,6 +195,15 @@ marker, which the GUI detects to identify the shell without using IPC.
 
 ## Release packaging and updater
 
+Linux AppImage packaging uses `desktop/scripts/appimage-patchelf.py` to preserve
+the compiled Bun CLI when linuxdeploy sets the executable RPATH. Only the exact
+AppDir sidecar, still byte-identical to the prepared CLI, is exempt; other ELF
+operations use the system patchelf. `desktop/scripts/verify-linux-sidecar.sh`
+extracts the completed AppImage, compares its CLI bytes and runs its version command
+on the hosted runner before any release asset is collected.
+The macOS release combines both prepared CLI architectures with `lipo` into the
+universal external binary Tauri expects, and checks that both slices are present.
+
 The release workflow packages the desktop shell as `OpenCodex-<version>-macos.dmg`,
 `OpenCodex-<version>-windows-x64.msi`, `OpenCodex-<version>-linux-x86_64.AppImage`, and
 `OpenCodex-<version>-linux-amd64.deb`. Each artifact is collected with a `.sha256` file;

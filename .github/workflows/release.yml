@@ -245,6 +245,10 @@ jobs:
         run: |
           bun desktop/scripts/prepare-sidecar.ts --target aarch64-apple-darwin
           bun desktop/scripts/prepare-sidecar.ts --target x86_64-apple-darwin
+          lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin \
+            desktop/src-tauri/binaries/ocx-x86_64-apple-darwin \
+            -output desktop/src-tauri/binaries/ocx-universal-apple-darwin
+          lipo -verify_arch arm64 x86_64 desktop/src-tauri/binaries/ocx-universal-apple-darwin
 
       - name: Prepare sidecar
         if: runner.os != 'macOS'
@@ -344,6 +348,12 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
         run: bun desktop/scripts/windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"
 
+      - name: Preserve the compiled Linux sidecar
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x desktop/scripts/appimage-patchelf.py
+          echo "PATCHELF=$GITHUB_WORKSPACE/desktop/scripts/appimage-patchelf.py" >> "$GITHUB_ENV"
+
       # Release signing is intentionally secret-gated. Developer ID, notarization,
       # and updater signatures require maintainer-owned credentials; builds without
       # those secrets remain useful for local validation but are not release assets.
@@ -362,6 +372,10 @@ jobs:
         # linuxdeploy suppresses its own stderr at the default verbosity. Keep
         # diagnostics on the first attempt; Apple signing commands stay non-verbose.
         run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
+
+      - name: Verify the packaged Linux sidecar
+        if: runner.os == 'Linux'
+        run: bash desktop/scripts/verify-linux-sidecar.sh
 
       - name: Rename release assets
         shell: bash
