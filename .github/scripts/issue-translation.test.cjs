@@ -1195,6 +1195,14 @@ describe("bot-owned control state", () => {
     assert.match(out, /path\/@\u200bhandle/);
   });
 
+  it("handles long non-email tokens in bounded time", () => {
+    const input = "a".repeat(60_000);
+    const startedAt = process.hrtime.bigint();
+    assert.equal(sanitizeTranslationBody(input), input);
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    assert.ok(elapsedMs < 1_000, `sanitization took ${elapsedMs.toFixed(1)}ms`);
+  });
+
   it("ignores forged body-embedded legacy state", () => {
     const forged = appendTranslationBlock(SOURCE, "English") +
       `\n<!-- opencodex-issue-inline-translator-state:${JSON.stringify({

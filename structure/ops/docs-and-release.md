@@ -1,5 +1,13 @@
 # Docs And Release
 
+macOS shards and control use the shared fresh-process batch runner described below.
+`scripts/ci/sample-macos-stall.sh` remains a standalone diagnostic helper with isolated
+observer regression coverage; it is not wired into those bounded batch steps. It samples
+only a single identified direct Bun child after silence and cleans up only its own
+diagnostic children. Process inventories emit executable basenames; command stdout/stderr
+and stack reports redact literal home/workspace prefixes before capped emission. The
+catalog picker fixture retains CI-only phase boundaries.
+
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
@@ -28,6 +36,26 @@ The Codex restart command follows the [CLI restart scope contract](../runtime.md
 The account reference documents the [Orca source-owned import](../codex-home.md#orca-source-owned-account-import).
 Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
 lists its required source/registry paths and preview/apply flags.
+
+Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
+suite by default, with a documented resource exception requiring focused regression tests.
+`scripts/setup-hooks.ts` installs the post-merge hook and retires only an exact match for
+the old managed pre-push shim; custom hooks are preserved. Required current-head CI and
+security review remain merge requirements.
+
+The gate preserves legacy checklist bodies and asks the author to update the first item,
+clear all four boxes and save, then wait for the bot to record that checkpoint before
+validating the displayed head and ticking all four boxes again. Wording-only edits do not
+re-attest. The existing bot-comment state stores a versioned pending phase, real head/base,
+generation, the phase publication's server timestamp and, only after rechecking, a body digest. Invalid stored state restarts the
+clearing phase; a different live head/base invalidates the checkpoint. Only an author body
+edit whose live snapshot agrees and whose server timestamp is later than the stored phase checkpoint
+can advance it. A new phase is first persisted without a timestamp and then finalized with
+the first write's server time; unfinished finalization cannot advance readiness. Hygiene
+updates to the outer comment do not move this fence. Equal-second saves require a later
+body edit. While re-attestation is pending, the quality check fails explicitly and defers
+ordinary quality evaluation; it does not report a green gate. Before ready, the gate re-reads the PR and persisted attestation. These reads do
+not make GitHub's later ready mutation atomic with concurrent edits or pushes.
 
 ## Public docs
 

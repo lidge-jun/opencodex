@@ -1,6 +1,6 @@
 /**
  * Run React Doctor in gui/ when this push includes gui/ changes.
- * Used by `bun run prepush`. Skip with: git push --no-verify
+ * Used by `bun run prepush`.
  *
  * Gating by contract (doctor.config.json blocking: "warning"): findings fail
  * the push. An unavailable engine (offline npx fetch, missing binary) still

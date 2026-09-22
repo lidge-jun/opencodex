@@ -12,13 +12,16 @@ runtime Bun aux utilisateurs, mais les scripts de ce dépôt utilisent votre ins
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
+bun run setup:hooks  # installer post-merge et retirer l’ancien pre-push géré
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
-bun run test:changed              # routine import-graph test selection
-bun test tests/routing/router.test.ts     # routine focused test
-bun run test                      # complete suite (PR-ready / explicit ask)
+bun run test        # suite complète (par défaut)
 ```
+
+`bun run setup:hooks` installe uniquement `post-merge` et supprime l’ancien hook `pre-push`
+géré s’il n’a pas été modifié, tout en préservant les hooks personnalisés. Le hook `pre-push`
+n’est plus obligatoire. `bun run prepush` reste une vérification manuelle facultative.
 
 `bun run dev` reste un alias pour `bun run dev:proxy`. Le serveur de développement du tableau de bord est `bun run dev:gui` ;
 le tableau de bord packagé en `GET /` est produit par `bun run build:gui` (`gui/dist`).
@@ -31,17 +34,25 @@ distincte. Utilisez les scripts enregistrés afin que les commandes locales corr
 ```bash
 bun run typecheck                 # strict TypeScript check
 bun run test:changed              # import-graph tests against the resolved dev merge base
-bun run test                      # complete tests/ suite (PR-ready / explicit ask)
+bun run test                      # suite complète (par défaut)
 bun test tests/routing/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
+Exécutez `bun run test` par défaut. Si une exécution complète est disproportionnée par rapport
+à la taille de la tâche, aux ressources de la machine ou aux worktrees utilisés en parallèle, vous
+devez au minimum exécuter des tests de régression ciblés qui exercent le comportement modifié, par
+exemple `bun test tests/<domain>/<name>.test.ts`. Expliquez ce choix et indiquez les commandes
+exactes, leurs résultats et le périmètre non testé. `bun run test:changed` peut compléter cette
+couverture, mais ne détecte pas toutes les dépendances indirectes. Se reposer uniquement sur la CI
+ou omettre les tests locaux ne constitue pas une exemption générale. Avant la fusion, tous les
+contrôles CI obligatoires doivent réussir sur le commit exact de la tête actuelle de la PR.
+
 Les tests Bun vivent dans des répertoires par domaine calqués sur `src/` (`tests/<domain>/`), la carte étant `scripts/test-layout/layout.json`. `tests/helpers/` contient les fixtures
 partagées et `tests/e2e-style/` des scénarios plus larges de parité native. Placez une régression ciblée près
-des tests existants du sous-système modifié. Exécutez la suite complète pour le routage partagé, les adaptateurs,
-la configuration ou le comportement du serveur.
+des tests existants du sous-système modifié.
 
 Le site de documentation que vous lisez se trouve dans `docs-site/` (Astro + Starlight) :
 
@@ -224,6 +235,6 @@ la fabrique depuis `src/index.ts` lorsqu’elle appartient à l’API publique d
 
 ## Vérifiez avant de déclarer que c'est fait
 
-Exécutez la commande la plus étroite qui prouve votre changement — `bun run typecheck` pour les types, un
-`bun test tests/<name>.test.ts` ou une sonde d'exécution pour le comportement, puis les portes plus larges appropriées à
-la surface affectée. opencodex privilégie les petits commits vérifiables plutôt que les gros lots.
+Suivez la politique de test ci-dessus et exécutez `bun run typecheck` pour les changements de types,
+ainsi que les vérifications requises pour la zone concernée. Indiquez les commandes, les résultats
+et le périmètre non testé ; ne revendiquez que les validations réellement effectuées.

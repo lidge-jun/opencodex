@@ -186,6 +186,9 @@ jobs:
               isChangedFileListTruncated,
               extractReviewReadiness,
               appendReviewReadinessSection,
+              reviewReadinessMigrationRequired,
+              reviewReadinessUsesCurrentPolicy,
+              REVIEW_READINESS_ITEMS,
               stripReviewReadinessSection,
               uncheckReviewReadinessBoxes,
               REVIEW_READINESS_CLAIM_INDEX,
@@ -204,6 +207,8 @@ jobs:
             );
             const {
               parseGateState,
+              advanceReattestation,
+              savedAttestationAuthorizes,
               gateStateMarker,
               parseState,
               parseReadinessState,
@@ -341,7 +346,8 @@ jobs:
               legacyReadinessState
             );
 
-            let gateState = storedGateState ?? migratedGateState;
+            let gateState = storedGateState && typeof storedGateState === "object" && !Array.isArray(storedGateState)
+              ? storedGateState : migratedGateState;
 
             /**
              * Maintainers from `MAINTAINERS.md` on the trusted default branch
@@ -418,13 +424,15 @@ jobs:
                   await migrateLegacyCommentsIfNeeded();
                   return;
                 }
-                await github.rest.issues.updateComment({
+                const updated = await github.rest.issues.updateComment({
                   owner,
                   repo,
                   comment_id: gateCommentId,
                   body
                 });
-                gateComment.body = body;
+                // Replace the listed comment instead of mutating it, so a later
+                // authoritative readback observes the server, not this run's copy.
+                gateComment = { ...gateComment, body, updated_at: updated.data.updated_at };
                 await migrateLegacyCommentsIfNeeded();
                 return;
               }
@@ -435,7 +443,7 @@ jobs:
                 body
               });
               gateCommentId = created.data.id;
-              gateComment = { id: gateCommentId, body };
+              gateComment = { id: gateCommentId, body, updated_at: created.data.updated_at };
               await migrateLegacyCommentsIfNeeded();
             }
 
@@ -525,6 +533,118 @@ jobs:
               core.warning(
                 `Could not look up collaborator permission: ${error.message}`
               );
+            }
+
+            let reattestation = null;
+            let preserveAuthorBody = false;
+            const initiallyLegacy = reviewReadinessMigrationRequired(pr.body);
+            const unreadablePendingState = Boolean(gateComment?.body?.includes("opencodex-pr-gate-state:") &&
+              (!storedGateState || typeof storedGateState !== "object" || Array.isArray(storedGateState)));
+
+            function observeReattestation(snapshot, invalidate = false, allowEvent = true) {
+              const pending = (unreadablePendingState || (initiallyLegacy && gateState.pendingReattestation == null)) && !preserveAuthorBody
+                ? { invalid: true } : gateState.pendingReattestation;
+              const result = advanceReattestation({
+                pending,
+                legacy: reviewReadinessMigrationRequired(snapshot.body),
+                current: reviewReadinessUsesCurrentPolicy(snapshot.body),
+                readiness: extractReviewReadiness(snapshot.body),
+                live: { headSha: snapshot.head?.sha, baseRef: snapshot.base?.ref,
+                  body: snapshot.body, updatedAt: snapshot.updated_at, authorId: snapshot.user?.id },
+                event: allowEvent ? { name: context.eventName, action: context.payload.action,
+                  senderId: context.payload.sender?.id, senderType: context.payload.sender?.type,
+                  headSha: context.payload.pull_request?.head?.sha, body: context.payload.pull_request?.body,
+                  updatedAt: context.payload.pull_request?.updated_at,
+                  previousBody: context.payload.changes?.body?.from } : {},
+                invalidate
+              });
+              preserveAuthorBody ||= pending != null || result.pending != null;
+              gateState.pendingReattestation = result.pending;
+              reattestation = result;
+              return result;
+            }
+
+            async function persistReattestationCheckpoint(state, options) {
+              await upsertGateComment(state, options);
+              if (state.pendingReattestation?.checkpointAt !== null) return;
+              const checkpointAt = gateComment?.updated_at;
+              if (typeof checkpointAt !== "string" || !Number.isFinite(Date.parse(checkpointAt))) {
+                core.setFailed("The re-attestation checkpoint has no authoritative server timestamp.");
+                return;
+              }
+              const finalized = { ...state.pendingReattestation, checkpointAt };
+              await upsertGateComment({ ...state, pendingReattestation: finalized }, options);
+              gateState.pendingReattestation = finalized;
+            }
+
+            async function retainReattestationDraft(snapshot) {
+              core.setFailed("Current-head author re-attestation is pending; ordinary quality evaluation resumes after the saved checkpoint.");
+              if (reattestation?.invalidIdentity) {
+                core.setFailed("Cannot bind re-attestation to a verified current PR head.");
+                return;
+              }
+              const pending = gateState.pendingReattestation;
+              const snapshotReadiness = extractReviewReadiness(snapshot.body);
+              const clearStep = "Wait for the bot to acknowledge the cleared checklist before validating and ticking the boxes again.";
+              const action = pending?.phase === "await-check"
+                ? "The cleared checklist has been recorded. Validate this head, tick all four boxes and save the PR description."
+                : reviewReadinessUsesCurrentPolicy(snapshot.body) && snapshotReadiness.checked > 0
+                  ? `The first managed item already uses the current wording, but boxes ticked before this notice cannot carry over. Clear all four boxes and save. ${clearStep}`
+                  : `Change the first managed item to ${inlineCode(REVIEW_READINESS_ITEMS[0])}, clear all four boxes and save. ${clearStep}`;
+              const state = { ...gateState, active: true, maintainersPinged: false,
+                autoDraftedByBot: !snapshot.draft || gateState.autoDraftedByBot };
+              const options = {
+                status: "DRAFT", statusReason: "author re-attestation is required for the current head.",
+                actions: [action, "Only a new body edit by the PR author after this notice can advance the checkpoint. If edits share a checkpoint timestamp, make another body edit and save later."],
+                readiness: snapshotReadiness, checklistRequired: true,
+                notices: [`Current head: ${inlineCode(snapshot.head.sha)}. Existing PR text and checkbox marks were preserved.`]
+              };
+              await persistReattestationCheckpoint(state, options);
+              if ((snapshot.labels ?? []).some(label => label.name === REVIEW_READY_LABEL)) {
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number: pull_number, name: REVIEW_READY_LABEL });
+                } catch (error) {
+                  core.setFailed("Could not remove the stale review-ready label while re-attestation is pending.");
+                }
+              }
+              if (!snapshot.draft) {
+                try { await convertToDraft(); }
+                catch (error) {
+                  state.autoDraftedByBot = false;
+                  state.pendingReattestation = gateState.pendingReattestation;
+                  await upsertGateComment(state, {
+                    ...options, notices: [...options.notices, "Automatic draft conversion failed. Please retain draft state manually until re-attestation is complete."]
+                  });
+                  core.setFailed("Could not retain draft state during author re-attestation.");
+                }
+              }
+            }
+
+            if (!authorHasPushPermission(authorPermission) &&
+                (reviewReadinessMigrationRequired(pr.body) || gateState.pendingReattestation != null || unreadablePendingState)) {
+              const { data: freshPr } = await github.rest.pulls.get({ owner, repo, pull_number });
+              if (freshPr.node_id !== pr.node_id || freshPr.user?.id !== pr.user?.id) {
+                core.setFailed("PR identity changed before re-attestation.");
+                return;
+              }
+              Object.assign(pr, freshPr);
+              const result = observeReattestation(pr);
+              if (result.invalidIdentity || result.pending?.phase !== "attested") {
+                await retainReattestationDraft(pr);
+                return;
+              }
+              // Persist the new proof before any ready side effect. A failed write
+              // cannot be treated as a saved re-attestation checkpoint.
+              await persistReattestationCheckpoint({ ...gateState, active: true }, {
+                status: "DRAFT", statusReason: "Current-head re-attestation recorded; checking remaining requirements.",
+                actions: [], readiness: extractReviewReadiness(pr.body), checklistRequired: true, notices: []
+              });
+              if (!observeReattestation(pr, false, false).canComplete) {
+                core.setFailed("Re-attestation finalization is incomplete; readiness was not advanced.");
+                return;
+              }
+            } else if (authorHasPushPermission(authorPermission)) {
+              gateState.pendingReattestation = null;
             }
 
             let behindMain = 0;
@@ -815,7 +935,7 @@ jobs:
                 ? ""
                 : pr.head.sha);
             const completionHeadSha =
-              gateState.completedAtHeadSha ?? null;
+              reattestation?.canComplete ? pr.head.sha : (gateState.completedAtHeadSha ?? null);
             const headDrifted = completionIsStale({
               checklistRequired,
               checklistComplete,
@@ -837,6 +957,11 @@ jobs:
                 repo,
                 pull_number
               });
+              if (preserveAuthorBody || reviewReadinessMigrationRequired(freshPr.body)) {
+                observeReattestation(freshPr, true, false);
+                await retainReattestationDraft(freshPr);
+                return;
+              }
               const freshReadiness = extractReviewReadiness(
                 freshPr.body ?? ""
               );
@@ -848,7 +973,8 @@ jobs:
                 ...defaultGateState(),
                 active: gateState.active,
                 autoDraftedByBot: gateState.autoDraftedByBot,
-                titlePrefixedByBot: gateState.titlePrefixedByBot
+                titlePrefixedByBot: gateState.titlePrefixedByBot,
+                pendingReattestation: gateState.pendingReattestation ?? null
               };
               headDriftNotice = buildStaleNotice({
                 completionHeadSha,
@@ -991,6 +1117,11 @@ jobs:
                   repo,
                   pull_number
                 });
+                if (preserveAuthorBody || reviewReadinessMigrationRequired(freshPr.body)) {
+                  observeReattestation(freshPr, true, false);
+                  await retainReattestationDraft(freshPr);
+                  return;
+                }
                 const freshReadiness = extractReviewReadiness(
                   freshPr.body ?? ""
                 );
@@ -998,7 +1129,8 @@ jobs:
                   ...defaultGateState(),
                   active: gateState.active,
                   autoDraftedByBot: gateState.autoDraftedByBot,
-                  titlePrefixedByBot: gateState.titlePrefixedByBot
+                  titlePrefixedByBot: gateState.titlePrefixedByBot,
+                  pendingReattestation: gateState.pendingReattestation ?? null
                 };
                 claimNotice = [
                   ...(claimViolations.includes("review_findings")
@@ -1091,6 +1223,40 @@ jobs:
                 actions.push(...revalidationNotice);
               }
               return actions;
+            }
+
+            if (checklistRequired && checklistComplete && failures.length === 0) {
+              const expectedPending = JSON.stringify(gateState.pendingReattestation);
+              try {
+                if (preserveAuthorBody) {
+                  const { data: finalComment } = await github.rest.issues.getComment({ owner, repo, comment_id: gateCommentId });
+                  const finalState = parseGateState(finalComment.body);
+                  // Promotion needs positive evidence: the saved comment must hold a
+                  // finalized attestation of this exact head, base, and body.
+                  if (finalComment.user?.login !== "github-actions[bot]" ||
+                      JSON.stringify(finalState?.pendingReattestation) !== expectedPending ||
+                      !savedAttestationAuthorizes(finalState?.pendingReattestation, {
+                        headSha: pr.head.sha, baseRef: pr.base.ref, body: pr.body, authorId: pr.user?.id })) {
+                    core.setFailed("Saved re-attestation changed before readiness; no ready action was taken.");
+                    return;
+                  }
+                }
+                const { data: finalPr } = await github.rest.pulls.get({ owner, repo, pull_number });
+                if (reviewReadinessMigrationRequired(finalPr.body)) {
+                  observeReattestation(finalPr, true, false);
+                  await retainReattestationDraft(finalPr);
+                  return;
+                }
+                if (finalPr.node_id !== pr.node_id || finalPr.head?.sha !== pr.head.sha ||
+                    finalPr.base?.ref !== pr.base.ref || finalPr.body !== pr.body ||
+                    finalPr.user?.id !== pr.user?.id || finalPr.state !== "open") {
+                  core.setFailed("PR changed before readiness; no ready action was taken.");
+                  return;
+                }
+              } catch (error) {
+                core.setFailed("Could not refresh the current PR and saved re-attestation before readiness.");
+                return;
+              }
             }
 
             // The `review-ready` label marks the ready moment for humans and
@@ -1217,7 +1383,7 @@ jobs:
                     "This pull request is being kept as a draft automatically. Once every issue above is resolved, it will be marked ready for review again.",
                     ...(checklistRequired && !checklistComplete
                       ? [
-                          `@${pr.user.login} Tick the boxes once your local CI is green, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
+                          `@${pr.user.login} Tick the boxes once required local validation has passed with commands, results, and any full-suite exception documented, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
                         ]
                       : [])
                   ]);
@@ -1242,7 +1408,7 @@ jobs:
                     "This pull request was already a draft. Its draft status will be preserved after every issue above is resolved.",
                     ...(checklistRequired && !checklistComplete
                       ? [
-                          `@${pr.user.login} Tick the boxes once your local CI is green, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
+                          `@${pr.user.login} Tick the boxes once required local validation has passed with commands, results, and any full-suite exception documented, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
                         ]
                       : [])
                   ]);
@@ -1373,6 +1539,7 @@ jobs:
                 readyState.maintainersPinged = true;
                 notified = true;
               }
+              if (!readyConversionFailed) readyState.pendingReattestation = null;
               readyState.completedAtHeadSha = pr.head.sha;
               readyState.version = 1;
 

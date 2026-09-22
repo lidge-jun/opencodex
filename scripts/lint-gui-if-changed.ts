@@ -1,8 +1,8 @@
 /**
  * Run GUI Oxlint when this push includes gui/ changes.
- * Used by `bun run prepush`. Skip with: git push --no-verify
+ * Used by `bun run prepush`.
  *
- * Mirrors `scripts/doctor-gui-if-changed.ts` so the local pre-push gate and
+ * Mirrors `scripts/doctor-gui-if-changed.ts` so explicit local validation and
  * the CI `gates` job agree: GUI lint runs only when the push actually touches
  * `gui/`. Unlike doctor there is no engine to fetch, so lint findings always
  * fail the push — there is no infra-degradation path to soft-skip on.

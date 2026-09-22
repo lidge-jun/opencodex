@@ -9,13 +9,15 @@ description: opencodex 的开发环境、结构、约定，以及添加 provider
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
+bun run setup:hooks  # 安装 post-merge 并移除旧的托管 pre-push
 bun run dev:proxy    # 开发模式代理 API
 bun run dev:gui      # 仪表盘 dev 服务器（另一个终端）
 bun run typecheck    # bun x tsc --noEmit
-bun run test:changed              # routine import-graph test selection
-bun test tests/routing/router.test.ts     # routine focused test
-bun run test                      # complete suite (PR-ready / explicit ask)
+bun run test        # 完整测试套件（默认）
 ```
+
+`bun run setup:hooks` 仅安装 `post-merge`，并移除未经修改的旧版托管 `pre-push` 钩子，
+保留自定义钩子。`pre-push` 钩子不再是必需项；`bun run prepush` 仍可作为可选的手动检查。
 
 `bun run dev` 继续作为 `bun run dev:proxy` 的别名。仪表盘 dev 服务器使用 `bun run dev:gui`；
 `GET /` 提供的打包仪表盘由 `bun run build:gui` 构建到 `gui/dist`。
@@ -27,6 +29,7 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 
 ```bash
 bun run typecheck                 # 严格 TypeScript 检查
+bun run test:changed              # 针对解析出的 dev merge-base 的导入图测试
 bun run test                      # 完整 tests/ suite
 bun test tests/routing/router.test.ts     # 聚焦单个测试文件
 bun run build:gui                 # Vite GUI 构建 + package 准备
@@ -34,9 +37,15 @@ bun run privacy:scan              # CI 使用的 credential/privacy 扫描
 bun run prepare:package           # 刷新 package launcher/asset
 ```
 
+默认运行 `bun run test` 执行完整测试套件。如果相对于任务规模、机器资源或并行使用的工作树，
+完整运行的成本过高，仍必须至少运行实际验证变更行为的针对性回归测试，例如
+`bun test tests/<domain>/<name>.test.ts`。说明缩小范围的原因，并报告准确的命令、结果和未测试范围。
+`bun run test:changed` 可以补充覆盖，但无法发现所有间接依赖。不存在仅依赖 CI 或完全跳过本地测试
+的一概豁免。合并前，所有必需的 CI 检查必须在当前 PR 头部的确切提交上通过。
+
 测试是按 `src/` 划分的领域目录（`tests/<domain>/`）下的 Bun test，映射表在 `scripts/test-layout/layout.json`。`tests/helpers/` 存放共享 fixture，
 `tests/e2e-style/` 存放范围更广的原生一致性场景。请在对应 subsystem 的现有测试附近加入聚焦的
-回归测试；若改动涉及共享 routing、adapter、config 或 server 行为，还应运行完整 suite。
+回归测试。
 
 你正在阅读的文档站点位于 `docs-site/`（Astro + Starlight）：
 
@@ -159,6 +168,5 @@ package API，还要从 `src/index.ts` export。
 
 ## 在声称完成前先验证
 
-先运行能证明改动的最小命令：类型检查用 `bun run typecheck`，行为检查用聚焦的
-`bun test tests/<name>.test.ts` 或 runtime probe，然后再执行适合影响范围的更宽 gate。
-opencodex 倾向于小而可验证的 commit，而不是大批量改动。
+遵循上述测试政策，并针对类型变更运行 `bun run typecheck`，以及受影响范围所需的其他检查。
+报告命令、结果和未测试范围，只声明实际完成的验证。

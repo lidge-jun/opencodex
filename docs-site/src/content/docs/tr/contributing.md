@@ -14,13 +14,16 @@ aracının bulunması gerekir. Yayınlanan npm paketi kullanıcılar için kendi
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
+bun run setup:hooks  # post-merge kur ve eski yönetilen pre-push kancasını kaldır
 bun run dev:proxy    # geliştirme modunda proxy API
 bun run dev:gui      # kontrol paneli geliştirme sunucusu (başka bir terminalde)
 bun run typecheck    # bun x tsc --noEmit
-bun run test:changed              # routine import-graph test selection
-bun test tests/routing/router.test.ts     # routine focused test
-bun run test                      # complete suite (PR-ready / explicit ask)
+bun run test        # tam test paketi (varsayılan)
 ```
+
+`bun run setup:hooks` yalnızca `post-merge` kancasını kurar ve değiştirilmemiş eski yönetilen
+`pre-push` kancasını kaldırır; özel kancaları korur. `pre-push` kancası artık zorunlu değildir.
+`bun run prepush` isteğe bağlı bir manuel denetim olarak kullanılabilir.
 
 `bun run dev`, `bun run dev:proxy` komutunun bir takma adıdır. Kontrol paneli
 geliştirme sunucusu `bun run dev:gui` ile çalışır; `GET /` adresindeki
@@ -34,6 +37,7 @@ Yerel komutların CI ile eşleşmesi için depodaki betikleri kullanın:
 
 ```bash
 bun run typecheck                 # katı TypeScript denetimi
+bun run test:changed              # çözümlenen dev merge-base için import grafiği testleri
 bun run test                      # tests/ paketinin tamamı
 bun test tests/routing/router.test.ts     # odaklanmış test dosyası
 bun run build:gui                 # Vite GUI derlemesi + paket hazırlığı
@@ -41,12 +45,19 @@ bun run privacy:scan              # CI tarafından kullanılan kimlik/gizlilik t
 bun run prepare:package           # paket başlatıcılarını ve varlıklarını yenileme
 ```
 
+Varsayılan olarak `bun run test` çalıştırın. Tam çalıştırma görevin boyutu, makine kaynakları
+veya eşzamanlı kullanılan çalışma ağaçları nedeniyle orantısız derecede maliyetliyse, en azından
+değişen davranışı gerçekten sınayan odaklanmış regresyon testlerini çalıştırmanız gerekir; örneğin
+`bun test tests/<domain>/<name>.test.ts`. Kapsamı daraltma nedenini, tam komutları, sonuçları ve
+test edilmeyen kapsamı açıklayın. `bun run test:changed` kapsamı destekleyebilir ancak tüm dolaylı
+bağımlılıkları bulamaz. Yalnızca CI sonucuna güvenmek veya yerel testleri atlamak için genel bir
+muafiyet yoktur. Birleştirmeden önce tüm zorunlu CI denetimleri PR’ın mevcut başındaki tam commit
+için başarılı olmalıdır.
+
 Bun testleri `src/` yapısını yansıtan alan dizinlerinde (`tests/<domain>/`) bulunur; harita `scripts/test-layout/layout.json` dosyasıdır. `tests/helpers/`
 paylaşılan test ortamlarını (fixtures) ve `tests/e2e-style/` daha geniş yerel
 parite senaryolarını içerir. Değiştirdiğiniz alt sistemin mevcut testlerinin
-yakınında odaklanmış bir regresyon testi bulundurun; paylaşılan yönlendirme,
-adaptörler, yapılandırma veya sunucu davranışları için test paketinin tamamını
-çalıştırın.
+yakınında odaklanmış bir regresyon testi bulundurun.
 
 Okumakta olduğunuz dokümantasyon sitesi `docs-site/` (Astro + Starlight)
 dizinindedir:
@@ -263,7 +274,6 @@ fabrikayı `src/index.ts` dosyasından dışa aktarın.
 
 ## Bittiğini iddia etmeden önce doğrulayın
 
-Değişikliğinizi kanıtlayan en dar komutu çalıştırın — tipler için `bun run
-typecheck`, davranış için odaklanmış bir `bun test tests/<ad>.test.ts` veya
-çalışma zamanı probu, ardından etkilenen yüzeye uygun daha geniş kapılar.
-opencodex büyük partiler yerine küçük, doğrulanabilir commit'leri tercih eder.
+Yukarıdaki test politikasını izleyin; tip değişiklikleri için `bun run typecheck` ve etkilenen
+alanın gerektirdiği denetimleri çalıştırın. Komutları, sonuçları ve test edilmeyen kapsamı
+bildirin; yalnızca gerçekten tamamlanan doğrulamaları belirtin.

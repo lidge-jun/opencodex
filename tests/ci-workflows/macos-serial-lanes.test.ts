@@ -107,6 +107,8 @@ function createFixture(directory: string, options: FixtureOptions): void {
   // block, so a copy here would let the block and the classifier drift apart unnoticed, which is
   // the exact failure mode that collapsing four inline signature lists into one file removed.
   mkdirSync(join(directory, "scripts", "ci"), { recursive: true });
+  copyFileSync(repoPath("scripts", "ci", "sample-macos-stall.sh"),
+    join(directory, "scripts", "ci", "sample-macos-stall.sh"));
   copyFileSync(repoPath("scripts", "ci", "bun-crash-signatures.sh"),
     join(directory, "scripts", "ci", "bun-crash-signatures.sh"));
   copyFileSync(repoPath("scripts", "ci", "run-bun-test-batches.sh"),
@@ -137,9 +139,9 @@ function spawnErrorCode(error: unknown): string {
   return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "SPAWN_ERROR";
 }
 
-function runShell(directory: string, shard: number): Promise<{ status: number | null; output: string }> {
+function runShell(directory: string, shard: number, scriptOverride?: string): Promise<{ status: number | null; output: string }> {
   // Use the runner's native /bin/bash (Bash 3 on macOS), never a shell mock.
-  const command = macosTestBlock(shard);
+  const command = scriptOverride ?? macosTestBlock(shard);
   return new Promise((resolve, reject) => {
     let child: ChildProcessByStdio<null, Readable, Readable>;
     try {
@@ -275,6 +277,20 @@ function expectBatchArguments(call: Invocation): void {
 }
 
 describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownership", () => {
+  test("stall observer samples only an identified silent suite without signaling it", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ocx macos' observer-"));
+    try {
+      createFixture(directory, {});
+      const fixture = repoPath("tests", "fixtures", "macos-stall-observer.sh");
+      const result = await runShell(directory, 1,
+        `bash ${shellQuote(fixture)} "$PWD/probe" "$PWD/scripts/ci/sample-macos-stall.sh"`);
+      expect(result.status, result.output).toBe(0);
+      for (const scenario of ["silent", "absent", "ambiguous", "progress", "stop"]) {
+        expect(result.output).toContain(`PASS ${scenario}`);
+      }
+    } finally { removeTreeWithRetry(directory); }
+  }, SPAWN_BUDGET_MS);
+
   test("both actual workflow shards own every file exactly once", async () => {
     const runs = [await runShard(1), await runShard(2)];
     for (const [index, run] of runs.entries()) {

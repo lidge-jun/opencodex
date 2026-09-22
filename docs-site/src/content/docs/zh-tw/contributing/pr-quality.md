@@ -22,11 +22,11 @@ description: OpenCodex pull request 的審查就緒門檻、貢獻者責任、�
 有三個決定性的檢查會在人工作業之前執行，每個失敗訊息都會確切告訴你該改什麼：
 
 - **PR 品質（`enforce-target`）。** Pull request 必須以 `dev` 為目標，並帶有真正的描述：變更內容與原因的 **Summary**，加上 **Test plan**（或同等實質內容）。當 diff 更動 `gui/` 下的檔案，或 GitHub 對大型 diff 回傳不完整的變更檔清單時，描述必須包含 UI 變更的截圖；檢查會讓 PR 維持 draft 並留言，直到截圖出現。不完整的檔案清單會保守地視為 GUI 變更。維護者可以針對 `gui/` 變更、GUI 路徑分類誤判、或不完整檔案清單的誤判，加上 `gui-screenshot-waived` label 來豁免截圖要求；新增或移除該 label 會立即重新評估 gate。舊式維護者留言（例如「no gui changes」）在下次 PR 事件時仍會為相容性而辨識，但留言本身不再觸發這個特權 PR gate。貢獻者不能自行豁免截圖要求。
-  沒有 repository push 權限的貢獻者 PR 會以 draft 開啟，並維持 draft 直到描述中的四個格子的 review-ready 檢查清單完成：本機 CI 通過、分支位於最新 `dev` commit、所有正確的 Codex 與 CodeRabbit 發現都已修正、以及 ready-for-review 確認。當每個格子都勾選後，檢查會把 PR 標記為可審查，並通知 `MAINTAINERS.md` 中列出的維護者（不含作者）。gate 的狀態與「該做什麼」集中在單一 bot 留言中，每次執行都會重寫，所以只需看一個地方。完成綁定在 PR head 所指的確切 commit：如果之後又推出新 commit，gate 會把 PR 移回 draft、重設檢查清單與維護者通知，並要求你針對最新程式碼再次測試並勾選。重新定位到 `dev` 會自動清除錯誤分支訊息，並被 gate 記住；draft 會一直持續到檢查清單完成。
-  在接受完成之前，gate 會驗證它能自行檢查的檢查清單聲明：分支必須位於最新 `dev` commit 或落後最多 10 個 commit，而且目前 head 上所有由 review bot 撰寫的 Codex 與 CodeRabbit review thread 都必須已解決（其他作者未解決的 thread 不會阻擋）。本機 CI 的格子只是作者的 attestation——fork 貢獻者無法啟動 repository CI，必須由維護者啟動——所以 gate 永遠不會反駁它；新的 push 仍會重設每個格子。落在 diff 範圍之外、且只在目前 head 的 review body 中回報的 CodeRabbit 發現，在 bot review thread 開啟期間會計入未解決數；解決所有 bot thread 即可清除該格子。被反駁的聲明會取消勾選對應的格子，並讓 PR 維持 draft。當檢查清單完成且所有 gate 都綠燈時，gate 會加上 `review-ready` label，作為就緒時刻的可見狀態標記。
+  沒有 repository push 權限的貢獻者 PR 會以 draft 開啟，並維持 draft 直到描述中的四個格子的 review-ready 檢查清單完成：必要的本機驗證通過，並記錄命令、結果及任何完整套件例外、分支位於最新 `dev` commit、所有正確的 Codex 與 CodeRabbit 發現都已修正、以及 ready-for-review 確認。當每個格子都勾選後，檢查會把 PR 標記為可審查，並通知 `MAINTAINERS.md` 中列出的維護者（不含作者）。gate 的狀態與「該做什麼」集中在單一 bot 留言中，每次執行都會重寫，所以只需看一個地方。完成綁定在 PR head 所指的確切 commit：如果之後又推出新 commit，gate 會把 PR 移回 draft、重設檢查清單與維護者通知，並要求你針對最新程式碼再次測試並勾選。重新定位到 `dev` 會自動清除錯誤分支訊息，並被 gate 記住；draft 會一直持續到檢查清單完成。
+  在接受完成之前，gate 會驗證它能自行檢查的檢查清單聲明：分支必須位於最新 `dev` commit 或落後最多 10 個 commit，而且目前 head 上所有由 review bot 撰寫的 Codex 與 CodeRabbit review thread 都必須已解決（其他作者未解決的 thread 不會阻擋）。必要本機驗證的格子只是作者的 attestation——fork 貢獻者無法啟動 repository CI，必須由維護者啟動——所以 gate 永遠不會反駁它；新的 push 仍會重設每個格子。落在 diff 範圍之外、且只在目前 head 的 review body 中回報的 CodeRabbit 發現，在 bot review thread 開啟期間會計入未解決數；解決所有 bot thread 即可清除該格子。被反駁的聲明會取消勾選對應的格子，並讓 PR 維持 draft。當檢查清單完成且所有 gate 都綠燈時，gate 會加上 `review-ready` label，作為就緒時刻的可見狀態標記。
   CodeRabbit 的狀態留言編輯不會觸發 PR gate。CodeRabbit 成功的 `CodeRabbit` commit status 會透過 `status` 事件喚醒受信任的預設分支 gate。gate 將該 status SHA 對應到確切一個目前 head 仍相符的 open PR，然後在變更檢查清單、label、留言或 draft 狀態之前，重新讀取即時的 review thread 與 review body。模糊或過時的 SHA 關聯會被忽略，且不會以 gate 的具寫入權限 token 執行任何 PR head 程式碼。
 
-- **Hygiene。** 行為變更需要測試；新增 lint 或 type suppression、聚焦或跳過的測試、空的 catch 區塊、編輯產生的輸出，以及未隨 manifest 一起變更的 lockfile，每項都需要明確的核准 label。僅對原始檔做留言層級的變更不算行為變更，也不需要測試。
+- **Hygiene。** 行為變更需要測試；新增 lint 或 type suppression、聚焦或跳過的測試、空的 catch 區塊、編輯產生的輸出，以及未隨 manifest 一起變更的 lockfile，每項都需要明確的核准 label。僅對原始檔做留言層級的變更不算行為變更，也不需要新增迴歸測試。[本機測試政策](/zh-tw/contributing/) 仍然適用。
 - **跨平台 CI。** 每個 pull request 的測試套件在 Linux 上分片執行，並在 macOS 上完整執行。Windows 在釋出邊界執行——即提升到 `main` 或 `preview` 時——所以慢速或不穩定的 Windows runner 不能決定你的 pull request 何時變綠。
   這對**每個** pull request 都執行，無論其 base 分支為何——包括 base 是另一個 open PR head 的 stacked child。由 `paths:` filter，而非 base 分支，決定 jobs 是否執行：只碰 docs 或 `devlog/` 的 PR 不會佇列任何 job。
 
@@ -45,3 +45,12 @@ CodeRabbit 會 review 每個 PR，其發現僅供參考。它說對的就照做�
 ## 當 pull request 被關閉時
 
 停滯且帶著未解決 review 回饋的 PR 可能被關閉，並會清楚陳述原因。關閉不是對貢獻者的判決：一旦陳述的原因解決，就重新開啟它，或用乾淨的 PR 取代。若原因不清楚，請詢問。
+
+## 更新舊版審查準備清單
+
+若檢查指出清單仍使用舊版「本機 CI 通過」文字，機器人會保留您的 PR 說明。
+請將第一項改成機器人留言指定的文字，取消全部四個勾選並儲存。等待機器人確認
+已記錄此步驟後，驗證留言顯示的 commit，再勾選四項並重新儲存。只改文字而保留
+全部勾選，不算重新確認。新的 push 或目標分支變更會使記錄失效。完成此流程與
+一般品質檢查前，檢查保持失敗，PR 保持草稿。如果儲存時間與檢查點相同，請稍後
+再次修改說明內文並儲存；只修改標題不算。
