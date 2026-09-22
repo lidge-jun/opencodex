@@ -479,6 +479,7 @@
     "codex-auth-context.test.ts": "codex-integration",
     "codex-auth-modal-status.test.ts": "gui",
     "codex-catalog-admission.test.ts": "codex-integration",
+    "codex-catalog-exclusions.test.ts": "codex-integration",
     "codex-catalog-golden.test.ts": "codex-integration",
     "codex-catalog-model-picker-order.test.ts": "codex-integration",
     "codex-catalog-refresh-status.test.ts": "codex-integration",

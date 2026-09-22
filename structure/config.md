@@ -354,8 +354,9 @@ contract. It preserves each field's existing rule rather than assigning one glob
 operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key with a case-varied operator key claiming the registry row,
 restriction lists form a stable union, and hard wire pins precede valid operator overrides and
 registry wire defaults. Only the canonical `openai-apikey` provider merges
-`modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value; other
-providers use ordinary operator-per-key fill. Its output is recursively
+`modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value across
+case-equal keys, retaining the operator's row spelling and provenance even when registry-clamped;
+other providers use ordinary operator-per-key fill. Its output is recursively
 frozen and carries field/model provenance. It never persists resolved policy and excludes API keys,
 account selection, quota, health, cooldowns, discovered availability, and request-owned evidence.
 Observed context/input/output values are combined only in a call-local projection that can narrow a

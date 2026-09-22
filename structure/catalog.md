@@ -64,7 +64,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row
   and all account-selector clones and drop that model family from raw `/v1/models`);
 - applies exact provider/model compatibility exclusions after live discovery and metadata
-  augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
+  augmentation, so upstream-advertised but uncallable rows—including retired aliases retained in
+  generated metadata for historical accounting—never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless the final routed provider/model
   explicitly enables the verified OpenAI-compatible service tier;
 - backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
