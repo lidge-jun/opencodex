@@ -52,6 +52,7 @@ import {
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -345,6 +346,13 @@ function codexAccountPrioritiesError(value: unknown): string | null {
     const parsed = codexAccountPrioritiesSchema.safeParse(raw.codexAccountPriorities);
     if (!parsed.success) {
       return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountPriorities.");
+    }
+  }
+  if (raw.codexAccountAutoSwitchThresholds !== undefined) {
+    const parsed = codexAccountAutoSwitchThresholdsSchema.safeParse(raw.codexAccountAutoSwitchThresholds);
+    if (!parsed.success) {
+      return schemaDiagnosticsError(parsed.error)
+        .replace("schema_invalid: ", "schema_invalid: codexAccountAutoSwitchThresholds.");
     }
   }
   // Tested as a string rather than coerced: `String(123)` matches the id pattern, so a

@@ -5,6 +5,7 @@ import {
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -217,6 +218,10 @@ export const configSchema = z.object({
   // typo cannot trip the backup-and-defaults repair path and wipe providers or
   // pool accounts. Warning emitted in loadConfig.
   codexAccountPriorities: codexAccountPrioritiesSchema.optional().catch(undefined),
+  // Malformed hand edits disable only account-local overrides, preserving the rest of config.
+  codexAccountAutoSwitchThresholds: codexAccountAutoSwitchThresholdsSchema.optional().catch(undefined),
+  // An invalid optional preference must not discard providers or credential rows.
+  codexAccountPriorityFailback: z.boolean().optional().catch(false),
   activeCodexAccountPinned: z.string().regex(CODEX_ACCOUNT_PIN_PATTERN).optional().catch(undefined),
   // A malformed hand edit must degrade to false without discarding providers, accounts,
   // or the exact selector map. Live writes remain strict.

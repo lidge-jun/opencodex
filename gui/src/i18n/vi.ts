@@ -13,6 +13,12 @@ export const vi: Record<TKey, string> = {
   "tray.cost": "Phí ước tính",
   "tray.cached": "Đệm {percent}",
 
+  "accountPool.autoSwitchThreshold": "Ngưỡng riêng cho tài khoản",
+  "accountPool.autoSwitchThresholdAria": "Ngưỡng sử dụng cho {email}",
+  "accountPool.autoSwitchOverrideAria": "Ghi đè ngưỡng sử dụng chung cho {email}",
+  "accountPool.autoSwitchHint": "Ghi đè ngưỡng chung cho tài khoản này. 0 chỉ tắt chuyển đổi chủ động dựa trên mức sử dụng từ tài khoản này.",
+  "accountPool.autoSwitchUpdated": "Đã cập nhật ngưỡng sử dụng cho {email}",
+  "accountPool.autoSwitchUpdateFailed": "Không thể lưu ngưỡng sử dụng cho {email}. Giá trị được xác nhận gần nhất đang được hiển thị.",
   "usage.incomplete": "Không thể đưa một số bản ghi sử dụng vào. Số lượng, ngày tháng và thứ hạng chỉ phản ánh các bản ghi có thể đọc được.",
   "models.pickerOrder.usageIncomplete": "Không thể lưu thứ tự dùng nhiều nhất vì lịch sử sử dụng không đầy đủ. Hãy chọn thứ tự khác hoặc sửa lịch sử trước.",
   "api.attribution.noRecordedUse": "Không có lượt sử dụng trong các bản ghi có thể đọc được",

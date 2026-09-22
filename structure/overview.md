@@ -262,3 +262,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 Codex compaction can select a request-local model through the
 [existing Responses handlers](transports/responses.md#compaction-routing-overrides) for the configured
 manual and automatic triggers, while subsequent turns keep their conversation settings.
+The optional [ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.

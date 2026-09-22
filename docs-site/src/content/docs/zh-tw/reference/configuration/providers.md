@@ -35,6 +35,7 @@ ocx models provider openrouter on
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 公開模型選擇器命名空間到已儲存 Codex 帳號目標。這會驗證並持久化映射，但不會自行新增 picker 列或變更路由。 |
 | `activeCodexAccountId?` | `string` | — | 為下一個請求手動選擇的池帳號。選擇清除執行緒親和性；進行中的請求保留擷取的憑證。 |
 | `autoSwitchThreshold?` | `number` | `80` | 主動切換的用量閾值。`quota` 可在下一個請求時重新評估未綁定任務。綁定任務預設（`pool.cacheAffinity`）在越過閾值後仍會保留帳號，直到該帳號耗盡或無法繼續服務，並且只改綁到確有額度餘裕且用量嚴格更低的帳號。將 `pool.cacheAffinity` 設為 `false` 才會在此閾值重新評估綁定任務。`fill-first` 僅將其用作未綁定指派的排空點；一般 `round-robin` 選擇不使用它。分數使用最熱的已知 5h、週或 30d 配額視窗。`0` 僅停用基於用量的主動切換，而非未綁定指派或失敗復原。 |
+| `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | 各帳號對 `autoSwitchThreshold` 的覆寫：帳號 ID → `0`–`100` 的整數。沒有項目時繼承全域值；`0` 只停用從該帳號發起的使用量主動切換。支援主帳號 `__main__`。可在 Codex Auth 的帳號卡片中管理。 啟用覆寫時，會將目前全域閾值複製為固定的帳號值。覆寫值（包括 `0`）在之後修改全域閾值時仍優先。停用時傳送 `threshold: null`，刪除項目，並恢復繼承目前全域閾值及其未來的變更。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新／未綁定 Codex 請求的指派策略。當請求沒有即時（父執行緒 id、配額 scope）親和性時即為未綁定；可見的既有任務在代理重啟或親和性重置後可變為未綁定。`quota` 在無現用帳號時選擇最低用量的合格帳號，將合格現用帳號保持在 `autoSwitchThreshold` 以下，且在閾值後可將未綁定請求移至較低用量的合格帳號。綁定任務預設會保留到帳號耗盡（已知用量 100%）或無法繼續服務，改綁時只前往確有額度餘裕且用量嚴格更低的帳號。關閉該設定後，也可在閾值將綁定任務的下一個請求改綁到確有額度餘裕且用量嚴格更低的帳號。`round-robin` 均勻分配未綁定請求；`fill-first` 持續將未綁定請求指派到現用帳號直到冷卻、不可用或設定的排空閾值。  `reset-first`: 在低於用量門檻的帳號中，優先選擇下次5小時或週額度重設最早的帳號。已綁定任務遵循設定的親和策略。獨立模型額度按用量排序。 此排序不使用月額度重設時間。 |
 | `pool.cacheAffinity?` | `boolean` | `true` | 綁定 Codex 執行緒的 cache-affinity 排序，獨立於 `pool.kernel`。預設開啟；省略該鍵或設為 `true` 即為開啟，格式錯誤視為開啟。即時綁定優先於配額餘裕：`quota` 不會只因用量越過 `autoSwitchThreshold` 就移動執行緒。帳號暫停、無法使用或真正耗盡（已知用量 100%）時仍會離開，且只改綁到確有額度餘裕且用量嚴格更低的帳號。用量未知的帳號不會作為綁定任務的改綁目標。設為 `false` 可恢復依閾值重新綁定。親和性是重排而非釘死。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 在前進一個 round-robin 選擇前保留的新／未綁定任務指派；計數器在任務綁定時前進，而非在上游成功後。範圍 1–100。 |
@@ -42,6 +43,8 @@ ocx models provider openrouter on
 | `modelCacheTtlMs?` | `number` | `300000` | Per-供應商 `/models` 快取的新鮮度視窗。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 政策：停用、5 分鐘臨時或 1 小時延長。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | 可選的主動 OAuth refresh 與 Codex 帳號暖機政策。 |
+
+這些策略均使用各帳戶的有效閾值：存在 `codexAccountAutoSwitchThresholds` 項目時使用該值，否則繼承全域 `autoSwitchThreshold`。覆寫值為 0 僅關閉基於用量的主動切換；啟動綁定、硬鎖、冷卻、模型使用資格檢查和故障復原仍然生效。
 
 `codexAccountNamespaces` key 是公開選擇器：1–64 字元，以 ASCII 字母或數字開頭與結尾，中間為字母、數字、`.`、`_` 或 `-`。保留的 JavaScript 物件名稱被拒絕。每個值是有效的池帳號 id（絕非內部 `__main__`）或代表 Codex Desktop 帳號的 `"@main"`。供應商與保留的 `openai` / `combo` 衝突以不區分大小寫方式檢查。保持原始帳號 id 與電子郵件私密；選擇器是公開名稱。
 
@@ -146,8 +149,8 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 | 策略 | 行為 |
 | --- | --- |
 | `quota`（預設） | 若無現用帳號，跨 5 小時、週與 30 天視窗選擇最低用量的合格帳號。否則將合格現用帳號保持在 `autoSwitchThreshold` 以下；在超過閾值後，未綁定請求可移至較低用量的合格帳號。預設下 cache affinity 優先於配額餘裕，綁定任務會保留到帳號耗盡（已知用量 100%）或無法繼續服務，改綁時只前往確有額度餘裕且用量嚴格更低的帳號。關閉該設定後，也可在閾值將綁定任務的下一個請求改綁到確有額度餘裕且用量嚴格更低的帳號。`0` 停用此用量驅動的重新評估，而非失敗復原。 |
-| `round-robin` | 在合格帳號間均勻指派未綁定請求。`autoSwitchThreshold` 不變更一般 round-robin 選擇。`accountPoolStickyLimit`（1–100）計數一次選擇上的指派，而非成功的上游回應。 |
-| `fill-first` | 將未綁定請求指派到現用帳號直到冷卻、重新認證或設定的排空閾值；未知用量不強制切換。健康的綁定任務保留親和性。 |
+| `round-robin` | 在合格帳號間均勻指派未綁定請求。輪替本身以計數器為基礎，不使用用量閾值，但共用的優先順序層級篩選仍依各帳號自身的有效閾值（帳號覆寫值，未設定則使用全域值）檢查餘裕。`accountPoolStickyLimit`（1–100）計數一次選擇上的指派，而非成功的上游回應。 |
+| `fill-first` | 將未綁定請求指派到現用帳號直到冷卻、重新認證或該帳號的有效排空閾值（帳號覆寫值，未設定則使用全域值）；未知用量不強制切換。健康的綁定任務保留親和性。 |
 
 輪換不保護免於供應商強制執行；多帳號使用可能違反供應商條款。
 

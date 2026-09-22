@@ -14,6 +14,7 @@ import {
 } from "../provider-validation";
 import { isValidCodexAccountNamespaceTarget } from "../../codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "../../codex/account-priority";
+import { isCodexAccountAutoSwitchThresholdKey, parseCodexAutoSwitchThreshold } from "../../codex/account-auto-switch";
 import { parseAccountPriority } from "../../codex/pool-rotation";
 import { credentialGroupIssues } from "../../routing/identity-domains";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
@@ -632,6 +633,38 @@ const codexQuotaAutoRefreshEntrySchema = z.object({
 }).strict();
 const CODEX_QUOTA_AUTO_REFRESH_KEY_ERROR =
   "quota auto-refresh keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
+
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLDS_RECORD_ERROR =
+  "codexAccountAutoSwitchThresholds must be a plain object mapping Codex account ids to usage thresholds";
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_KEY_ERROR =
+  "usage-threshold keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_VALUE_ERROR =
+  "account usage threshold must be an integer between 0 and 100";
+
+export const codexAccountAutoSwitchThresholdsSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLDS_RECORD_ERROR },
+).superRefine((thresholds, ctx) => {
+  for (const [accountId, threshold] of Object.entries(thresholds)) {
+    if (!isCodexAccountAutoSwitchThresholdKey(accountId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [accountId],
+        message: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_KEY_ERROR,
+      });
+    }
+    if (parseCodexAutoSwitchThreshold(threshold) === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: [accountId],
+        message: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_VALUE_ERROR,
+      });
+    }
+  }
+}).pipe(z.record(z.string(), z.number().int()));
 
 export const codexQuotaAutoRefreshSchema = z.custom<Record<string, unknown>>(
   (value): value is Record<string, unknown> => !!value

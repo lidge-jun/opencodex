@@ -580,6 +580,7 @@ export async function prepareResponsesRequest(
     options.codexAuthPolicy ?? config,
     previewRequestScopedMainCredential,
     route.codexAccountId,
+    codexQuotaScopeForModel(route.modelId),
   ).preserve;
   // Deliberately NOT fenced on ownership: final auth derives `nativeMainSelectionOnly` from the
   // drain alone, and adding a term here would diverge from it in the other direction.
@@ -836,6 +837,7 @@ export async function prepareResponsesRequest(
                 options.codexAuthPolicy ?? config,
                 recoveryRequestScopedMainCredential,
                 route.codexAccountId,
+                codexQuotaScopeForModel(route.modelId),
               ).preserve;
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked

@@ -548,3 +548,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 Compaction routing selects its configured model at Responses ingress under the
 [compaction routing contract](transports/responses.md#compaction-routing-overrides). Catalog selection remains conversation-owned.
+Subagent account previews and live routing share the [priority failback](providers/openai-tiers.md#ongoing-priority-failback) decision; model eligibility and fixed catalog selectors retain their existing meaning.

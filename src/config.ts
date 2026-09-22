@@ -10,7 +10,7 @@ import {
 } from "./codex/custom-model-catalog-migration";
 import { refreshUserCostOverlays } from "./usage/user-cost-overlays";
 import {
-  clearPendingConfigTopLevelDeletions,
+  clearPendingConfigDeletions,
   projectConfigRebaseProvenance,
 } from "./config/rebase-provenance";
 import { getConfigDir, getConfigPath, hardenConfigDir } from "./config/paths";
@@ -354,7 +354,7 @@ export function initializePersistedConfigIfMissing(
     adoptCustomModelCatalogMigration(config, persisted);
     if (persisted.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(persisted.configRebaseProvenance);
-    clearPendingConfigTopLevelDeletions(config);
+    clearPendingConfigDeletions(config);
     refreshUserCostOverlays(persisted);
     return "created";
   } catch (cause) {
@@ -378,6 +378,6 @@ export function saveConfig(config: OcxConfig): void {
     adoptCustomModelCatalogMigration(config, withProvenance);
     if (withProvenance.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(withProvenance.configRebaseProvenance);
-    clearPendingConfigTopLevelDeletions(config);
+    clearPendingConfigDeletions(config);
   });
 }

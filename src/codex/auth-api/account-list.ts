@@ -6,6 +6,7 @@ import { ConfigMutationLockError, mutatePersistedConfig } from "../../config";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { isCodexAccountPaused, setCodexAccountPaused } from "../account-pause";
 import { getCodexAccountPriority } from "../account-priority";
+import { getCodexAccountAutoSwitchThresholdOverride } from "../account-auto-switch";
 import { clearThreadAccountMapForAccount, isCodexAccountPlanExcluded, reconcileCodexActiveAfterExclusion } from "../routing";
 import { codexPlanValue, isThirtyDayOnlyCodexPlan } from "../plan";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
@@ -134,6 +135,7 @@ export function poolAccountDto(
     isMain: false,
     paused,
     priority,
+    autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(config, account.id),
     quota: quota ? { ...quota } : null,
     needsReauth: needsReauth || health.status === "reauth_required",
     ...(reauthReason !== undefined ? { reauthReason } : {}),
@@ -157,6 +159,8 @@ export interface CodexAuthAccountDto {
   paused: boolean;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
+  /** Null inherits the global usage-switch threshold; 0 disables it for this account. */
+  autoSwitchThresholdOverride: number | null;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
   /**
@@ -353,6 +357,7 @@ export async function listCodexAuthAccountsSnapshot(
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     mainAccountHardLock: getMainAccountHardLockStatus(runtimeConfig),
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+    autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,
     ...(mainReauthReason !== undefined ? { reauthReason: mainReauthReason } : {}),

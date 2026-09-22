@@ -578,3 +578,5 @@ userinfo is stripped while host and port stay visible, `direct` and credential-l
 print unchanged, and a non-URL value that is not `direct` is masked whole. `config export`
 keeps the raw file so exports can restore credentials. Get and mutation output select
 redaction by the normalized final path segment, matching lookup and mutation semantics.
+
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades malformed values to false without discarding providers. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.

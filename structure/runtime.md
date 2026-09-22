@@ -597,4 +597,4 @@ registration succeeds.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/docs-and-release.md#bun-updater-ownership-transaction).
 
-Companion timeline and filtered totals follow the [companion usage contract](companion.md).
+Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch.
