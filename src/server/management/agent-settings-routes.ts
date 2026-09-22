@@ -1,4 +1,5 @@
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
+import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -231,18 +232,22 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }).kind;
       if (["not_installed", "no_owned_state", "foreign", "unsafe", "broken"].includes(afterKind)) return;
       const routed = filterCatalogVisibleModels(allModels, current).map(m => ({ provider: m.provider, id: m.id, contextWindow: m.contextWindow }));
+      const writtenProfile = current.claudeCode.desktopProfile;
+      const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
       const result = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
         current.port ?? 10100,
         [...desktopVisibleNativeSlugs(current)],
         routed,
         current.apiKeys?.[0]?.key,
         "static",
-        current.claudeCode.desktopProfile,
+        writtenProfile,
         nativeContextLimits(current),
       );
       if (result.written && result.fingerprint) {
-        current.claudeCode = { ...current.claudeCode, desktopProfile: { ...current.claudeCode.desktopProfile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
-        saveConfigPreservingClaudeCode(current);
+        const marked = commitDesktopAppliedMarker(markerBaseline, result.fingerprint);
+        if (marked.status === "unavailable" || marked.value === false) {
+          console.warn("[claude-desktop] provider-change applied marker skipped");
+        }
       }
     } catch { /* best-effort */ }
   }

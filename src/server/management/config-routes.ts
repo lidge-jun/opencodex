@@ -18,11 +18,11 @@ import {
   isValidProviderName,
   loadConfig,
   multiAgentGuidanceEnabled,
-  mutatePersistedConfig,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
 } from "../../config";
+import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import {
   clearLoginState,
   getLoginStatus,
@@ -220,45 +220,21 @@ export async function syncEnabledClientIntegrations(
       if (claudeDesktopIntegrationEnabled(latest)) {
         const routed = filterCatalogVisibleModels(models, latest)
           .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
+        const writtenProfile = latest.claudeCode?.desktopProfile;
+        const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
         const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
           port,
           [...desktopVisibleNativeSlugs(latest)],
           routed,
           latest.apiKeys?.[0]?.key,
           "static",
-          latest.claudeCode?.desktopProfile,
+          writtenProfile,
           nativeContextLimits(latest),
         );
         if (!r.written || !r.fingerprint) {
           out.push({ client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
         } else {
-          const { emptyDesktopProfile, sameProfileContent } = await import("../../claude/desktop-profile");
-          // The fingerprint belongs to the desired profile the write just used. If another
-          // writer saved a different desired profile between the Desktop write and this marker
-          // commit, stamping it would claim B is applied while the disk holds A's bytes.
-          const writtenProfile = latest.claudeCode?.desktopProfile;
-          const marked = mutatePersistedConfig(persisted => {
-            const profile = persisted.claudeCode?.desktopProfile;
-            // Presence first: a concurrent delete (of the profile or the whole claudeCode
-            // subtree) must not resurrect the written profile under a fresh fingerprint,
-            // and a concurrent insert must not inherit it either. Content is compared only
-            // when both sides carry a profile.
-            if ((profile == null) !== (writtenProfile == null)) {
-              return { changed: false, value: false };
-            }
-            if (profile && writtenProfile && !sameProfileContent(profile, writtenProfile)) {
-              return { changed: false, value: false };
-            }
-            persisted.claudeCode = {
-              ...(persisted.claudeCode ?? {}),
-              desktopProfile: {
-                ...(profile ?? writtenProfile ?? emptyDesktopProfile()),
-                appliedFingerprint: r.fingerprint,
-                appliedAt: new Date().toISOString(),
-              },
-            };
-            return { changed: true, value: true };
-          });
+          const marked = commitDesktopAppliedMarker(markerBaseline, r.fingerprint);
           out.push(marked.status === "unavailable"
             ? { client: "claude-desktop", ok: false, reason: "Claude Desktop applied marker was not saved (" + marked.reason + ")" }
             : marked.value === false

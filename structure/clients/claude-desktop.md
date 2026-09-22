@@ -152,13 +152,14 @@ not clear a newer connection. Authorized uninstall completes or resumes owned De
 before removing OpenCodex state, and preserves recovery state when cleanup conflicts or fails.
 
 The server-owned applied marker (`claudeCode.desktopProfile.appliedFingerprint` and
-`appliedAt`) is committed by the config route only while the persisted desired profile still
-matches the profile that was just written. Presence is compared first, then content: if a concurrent
-writer deleted the profile or the whole `claudeCode` block, or replaced it with a different
-profile, before the marker commit, the write is declined and reported as skipped instead of
-resurrecting the removed profile with a fresh fingerprint. A profile that was absent from the start
-still stores its fingerprint normally. Default-family key order does not change the desired content;
-the comparison uses each family's selected route while preserving real selection changes.
+`appliedAt`) is committed through `src/claude/desktop-applied-marker.ts` only while the
+persisted desired profile still matches the exact profile handed to the Desktop writer and
+its prior fingerprint and time are unchanged. Sync compares profile presence, content and
+both marker fields before committing; an initially absent profile can receive a marker, while
+a concurrently deleted or changed profile or a newer marker is left intact and the existing
+skip outcome is reported. Provider-change auto-apply requires a present profile and emits a
+generic diagnostic when the same comparison declines its marker. Default-family key order
+does not change desired content; the comparison uses each family's selected route.
 
 These guarantees concern files on disk. Fully quitting and reopening Desktop is required after
 apply, rotation/recovery or restoration; there is no automatic process restart or guarantee that

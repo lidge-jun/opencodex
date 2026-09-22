@@ -72,9 +72,10 @@ describe("ocx sync fans out to enabled native clients and owned file integration
     expect(fn).toContain("nativeContextLimits(latest)");
     // Cleanup accepts only the fingerprint of the exact credential-bearing profile we wrote.
     // Sync must durably advance that ownership marker rather than leaving the old value behind.
-    expect(fn).toContain("mutatePersistedConfig(persisted =>");
-    expect(fn).toContain("appliedFingerprint: r.fingerprint");
-    expect(fn.indexOf("nativeContextLimits(latest)")).toBeLessThan(fn.indexOf("appliedFingerprint: r.fingerprint"));
+    expect(fn).toContain("captureDesktopAppliedMarker(writtenProfile)");
+    expect(fn).toContain("commitDesktopAppliedMarker(markerBaseline, r.fingerprint)");
+    expect(fn.indexOf("captureDesktopAppliedMarker(writtenProfile)")).toBeLessThan(fn.indexOf("const r = (deps.writeDesktop3pConfig"));
+    expect(fn.indexOf("nativeContextLimits(latest)")).toBeLessThan(fn.indexOf("commitDesktopAppliedMarker(markerBaseline, r.fingerprint)"));
     // A client that is off is omitted rather than reported: the caller has to be able to
     // tell "left alone" from "tried and failed", so there is no skipped state to emit.
     expect(fn).not.toContain('"skipped"');
@@ -360,6 +361,29 @@ describe("Desktop sync rechecks persisted state after discovery", () => {
     },
     apiKeys: [{ id: "sync-key", name: "fixture", key: "ocx_old_sync_fixture", createdAt: "2026-01-01T00:00:00.000Z" }],
     claudeCode,
+  });
+
+  test.each([
+    { name: "newer fingerprint", fingerprint: "newer-fingerprint" },
+    { name: "newer timestamp only", fingerprint: "prior-fingerprint" },
+  ])("sync preserves a $name committed during the Desktop write", async ({ fingerprint }) => {
+    const initialProfile = {
+      ...driftProfileA,
+      appliedFingerprint: "prior-fingerprint",
+      appliedAt: "2026-09-23T00:00:00.000Z",
+    };
+    const newerProfile = {
+      ...initialProfile,
+      appliedFingerprint: fingerprint,
+      appliedAt: "2026-09-23T00:00:01.000Z",
+    };
+    const { outcome, persisted } = await runDesktopSyncWithDrift(
+      driftBaseConfig({ desktopProfile: initialProfile }),
+      concurrent => { concurrent.claudeCode!.desktopProfile = newerProfile; },
+    );
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.reason).toContain("applied marker skipped");
+    expect(persisted.claudeCode?.desktopProfile).toEqual(newerProfile);
   });
 
   test.each([
