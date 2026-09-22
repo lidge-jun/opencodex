@@ -3,6 +3,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
 import { getAccountCredential, getAccountSet } from "../../oauth/store";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
+import { CLAUDE_CLI_USER_AGENT } from "../claude-cli-identity";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -276,7 +277,7 @@ export async function fetchAnthropicUsageQuota(accessToken: string): Promise<Pro
       headers: {
         Accept: "application/json, text/plain, */*",
         "Content-Type": "application/json",
-        "User-Agent": "claude-cli/2.1.63 (external, cli)",
+        "User-Agent": CLAUDE_CLI_USER_AGENT,
         "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
         Authorization: `Bearer ${accessToken}`,
       },

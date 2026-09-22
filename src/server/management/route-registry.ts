@@ -148,6 +148,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/grok/apply", module: "server/management/agent-settings-routes", mutates: true },
   { method: "GET", path: "/api/grok/reset-coupons", module: "server/management/grok-coupon-routes", mutates: false },
   { method: "POST", path: "/api/grok/reset-coupons/consume", module: "server/management/grok-coupon-routes", mutates: true },
+  { method: "GET", path: "/api/anthropic/reset-grants", module: "server/management/anthropic-reset-grant-routes", mutates: false, exempt: { reason: "deferred-verb", why: "Reading Claude reset grants has no CLI verb yet; the dashboard ticket badge is the only reader in this unit.", owner: "260923_claude_reset_grants wp1", ownerDoc: "devlog/_plan/260923_claude_reset_grants/010_plan.md" } },
+  { method: "POST", path: "/api/anthropic/reset-grants/consume", module: "server/management/anthropic-reset-grant-routes", mutates: true, exempt: { reason: "session-only", why: "Spending a Claude reset grant requires the gui-session principal (anthropic-reset-grant-routes.ts handleConsume); the admin token is refused." } },
   { method: "PUT", path: "/api/claude-code", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/claude-desktop", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
