@@ -277,7 +277,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-opencodex が管理対象 [バックグラウンドサービス](/reference/cli/#ocx-service) として実行される場合、`OCX_SERVICE=1` が設定されるため、サービス主導の再起動によって Codex 設定がスラッシングされなくなります。明示的な `ocx stop` / `ocx service stop` のみがネイティブ Codex を復元します。
+opencodex が管理対象 [バックグラウンドサービス](/ja/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) として実行される場合、`OCX_SERVICE=1` が設定されるため、サービス主導の再起動によって Codex 設定がスラッシングされなくなります。明示的な `ocx stop` / `ocx service stop` のみがネイティブ Codex を復元します。
 
 ## ページ分割履歴の保護による拒否
 

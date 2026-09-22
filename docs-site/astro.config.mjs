@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import internalLinks from "./src/integrations/internal-links.mjs";
 
 // Canonical GitHub Pages custom domain. The site is served at the domain root,
 // so Starlight must not emit the former /opencodex project-site prefix.
@@ -172,5 +173,7 @@ export default defineConfig({
         { label: "Contributing", translations: { fr: "Contribuer", ko: "기여하기", "zh-CN": "贡献", "zh-TW": "貢獻", ru: "Как внести вклад", ja: "コントリビュート", tr: "Katkıda Bulunma" }, slug: "contributing" },
       ],
     }),
+    // Runs after Starlight has written the site: refuses a build with a broken internal link.
+    internalLinks(),
   ],
 });

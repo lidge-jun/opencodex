@@ -122,4 +122,4 @@ OAuth 帳號時使用 `anthropic`，否則使用 `openai`。明確選擇 `anthro
 `PUT /api/sidecar-settings` 接受相同欄位。部分更新會保留未提交的鍵。`timeoutMs` 使用執行時整數邊界（1–2147483647 毫秒）。
 
 如果更想直接改檔案，仍可在 `config.json` 中把 `enabled` 設為 `false`。Anthropic OAuth 搜尋和圖像描述沿用現有 Claude Code OAuth fingerprint 先例，但仍應使用目標帳號和實際負載充分 soak test。所有欄位見
-[設定參考](/zh-tw/reference/configuration/#sidecars)。
+[設定參考](/zh-tw/reference/configuration/server/#sidecar)。

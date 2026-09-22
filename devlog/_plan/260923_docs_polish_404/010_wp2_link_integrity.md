@@ -34,14 +34,43 @@ NEW `docs-site/src/integrations/internal-links.mjs` (plain ESM, no dependency): 
   when its host is `opencodex.me`, or `lidge-jun.github.io` with a leading `/opencodex` segment, which is
   stripped once for that host only (GitHub's redirect does the same). Skip other hosts, `mailto:`,
   `data:`, `/_astro/`, `/pagefind/`. Relative links and fragment-only `#frag` (same page) are checked.
+- On the generated `404.html` only, skip unresolvable links whose path is `/<locale>/404/`: Starlight's
+  language picker there points at locale 404 pages it never builds (measured: 14 such links on dev
+  a4bdc03054). Every other link on the 404 page, and picker links on ordinary pages, stay checked.
 - Resolve a path: strip query; decode; if the path names an existing file in dist, it resolves;
   else try `<path>/index.html` (with or without the trailing slash, matching `trailingSlash: "ignore"` at
   `astro.config.mjs:18`), else `<path>.html`. No match is a broken link.
 - Fragment: when the link carries `#frag` and resolves to an HTML page, `frag` (decoded) must be one of
   that page's ids. These are the rendered Starlight heading ids, so no slugger is reimplemented.
 - Report as `page → href` lines. Broken routes and broken fragments both throw and fail the build.
-  Every pre-existing failure the first run reports is fixed in this unit (locale fragment fixes may be
-  dispatched to one gpt-6-sol worker per locale). There is no global fragment switch and no allowlist.
+  There is no global fragment switch and no allowlist.
+
+## Pre-existing failures (measured, see [001](001_existing_link_failures.md))
+
+A scratch scan of the current build found 106 unique failures (the 404-page picker excluded): 5 route
+breaks and 11 fragment breaks in English sources, about 90 fragment breaks in locale sources. Most come
+from the configuration reference split into subpages (`/reference/configuration/#remote-access` now lives
+on `/reference/configuration/server/`) and translated headings whose slugs changed. All are fixed in this
+commit so Layer A can throw on the first build:
+
+- English sources (`guides/{claude-code,codex-integration,desktop-app,opencode,pi,providers,sidecars}.md`,
+  `reference/cli/agents.md`, `reference/configuration/{providers,server}.md`): main fixes each by finding
+  the heading's current page and slug in the rendered build.
+- Each locale's rows: one gpt-6-sol worker per locale, write scope = the listed source files in
+  `docs-site/src/content/docs/<locale>/`, rule = point the link at the rendered id that now carries that
+  heading (in the same locale when the target page exists there, else the fallback page's English id);
+  never delete a link to silence it. When the fragment names prose with no heading (for example
+  `guides/claude-code.md` `#mcp-tool-schemas-fill-the-context-on-turn-one` points at bold text), link the
+  nearest enclosing heading's id. Workers run no builds; main rebuilds once after all return.
+- Link ledger (audit round 3): before and after the repair, main's scratch script records per edited source
+  file the ordered list of Markdown link texts and the count of links; the two lists must be equal, only
+  hrefs may differ, and every row of 001 must map to a changed href whose new target resolves in the rebuilt
+  dist. A shrunken list fails the phase.
+- `.github/ISSUE_TEMPLATE/documentation.yml:31` placeholder `https://opencodex.me/providers/` is broken. Open PR
+  #5593 changes that line to
+  `"https://opencodex.me/guides/providers/ or docs-site/src/content/docs/guides/providers.md"`; this commit
+  makes the byte-identical change so either merge order is clean, and Layer B scans
+  `.github/ISSUE_TEMPLATE/`.
 - Export the pure resolver (`resolveInternalLink(distFiles, idsByPage, fromPage, href)`) so the Bun test
   can exercise it with fixtures without building.
 

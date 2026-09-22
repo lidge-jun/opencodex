@@ -28,7 +28,7 @@ listesine eklenmez. Satır, gerçek bir katalog satırının sahip olduğu alan
 şekliyle eşleştirilir, bu da hatalı biçimlendirilmiş girdileri filtreler —
 önbellek kullanıcıya ait bir dosya olduğundan kimliğin bir yukarı akış
 yanıtından geldiğini kanıtlamaz. Bkz. [Tam Codex hesap
-seçicileri](/tr/reference/configuration/routing/#exact-codex-account-selectors).
+seçicileri](/tr/reference/configuration/routing/#tam-codex-hesap-seçicileri).
 
 `gpt-daybreak-blue-latest`, hesap nitelikli satırlar için bu yalnızca gözlem
 kuralını takip eder ve yalın yerel izin listesine eklenmez. Ayrı, açık bir
@@ -115,7 +115,7 @@ yönlendirir. Ayrıca uyumluluk takma adları mevcutken devre dışı bırakılm
 yerel satırları etkili katalogdan çıkarır, böylece Desktop `visibility`'yi yok
 sayarak onları yeniden canlandıramaz. Komut, devre dışı bırakma anahtarı
 anlambilimi ve güvenlik kısıtlamaları için [Codex Desktop yerel izin listesi
-uyumluluğu](/tr/guides/combos/#codex-desktop-native-allowlist-compatibility)
+uyumluluğu](/tr/guides/combos/#codex-desktop-yerel-izin-listesi-uyumluluğu)
 bölümüne bakın.
 
 ## Entegrasyon yolu

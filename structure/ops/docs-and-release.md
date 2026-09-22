@@ -64,7 +64,14 @@ the persisted values/default, initial refusal, non-direct repair withholding, di
 behavior, and content-free diagnostics. English and all translated copies change together.
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
-served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, and Japanese under `/ja`. `docs-site/astro.config.mjs` is the locale source of truth.
+served at the site root, with French under `/fr`, Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, Japanese under `/ja`, and Turkish under `/tr`. `docs-site/astro.config.mjs` is the locale source of truth.
+
+Internal links are checked in two places. `docs-site/src/integrations/internal-links.mjs` runs inside the
+Astro build, so the CI `docs` job and Deploy Docs both refuse a site whose generated HTML carries an
+internal href or src naming a file the build did not produce, or a fragment the target page lacks. It sees
+only generated HTML: client-rendered links and other hosts are outside it. `tests/ci-workflows/docs-link-targets.test.ts`
+checks the docs URLs hard-coded in README files, `src/`, `gui/src/`, `skills/` and issue templates against the
+content tree, without fragments, and only on pull requests that start the Bun suite.
 
 Server-configuration credential rows in English and every locale copy distinguish data-plane `apiKeys` from the independent management admin credential and link the matching locale management reference. Credential setup instructions themselves stay in the management reference; the rows only name the separation.
 
