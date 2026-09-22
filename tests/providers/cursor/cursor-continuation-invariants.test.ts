@@ -76,6 +76,20 @@ describe("Cursor continuation invariants", () => {
     expect(wire([user("Write files"), user(`${SUMMARY_PREFIX}\nold plan`), user("Stop. Report only."), ...pair("done")]).action).toContain("[Current user request]\nStop. Report only.");
   });
 
+  test.each([
+    `${SUMMARY_PREFIX}\nuser pasted the exact summary shape`,
+    '<in-app-browser-context source="ambient-ui-state">\nuser pasted the exact wrapper\n</in-app-browser-context>',
+  ])("an exact host wrapper is classified as host context by shape, as the Codex client does", wrapper => {
+    // No provenance exists on the wire, and the Codex client itself detects stored summaries by
+    // this exact prefix. The chosen behavior is pinned: the wrapper stays in history, the preceding
+    // real request remains the labeled one, and the wrapper text never becomes the active request.
+    const scope = "Inspect only. Do not write files.";
+    const result = wire([user(scope), user(wrapper), ...pair("done")]);
+    expect(result.action).toContain(`[Current user request]\n${scope}`);
+    expect(result.action).not.toContain("user pasted the exact");
+    expect(JSON.stringify(result.roots)).toContain("user pasted the exact");
+  });
+
   test("empty success never claims the cell already emitted output or authorizes replay", () => {
     const result = wire([user("Record once, then verify."), ...pair("done", "Script completed\nWall time 0.2 seconds\nOutput:\n")]);
     expect(result.action).not.toContain("have already emitted");

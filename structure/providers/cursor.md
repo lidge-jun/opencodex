@@ -111,6 +111,10 @@ does not expose authoritative cache_read_tokens.
 `src/adapters/cursor/protobuf-request.ts` repeats the latest actual user request in the active
 external-model tool continuation. Canonical compaction summaries, opaque-compaction notes and
 standalone ambient-browser wrappers stay in history without being promoted to that request.
+Those wrappers are recognized by their exact canonical shape, the same prefix rule the Codex
+client uses to detect a stored summary; the wire carries no other provenance, so a user message
+that is itself an exact wrapper is treated as host context and the preceding real request stays
+the labeled one. Quoting a marker inside other text keeps the message as the request.
 Blank or image-only user input stops the search instead of reviving an older goal.
 Grok 4.6 code-mode continuations distinguish emitted observations from an empty completed cell:
 the latter is not proof of failure and never authorizes replay of a completed side effect.
