@@ -310,7 +310,8 @@ stability timer; if the same new manifest identity remains readable and distinct
 drain-and-restart handoff without waiting for another request. A temporarily unreadable manifest
 is polled until readable and then receives a fresh full stability interval, while a return to the
 startup identity cancels the pending restart. Failed restart admission retries after the same
-bounded delay. Source checkouts and standalone binaries remain outside this integrity fence.
+bounded delay. Stopping the server before the accepted restart begins vetoes it, and a service child
+restarts only while it still owns the service home. Source checkouts and standalone binaries remain outside this fence.
 
 ## Release workflow
 
