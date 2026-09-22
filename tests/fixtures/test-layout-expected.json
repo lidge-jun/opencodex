@@ -575,6 +575,7 @@
   "docs-bun-source-requirement.test.ts": "ci-workflows",
   "setup-hooks.test.ts": "ci-workflows",
   "pr-readiness-reattest.test.ts": "ci-workflows",
+  "exhaustive-deps-suppression.test.ts": "ci-workflows",
   "docs-provider-billing-claims.test.ts": "ci-workflows",
   "docs-provider-preset-counts.test.ts": "ci-workflows",
   "docs-readme-translation-parity.test.ts": "ci-workflows",

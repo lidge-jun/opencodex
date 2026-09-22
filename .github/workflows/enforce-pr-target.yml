@@ -208,6 +208,7 @@ jobs:
             const {
               parseGateState,
               advanceReattestation,
+              savedAttestationAuthorizes,
               gateStateMarker,
               parseState,
               parseReadinessState,
@@ -429,8 +430,9 @@ jobs:
                   comment_id: gateCommentId,
                   body
                 });
-                gateComment.body = body;
-                gateComment.updated_at = updated.data.updated_at;
+                // Replace the listed comment instead of mutating it, so a later
+                // authoritative readback observes the server, not this run's copy.
+                gateComment = { ...gateComment, body, updated_at: updated.data.updated_at };
                 await migrateLegacyCommentsIfNeeded();
                 return;
               }
@@ -582,15 +584,19 @@ jobs:
                 return;
               }
               const pending = gateState.pendingReattestation;
+              const snapshotReadiness = extractReviewReadiness(snapshot.body);
+              const clearStep = "Wait for the bot to acknowledge the cleared checklist before validating and ticking the boxes again.";
               const action = pending?.phase === "await-check"
                 ? "The cleared checklist has been recorded. Validate this head, tick all four boxes and save the PR description."
-                : `Change the first managed item to ${inlineCode(REVIEW_READINESS_ITEMS[0])}, clear all four boxes and save. Wait for the bot to acknowledge the cleared checklist before validating and ticking the boxes again.`;
+                : reviewReadinessUsesCurrentPolicy(snapshot.body) && snapshotReadiness.checked > 0
+                  ? `The first managed item already uses the current wording, but boxes ticked before this notice cannot carry over. Clear all four boxes and save. ${clearStep}`
+                  : `Change the first managed item to ${inlineCode(REVIEW_READINESS_ITEMS[0])}, clear all four boxes and save. ${clearStep}`;
               const state = { ...gateState, active: true, maintainersPinged: false,
                 autoDraftedByBot: !snapshot.draft || gateState.autoDraftedByBot };
               const options = {
                 status: "DRAFT", statusReason: "author re-attestation is required for the current head.",
                 actions: [action, "Only a new body edit by the PR author after this notice can advance the checkpoint. If edits share a checkpoint timestamp, make another body edit and save later."],
-                readiness: extractReviewReadiness(snapshot.body), checklistRequired: true,
+                readiness: snapshotReadiness, checklistRequired: true,
                 notices: [`Current head: ${inlineCode(snapshot.head.sha)}. Existing PR text and checkbox marks were preserved.`]
               };
               await persistReattestationCheckpoint(state, options);
@@ -1225,8 +1231,12 @@ jobs:
                 if (preserveAuthorBody) {
                   const { data: finalComment } = await github.rest.issues.getComment({ owner, repo, comment_id: gateCommentId });
                   const finalState = parseGateState(finalComment.body);
+                  // Promotion needs positive evidence: the saved comment must hold a
+                  // finalized attestation of this exact head, base, and body.
                   if (finalComment.user?.login !== "github-actions[bot]" ||
-                      JSON.stringify(finalState?.pendingReattestation) !== expectedPending) {
+                      JSON.stringify(finalState?.pendingReattestation) !== expectedPending ||
+                      !savedAttestationAuthorizes(finalState?.pendingReattestation, {
+                        headSha: pr.head.sha, baseRef: pr.base.ref, body: pr.body, authorId: pr.user?.id })) {
                     core.setFailed("Saved re-attestation changed before readiness; no ready action was taken.");
                     return;
                   }

@@ -247,8 +247,27 @@ function advanceReattestation({
   return { pending: prior, canComplete: false, changed: false, invalidIdentity: false };
 }
 
+/**
+ * Whether a saved re-attestation positively authorizes readiness for the live
+ * PR: a finalized attestation of this exact head, base, and body. A readable
+ * state that is merely unchanged from an earlier phase is not evidence.
+ *
+ * @param {unknown} saved
+ * @param {{headSha:string,baseRef:string,body:string,authorId:number}} live
+ */
+function savedAttestationAuthorizes(saved, live) {
+  const parsed = parsePendingReattestation(saved);
+  if (parsed.kind !== "valid" || !validLiveIdentity(live)) return false;
+  const value = parsed.value;
+  return value.phase === "attested" &&
+    typeof value.checkpointAt === "string" &&
+    sameIdentity(value, live) &&
+    value.attestedBodySha256 === bodyDigest(live.body);
+}
+
 module.exports = {
   advanceReattestation,
   bodyDigest,
   parsePendingReattestation,
+  savedAttestationAuthorizes,
 };
