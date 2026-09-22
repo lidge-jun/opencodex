@@ -289,9 +289,11 @@ export function backfillWebSearchQueries(body: unknown): unknown {
  *   - It never restores a call id the body already carries. If the history somehow holds that
  *     `function_call` too, emitting a second one would be a duplicate the upstream must reject.
  *
- * Entries are scoped to the upstream destination, so a history replayed against a different
- * provider cannot resurrect a call that provider never made. Callers pass `undefined` for any
- * provider without the bridge armed, and the common path then returns the original reference.
+ * Entries are scoped to the caller principal, conversation and exact serving identity, so a
+ * history replayed by another caller or against a different provider, model, destination or
+ * credential cannot resurrect a call that pairing never made. Callers pass `undefined` for any
+ * provider without the bridge armed and for a caller with no principal, and the common path then
+ * returns the original reference.
  */
 export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: string | undefined): unknown {
   if (destinationScope === undefined) return body;

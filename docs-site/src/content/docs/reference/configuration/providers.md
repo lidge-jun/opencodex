@@ -242,6 +242,11 @@ mode, or base URL during search or provider pacing ends the turn with a bridge e
 provider request is sent. Changing away and back also ends that continuation. Start a new turn to
 use the new selection. Selection changes before the first provider send retain normal reselection.
 
+A bridged search result is shown to the provider again on the conversation's next turn only for
+the same caller, conversation, provider, model and selected key. The caller is identified by the
+opencodex API key it presents, so a client that sends no opencodex API key gets no such replay:
+its earlier search cells reach the provider unchanged, as they do for a provider without the bridge.
+
 Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
 exception is an explicit custom row whose model id has pinned native Codex capabilities,
 including Astra or Daybreak on an arbitrary gateway: its advertised list is intersected with
