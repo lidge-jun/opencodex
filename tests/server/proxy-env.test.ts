@@ -235,11 +235,17 @@ describe("applyProxyEnv", () => {
   test.each([
     ["an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
     ["an inherited HTTPS proxy", { https_proxy: "http://proxy.invalid:3128" }],
-    ["only NO_PROXY", {}],
-  ] as const)("leaves NO_PROXY untouched with %s and no config.proxy", (_label, inherited) => {
+  ] as const)("adds only loopback addresses for %s and no config.proxy", (_label, inherited) => {
     // Bun applies an inherited HTTP(S) proxy itself and matches NO_PROXY entries as domain
     // suffixes, so adding "localhost" there would also send any *.localhost name direct.
+    // Loopback addresses cannot widen that way and keep local 127.0.0.1 calls off the proxy.
     Object.assign(process.env, inherited);
+    process.env.NO_PROXY = "operator-owned.example";
+    applyProxyEnv(configWithProxy());
+    expect(process.env.NO_PROXY).toBe("operator-owned.example,127.0.0.1,::1,[::1]");
+  });
+
+  test("leaves an inherited NO_PROXY untouched when no proxy is inherited", () => {
     process.env.NO_PROXY = "operator-owned.example";
     applyProxyEnv(configWithProxy());
     expect(process.env.NO_PROXY).toBe("operator-owned.example");

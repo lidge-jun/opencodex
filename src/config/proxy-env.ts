@@ -98,22 +98,29 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
   }
 }
 
-// With no config.proxy, loopback bypasses are written only for an inherited SOCKS proxy. The
-// installed fetch wrapper applies SOCKS before anything else (src/lib/proxy-env.ts
-// configuredOutboundFetch), and its matcher treats these loopback entries as exact hosts, so
-// only a request already judged loopback reaches Bun's own proxying, even beside an inherited
-// HTTP(S) proxy. An inherited HTTP(S) proxy alone is Bun's, and Bun matches NO_PROXY entries as
-// domain suffixes, so adding "localhost" there would also send any *.localhost name direct.
-// A proxy-free process is left untouched: writing NO_PROXY into it is itself a proxy-env
-// mutation callers observe (the lab sandbox rejects these keys as a forbidden leak).
-function inheritedSocksProxyOwnsTraffic(): boolean {
-  return socks5ProxyFromEnv() !== undefined;
+const LOOPBACK_NO_PROXY = ["localhost", "127.0.0.1", "::1", "[::1]"] as const;
+const LOOPBACK_ADDRESS_NO_PROXY = ["127.0.0.1", "::1", "[::1]"] as const;
+
+// With no config.proxy, which loopback bypasses are written depends on who applies the
+// inherited proxy. An inherited SOCKS proxy is applied first by the installed fetch wrapper
+// (src/lib/proxy-env.ts configuredOutboundFetch), whose matcher treats these entries as exact
+// hosts, so the full list is safe even beside an inherited HTTP(S) proxy: only a request already
+// judged loopback reaches Bun's own proxying. An inherited HTTP(S) proxy alone is Bun's, and Bun
+// matches NO_PROXY entries as domain suffixes, so "localhost" there would also send any
+// *.localhost name direct; the loopback addresses cannot widen that way (a URL host ending in a
+// numeric label parses as IPv4), so only they are added, keeping local health and management
+// calls to 127.0.0.1 off that proxy. A proxy-free process is left untouched: writing NO_PROXY
+// into it is itself a proxy-env mutation callers observe (the lab sandbox rejects these keys).
+function inheritedLoopbackBypass(): readonly string[] | undefined {
+  if (socks5ProxyFromEnv() !== undefined) return LOOPBACK_NO_PROXY;
+  const schemeProxy = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].some(key => process.env[key]?.trim());
+  return schemeProxy ? LOOPBACK_ADDRESS_NO_PROXY : undefined;
 }
 
-function withNoProxyEntries(existing: string, configured: readonly string[]): string {
+function withNoProxyEntries(existing: string, configured: readonly string[], loopback: readonly string[]): string {
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
   const seen = new Set(entries.map(entry => entry.toLowerCase()));
-  for (const host of [...configured, "localhost", "127.0.0.1", "::1", "[::1]"]) {
+  for (const host of [...configured, ...loopback]) {
     const key = host.toLowerCase();
     if (!seen.has(key)) {
       entries.push(host);
@@ -123,13 +130,13 @@ function withNoProxyEntries(existing: string, configured: readonly string[]): st
   return entries.join(",");
 }
 
-function mergeNoProxyEntries(configured: string[] = []): void {
-  process.env.NO_PROXY = withNoProxyEntries(process.env.NO_PROXY ?? process.env.no_proxy ?? "", configured);
+function mergeNoProxyEntries(configured: readonly string[] = [], loopback: readonly string[] = LOOPBACK_NO_PROXY): void {
+  process.env.NO_PROXY = withNoProxyEntries(process.env.NO_PROXY ?? process.env.no_proxy ?? "", configured, loopback);
   // Bun's native fetch reads a non-empty lowercase no_proxy before NO_PROXY
   // (src/codex/catalog/remote.ts), so an inherited one would shadow the entries above.
   const inherited = process.env.no_proxy;
   if (inherited !== undefined && inherited.trim() !== "") {
-    process.env.no_proxy = withNoProxyEntries(inherited, configured);
+    process.env.no_proxy = withNoProxyEntries(inherited, configured, loopback);
   }
 }
 
@@ -169,7 +176,8 @@ export function applyProxyEnvWith(
     // deliberately NOT merged here — with no config.proxy the operator's bypass list has
     // no declared proxy to apply against, and merging it would silently widen direct
     // egress beyond the loopback fix this branch exists for.
-    if (inheritedSocksProxyOwnsTraffic()) mergeNoProxyEntries();
+    const loopback = inheritedLoopbackBypass();
+    if (loopback) mergeNoProxyEntries([], loopback);
     configureSocks5Fetch();
     return;
   }
