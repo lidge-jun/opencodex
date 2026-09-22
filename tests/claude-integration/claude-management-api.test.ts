@@ -3,9 +3,12 @@ import { managementFetch as fetch } from "../helpers/management-auth";
 import { mkdtempSync, readdirSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, saveConfig } from "../../src/config";
+import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import { startServer as startServerImpl } from "../../src/server";
+import { handleManagementAPI } from "../../src/server/management-api";
 import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
+import * as desktopProfiles from "../../src/claude/desktop-profile";
+import { buildClaudeDesktopState } from "../../src/server/management/shared";
 import * as systemEnv from "../../src/server/system-env";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -904,6 +907,62 @@ test("Claude Desktop PUT clears applied markers when routing changes", async () 
     expect(loadConfig().claudeCode?.desktopProfile).not.toHaveProperty("appliedAt");
   } finally {
     await server.stop(true);
+  }
+});
+
+test("Claude Desktop PUT preserves a newer applied marker committed during profile rebuilding", async () => {
+  const seeded = loadConfig();
+  const initialState = await buildClaudeDesktopState(seeded);
+  seeded.claudeCode = {
+    ...(seeded.claudeCode ?? {}),
+    desktopProfile: {
+      ...initialState.profile,
+      appliedFingerprint: "older-fingerprint",
+      appliedAt: "2026-09-23T00:00:00.000Z",
+    },
+  };
+  saveConfig(seeded);
+  // This standalone management snapshot has no live-config baseline. The old
+  // whole-snapshot save would therefore overwrite the newer disk marker.
+  const liveConfig = structuredClone(seeded);
+  const originalReconcile = desktopProfiles.reconcileDesktopProfile;
+  let builds = 0;
+  let injected = false;
+  const reconcile = spyOn(desktopProfiles, "reconcileDesktopProfile").mockImplementation((stored, models) => {
+    const profile = originalReconcile(stored, models);
+    builds += 1;
+    if (builds === 2) {
+      const concurrent = loadConfig();
+      concurrent.claudeCode = {
+        ...(concurrent.claudeCode ?? {}),
+        desktopProfile: {
+          ...concurrent.claudeCode!.desktopProfile!,
+          appliedFingerprint: "newer-fingerprint",
+          appliedAt: "2026-09-23T00:00:01.000Z",
+        },
+      };
+      saveConfig(concurrent);
+      injected = true;
+    }
+    return profile;
+  });
+  try {
+    const url = new URL("http://127.0.0.1:10100/api/claude-desktop");
+    const req = new Request(url, {
+      method: "PUT",
+      headers: { Host: url.host, "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: initialState.profile }),
+    });
+    const put = await handleManagementAPI(req, url, liveConfig);
+    expect(put?.status).toBe(200);
+    expect(injected).toBe(true);
+    expect(loadConfig().claudeCode?.desktopProfile?.appliedFingerprint).toBe("newer-fingerprint");
+    expect(loadConfig().claudeCode?.desktopProfile?.appliedAt).toBe("2026-09-23T00:00:01.000Z");
+    expect(liveConfig.claudeCode?.desktopProfile?.appliedFingerprint).toBe("newer-fingerprint");
+    saveConfigPreservingClaudeCode(liveConfig);
+    expect(loadConfig().claudeCode?.desktopProfile?.appliedFingerprint).toBe("newer-fingerprint");
+  } finally {
+    reconcile.mockRestore();
   }
 });
 

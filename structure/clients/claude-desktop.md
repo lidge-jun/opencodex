@@ -161,6 +161,12 @@ skip outcome is reported. Provider-change auto-apply requires a present profile 
 generic diagnostic when the same comparison declines its marker. Default-family key order
 does not change desired content; the comparison uses each family's selected route.
 
+The profile PUT in `src/server/management/agent-settings-routes.ts` validates against a
+persisted profile snapshot and commits only `claudeCode.desktopProfile` under the config
+mutation lock. Client marker fields are discarded. Unchanged desired content keeps the
+latest persisted marker, including one committed while the PUT awaited model discovery;
+a concurrent desired-profile edit declines the PUT with 409 instead of being overwritten.
+
 These guarantees concern files on disk. Fully quitting and reopening Desktop is required after
 apply, rotation/recovery or restoration; there is no automatic process restart or guarantee that
 a running app discarded a key. Local disconnect does not revoke the hub key or remove arbitrary

@@ -990,9 +990,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     let body: { profile?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     try {
-      const { parseDesktopProfile, preserveDesktopAppliedState, reconcileDesktopProfile } = await import("../../claude/desktop-profile");
+      const { parseDesktopProfile, preserveDesktopAppliedState, reconcileDesktopProfile, sameProfileContent } = await import("../../claude/desktop-profile");
       const parsed = parseDesktopProfile(body.profile);
-      const current = await buildClaudeDesktopState(config);
+      const initial = loadConfig();
+      const current = await buildClaudeDesktopState(initial);
       const availableRoutes = new Set(current.models.filter(item => item.available).map(item => item.route));
       for (const route of Object.keys(parsed.assignments)) {
         if (!current.profile.assignments[route] && !availableRoutes.has(route)) {
@@ -1016,13 +1017,33 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // Applied markers are server-owned bookkeeping. Discard client copies, then
       // restore the trusted markers only if the desired profile stayed identical.
       const editable = { version: 1 as const, assignments: parsed.assignments, defaults: parsed.defaults };
-      const state = await buildClaudeDesktopState(config, editable);
+      const state = await buildClaudeDesktopState(initial, editable);
       const rebuilt = reconcileDesktopProfile(state.profile, state.models);
-      config.claudeCode = {
-        ...(config.claudeCode ?? {}),
-        desktopProfile: preserveDesktopAppliedState(current.profile, rebuilt),
-      };
-      saveConfigPreservingClaudeCode(config);
+      const expectedProfile = initial.claudeCode?.desktopProfile;
+      const outcome = mutatePersistedConfig<OcxConfig["claudeCode"] | null>(persisted => {
+        const latest = persisted.claudeCode?.desktopProfile;
+        if ((latest == null) !== (expectedProfile == null)
+          || (latest && expectedProfile && !sameProfileContent(latest, expectedProfile))) {
+          return { changed: false, value: null };
+        }
+        persisted.claudeCode = {
+          ...(persisted.claudeCode ?? {}),
+          desktopProfile: preserveDesktopAppliedState(latest ?? current.profile, rebuilt),
+        };
+        return { changed: true, value: structuredClone(persisted.claudeCode) };
+      });
+      if (outcome.status === "unavailable" || outcome.value === null) {
+        return jsonResponse({ error: "Claude Desktop profile changed during save" }, 409);
+      }
+      adoptPersistedClaudeCode(config, outcome.value);
+      // An unarmed live snapshot may prefer its old marker during reconciliation.
+      // Pin the field this route just committed while leaving other live leaves intact.
+      if (outcome.value?.desktopProfile) {
+        config.claudeCode = {
+          ...(config.claudeCode ?? {}),
+          desktopProfile: structuredClone(outcome.value.desktopProfile),
+        };
+      }
       const saved = await buildClaudeDesktopState(config);
       const runtimePort = Number(url.port) || config.port;
       return jsonResponse({ ok: true, ...saved, port: runtimePort });

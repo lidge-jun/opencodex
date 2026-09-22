@@ -19,7 +19,7 @@ import type { OAuthController } from "../../src/oauth/types";
 import { getCredential } from "../../src/oauth/store";
 import * as oauthStore from "../../src/oauth/store";
 import * as oauth from "../../src/oauth";
-import { requestMuseDeviceAuthorization } from "../../src/oauth/meta-muse-device";
+import { MuseDeviceLoginError, requestMuseDeviceAuthorization } from "../../src/oauth/meta-muse-device";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
@@ -150,11 +150,21 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     const cfg = config();
     saveConfig(cfg);
     let fetches = 0;
+    let overflowObserved = false;
     const login = spyOn(oauth, "startLoginFlow").mockImplementation(async () => {
-      await requestMuseDeviceAuthorization({ fetchImpl: (async () => {
-        fetches++;
-        return new Response(JSON.stringify({ device_code: "private-device-canary", filler: "x".repeat(65_536) }));
-      }) as typeof fetch });
+      try {
+        await requestMuseDeviceAuthorization({ fetchImpl: (async () => {
+          fetches++;
+          return new Response(JSON.stringify({ device_code: "private-device-canary", filler: "x".repeat(65_536) }));
+        }) as typeof fetch });
+      } catch (error) {
+        expect(error).toBeInstanceOf(MuseDeviceLoginError);
+        if (!(error instanceof MuseDeviceLoginError)) throw error;
+        expect(error.kind).toBe("device-authorization");
+        expect(error.message).toContain("exceeded the 65536-byte limit");
+        overflowObserved = true;
+        throw error;
+      }
       throw new Error("oversized authorization must not succeed");
     });
     const request = () => new Request("http://localhost/api/oauth/login", {
@@ -170,6 +180,7 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
       expect(response?.status).toBe(409);
       expect(await response?.json()).toEqual({ error: PUBLIC_OAUTH_ERROR });
       expect(fetches).toBe(1);
+      expect(overflowObserved).toBe(true);
       expect(getCredential("meta-muse")).toBeNull();
     } finally { login.mockRestore(); }
   });
