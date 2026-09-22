@@ -600,6 +600,68 @@ describe("operator-granted replacement of an ambiguous reset", () => {
     expect(mock.calls).toHaveLength(2);
   });
 
+  // 429 and 529 are the cases the gateway-only transient set let through: the client retry table
+  // and the proxy's own quota rotation both resend them. 401 and 402 are proxy recovery triggers.
+  test.each([401, 402, 408, 409, 429, 500, 503, 529])(
+    "a %d answer to a spent replacement settles as the refusal and releases its body",
+    async (status) => {
+      silenceWarn();
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({ cancel: () => { cancelled = true; } });
+      const mock = mockDoFetch([
+        bunResetError(), new Response(body, { status }), new Response("duplicate"),
+      ]);
+      const response = await fetchWithTransientRetry(mock.doFetch, {
+        attempts: 3, claimAmbiguousResend: () => true,
+      });
+      expect(response.status).toBe(429);
+      expect(isNonReplayableResponse(response)).toBe(true);
+      expect(response.headers.get("x-should-retry")).toBe("false");
+      expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+      expect(cancelled).toBe(true);
+      expect(mock.calls).toHaveLength(2);
+    },
+  );
+
+  test.each([400, 404, 422])(
+    "a %d answer to a spent replacement keeps its status but can no longer trigger recovery",
+    async (status) => {
+      silenceWarn();
+      const mock = mockDoFetch([
+        bunResetError(), new Response("request defect", { status }), new Response("duplicate"),
+      ]);
+      const response = await fetchWithTransientRetry(mock.doFetch, {
+        attempts: 3, claimAmbiguousResend: () => true,
+      });
+      expect(response.status).toBe(status);
+      expect(isNonReplayableResponse(response)).toBe(true);
+      expect(await response.text()).toBe("request defect");
+      expect(mock.calls).toHaveLength(2);
+    },
+  );
+
+  test("a successful answer to a spent replacement is returned unchanged", async () => {
+    silenceWarn();
+    const mock = mockDoFetch([bunResetError(), new Response("answer"), new Response("duplicate")]);
+    const response = await fetchWithTransientRetry(mock.doFetch, {
+      attempts: 3, claimAmbiguousResend: () => true,
+    });
+    expect(response.status).toBe(200);
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(await response.text()).toBe("answer");
+    expect(mock.calls).toHaveLength(2);
+  });
+
+  test("an error answer with no replacement spent stays an ordinary recoverable response", async () => {
+    const mock = mockDoFetch([new Response("request defect", { status: 400 })]);
+    const response = await fetchWithResetRetry(mock.doFetch, {
+      attempts: 3, claimAmbiguousResend: () => true,
+    });
+    expect(response.status).toBe(400);
+    expect(isNonReplayableResponse(response)).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
   test("the transient layer carries the grant into its inner reset layer", async () => {
     silenceWarn();
     const reports: number[] = [];
