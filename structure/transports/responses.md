@@ -1364,17 +1364,20 @@ may already have run the turn, so `fetchWithResetRetry` sorts the replacement's 
 | Replacement answer | Result |
 | --- | --- |
 | 2xx | Returned unchanged. |
-| 307, 308, 401, 402, 408, 409, 429, or any 5xx | Body released; settles as the refusal. |
+| 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx | Body released; settles as the refusal. |
 | Any other status | Real status and body kept, marked non-replayable. |
 
 The refusal set is everything that would send again: the client retry table (408, 409, 429,
 every 5xx, which the Codex client retries whatever the headers say), a client following a
-307/308 with the same body, and this proxy's credential and quota recovery (401 refresh or
-rotation, 402/429 account rotation). The gateway statuses in `isTransientUpstreamStatus` are only
+307/308 with the same body, a 413 answered as a context overflow the client compacts and resends,
+and this proxy's credential and quota recovery (401 refresh or rotation, 402/429 account
+rotation). The gateway statuses in `isTransientUpstreamStatus` are only
 a subset; 429 and 529 escaped them before. A kept status stays the upstream's evidence for the
 caller, and the marker stops every recovery loop that checks it, such as the opaque-blob rebuild
-of a 400. The cost is that a real 401, 402 or 429 on a replacement send is not recorded against
-its credential on that request.
+of a 400 or the Codex pool's gated-model retry. A combo rebuilds a failed attempt as a new
+response, so `consumeComboFailure` records `nonReplayable` and the combo stops rather than hopping
+on, say, a context overflow. The cost is that a real 401, 402 or 429 on a replacement send is not
+recorded against its credential on that request.
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
