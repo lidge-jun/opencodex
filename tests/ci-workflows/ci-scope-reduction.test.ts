@@ -252,7 +252,14 @@ function gateEnvironment(inputs: GateInputs, results: Record<string, string>): R
     CHANGES_DOCS: inputs.docs,
     CHANGES_STRUCTURE: inputs.structure,
     LANE: inputs.lane,
-    RESULTS: JSON.stringify(results),
+    // `needs` serializes as an object per job, and the gate reads
+    // `.value.result` out of it. Passing a flat name-to-string map makes jq
+    // fail on the first entry, which empties the heredoc feeding the check
+    // loop — so every assertion over `bad` would pass over a loop that never
+    // ran. Shape it the way the real context does.
+    RESULTS: JSON.stringify(Object.fromEntries(
+      Object.entries(results).map(([job, result]) => [job, { result }]),
+    )),
   };
 }
 
