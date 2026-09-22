@@ -118,6 +118,28 @@ describe("benign abort-teardown classification", () => {
     expect(isBenignAbortTeardown(err)).toBe(false);
   });
 
+  test("does NOT flag unparenthesized, async, file-URL, or Windows JS source frames", () => {
+    for (const frame of [
+      "at /abs/src/server.ts:120:13",
+      "at async handler (file:///abs/src/server.ts:120:13)",
+      "at file:///abs/src/server.ts:120:13",
+      "at C:\\app\\src\\server.ts:120:13",
+    ]) {
+      const err = new TypeError("null is not an object");
+      err.stack = `TypeError: null is not an object\r\n    at <anonymous> (native:1:11)\r\n    ${frame}`;
+      expect(isBenignAbortTeardown(err), frame).toBe(false);
+    }
+  });
+
+  test("hidden JSC source fields alone do not veto a native-only stack", () => {
+    // Bun can attach sourceURL/line/column to errors raised from builtin frames, and the
+    // benign summary still records them through diagnose(); only a real JS frame vetoes.
+    const err = new TypeError("null is not an object");
+    err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)\n    at native:7:39";
+    Object.assign(err, { sourceURL: "/abs/src/server.ts", line: 1216, column: 24 });
+    expect(isBenignAbortTeardown(err)).toBe(true);
+  });
+
   test("does NOT flag a different message or the (evaluating …) form", () => {
     const a = new TypeError("null is not an object (evaluating 'x.y')");
     a.stack = "TypeError: ...\n    at <anonymous> (native:1:11)";

@@ -176,9 +176,24 @@ export function isBenignAbortTeardown(err: unknown): boolean {
   const lockedStreamTeardown = err.message === "Invalid state: ReadableStream is locked"
     && (err as { code?: unknown }).code === "ERR_INVALID_STATE";
   if (!bareNullTeardown && !lockedStreamTeardown) return false;
-  const stack = err.stack ?? "";
-  // Native-only: no JS source frame. A real app TypeError would carry a `(file:line:col)` frame.
-  return !/\((?!native:)[^)]*:\d+:\d+\)/.test(stack);
+  // Native-only: no JS source frame, parenthesized or not. Hidden JSC source fields
+  // (sourceURL/line/column) do not decide this: Bun can attach them to errors raised from
+  // its own builtin frames, and the benign summary still records them through diagnose().
+  return !hasJsSourceFrame(err.stack ?? "");
+}
+
+/**
+ * True when a stack line is an `at …` frame ending in `line:col` (optionally inside
+ * parentheses) whose location is not a Bun builtin (`native:`). Covers `at fn (/abs/x.ts:1:2)`,
+ * `at /abs/x.ts:1:2`, `at async fn (file:///x.ts:1:2)` and Windows drive paths.
+ */
+function hasJsSourceFrame(stack: string): boolean {
+  return stack.split(/\r?\n/).some(raw => {
+    const frame = raw.trim();
+    return frame.startsWith("at ")
+      && /:\d+:\d+\)?$/.test(frame)
+      && !/[(\s]native:\d+:\d+\)?$/.test(frame);
+  });
 }
 
 function record(kind: string, err: unknown, promise?: unknown): void {
