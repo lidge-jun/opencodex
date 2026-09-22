@@ -64,9 +64,9 @@ inside subsequent code fences or quoted examples: this explicit opt-in does not 
 Gateways producing ambiguous literals should use structured reasoning instead. Iterative draining
 keeps stack depth independent of the number of blocks in an upstream chunk.
 A block left unterminated at end of stream flushes as reasoning rather than being
-dropped. Whitespace between the leading block and the start of the answer is dropped as formatting
-noise; once answer text has been emitted, whitespace after a later closing tag is preserved,
-because a mid-answer block sits inside markdown or code where indentation is meaningful.
+dropped. In interleaved Chat mode, whitespace after the leading block and after later blocks
+remains answer text, including indentation and blank lines. Kiro uses single-block mode and
+retains its existing first-answer normalization.
 `src/adapters/inline-think-tags.ts` owns the parser and is shared with the Kiro adapter,
 which consumes it in single-block mode with its existing leading/first-answer normalization.
 Regression coverage is in `tests/adapters/openai/openai-chat-inline-think-tags.test.ts` and
