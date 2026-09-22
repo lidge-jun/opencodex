@@ -1,5 +1,10 @@
 # Providers And Adapters
 
+The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
+the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.
+Failure prevents CLI spawn and settles the bridge's private directory; the CodeBuddy adapter
+also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
+
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).

@@ -675,6 +675,36 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(frames.some(f => f.event === "response.function_call_arguments.done")).toBe(false);
   });
 
+  test("holds function-call argument fragments that can never parse, failing the item clean", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_6c903fcfec9947a8b7aff270", name: "js" },
+      // A coding-agent stream that already lost its leading `{"` (observed 260921):
+      // the fragments can never assemble into parseable JSON.
+      { type: "tool_call_delta", arguments: 'code":"let log = [];"' },
+      { type: "tool_call_delta", arguments: ',"timeout_ms":90000}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "codebuddy-cn/hy4-preview-f"));
+
+    expect(frames.some(f => f.event === "response.function_call_arguments.delta")).toBe(false);
+    const failed = frames.find(f => f.event === "response.failed")?.data.response as Record<string, unknown>;
+    const failure = failed?.error as Record<string, unknown> | undefined;
+    expect(String(failure?.message)).toContain("malformed tool call arguments");
+  });
+
+  test("still streams healthy function-call argument deltas unchanged", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_ok", name: "js" },
+      { type: "tool_call_delta", arguments: '{"code":"' },
+      { type: "tool_call_delta", arguments: 'let x = 1"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "codebuddy-cn/hy4-preview-f"));
+
+    const deltas = frames.filter(f => f.event === "response.function_call_arguments.delta").map(f => f.data.delta);
+    expect(deltas.join("")).toBe('{"code":"let x = 1"}');
+  });
+
   test("repairs a complete decorated top-level apply_patch payload", () => {
     const body = `*** Begin Patch ***
 *** Update File: README.md

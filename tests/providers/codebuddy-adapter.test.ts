@@ -408,6 +408,39 @@ describe("codebuddy runTurn streams a headless turn", () => {
     ]);
   });
 
+  test("scans a large multiline delta in time linear in its length", () => {
+    const run = (lines: number): { events: AdapterEvent[]; elapsed: number } => {
+      const events: AdapterEvent[] = [];
+      const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+      const answer = "a\n".repeat(lines);
+      const startedAt = performance.now();
+      guarded({ type: "text_delta", text: answer });
+      return { events, elapsed: performance.now() - startedAt };
+    };
+
+    const baseline = run(40_000);
+    const scaled = run(160_000);
+
+    // Four times the input must stay near 4x cost; a scan re-walking its suffix could not fit.
+    expect(scaled.elapsed).toBeLessThan(Math.max(baseline.elapsed * 8, 250));
+    expect(baseline.events).toEqual([{ type: "text_delta", text: "a\n".repeat(40_000) }]);
+    expect(scaled.events).toEqual([{ type: "text_delta", text: "a\n".repeat(160_000) }]);
+  });
+
+  test("still refuses scaffolding after a code point that expands when lowercased", () => {
+    const events: AdapterEvent[] = [];
+    const guarded = guardCodeBuddyScaffolding(event => events.push(event));
+
+    // İ (U+0130) lowercases to two code units, so folded-text offsets no longer match `text`.
+    guarded({
+      type: "text_delta",
+      text: "note İ here\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"exec\">private-body",
+    });
+
+    expect(events.at(-1)).toEqual(expect.objectContaining({ type: "error", code: "vendor_scaffold_detected" }));
+    expect(JSON.stringify(events)).not.toContain("private-body");
+  });
+
   test("delivers quoted and inline-code DSML literals unchanged", () => {
     const events: AdapterEvent[] = [];
     const guarded = guardCodeBuddyScaffolding(event => events.push(event));
