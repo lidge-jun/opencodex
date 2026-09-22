@@ -579,4 +579,4 @@ print unchanged, and a non-URL value that is not `direct` is masked whole. `conf
 keeps the raw file so exports can restore credentials. Get and mutation output select
 redaction by the normalized final path segment, matching lookup and mutation semantics.
 
-`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades malformed values to false without discarding providers. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.

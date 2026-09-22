@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigPath, getDefaultConfig, readConfigDiagnostics, validateConfigCandidate } from "../../src/config";
+import { getConfigPath, getDefaultConfig, loadConfig, readConfigDiagnostics, saveConfig, validateConfigCandidate } from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
 
@@ -46,6 +46,7 @@ function writeConfig(content: unknown): void {
       { work: 101 },
       { work: 1.5 },
       { work: "80" },
+      { work: 80, broken: "90" },
       { "bad id!": 80 },
       [],
     ]) {
@@ -96,5 +97,38 @@ describe("codex account usage-threshold overrides", () => {
     expect(Object.keys(diagnostics.config.providers)).toContain("openai");
     expect(backupNames()).toHaveLength(0);
     expect(diagnostics.warnings).toContainEqual(expect.stringContaining("per-account usage thresholds are disabled"));
+  });
+
+  test("retains valid thresholds after a malformed neighbor and unrelated port save", () => {
+    writeThresholdConfig({ work: 80, broken: "90" });
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.config.codexAccountAutoSwitchThresholds).toEqual({ work: 80 });
+    expect(diagnostics.warnings).toContainEqual(expect.stringContaining("invalid entries were ignored"));
+
+    const loaded = loadConfig();
+    loaded.port = 10101;
+    saveConfig(loaded);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf-8"));
+    expect(persisted.port).toBe(10101);
+    expect(persisted.codexAccountAutoSwitchThresholds).toEqual({ work: 80 });
+    expect(backupNames()).toHaveLength(0);
+  });
+
+  test("rejects non-boolean priority failback writes but degrades hand edits to false", () => {
+    expect(validateConfigCandidate({ ...getDefaultConfig(), codexAccountPriorityFailback: true }).ok).toBe(true);
+    const candidate = { ...getDefaultConfig(), codexAccountPriorityFailback: "true" };
+    expect(validateConfigCandidate(candidate)).toEqual({
+      ok: false,
+      error: "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted",
+    });
+
+    writeConfig(candidate);
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.codexAccountPriorityFailback).toBe(false);
+    expect(Object.keys(diagnostics.config.providers)).toContain("openai");
+    expect(backupNames()).toHaveLength(0);
   });
 });

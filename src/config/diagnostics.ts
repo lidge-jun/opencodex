@@ -365,6 +365,14 @@ function codexAccountPrioritiesError(value: unknown): string | null {
   return null;
 }
 
+function codexAccountPriorityFailbackError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexAccountPriorityFailback")) return null;
+  const enabled = raw.codexAccountPriorityFailback;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted";
+}
+
 /**
  * Same reasoning as {@link codexAccountPrioritiesError}, plus one of its own. The read
  * path drops an invalid grouping, so a degraded write would erase a declaration the
@@ -603,6 +611,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
+    ?? codexAccountPriorityFailbackError(value)
     ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)

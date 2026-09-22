@@ -666,6 +666,22 @@ export const codexAccountAutoSwitchThresholdsSchema = z.custom<Record<string, un
   }
 }).pipe(z.record(z.string(), z.number().int()));
 
+/** Load only: retain valid overrides from a hand-edited map; writes use the strict schema above. */
+export function salvageCodexAccountAutoSwitchThresholds(value: unknown): Record<string, number> | undefined {
+  const parsed = codexAccountAutoSwitchThresholdsSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
+  const valid: Record<string, number> = Object.create(null);
+  for (const [accountId, threshold] of Object.entries(value)) {
+    const parsedThreshold = parseCodexAutoSwitchThreshold(threshold);
+    if (isCodexAccountAutoSwitchThresholdKey(accountId) && parsedThreshold !== null) {
+      valid[accountId] = parsedThreshold;
+    }
+  }
+  return Object.keys(valid).length ? valid : undefined;
+}
+
 export const codexQuotaAutoRefreshSchema = z.custom<Record<string, unknown>>(
   (value): value is Record<string, unknown> => !!value
     && typeof value === "object"
