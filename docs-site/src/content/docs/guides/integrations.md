@@ -475,12 +475,14 @@ manual client setup with no Integrations-tab switch, and it is separate from the
 
 3. Sync models from the endpoint, or add one by its `provider/model` id, and select it.
 
-The app uses `GET /v1/models` for discovery and `POST /v1/chat/completions` for turns. opencodex
-translates those turns into its Responses pipeline, so routing, OAuth, combos and sidecars apply as
-usual. The accepted request fields are listed in the
+The app uses `GET /v1/models` for discovery and `POST /v1/chat/completions` for turns. Those turns
+go through opencodex's normal model routing, so provider credentials, OAuth accounts and combos apply
+as they do for any other client. The accepted request fields are listed in the
 [proxy formats reference](/reference/proxy-formats/).
 
 If the app reports no models, check that the base URL ends in `/v1` rather than
-`/v1/chat/completions` and that `/v1/models` returns a non-empty `data` array. A non-loopback
-bind needs the data-admission token described under
-[remote access](/reference/configuration/server/#remote-access).
+`/v1/chat/completions` and that `/v1/models` returns a non-empty `data` array. When opencodex
+listens on a non-loopback address, put a data-admission key (the token described under
+[remote access](/reference/configuration/server/#remote-access), or a dashboard-generated `ocx_…`
+key) in the app's API key field. The app sends it as `Authorization: Bearer`, which
+`/v1/chat/completions` accepts as proxy admission and never forwards upstream.

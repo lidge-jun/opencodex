@@ -97,6 +97,12 @@ matters for maintainers is which groups exist and who resolves them:
 Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
 
+`ocx doctor` reports proxy state on three separate surfaces: its own process environment, the
+effective `config.proxy`, and the running proxy process environment (read from
+`/proc/<pid>/environ` on Linux and WSL, reported as unavailable elsewhere). Each proxy key is shown
+as present or absent only; `src/cli/doctor.ts` never prints or stores a proxy value, because proxy
+URLs can carry credentials.
+
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
 The `ocx config show` reader in `src/cli/config-command.ts` uses those diagnostics directly. Its

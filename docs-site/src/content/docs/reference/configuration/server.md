@@ -601,7 +601,9 @@ input size and content. Restart the proxy after editing
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
 replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
-uses different helper ids.
+uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
+extending them, so include `gpt-5.6-luna` in the list when current clients should still be
+intercepted.
 Interception is model-based: every request whose bare model id matches `sourceModels` can be
 redirected, including normal `request_kind: "turn"` requests. `x-codex-turn-metadata` does not exempt
 a matching request.

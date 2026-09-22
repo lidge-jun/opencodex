@@ -285,6 +285,11 @@ helper validates this actor/base exception separately from its default contribut
 path; it does not certify CI or security review. The PR-only bypass leaves direct pushes,
 force-pushes and deletion blocked. `main` and `preview` retain their existing review rules.
 
+A new dashboard management operation ships with its `ocx` command in the same change, declared in
+`src/cli/capabilities.ts`, or with an explicit note that it is visual-only (theme, language,
+navigation). CLI commands call the running management API rather than re-implementing its validation,
+so the management route stays the single domain schema.
+
 > Decision record: [ADR-0083](../decisions/ADR-0083-maintenance-governance.md)
 
 ## Package runtime (bundled Bun)
