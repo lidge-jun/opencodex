@@ -15,6 +15,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import {
   appendUsageEntry,
+  normalizeUsageEntryForTest,
   resetUsageReadCacheForTests,
   usageLogPath,
   type PersistedUsageEntry,
@@ -168,7 +169,12 @@ describe("request-history index (RI-02)", () => {
 
   test("large history indexes fully and paginates without duplicates or misses", async () => {
     const rows = seedRows(1500, 10_000);
-    for (const row of rows) appendUsageEntry(row);
+    // Exercise all 1,500 indexed rows and 15 pages without timing 1,500 filesystem opens.
+    // This is byte-for-byte the append writer's normalization + JSON + LF representation;
+    // the incremental-append cases above continue to exercise appendUsageEntry itself.
+    writeFileSync(usageLogPath(), rows.map(row => `${JSON.stringify(normalizeUsageEntryForTest(row))}\n`).join(""), {
+      encoding: "utf-8", mode: 0o600,
+    });
     const seen = new Set<string>();
     let cursor: string | undefined;
     let pages = 0;
