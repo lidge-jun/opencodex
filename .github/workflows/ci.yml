@@ -545,8 +545,8 @@ jobs:
     # Two shards. Unsharded, this job was the critical path on every green dev
     # push (mean 14.9 min against a 4.7 min Linux maximum; devlog
     # 260905_test_modularization_and_windows/003). Two halves finish in ~7.7 and
-    # cost 0.6 extra macOS minutes of setup per run. The whole-pool control that
-    # the single job used to provide lives in macos-control below, on dispatch.
+    # cost 0.6 extra macOS minutes of setup per run. The full-membership control
+    # runs the same bounded batches without sharding on explicit dispatch.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -587,101 +587,21 @@ jobs:
           cd gui
           bun run build
 
-      # No attempt is ever repeated here. A Bun panic is the interpreter dying mid-suite,
-      # which is process death a user would have seen; a second execution that happens not
-      # to die does not un-kill the first, and a leg that reports green on it is reporting
-      # something that did not happen. This leg retried a crash exactly once until
-      # 2026-09-17, the Linux batch runner swept crashed batches into green, and the result
-      # was that Bun 1.4.2's preload segfault stayed invisible on every lane except Windows.
-      #
-      # `is_bun_runtime_crash` from scripts/ci/bun-crash-signatures.sh survives, and this leg,
-      # the Windows leg, the macOS control and the Linux batch runner all still source that one
-      # definition. Its job is now diagnosis only: it decides which failure message is printed,
-      # never whether the leg fails.
-      - name: Test
-        env:
-          MACOS_TEST_SHARD: ${{ matrix.shard }}
+      - name: Setup bounded batch utilities
         run: |
-          # GitHub Actions starts bash `run:` blocks with `-e`. Disable
-          # errexit so a Bun crash reaches PIPESTATUS and the classifier below,
-          # instead of aborting the step before either can be read.
-          set +e
-          set -uo pipefail
-          # One shared classifier for every lane; see scripts/ci/bun-crash-signatures.sh.
-          source scripts/ci/bun-crash-signatures.sh
+          brew list coreutils >/dev/null 2>&1 || brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
 
-          run_macos_suite() {
-            local suite_log suite_status
-            suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)" || return $?
-            # The per-test ceiling applies to every invocation, including each isolated
-            # serial file. One attempt, whatever the outcome.
-            bun test --isolate --timeout 60000 "$@" 2>&1 | tee "$suite_log"
-            suite_status="${PIPESTATUS[0]}"
-            if [ "$suite_status" -eq 0 ]; then
-              rm -f "$suite_log"
-              return 0
-            fi
-            if is_bun_runtime_crash "$suite_status" "$suite_log"; then
-              echo "::error::Bun runtime crash in the macOS suite (exit ${suite_status}); a crash is process death, not a test result, and it fails this leg on the first occurrence."
-            else
-              echo "::error::macOS suite failed (exit ${suite_status})."
-            fi
-            rm -f "$suite_log"
-            return "$suite_status"
-          }
-
-          case "$MACOS_TEST_SHARD" in
-            1|2) ;;
-            *) echo "::error::Invalid macOS test shard"; exit 64 ;;
-          esac
-          serial_manifest="$(bun -e 'import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"; console.log(SERIAL_FULL_SUITE_FILES.join("\n"));')"
-          manifest_status=$?
-          if [ "$manifest_status" -ne 0 ]; then
-            exit "$manifest_status"
-          fi
-          serial_files=()
-          ignore_args=()
-          serial_count=0
-          while IFS= read -r file; do
-            if [[ ! "$file" =~ ^[[:alnum:]_./-]+$ || "$file" == /* || "/$file/" == *"/../"* || "/$file/" == *"/./"* ]]; then
-              echo "::error::Invalid serial test path"
-              exit 1
-            fi
-            for ((index=0; index<serial_count; index++)); do
-              if [ "${serial_files[$index]}" = "$file" ]; then
-                echo "::error::Duplicate serial test path"
-                exit 1
-              fi
-            done
-            # The established basename glob must exclude exactly the owned file.
-            # Refuse missing files or collisions instead of silently losing tests.
-            base="${file##*/}"
-            matches="$(find tests -type f -name "$base")" || exit $?
-            if [ "$matches" != "tests/$file" ]; then
-              echo "::error::Missing or ambiguous serial test path: $file"
-              exit 1
-            fi
-            serial_files[$serial_count]="$file"
-            ignore_args+=("--path-ignore-patterns" "**/$base")
-            serial_count=$((serial_count + 1))
-          done <<< "$serial_manifest"
-          if [ "$serial_count" -eq 0 ]; then
-            echo "::error::Empty serial test manifest"
-            exit 1
-          fi
-
-          run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"
-          suite_status=$?
-          if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
-          for ((index=0; index<serial_count; index++)); do
-            if [ "$((index % 2 + 1))" -ne "$MACOS_TEST_SHARD" ]; then continue; fi
-            file="${serial_files[$index]}"
-            echo "::group::macOS isolated $file"
-            run_macos_suite --parallel=1 "./tests/$file"
-            suite_status=$?
-            echo "::endgroup::"
-            if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
-          done
+      - name: Test in fresh-process batches
+        env:
+          TEST_SHARD: ${{ matrix.shard }}/2
+          BUN_TEST_FILE_SCOPE: all
+          BUN_TEST_BATCH_SIZE: '12'
+          BUN_TEST_PARALLEL: '1'
+          BUN_TEST_BATCH_TIMEOUT_SECONDS: '300'
+          OCX_TEST_NO_QUEUE: '1'
+          OCX_TEST_FULL_SUITE: '1'
+        run: bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help

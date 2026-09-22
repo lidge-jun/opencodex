@@ -258,35 +258,22 @@ describe("GitHub Actions hardening", () => {
     const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { name?: string; env?: Record<string, string>; run?: string }[] })?.steps ?? [];
     // The 60s per-test ceiling is part of the pinned shape: dropping it silently
     // restores the timing-flake class this lane kept surfacing.
-    const macosTestStep = macosSteps.find(step => step.name === "Test");
-    expect(macosTestStep?.env?.MACOS_TEST_SHARD).toBe("${{ matrix.shard }}");
-    expect(hasShellCommandHead(macosTestStep?.run, 'bun test --isolate --timeout 60000 "$@"')).toBe(true);
-    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"')).toBe(true);
-    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite --parallel=1 "./tests/$file"')).toBe(true);
-    expect(macosTestStep?.run).toContain('import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"');
+    const macosTestStep = macosSteps.find(step => step.name === "Test in fresh-process batches");
+    expect(macosTestStep?.env).toMatchObject({
+      TEST_SHARD: "${{ matrix.shard }}/2", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1", OCX_TEST_FULL_SUITE: "1",
+    });
+    expect(macosTestStep?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
+    expect(macosSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
     const macosShards = (ci.jobs?.["platform-macos"] as {
       strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
     })?.strategy;
     expect(macosShards?.["fail-fast"]).toBe(false);
     expect(macosShards?.matrix?.shard).toEqual([1, 2]);
 
-    // The macOS leg retries NOTHING. It carried a crash-only retry until
-    // 2026-09-17, on the reasoning that a Bun panic is a runtime defect rather than a
-    // test result. Both halves of that are true and the conclusion still does not
-    // follow: a panic is process death a user would have seen, and a second execution
-    // that happens not to die does not un-kill the first. Pin the absence of the loop
-    // and of its vocabulary, so it cannot return in a renamed form.
-    const macosTestRun = macosTestStep?.run ?? "";
-    // Actions invokes multiline `run:` blocks with `bash -e`. The retry loop
-    // is gone but errexit must still be disabled before the crash-prone command:
-    // otherwise exit 133 aborts the step before PIPESTATUS can be inspected and the
-    // failure is reported without saying what kind it was.
-    expect(hasExactShellCommand(macosTestRun, "set +e")).toBe(true);
-    // The crash signatures themselves moved to scripts/ci/bun-crash-signatures.sh; that one
-    // definition and every lane that sources it are pinned by ci-bun-crash-classifier.test.ts.
-    expect(macosTestRun).toContain("it fails this leg on the first occurrence");
-    expect(macosTestRun).not.toContain("for attempt in");
-    expect(macosTestRun).not.toContain("while true");
+    // Failure disposition belongs to the shared runner; the workflow has no recovery loop.
+    expect(macosTestStep?.run).not.toContain("for attempt in");
+    expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
     expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
       .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");

@@ -177,7 +177,8 @@ then removes the other mode's configuration (only values OpenCodex wrote — a f
 `NODE_EXTRA_CA_CERTS`, for example a corporate proxy, is never overwritten and the apply is
 refused instead). A failed replacement preserves the previous connection. If retiring the old
 configuration fails after the replacement was written, the command reports incomplete cleanup;
-resolve that error before restarting Desktop. Fully quit and reopen Desktop after a successful switch. `ocx ensure` refreshes a stale
+resolve that error before restarting Desktop. A committed gateway keeps its saved mode and profile
+marker even when first-party settings cleanup fails. Fully quit and reopen Desktop after a successful switch. `ocx ensure` refreshes a stale
 first-party env when the integration is ON and removes it when OFF. Set
 `claudeCode.intercept.enabled: false` to disable the proxy entirely; first-party then cannot be
 applied and an implicit apply falls back to gateway. On a connected client the proxy runs on the
