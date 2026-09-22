@@ -117,7 +117,7 @@ bun run release:watch               # 观察最新的 Release workflow run
   小而专注的 module 位于单一 `index.ts` 之后。
 - **在边界处理异步错误** —— sidecar 不会把异常抛进请求路径，而会降级成合适的 marker。
 - **Structure SOT** —— 当前维护者不变量放在 `structure/`；公开用户流程放在 `docs-site/`；
-  历史调查/诊断记录放在 `docs/`。
+  规划与调查记录放在 `devlog/`。
 - **保留 export** —— 其他 module 可能依赖它们。
 
 ## 向目录中添加 provider

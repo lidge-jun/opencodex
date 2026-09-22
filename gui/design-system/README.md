@@ -29,7 +29,7 @@ gui/src/ui.tsx
 ├── Select
 └── EmptyState
 
-docs/design-system/
+gui/design-system/
 ├── README.md
 ├── foundations.md
 ├── components.md
@@ -67,5 +67,5 @@ docs/design-system/
 
 ## 관련 결정 기록
 
-- [ADR 0004](../adr/0004-gui-toggle-contrast-and-nav-spacing.md)
-- [ADR 0005](../adr/0005-gui-design-token-system.md)
+- [ADR 0004](./decisions/0004-gui-toggle-contrast-and-nav-spacing.md)
+- [ADR 0005](./decisions/0005-gui-design-token-system.md)

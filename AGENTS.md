@@ -341,7 +341,13 @@ than nudged.
   `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Verification, Checklist).
   `enforce-target` rejects empty, thin, or malformed descriptions, and a PR
   whose title or description mentions `gui` must include a screenshot of the
-  UI change in the description. When the PR resolves an issue, add
+  UI change in the description. Host the image outside the PR branch: drag
+  it into the description editor, or commit it to the orphan `pr-assets`
+  branch and link `raw.githubusercontent.com/<owner>/<repo>/<commit-sha>/<path>`.
+  Never commit screenshot evidence to the PR branch — the squash merge carries
+  it into `dev`, which is how `docs/pr-assets/` and its siblings grew until
+  they were deleted; `tests/ci-workflows/repo-hygiene.test.ts` now rejects
+  those folders. When the PR resolves an issue, add
   `Closes #<number>` to link it. GitHub auto-closes the linked issue only
   when the PR merges into the default branch (`main`); PRs here target
   `dev`, so close the issue manually once the change is on `dev`.

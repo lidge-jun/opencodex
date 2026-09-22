@@ -229,9 +229,17 @@ invariants belong in `structure/`, not the README.
 
 ## Historical docs
 
-`docs/` contains investigations and diagnostic notes. Do not treat it as the current public user
-manual. When an investigation graduates into a maintained invariant, summarize it here under
-`structure/` and link public workflows from `docs-site/`.
+The root `docs/` folder is retired and declared in `absentPaths`, so the structure gate fails if a
+file there is tracked again. Its notes remain readable in git history before the retirement commit.
+Investigations and plans go to `devlog/`; the GUI design-system contract lives in `gui/design-system/`.
+When an investigation graduates into a maintained invariant, summarize it here under `structure/`
+and link public workflows from `docs-site/`.
+
+Pull-request screenshot evidence never enters the `dev` tree. Authors attach images through the
+description editor or commit them to the orphan `pr-assets` branch and link them by commit SHA; a
+"Protect pr-assets" ruleset blocks deletion and force-push there so pinned links stay valid. No
+workflow's `push` trigger matches that branch. `tests/ci-workflows/repo-hygiene.test.ts` rejects
+tracked files under the old evidence folders.
 
 Cross-cutting structure contracts are maintained by editing `structure/manifest.json`, the authority
 statement, and any dependent whose local explanation changes. Regenerate `structure/INDEX.md` with

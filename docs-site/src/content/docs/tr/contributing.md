@@ -189,8 +189,8 @@ sahipliği `.github/CODEOWNERS` dosyasında bildirilmiştir.
 - **Sınırlarda asenkron hataları yakalayın** — sidecar'lar istek yoluna asla
   hata fırlatmaz; zarif bir işaretleyiciye indirgenirler.
 - **Yapı SOT** — geçerli bakımcı değişmezleri `structure/` dizininde yer alır.
-  Herkese açık kullanıcı iş akışlarını `docs-site/` dizininde ve geçmiş inceleme
-  notlarını `docs/` dizininde tutun.
+  Herkese açık kullanıcı iş akışlarını `docs-site/` dizininde, planlama ve inceleme
+  notlarını `devlog/` dizininde tutun.
 - **Dışa aktarımları (exports) koruyun** — diğer modüller bunlara bağımlı
   olabilir.
 

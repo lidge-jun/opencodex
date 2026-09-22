@@ -166,7 +166,7 @@ du dépôt et des chemins sensibles du point de vue de la sécurité est déclar
 - **Gérer les erreurs asynchrones aux frontières** — les services auxiliaires ne propagent jamais d’exception dans le
   chemin de requête ; ils se dégradent en un marqueur explicite.
 - **Structure, source de vérité** — les invariants actuels des responsables résident dans `structure/`. Conservez
-  les parcours utilisateurs publics dans `docs-site/` et les notes d’enquête historiques dans `docs/`.
+  les parcours utilisateurs publics dans `docs-site/` et les notes de planification et d’enquête dans `devlog/`.
 - **Préserver les exportations** — d'autres modules peuvent en dépendre.
 
 ## Ajout d'un fournisseur au catalogue

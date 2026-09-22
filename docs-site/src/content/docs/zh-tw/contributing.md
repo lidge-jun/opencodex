@@ -135,7 +135,7 @@ bun run release:watch               # 觀察最新的 Release workflow run
   小而專注的 module 位於單一 `index.ts` 之後。
 - **在邊界處理非同步錯誤** —— sidecar 不會把例外拋進請求路徑，而會降級成合適的 marker。
 - **Structure SOT** —— 目前維護者不變數放在 `structure/`；公開使用者流程放在 `docs-site/`；
-  歷史調查/診斷記錄放在 `docs/`。
+  規劃與調查記錄放在 `devlog/`。
 - **保留 export** —— 其他 module 可能依賴它們。
 
 ## 向目錄中新增 provider

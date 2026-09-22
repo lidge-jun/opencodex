@@ -6,6 +6,10 @@
   ],
   "absentPaths": [
     {
+      "path": "docs/",
+      "reason": "the root docs/ folder is retired; ops/docs-and-release.md documents where its material went and that no docs/ tree is tracked"
+    },
+    {
       "path": "go/",
       "reason": "the Go native-runtime experiment is retired; ops/docs-and-release.md documents that no go/ tree is tracked"
     }
