@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   armClaudeCodeBaseline,
+  armDetachedConfigBaseline,
+  adoptPersistedClaudeCode,
   adoptPersistedProviderIntoLiveConfig,
   deleteConfigTopLevelKey,
   getConfigPath,
@@ -574,6 +576,22 @@ test("our own change wins a conflict and rebases the baseline", () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
 });
 
+// A scoped Desktop write commits against the file, then adopts the committed
+// subtree. A live mutation still pending — a Claude settings PUT yields between
+// assigning `config.claudeCode` and saving — must survive the adoption and reach
+// the next save instead of being silently replaced.
+test("a scoped Claude write keeps a pending live Claude edit", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  live.claudeCode = { ...(live.claudeCode ?? {}), authMode: "proxy" };
+
+  adoptPersistedClaudeCode(live, { authMode: "subscription", desktopMode: "first-party" });
+
+  expect(live.claudeCode).toMatchObject({ authMode: "proxy", desktopMode: "first-party" });
+  saveConfigPreservingClaudeCode(live);
+  expect(diskConfig().claudeCode).toEqual({ authMode: "proxy", desktopMode: "first-party" });
+});
+
 test("OAuth reconciliation keeps a pending live Claude subtree authoritative", () => {
   const live = loadConfig();
   armClaudeCodeBaseline(live);
@@ -907,4 +925,127 @@ test("a malformed upstreamHostCircuitThreshold hand edit disables only the circu
     "upstreamHostCircuitThreshold ignored: expected an integer from 0 to 20",
   );
   expect(diagnostics.config.providers.test).toBeDefined();
+});
+
+// A detached snapshot — the catalog auto-refresh tick's per-tick loadConfig() —
+// owns no live listener and cannot express a deletion of its own, so every field
+// rebases: a concurrent hand edit to the binding or to a key the snapshot never
+// held is adopted rather than overwritten by the snapshot's stale values.
+test("a detached snapshot save adopts concurrent listener and disk-only hand edits", () => {
+  const snapshot = loadConfig();
+  armDetachedConfigBaseline(snapshot);
+  // Discovery mutates only its own surfaces on the snapshot.
+  snapshot.disabledModels = ["test/retired"];
+  writeDiskConfig({
+    port: 10101,
+    hostname: "127.0.0.2",
+    metricsExport: { enabled: true },
+    claudeCode: { authMode: "proxy" },
+  });
+
+  saveConfigPreservingClaudeCode(snapshot);
+
+  const disk = diskConfig();
+  expect(disk.port).toBe(10101);
+  expect(disk.hostname).toBe("127.0.0.2");
+  expect(disk.metricsExport).toEqual({ enabled: true });
+  expect((disk.claudeCode as Record<string, unknown>).authMode).toBe("proxy");
+  expect(disk.disabledModels).toEqual(["test/retired"]);
+});
+
+test("a detached snapshot save merges concurrent disabledModels edits by member", () => {
+  writeDiskConfig({ disabledModels: ["test/seeded"] });
+  const snapshot = loadConfig();
+  armDetachedConfigBaseline(snapshot);
+  // Discovery only appends, so the snapshot's extra slug is its arrival.
+  snapshot.disabledModels = ["test/seeded", "test/discovered"];
+  // The operator's mid-flight edit both hides a new slug and un-hides the seeded one.
+  writeDiskConfig({ disabledModels: ["test/hand-hidden"] });
+
+  saveConfigPreservingClaudeCode(snapshot);
+
+  expect(diskConfig().disabledModels).toEqual(["test/discovered", "test/hand-hidden"]);
+});
+
+test("a detached snapshot save preserves a persisted modelDiscovery tombstone", () => {
+  writeDiskConfig({
+    modelDiscovery: {
+      knownModels: { test: { ids: ["seeded"], removed: [], updatedAt: "2026-09-01T00:00:00.000Z" } },
+    },
+  });
+  const snapshot = loadConfig();
+  armDetachedConfigBaseline(snapshot);
+  snapshot.modelDiscovery!.recentArrivals = {
+    test: [{ id: "discovered", at: "2026-09-02T00:00:00.000Z" }],
+  };
+
+  const deletingWriter = loadConfig();
+  deleteConfigTopLevelKey(deletingWriter, "modelDiscovery");
+  saveConfig(deletingWriter);
+
+  saveConfigPreservingClaudeCode(snapshot);
+
+  expect(diskConfig().modelDiscovery).toBeUndefined();
+  expect(diskConfig().configRebaseProvenance).toEqual({
+    version: 1,
+    deletedTopLevelKeys: ["modelDiscovery"],
+  });
+});
+
+test("an explicit modelDiscovery reintroduction clears persisted tombstone authority", () => {
+  writeDiskConfig({
+    modelDiscovery: {
+      knownModels: { test: { ids: ["seeded"], removed: [], updatedAt: "2026-09-01T00:00:00.000Z" } },
+    },
+  });
+  const snapshot = loadConfig();
+  armDetachedConfigBaseline(snapshot);
+  snapshot.modelDiscovery!.recentArrivals = {
+    test: [{ id: "discovered", at: "2026-09-02T00:00:00.000Z" }],
+  };
+
+  const deletingWriter = loadConfig();
+  deleteConfigTopLevelKey(deletingWriter, "modelDiscovery");
+  saveConfig(deletingWriter);
+  const reintroducingWriter = loadConfig();
+  reintroducingWriter.modelDiscovery = { newModelPolicy: "off" };
+  saveConfig(reintroducingWriter);
+
+  saveConfigPreservingClaudeCode(snapshot);
+
+  expect(diskConfig().modelDiscovery).toEqual({
+    newModelPolicy: "off",
+    recentArrivals: {
+      test: [{ id: "discovered", at: "2026-09-02T00:00:00.000Z" }],
+    },
+  });
+  expect(diskConfig().configRebaseProvenance).toBeUndefined();
+});
+
+test("a non-detached pending modelDiscovery edit keeps existing same-leaf precedence", () => {
+  writeDiskConfig({ modelDiscovery: { newModelPolicy: "on" } });
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  live.modelDiscovery!.newModelPolicy = "off";
+
+  const deletingWriter = loadConfig();
+  deleteConfigTopLevelKey(deletingWriter, "modelDiscovery");
+  saveConfig(deletingWriter);
+
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().modelDiscovery).toEqual({ newModelPolicy: "off" });
+  expect(diskConfig().configRebaseProvenance).toBeUndefined();
+});
+
+test("a live save merges concurrent disabledModels edits by member", () => {
+  writeDiskConfig({ disabledModels: ["test/seeded"] });
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  live.disabledModels = ["test/seeded", "test/live-hidden"];
+  writeDiskConfig({ disabledModels: ["test/seeded", "test/hand-hidden"] });
+
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().disabledModels).toEqual(["test/seeded", "test/live-hidden", "test/hand-hidden"]);
 });

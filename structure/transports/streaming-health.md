@@ -297,9 +297,9 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 ## Experimental native mid-turn steering
 
 `codexNativeSteering: true` is an independent, default-off opt-in for the client-facing
-Responses WebSocket endpoint. It requires `websockets: true`, a canonical ChatGPT forward
-route or explicitly opted-in canonical OpenAI API route, an eligible Bun runtime, and a
-supporting model/execution mode. HTTP fallback and translated/sidecar/Combo paths do not gain steering. Plaintext V2
+Responses WebSocket endpoint. It requires `websockets: true`, the canonical ChatGPT forward
+route, an eligible Bun runtime, and a supporting model/execution mode. HTTP fallback and
+translated/sidecar/Combo paths do not gain steering. Plaintext V2
 restoration is excluded because it is not a transparent native event stream.
 
 `src/server/responses/native-steering.ts` owns one downstream turn and one private physical
@@ -338,7 +338,9 @@ control events are preserved. A single bounded reader owns delivery; client canc
 account invalidation and shutdown abort its upstream. Numeric usage is summed once per
 response; steering control frames (which can contain returned user input) are not log samples.
 
-Bounds: 32 outstanding submissions, 128 response IDs per chain, 32 MiB replay journal,
+Bounds: 32 outstanding submissions, 128 response IDs per chain, 32 MiB replay journal
+with a 128 MiB aggregate pinned-journal ceiling independent of the configured budget,
+the configured inbound and upstream body ceilings, and the shared application-owned memory budget,
 256 KiB / 1,024 required-input stubs, existing WS frame/queue byte limits, a 90-second control
 wait, and a 30-minute saved-tool-result wait. Ordinary active-response silence uses the
 configured stall deadline. Unsupported routes return explicit errors rather than discarding
@@ -372,8 +374,13 @@ and private socket. `src/server/responses/native-injection-protocol.ts` validate
 only string-valued developer `function_call_output` items for completed calls
 advertised by that response and lane. IDs are never global lookup keys. One physical
 injection awaits acknowledgement at a time because success carries a response ID,
-not an injection ID; further submissions remain in a bounded FIFO. Repeated call
-results, mismatched/repeated acknowledgements and unsupported shapes fail closed.
+not an injection ID; further submissions remain in a bounded FIFO.
+The configured upstream body limit is checked before a result reserves calls or
+enters the queue, including while another result awaits acknowledgement. A size
+refusal leaves the original socket and outstanding result usable for a corrected submission.
+Repeated call results, mismatched/repeated acknowledgements and unsupported shapes fail closed. On
+non-forward routes, native events also enforce the current request's explicit tool
+catalog before advertising or relaying a client-executed call.
 
 A response terminal is relayed immediately, but pending acknowledgements and
 unreturned advertised calls retain the socket. Late tool results still reach that
@@ -475,7 +482,7 @@ Injection retains its existing helper export names and comparison semantics.
 
 `native-steering-settings.ts` validates a bounded allowlist for explicit saved-result
 continuations: `reasoning`, `text` (including structured-output format),
-`stream_options` and public-API `max_output_tokens`. Unknown/malformed overrides
+`stream_options` and a validated `max_output_tokens` field. Unknown/malformed overrides
 fail before result reservation. Null resets the supplied setting; omission keeps
 the current authorized wire value. Models, tools, instructions, account, lane,
 service tier, execution mode and other settings remain pinned. The schema uses
@@ -489,10 +496,10 @@ current wire base, retaining new values across later explicit continuations.
 Normal pacing and captured account/dispatch guards still run before physical send.
 No tool results are transformed by generation normalization or rerun on rejection.
 
-Public API steering requires `openai-responses`, key-mode authentication,
-`upstreamWebsocket: true` and exactly `https://api.openai.com/v1`. It uses its own
-configured API key; subscription traffic is never migrated there. Injection-only
-beta metadata is not attached to steering. Initial mode selection explains disabled,
+Steering is restricted to the canonical ChatGPT forward route. In particular, an
+API-key Responses WebSocket cannot retain a steering channel because its successor
+generations do not pass through ordinary per-request send and spend admission. Public
+API WebSockets remain available for multi-agent injection. Initial mode selection explains disabled,
 multi-agent, conversation-bound and automatic-compaction exclusions without breaking
 ordinary creates or inventing model entitlement. HTTP fallback remains non-steerable.
 

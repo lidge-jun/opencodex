@@ -1131,6 +1131,71 @@ describe("doctor Codex default model exposure (#4646)", () => {
     expect(result.source).toBe("catalog");
   });
 
+  test("an implausibly large proxy model list falls back to the catalog", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: Array.from({ length: 10_001 }, () => ({ id: "gpt-5.6-sol" })) }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
+  test("an implausibly long proxy model id falls back to the catalog", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: [{ id: "x".repeat(1_025) }] }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
+  test("the row-count and model-id limits accept their exact boundaries", async () => {
+    const boundaryId = "x".repeat(1_024);
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => boundaryId,
+      live,
+      fetchFn: respondWith({
+        data: [{ id: boundaryId }, ...Array.from({ length: 9_999 }, () => ({ id: "" }))],
+      }),
+      readCatalogModelsFn: () => null,
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("proxy");
+  });
+
+  test("a proxy row with a missing or non-string id makes the response unreadable", async () => {
+    for (const malformed of [{}, { id: 42 }]) {
+      const result = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live,
+        fetchFn: respondWith({ data: [{ id: "gpt-5.6-sol" }, malformed] }),
+        readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+      });
+
+      expect(result.status).toBe("exposed");
+      expect(result.source).toBe("catalog");
+    }
+  });
+
+  test("a malformed proxy response with no catalog is undeterminable", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: [{ id: "gpt-5.6-sol" }, {}] }),
+      readCatalogModelsFn: () => null,
+    });
+
+    expect(result.status).toBe("undeterminable");
+    expect(result.source).toBeNull();
+  });
+
   test("a retained hide row is not exposure: the pin Desktop can still show is still reported", async () => {
     const result = await collectDefaultModelExposure({
       readConfiguredModelFn: () => "gpt-5.6-terra",
@@ -1145,5 +1210,72 @@ describe("doctor Codex default model exposure (#4646)", () => {
     expect(result.status).toBe("not_exposed");
     expect(result.source).toBe("catalog");
     expect(result.detail).not.toContain("/v1/models");
+  });
+
+  test("the default live fetch reads locally and falls back when the response crosses its byte cap", async () => {
+    let requestCount = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requestCount += 1;
+        if (requestCount === 1) return Response.json({ data: [{ id: "gpt-5.6-sol" }] });
+        return Response.json({
+          data: [{ id: "gpt-5.6-sol" }],
+          padding: "x".repeat(8 * 1024 * 1024),
+        });
+      },
+    });
+
+    try {
+      const liveServer = { pid: 4321, port: server.port, source: "config" as const };
+      const fromProxy = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live: liveServer,
+        readCatalogModelsFn: () => null,
+      });
+      expect(fromProxy.status).toBe("exposed");
+      expect(fromProxy.source).toBe("proxy");
+
+      const fromCatalog = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live: liveServer,
+        readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+      });
+      expect(fromCatalog.status).toBe("exposed");
+      expect(fromCatalog.source).toBe("catalog");
+      expect(requestCount).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the default live fetch does not follow redirects", async () => {
+    let redirectedRequests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        if (new URL(request.url).pathname === "/redirected") {
+          redirectedRequests += 1;
+          return Response.json({ data: [{ id: "gpt-5.6-sol" }] });
+        }
+        return Response.redirect(new URL("/redirected", request.url), 302);
+      },
+    });
+
+    try {
+      const result = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live: { pid: 4321, port: server.port, source: "config" },
+        readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+      });
+
+      expect(result.status).toBe("exposed");
+      expect(result.source).toBe("catalog");
+      expect(redirectedRequests).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
   });
 });

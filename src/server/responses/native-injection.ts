@@ -1,6 +1,14 @@
 import { CodexWsCorrelation } from "./codex-ws-correlation";
+import { NativeSteeringError } from "./native-steering";
+import { checkOutboundBodySize } from "./outbound-body-guard";
 import type { NativeResponseControl } from "./native-response-control";
 import type { NativeSteeringReplayObserver } from "./native-steering-replay";
+import {
+  UNDECLARED_TOOL_CALL_ERROR_CODE,
+  undeclaredToolCallMessage,
+  undeclaredToolCallNameInResponse,
+} from "../responses-undeclared-tool-guard";
+import type { ProviderExecutedCallType } from "../responses-undeclared-tool-guard";
 import {
   injectionError, injectionFingerprint, injectionId, injectionRecord as record, injectionResults,
   isInjectionRequest, MAX_NATIVE_INJECTIONS, MAX_NATIVE_INJECTION_BYTES, MAX_NATIVE_INJECTION_CALLS,
@@ -44,19 +52,38 @@ export class NativeInjectionChannel implements NativeResponseControl {
   private ackTimer?: ReturnType<typeof setTimeout>;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private readonly settings = new Map<string, string>();
+  private declaredToolNames?: ReadonlySet<string>;
+  private declaredBareToolNames: ReadonlySet<string> = new Set();
+  private declaredNamelessCallTypes: ReadonlySet<string> = new Set();
+  private providerExecutedCallTypes: ReadonlySet<ProviderExecutedCallType> = new Set();
   private readonly lane: unknown;
 
   /** Pin the original settings and lane; construction never opens a connection. */
   constructor(initial: Frame, private readonly idleMs = 300_000,
+    private readonly maxUpstreamBodyBytes?: number,
     private readonly deadlines = { ackMs: NATIVE_INJECTION_ACK_MS, toolMs: NATIVE_INJECTION_TOOL_MS }) {
     if (!isInjectionRequest(initial)) injectionError("injection_not_supported", "Native injection requires explicit multi_agent.enabled.");
     this.lane = initial.stream_id ?? undefined;
     for (const [key, value] of Object.entries(initial)) if (!ENVELOPE.has(key)) this.settings.set(key, injectionFingerprint(value));
   }
+  /** Refuse the exact rebuilt control body before it reaches the retained socket. */
+  assertOutboundFrame(text: string): void {
+    if (!checkOutboundBodySize(text, this.maxUpstreamBodyBytes).admitted) {
+      injectionError("outbound_body_too_large", "Native injection frame exceeds the configured upstream body limit.");
+    }
+  }
   /** Report that the real dispatch boundary has selected this owner. */
   get attached(): boolean { return this.everAttached; }
   /** A terminal is not final until submitted results have acknowledgements. */
   get ended(): boolean { return this.finished; }
+
+  /** Mirror the ordinary response guard for native events that bypass its SSE rewrite. */
+  configureToolAuthorization(active: boolean, names: ReadonlySet<string>, bareNames: ReadonlySet<string>, namelessCallTypes: ReadonlySet<string>, providerExecuted: ReadonlySet<ProviderExecutedCallType>): void {
+    this.declaredToolNames = active ? new Set(names) : undefined;
+    this.declaredBareToolNames = active ? new Set(bareNames) : new Set();
+    this.declaredNamelessCallTypes = active ? new Set(namelessCallTypes) : new Set();
+    this.providerExecutedCallTypes = active ? new Set(providerExecuted) : new Set();
+  }
 
   /** Attach once, after routing/auth/admission, retaining no global response-ID lookup. */
   attach(send: (frame: Frame) => void, fail: (error: Error) => void): () => void {
@@ -77,17 +104,28 @@ export class NativeInjectionChannel implements NativeResponseControl {
     return injectionError("native_control_mode_mismatch", "This multi-agent turn owns an injection-only channel; start a separate turn for steering.");
   }
   /** Abort unknown-delivery state without HTTP fallback, resends or invented acceptance. */
-  private fail(): void {
+  private fail(error?: Error): void {
     this.finished = true;
     clearTimeout(this.ackTimer); clearTimeout(this.idleTimer);
-    this.onFailure?.(new Error("Native injection transport failed or timed out; delivery is unknown. Do not automatically resend or rerun tools."));
+    this.onFailure?.(error ?? new Error("Native injection transport failed or timed out; delivery is unknown. Do not automatically resend or rerun tools."));
   }
   /** Require the same live owner; an unbound or detached channel cannot authorize a send. */
   private live(): void {
     if (!this.send || this.finished) injectionError("injection_not_supported", "No live native injection transport is available on this route.");
   }
+  private authorize(item: unknown): void {
+    if (!this.declaredToolNames) return;
+    const undeclared = undeclaredToolCallNameInResponse(
+      { output: [item] }, this.declaredToolNames, this.declaredNamelessCallTypes,
+      this.providerExecutedCallTypes, this.declaredBareToolNames,
+    );
+    if (undeclared !== undefined) {
+      injectionError(UNDECLARED_TOOL_CALL_ERROR_CODE, undeclaredToolCallMessage(undeclared));
+    }
+  }
   /** Advertise client-owned function/custom calls and approvals, never hosted execution. */
   private advertise(item: unknown): void {
+    this.authorize(item);
     const requirement = nativeToolRequirement(item);
     if (!requirement) return;
     const old = this.calls.get(requirement.key);
@@ -116,6 +154,7 @@ export class NativeInjectionChannel implements NativeResponseControl {
       if (call.state !== "available") injectionError("duplicate_injection", "This function result was already submitted; do not replay it.");
     }
     const text = JSON.stringify(frame);
+    this.assertOutboundFrame(text);
     const bytes = Buffer.byteLength(text);
     if (this.queue.length >= MAX_NATIVE_INJECTIONS || bytes + this.queueBytes > MAX_NATIVE_INJECTION_BYTES) {
       injectionError("injection_queue_full", "Native injection queue count or byte limit reached; no result was sent.");
@@ -135,10 +174,23 @@ export class NativeInjectionChannel implements NativeResponseControl {
     this.inFlight = submission;
     this.ackTimer = setTimeout(() => this.fail(), this.deadlines.ackMs);
     this.ackTimer.unref?.();
+    let rollback: (() => void) | undefined;
     try {
-      this.replay?.submitted(submission.frame);
+      rollback = this.replay?.submitted(submission.frame);
       this.send!(submission.frame);
-    } catch {
+    } catch (error) {
+      if (error instanceof NativeSteeringError) {
+        // A typed refusal is a known non-delivery: unjournal and free the reservation
+        // so a corrected result can be queued again on the same channel.
+        rollback?.();
+        clearTimeout(this.ackTimer); this.ackTimer = undefined;
+        this.inFlight = undefined; this.queue.shift(); this.queueBytes -= submission.bytes;
+        for (const item of submission.results) {
+          const call = this.calls.get(nativeResultKey(item));
+          if (call?.state === "queued") call.state = "available";
+        }
+        throw error;
+      }
       this.fail();
       injectionError("injection_delivery_unknown", "Injection dispatch failed; do not automatically resend or rerun tools.");
     }
@@ -163,7 +215,7 @@ export class NativeInjectionChannel implements NativeResponseControl {
     clearTimeout(this.ackTimer); this.ackTimer = undefined;
     this.inFlight = undefined; this.queue.shift(); this.queueBytes -= pending.bytes;
     // Do not let a synchronous fake peer publish the next ack before this event is relayed.
-    if (this.queue.length) queueMicrotask(() => { try { this.pump(); } catch { this.fail(); } });
+    if (this.queue.length) queueMicrotask(() => { try { this.pump(); } catch (error) { this.fail(error instanceof NativeSteeringError ? error : undefined); } });
   }
   /** Commit terminal replay only when no submitted injection can change its accepted inputs. */
   private recordTerminal(): void {
@@ -197,8 +249,14 @@ export class NativeInjectionChannel implements NativeResponseControl {
     }
     if (Buffer.byteLength(JSON.stringify(frame)) > MAX_NATIVE_INJECTION_BYTES) injectionError("invalid_injection", "Native injection continuation exceeds its byte limit.");
     this.continuationSent = true;
-    try { this.recordTerminal(); const copy = JSON.parse(JSON.stringify(frame)) as Frame; this.replay?.submitted(copy); this.send(copy); }
-    catch { this.fail(); injectionError("injection_delivery_unknown", "Continuation delivery is unknown; do not automatically resend results."); }
+    let undo: (() => void) | undefined;
+    try { this.recordTerminal(); const copy = JSON.parse(JSON.stringify(frame)) as Frame; undo = this.replay?.submitted(copy); this.send(copy); }
+    catch (error) {
+      // A typed refusal is a known non-delivery: unjournal, release the continuation
+      // slot so a corrected frame can be sent, and keep the code.
+      if (error instanceof NativeSteeringError) { undo?.(); this.continuationSent = false; throw error; }
+      this.fail(); injectionError("injection_delivery_unknown", "Continuation delivery is unknown; do not automatically resend results.");
+    }
     if (!this.finished) this.armIdle(this.deadlines.ackMs);
     return true;
   }
@@ -225,6 +283,7 @@ export class NativeInjectionChannel implements NativeResponseControl {
         this.correlation?.finish(); this.correlation = new CodexWsCorrelation(true, () => false);
       } else if (!this.currentId || this.terminal) throw new Error("Unexpected native injection event outside an active response.");
       this.correlation?.accept({ ...event, stream_id: undefined });
+      if (type === "response.output_item.added") this.authorize(event.item);
       if (type === "response.output_item.done") this.advertise(event.item);
       if (["response.completed", "response.failed", "response.incomplete"].includes(String(type))) {
         if (!this.currentId || response?.id !== this.currentId) throw new Error("Native injection terminal identity mismatch.");

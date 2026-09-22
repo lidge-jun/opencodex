@@ -11,6 +11,8 @@ import {
 } from "../../src/claude/desktop-first-party";
 import { applyDesktop, parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
+import { persistCommittedDesktopGateway } from "../../src/claude/desktop-gateway-state";
+import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config";
 import { ensureClaudeDesktopMatchesDesired } from "../../src/cli/ensure-desired-integrations";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
@@ -242,6 +244,148 @@ test("ensure warns instead of touching a gateway profile that contradicts an exp
   };
   ensureClaudeDesktopMatchesDesired(deps as unknown as Parameters<typeof ensureClaudeDesktopMatchesDesired>[0]);
   expect(logs.some(line => line.includes("gateway profile is still applied"))).toBe(true);
+});
+
+test("first-party apply rebases the Claude hand-edit guard after its scoped mode save", async () => {
+  // First-party apply ends at the mode-marker write — no profile-marker save
+  // follows — so unless that write adopts its committed subtree, live diverges
+  // from the armed baseline and the next whole-config save stomps a hand edit.
+  const snapshot = config({ claudeCode: { authMode: "subscription" } });
+  writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
+  armClaudeCodeBaseline(snapshot);
+
+  const applied = await dispatch("/api/claude-desktop/apply", { method: "POST" }, snapshot);
+  expect(applied.status).toBe(200);
+  expect(applied.body).toMatchObject({ mode: "first-party", saved: true });
+
+  const handEdited = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  handEdited.claudeCode = {
+    ...handEdited.claudeCode,
+    authMode: "proxy",
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+  };
+  writeFileSync(join(root, "config.json"), JSON.stringify(handEdited));
+
+  snapshot.disabledModels = ["unrelated/model"];
+  saveConfigPreservingClaudeCode(snapshot);
+
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  expect(saved.claudeCode).toMatchObject({
+    authMode: "proxy",
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+    desktopMode: "first-party",
+  });
+  expect(saved.disabledModels).toEqual(["unrelated/model"]);
+});
+
+test("gateway apply rebases its committed subtree before a later hand edit", async () => {
+  const snapshot = config({ claudeCode: { authMode: "subscription", nativePassthrough: true } });
+  writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
+  armClaudeCodeBaseline(snapshot);
+
+  const applied = await dispatch("/api/claude-desktop/apply", {
+    method: "POST",
+    body: JSON.stringify({ mode: "gateway" }),
+  }, snapshot, {
+    fetchAllModels: async () => [],
+    writeDesktop3pConfig: () => ({ written: true, path: join(library, "applied.json"), fingerprint: "gateway-fingerprint" }),
+  });
+  expect(applied).toMatchObject({ status: 200, body: { saved: true, fingerprint: "gateway-fingerprint" } });
+
+  const handEdited = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  handEdited.claudeCode = {
+    ...handEdited.claudeCode,
+    authMode: "proxy",
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+  };
+  writeFileSync(join(root, "config.json"), JSON.stringify(handEdited));
+
+  snapshot.disabledModels = ["unrelated/model"];
+  saveConfigPreservingClaudeCode(snapshot);
+
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  expect(saved.claudeCode).toMatchObject({
+    authMode: "proxy",
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+    desktopMode: "gateway",
+    desktopProfile: { appliedFingerprint: "gateway-fingerprint" },
+  });
+  expect(saved.disabledModels).toEqual(["unrelated/model"]);
+});
+
+test("a deferred policy probe cannot restore an older gateway marker after a first-party apply", async () => {
+  const snapshot = config({ claudeCode: { authMode: "subscription" } });
+  writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
+  armClaudeCodeBaseline(snapshot);
+  let releaseProbe!: (state: "absent") => void;
+  let enteredProbe!: () => void;
+  const probeEntered = new Promise<void>(resolve => { enteredProbe = resolve; });
+  const deferredProbe = new Promise<"absent">(resolve => { releaseProbe = resolve; });
+
+  const gateway = dispatch("/api/claude-desktop/apply", {
+    method: "POST",
+    body: JSON.stringify({ mode: "gateway" }),
+  }, snapshot, {
+    fetchAllModels: async () => [],
+    writeDesktop3pConfig: () => ({ written: true, path: join(library, "gateway.json"), fingerprint: "older-gateway" }),
+    probeClaudeDesktopPolicy: async () => {
+      enteredProbe();
+      return deferredProbe;
+    },
+  });
+  let released = false;
+  try {
+    await probeEntered;
+    expect((JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig)
+      .claudeCode?.desktopProfile?.appliedFingerprint).toBe("older-gateway");
+
+    const firstParty = await dispatch("/api/claude-desktop/apply", {
+      method: "POST",
+      body: JSON.stringify({ mode: "first-party" }),
+    }, snapshot);
+    expect(firstParty).toMatchObject({ status: 200, body: { mode: "first-party", saved: true } });
+
+    releaseProbe("absent");
+    released = true;
+    expect(await gateway).toMatchObject({ status: 200, body: { fingerprint: "older-gateway" } });
+    const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+    expect(saved.claudeCode?.desktopMode).toBe("first-party");
+    expect(saved.claudeCode?.desktopProfile?.appliedFingerprint).toBeUndefined();
+  } finally {
+    if (!released) releaseProbe("absent");
+    await gateway;
+  }
+});
+
+test("committed gateway adoption preserves a pending disjoint live Claude leaf", () => {
+  const snapshot = config({ claudeCode: { authMode: "subscription", nativePassthrough: true } });
+  writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
+  armClaudeCodeBaseline(snapshot);
+  snapshot.claudeCode!.nativePassthrough = false;
+
+  const committed = persistCommittedDesktopGateway(snapshot, undefined, "gateway-fingerprint");
+
+  expect(committed).toEqual({ ok: true });
+  expect(snapshot.claudeCode).toMatchObject({
+    authMode: "subscription",
+    nativePassthrough: false,
+    desktopMode: "gateway",
+    desktopProfile: { appliedFingerprint: "gateway-fingerprint" },
+  });
+  const persisted = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  expect(persisted.claudeCode?.nativePassthrough).toBe(true);
+});
+
+test("failed committed gateway persistence does not adopt into the live snapshot", () => {
+  const snapshot = config({ claudeCode: { authMode: "subscription", nativePassthrough: true } });
+  writeFileSync(join(root, "config.json"), "{ malformed");
+  armClaudeCodeBaseline(snapshot);
+  const before = structuredClone(snapshot);
+
+  const committed = persistCommittedDesktopGateway(snapshot, undefined, "gateway-fingerprint");
+
+  expect(committed).toEqual({ ok: false, reason: "invalid" });
+  expect(snapshot).toEqual(before);
 });
 
 test("ensure reconciles first-party env: refreshes when ON and stale, removes when OFF", () => {

@@ -7,6 +7,7 @@ import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../co
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import {
+  adoptPersistedClaudeCode,
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
   deleteConfigTopLevelKey,
@@ -123,12 +124,12 @@ function persistDesktopProfileField(
 ): { ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" } {
   const outcome = mutatePersistedConfig(persisted => {
     persisted.claudeCode = { ...(persisted.claudeCode ?? {}), desktopProfile };
-    return { changed: true, value: true };
+    return { changed: true, value: structuredClone(persisted.claudeCode) };
   });
   // Only mirror into memory once the durable write actually landed; an
   // `unavailable` outcome must not leave the snapshot claiming a saved profile.
   if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
-  config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile };
+  adoptPersistedClaudeCode(config, outcome.value);
   return { ok: true };
 }
 
@@ -137,9 +138,15 @@ async function persistDesktopModeField(
   desktopMode: "first-party" | "gateway",
 ): Promise<{ ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" }> {
   const { recordClaudeDesktopMode } = await import("../../claude/desktop-first-party");
-  const outcome = mutatePersistedConfig(persisted => recordClaudeDesktopMode(persisted, desktopMode));
+  const outcome = mutatePersistedConfig(persisted => {
+    const mutation = recordClaudeDesktopMode(persisted, desktopMode);
+    return { changed: mutation.changed, value: structuredClone(persisted.claudeCode) };
+  });
   if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
-  recordClaudeDesktopMode(config, desktopMode);
+  // First-party apply ends here — no profile-marker write follows — so without
+  // adopting, live diverges from the armed baseline and a later whole-config
+  // save reads that divergence as a pending mutation and stomps hand edits.
+  adoptPersistedClaudeCode(config, outcome.value);
   return { ok: true };
 }
 
@@ -1168,8 +1175,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           ...(modeWarning ? { warning: modeWarning } : {}),
         }, 500);
       }
-      const { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
-      const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)({ platform: deps.platform ?? process.platform });
+      const { claudeDesktopPolicyWarning, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
+      const policyState = deps.probeClaudeDesktopPolicy
+        ? await deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
+        : await getCachedClaudeDesktopPolicy({ platform: deps.platform ?? process.platform });
       const policyWarning = claudeDesktopPolicyWarning(policyState);
       const warning = [modeWarning, policyWarning].filter(Boolean).join(" ");
       return jsonResponse({
@@ -1219,10 +1228,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // a stale apply the operator should refresh.
       const stale = desiredEnabled && (mode === "first-party" ? firstPartySeen.stale : observed.kind === "gateway_drifted");
       const { getDesktopHealth } = await import("../../claude/desktop-health");
-      const { claudeDesktopPolicyHealth, probeClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
-      const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)({
-        platform: deps.platform ?? process.platform,
-      });
+      const { claudeDesktopPolicyHealth, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
+      const policyState = deps.probeClaudeDesktopPolicy
+        ? await deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
+        : await getCachedClaudeDesktopPolicy({ platform: deps.platform ?? process.platform });
       // Managed-policy conflicts only matter for the gateway profile; first-party mode never
       // touches Desktop's own configuration.
       const policy = claudeDesktopPolicyHealth(mode === "first-party" ? "absent" : policyState);

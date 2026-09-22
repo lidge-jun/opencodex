@@ -71,7 +71,10 @@ test("the aggregate gate expects the job instead of ignoring it", () => {
   const script = (gate?.steps ?? []).map(step => step.run ?? "").join("\n");
   expect(script).toContain("structure-gate) echo \"$structure\" ;;");
   expect(script).toContain("GATED_JOBS=\"$GATED_JOBS structure-gate widget\"");
-  expect(script).toContain("|widget)");
+  // widget is gated through the native arm rather than the ci-scoped one now,
+  // so match it as a pattern inside expected_for instead of pinning which arm
+  // it shares or where it sits in the grouping.
+  expect(script).toMatch(/case "\$1" in[\s\S]*?\bwidget\b[\s\S]*?esac/);
   expect(script).toContain("CHANGES_STRUCTURE");
 });
 

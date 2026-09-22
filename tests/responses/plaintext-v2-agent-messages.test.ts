@@ -729,6 +729,28 @@ describe("plaintext v2 agent message response restoration", () => {
 });
 
 describe("plaintext v2 agent message route policy", () => {
+  test("accepts the initial developer additional_tools catalog used by Codex Responses Lite", () => {
+    const tools = [{ type: "namespace", name: "collaboration", tools: [collaborationTool("spawn_agent"), collaborationTool("followup_task")] }];
+    const initial = { type: "additional_tools", role: "developer", tools };
+    const body = { input: [initial, { type: "message", role: "user", content: "delegate" }] };
+    const before = structuredClone(body);
+    expect(shouldPreparePlaintextV2AgentMessages({ enabled: true, inboundWire: "responses", canonicalChatGpt: true, requestBody: body })).toBe(true);
+    const prepared = preparePlaintextV2AgentMessages(body);
+    expect(prepared.namespaceAliased).toBe(true);
+    const result = prepared.body as { tools?: unknown; input: Array<typeof initial> };
+    expect(result.tools).toBeUndefined();
+    expect(result.input[0]!.tools[0]!.name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(result.input[0]!.tools[0]!.tools[0]!.name).toBe("start_delegated_task");
+    expect(result.input[0]!.tools[0]!.tools[1]!.name).toBe("continue_delegated_task");
+    expect(body).toEqual(before);
+    for (const rejected of [
+      { ...body, tools: [] },
+      { ...body, tools: null },
+      { input: [{ ...initial, role: "user" }] },
+      { input: [{ type: "message", role: "developer", content: "history" }, initial] },
+    ]) expect(preparePlaintextV2AgentMessages(rejected).namespaceAliased).toBe(false);
+  });
+
   test("requires an explicit opt-in, Responses inbound, canonical ChatGPT, and a v2 catalog", () => {
     const requestBody = { tools: [{ type: "namespace", name: "collaboration", tools: [collaborationTool("spawn_agent")] }] };
     const baseline = {
