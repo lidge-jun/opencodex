@@ -81,14 +81,19 @@ test("semantic comparison ignores object-key order but retains content-array ord
 });
 
 test.each([false, true])("rich/custom/approval continuation uses one original socket; API=%s", async api => {
-  const { socket, send, sent, ws, id } = await beginInjection({}, injectionConfig(api));
+  // The catalog authorizes by wire name; a function spec keeps the adapter wire shape verbatim.
+  const tools = [
+    { type: "function", name: "get_value", parameters: { type: "object", properties: {} } },
+    { type: "function", name: "custom", parameters: { type: "object", properties: {} } },
+  ];
+  const { socket, send, sent, ws, id } = await beginInjection({ tools }, injectionConfig(api));
   const func = advertiseInjection(socket);
   const custom = customCall(); const approval = approvalCall();
   emitItem(socket, custom, 1); emitItem(socket, approval, 2);
   completeInjection(socket, { output: [func, custom, approval] });
   await waitForInjection(() => sent.some(frame => frame.type === "response.completed"));
   expect(ws.data.nativeControl).toBeDefined();
-  const frame = continuationFrame({ type: "response.create", previous_response_id: id,
+  const frame = continuationFrame({ type: "response.create", previous_response_id: id, tools,
     input: [savedResult("call-1", "text"), customResult(), approvalResult(false)] }, api);
   send(frame);
   await waitForInjection(() => socket.frames.length === 2);

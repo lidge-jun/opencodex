@@ -76,6 +76,33 @@ function encode(messages: OcxMessage[], modelId = "grok-4.6-high") {
 }
 
 describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () => {
+  test("a long collapsed turn keeps its initiating instruction and full repetition count", () => {
+    const texts = rootTexts(encode(repeatedHistory(4100)));
+    expect(texts.some(text => text.includes("원격 ocx를 최신 버전으로 업데이트해봐"))).toBe(true);
+    expect(texts.filter(text => text.startsWith(REPEAT))).toHaveLength(1);
+    expect(texts.find(text => text.startsWith(REPEAT))).toContain("4100 times in a row");
+  });
+
+  test("a long trailing result run keeps the instruction and invocation preceding the run", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Read the result and explain it", timestamp: 1 },
+      { role: "assistant", content: [
+        { type: "toolCall", id: "long_call", name: "read_file", arguments: { path: "fixture.txt" } },
+      ], timestamp: 2 },
+      ...Array.from({ length: 4100 }, (_, i) => ({
+        role: "toolResult" as const, toolCallId: "long_call", toolName: "read_file",
+        content: "long-run-result", isError: false, timestamp: i + 3,
+      })),
+    ];
+    const texts = rootTexts(encode(messages));
+    expect(texts).toContain("Read the result and explain it");
+    const result = texts.find(text => text.startsWith("[Tool Result]"));
+    expect(result).toContain("read_file");
+    expect(result).toContain('"path":"fixture.txt"');
+    expect(result).toContain("long-run-result");
+    expect(result).toContain("4100 times in a row");
+  });
+
   test("consecutive identical assistant entries collapse into one marked entry", () => {
     const texts = rootTexts(encode(repeatedHistory(5)));
     const repeats = texts.filter(text => text.startsWith(REPEAT));

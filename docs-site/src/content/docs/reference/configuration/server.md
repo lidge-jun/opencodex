@@ -714,6 +714,6 @@ wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
 
 `codexNativeSteering` and `codexNativeInjection` enable separate, default-off native
 WebSocket control paths. See the canonical guide for
-[supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings-and-public-api),
+[supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings),
 [typed result and approval continuations](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion),
 and [confirmation deadlines and retained context](../../guides/codex-integration.md#steering-confirmation-deadlines-and-retained-context).

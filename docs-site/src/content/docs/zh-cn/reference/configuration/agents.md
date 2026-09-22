@@ -88,8 +88,10 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 `authMode: "forward"` 和准确的基础地址 `https://chatgpt.com/backend-api/codex`。OpenAI API key
 provider、自定义 OpenAI 兼容网关、最终发往其他 provider 的请求，以及非 Responses 调用都不会被改写。
 
-对于符合条件的 v2 请求，opencodex 只识别顶层 `collaboration` namespace，而且它必须直接包含
-`spawn_agent`。原生 ChatGPT 收到请求前，opencodex 会删除 `spawn_agent`、`send_message` 和
+对于符合条件的 v2 请求，opencodex 只识别工具目录顶层的 `collaboration` namespace，而且它必须直接包含
+`spawn_agent`。目录可以位于顶层 `tools`；如果该字段不存在，也可以位于首个输入项的 developer
+`additional_tools` 中（Responses Lite）。显式顶层目录优先，user 角色和后续历史目录不会启用转换。
+原生 ChatGPT 收到请求前，opencodex 会删除 `spawn_agent`、`send_message` 和
 `followup_task` 中已有的 `parameters.properties.message.encrypted: true`。ChatGPT 会按保留的
 `collaboration` namespace 和三个工具名处理消息，因此请求会给这四个名称使用固定的临时别名。
 修改前，opencodex 会检查顶层和 `additional_tools` 工具目录、嵌套 namespace、

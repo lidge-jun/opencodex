@@ -927,8 +927,7 @@ Do not rewrite an active paginated rollout or thread row to migrate those conver
 
 ## Experimental native mid-turn steering
 
-For a compatible model on the canonical ChatGPT forward route or an explicitly configured
-[OpenAI API WebSocket route](#steering-continuation-settings-and-public-api), and a client
+For a compatible model on the canonical ChatGPT forward route, and a client
 that sends `response.steer`, enable both options in `~/.opencodex/config.json` and restart
 OpenCodex before starting a fresh turn:
 
@@ -953,7 +952,7 @@ Do not rerun tools or resend accepted steering text. Model, account, tool declar
 may change in an explicit saved-result continuation as described below. Other changes
 require an explicitly stopped or finished turn and normal new dispatch. Multiple independent conversations use independent connections.
 
-HTTP fallback, noncanonical gateways, translated models, sidecars, Combo attempts and plaintext V2
+HTTP fallback, noncanonical gateways, public API-key routes, translated models, sidecars, Combo attempts and plaintext V2
 restoration do not support this option. It does not add steering capability to a model or
 a client that lacks it. Unsupported routes return a protocol error rather than silently
 ignoring input. Disconnected or timed-out delivery may be unknown: never automatically
@@ -983,6 +982,16 @@ waits, so the per-stage deadlines above compose to a worst case on the order of 
 During that time the turn holds one physical socket and one pinned credential that cannot rotate,
 because the channel deliberately never re-enters account selection. Treat an enabled steering
 connection as a long-lived session resource rather than an ordinary bounded request.
+
+Steering frames also share the proxy's configured body and memory limits. A control frame above
+[`maxInboundBodyBytes`](/reference/inbound-body-admission/) is refused before
+it is parsed on an established control connection (an initial frame is still parsed before
+its type-based limit applies), and the reconstructed body sent upstream is refused when it exceeds
+[`maxUpstreamBodyBytes`](/reference/configuration/providers/). Each
+connection's replay journal is capped at 32 MiB and counted as pinned state against
+[`appOwnedMemoryBudgetMb`](/reference/configuration/server/); admitting a
+journal demotes evictable caches first rather than failing, and the aggregate across live journals
+is capped at 128 MiB regardless of the configured budget.
 
 A timeout means **delivery is unknown**, not that the server rejected the input.
 Do not resend an accepted instruction or rerun a tool automatically. Inspect the
@@ -1064,6 +1073,11 @@ A missing acknowledgement or a disconnect means delivery can be **unknown**. Do
 not automatically resend a result, restart a tool or change accounts to retry it.
 The pending queue is limited to 32 frames and 8 MiB, with 1,024 advertised function
 calls, a 32 MiB replay journal and at most 128 responses per owned connection.
+Injection journals share the pinned memory budget and 128 MiB aggregate ceiling
+with steering journals; see [steering memory limits](#steering-confirmation-deadlines-and-retained-context).
+The configured upstream body limit is checked before a result enters the queue,
+even while another result awaits acknowledgement. An `outbound_body_too_large`
+refusal leaves the connection usable for a corrected result without rerunning its tool.
 Each sent injection has a 90-second acknowledgement deadline that unrelated output
 cannot extend; a saved-result wait is limited to 30 minutes. Existing frame limits
 and stall timeouts still apply.
@@ -1112,12 +1126,11 @@ can follow a completed multi-agent turn as a new explicit request using ordinary
 routing. Client support and backend entitlement still require live verification.
 
 
-## Steering continuation settings and public API
+## Steering continuation settings
 
 An explicit saved-result `response.create` may override `reasoning` (effort and
 summary), `text` (verbosity and supported structured-output format), and
-`stream_options`. On an explicitly configured public API route it may also
-change `max_output_tokens`. Subscription routes refuse that token-limit override
+`stream_options`. Subscription routes refuse a `max_output_tokens` override
 instead of silently ignoring it. Normal provider pins, subagent caps, effort
 mapping and summary/verbosity capability exclusions still apply.
 
@@ -1129,14 +1142,11 @@ corrected request can be submitted without rerunning its tool. The server still
 decides which settings the chosen model accepts. Changes to model, account,
 provider, tools, instructions or service tier require a separate ordinary turn.
 
-For public API steering, configure an `openai-responses` provider with exactly
-`https://api.openai.com/v1`, its API key and `upstreamWebsocket: true`, then use its
-normal prefixed model selector with `websockets: true` and
-`codexNativeSteering: true`. This does not buy API credit or redirect a ChatGPT
-subscription to separately billed usage. A supporting single-agent model/execution
-mode is still required. Conversation-bound responses and API automatic compaction
-are not steerable; their ordinary responses are preserved and a steering attempt
-receives an explanatory error. The multi-agent injection path stays separate.
+Native steering is restricted to the canonical ChatGPT subscription route. Public
+API-key and gateway routes are not steerable; their ordinary responses are preserved
+and a steering attempt receives an explanatory error. This prevents successor
+generations on a retained socket from bypassing normal per-request admission. The
+separately gated public API multi-agent injection path remains available.
 
 ### Executable direct-versus-proxy wire probe
 

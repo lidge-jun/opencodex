@@ -173,7 +173,10 @@ gateways, routes whose final destination is another provider, and non-Responses 
 rewritten.
 
 For an eligible v2 request, opencodex recognizes the catalog by a top-level `collaboration`
-namespace with a direct `spawn_agent` child. It removes
+namespace with a direct `spawn_agent` child. The catalog can be in top-level `tools`, or in the
+first input item's developer `additional_tools` when `tools` is absent (Responses Lite).
+An explicit top-level catalog takes precedence; user-role and later historical catalogs do not
+activate the option. It removes
 `parameters.properties.message.encrypted: true`, when present, only from `spawn_agent`,
 `send_message`, and `followup_task`. ChatGPT reserves both the `collaboration` namespace and those
 three tool names, so the request uses fixed private aliases for all four identities. Before making
