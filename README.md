@@ -96,22 +96,24 @@ re-opens the dashboard at any time.
 
 A native shell around the same dashboard, plus a WidgetKit extension that shows proxy status,
 today's usage and provider quotas without opening a browser. The proxy is unchanged: the app
-finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays at
-**http://localhost:10100**.
+finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays on the proxy's
+port (**http://localhost:10100** unless you configured another).
 
-It is beta. Builds are signed for integrity but not notarized, so macOS asks for a
-right-click → **Open** on first launch and Windows SmartScreen warns on the installer. The
-widget needs macOS 14 or newer; the snapshot model it renders lives in [`app/`](./app)
-(`MenuBarCore`).
+It is beta. Release builds of the macOS app are signed with a Developer ID and notarized (local
+builds are ad-hoc signed); the Windows installer is not code-signed yet, so SmartScreen warns on
+first run. The widget needs macOS 14 or newer; the snapshot model it renders lives in
+[`app/`](./app) (`MenuBarCore`).
 
 Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
-it locally with `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
+it locally: run `bun install && bun run build:gui` at the repository root, then
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` in
+`desktop/`.
 
 Install locations, service files and everything else written to disk are listed in
 [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
-[Desktop App guide](https://lidge-jun.github.io/opencodex/guides/desktop-app/) and the
-[macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/) cover
-per-platform installation and the Gatekeeper prompt.
+[Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover per-platform
+installation and first launch.
 
 </details>
 
@@ -207,8 +209,9 @@ setup, authenticated acceptance checks, remote management, and rollback.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -216,8 +219,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
