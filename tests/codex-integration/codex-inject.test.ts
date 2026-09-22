@@ -736,9 +736,8 @@ describe("Design B openai_base_url injection", () => {
   });
 
   test("provider-table retention accepts a table that differs only in blank-line count", () => {
-    // The comparison is intentionally on the extracted table string, not raw bytes:
-    // extractOcxProviderTableBlock collapses blank-line runs and trims the block tail,
-    // so a cosmetic blank-line edit keeps the user's own bytes instead of refusing.
+    // Semantic comparison ignores cosmetic spacing outside values while keeping
+    // the existing bytes; capture never collapses newlines inside string contents.
     const captured = [
       "# Auto-injected by opencodex",
       "[model_providers.opencodex]",
