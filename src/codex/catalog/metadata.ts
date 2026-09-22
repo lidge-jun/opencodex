@@ -31,7 +31,7 @@ import {
 import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
-import upstreamModelsSnapshot from "../data/upstream-models.json";
+import { pinnedNativeModelRows } from "./pinned-models";
 
 
 import type { RawEntry } from "./parsing";
@@ -42,7 +42,10 @@ import { RESERVE_METADATA_SOURCE_FIELD } from "./reserve";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_DAYBREAK_BLUE_MODEL,
+  NATIVE_GPT6_ASTRA_MINOR_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
+  NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT6_SOL_MODEL,
   NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -59,7 +62,10 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   NATIVE_DAYBREAK_BLUE_MODEL,
+  NATIVE_GPT6_ASTRA_MINOR_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
+  NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT6_SOL_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -75,6 +81,10 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   // The shipped pin also backfills older installed Codex catalogs that predate Astra.
   NATIVE_GPT6_ASTRA_MODEL,
+  // Same backfill for Sol and Luna from the roster pin: the live roster serves them only to
+  // client_version >= 0.155.0, so an installed catalog built by an older client lacks them.
+  // Astra Minor is deliberately absent: it is gated, and nativeOpenAiSlugs() would drop it anyway.
+  NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
 ];
 
 export function configuredNativeAliasSlugs(
@@ -177,10 +187,19 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // maxInputTokens is clamped to the resolved window by nativeOpenAiMaxInputTokens, so this reads
   // 272,000 by default and 872,000 only under the long-window opt-in.
   [NATIVE_GPT6_ASTRA_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
+  // Sol and Luna ship the same 272,000 / 872,000 pair in their roster rows (probe of
+  // /backend-api/codex/models?client_version=0.155.0, 2026-09-23). Unmeasured here, so they take
+  // the row's own ceiling rather than the GPT-5.6 family's measured 922,000.
+  [NATIVE_GPT6_SOL_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
+  [NATIVE_GPT6_LUNA_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
+  // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
+  // it, so this is inheritance, not a measurement.
+  [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
 };
 
+// Snapshot rows plus roster-captured rows the snapshot lacks (see pinned-models.ts).
 const PINNED_UPSTREAM_MODELS: Map<string, RawEntry> = new Map(
-  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
+  (pinnedNativeModelRows() as unknown as ReadonlyArray<RawEntry>)
     // Upstream stopped shipping top-level `base_instructions` (openai/codex #43604); every row
     // still carries `model_messages.instructions_template`. Derive at projection time so the
     // pinned JSON stays byte-identical to upstream while `hasNativeCatalogRowShape` and the alias
@@ -540,14 +559,19 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   // reserved for slugs that genuinely borrow another model's identity. The allowlist is explicit
   // rather than "has a pinned entry", which would also admit gpt-5.5/gpt-5.2/codex-auto-review into
   // the sync-replacement authority this map carries.
-  if (!sourceSlug.startsWith("gpt-5.6-") && !SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(slug)) {
+  // Keyed on the SOURCE so an alias of a self-described row (gpt-6-astra-minor -> gpt-6-astra)
+  // is admitted the same way an alias of a GPT-5.6 row (Daybreak -> Sol) always was; for a
+  // self-described slug itself the source is the slug, so nothing else changes.
+  if (!sourceSlug.startsWith("gpt-5.6-") && !SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(sourceSlug)) {
     return undefined;
   }
   const source = PINNED_UPSTREAM_MODELS.get(sourceSlug);
   if (!source) return undefined;
   if (slug === sourceSlug) return withDerivedBaseInstructions(source);
 
-  const alias = structuredClone(source) as RawEntry;
+  // Derive before cloning: Astra ships only model_messages, and an alias row without
+  // base_instructions fails the native row-shape checks just as its source would.
+  const alias = structuredClone(withDerivedBaseInstructions(source)) as RawEntry;
   alias.slug = slug;
   const presentation = nativeOpenAiAliasPresentation(slug);
   if (!presentation) return undefined; // an alias with no product identity must not ship a wrong one

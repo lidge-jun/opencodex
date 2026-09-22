@@ -277,11 +277,38 @@ export function applyReasoningLevels(
  * accident disappeared, and the sync path's else-branch
  * (`applyReasoningLevels(entry, ["low","medium","high","xhigh"])`) would have truncated the
  * shipped ladder, silently dropping `max` and `ultra`.
+ *
+ * Membership means "new-ladder native: keep the pinned ladder, never synthesize old-ladder top
+ * rungs" — NOT "advertise ultra". Returning false for a self-described row would be worse, not
+ * safer: every false branch (`finishUpstreamNativeEntry`, the persisted-row path in
+ * build-entries) calls `ensureUltraReasoningLevel`, which would hand `ultra` to `gpt-6-luna`.
+ * Whether `ultra` is added is decided separately by `nativeLadderIncludesUltra`.
+ *
+ * A capability alias of a self-described row qualifies through its source (`gpt-6-astra-minor`
+ * borrows `gpt-6-astra`), the same way Daybreak Blue qualifies through `gpt-5.6-sol`.
  */
 export function isGpt56NativeSlug(slug: string): boolean {
   if (slug.includes("/")) return false;
-  if (SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(slug)) return true;
-  return nativeOpenAiCapabilitySourceSlug(slug).startsWith("gpt-5.6-");
+  const sourceSlug = nativeOpenAiCapabilitySourceSlug(slug);
+  if (SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(sourceSlug)) return true;
+  return sourceSlug.startsWith("gpt-5.6-");
+}
+
+/**
+ * Whether a new-ladder native may advertise `ultra`.
+ *
+ * GPT-5.6 keeps its historical behaviour (always advertised; the wire clamp maps it down). A
+ * self-described GPT-6 row answers from its OWN pinned ladder, or its source's for an alias:
+ * the 2026-09-23 roster probe (`/backend-api/codex/models?client_version=0.155.0`) ships
+ * `gpt-6-sol` with low..ultra but `gpt-6-luna` with low..max, and advertising a rung upstream
+ * never listed would let a subagent spawn request an effort the model does not have.
+ */
+export function nativeLadderIncludesUltra(slug: string): boolean {
+  const sourceSlug = nativeOpenAiCapabilitySourceSlug(slug);
+  if (!SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(sourceSlug)) return true;
+  const levels = UPSTREAM_NATIVE_ENTRIES.get(sourceSlug)?.supported_reasoning_levels;
+  return Array.isArray(levels)
+    && (levels as Array<{ effort?: string }>).some(level => level?.effort === "ultra");
 }
 
 export function ensureGpt56ReasoningLevels(entry: RawEntry): void {
@@ -289,8 +316,12 @@ export function ensureGpt56ReasoningLevels(entry: RawEntry): void {
     ? entry.supported_reasoning_levels as Array<Partial<CodexReasoningLevel>>
     : [];
   const out = [...levels];
-  // max is a real native rung on the 5.6 family — always restored; ultra always advertised.
-  for (const effort of ["max", "ultra"]) {
+  // max is a real native rung on the 5.6 family — always restored. ultra is advertised unless
+  // the slug's pinned ladder (or its source's) stops short of it, as gpt-6-luna's does.
+  const wanted = typeof entry.slug === "string" && !nativeLadderIncludesUltra(entry.slug)
+    ? ["max"]
+    : ["max", "ultra"];
+  for (const effort of wanted) {
     if (out.some(level => level.effort === effort)) continue;
     out.push(CODEX_REASONING_LEVELS.find(level => level.effort === effort)
       ?? { effort, description: `${effort} reasoning` });

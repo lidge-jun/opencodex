@@ -793,6 +793,7 @@
     "forward-admission-separation.test.ts": "providers",
     "fulfill-video.test.ts": "videos",
     "gather-routed-models-single-flight.test.ts": "codex-integration",
+    "gpt6-native-rows.test.ts": "codex-integration",
     "gcp-adc.test.ts": "adapters/google",
     "gemini-37-flash-migration.test.ts": "adapters/google",
     "gemini-inline.test.ts": "images",
