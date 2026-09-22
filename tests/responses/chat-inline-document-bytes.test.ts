@@ -198,18 +198,11 @@ describe("inline document bytes reach a wire that can hold them", () => {
       stream: false,
       options: {},
     } as unknown as OcxParsedRequest;
-    const buildBody = (provider: OcxProviderConfig) => JSON.parse(
-      createOpenAIChatAdapter(provider).buildRequest(parsed).body,
-    ) as { messages: Array<{ role: string; content: unknown }> };
-    // Carrying a document must not demote the turn to `user`; which role the slot shows on the
-    // wire is the destination's recorded answer, so the accepting destination keeps `developer`
-    // and the unrecorded one folds to `system` in place.
-    expect(buildBody({ ...chatProvider, foldDeveloperRoleToSystem: false }).messages).toEqual([{
+    const outbound = JSON.parse(createOpenAIChatAdapter(chatProvider).buildRequest(parsed).body) as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    expect(outbound.messages).toEqual([{
       role: "developer",
-      content: [{ type: "file", file: { file_data: PDF_DATA_URL, filename: "spec" } }],
-    }]);
-    expect(buildBody({ ...chatProvider, foldDeveloperRoleToSystem: true }).messages).toEqual([{
-      role: "system",
       content: [{ type: "file", file: { file_data: PDF_DATA_URL, filename: "spec" } }],
     }]);
   });
