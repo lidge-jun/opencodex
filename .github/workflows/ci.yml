@@ -44,6 +44,8 @@ on:
       - "desktop/**"
       - "gui/**"
       - "assets/**"
+      - ".github/scripts/**"
+      - ".github/workflows/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -51,10 +53,6 @@ on:
       - "tsconfig.json"
       - "README.md"
       - "LICENSE"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/enforce-pr-target.yml"
-      - ".github/workflows/stale-needs-info.yml"
   workflow_dispatch:
     inputs:
       lane:
@@ -230,6 +228,8 @@ jobs:
               - 'desktop/**'
               - 'gui/**'
               - 'assets/**'
+              - '.github/scripts/**'
+              - '.github/workflows/**'
               - '.gitattributes'
               - '.npmignore'
               - 'package.json'
@@ -237,10 +237,6 @@ jobs:
               - 'tsconfig.json'
               - 'README.md'
               - 'LICENSE'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/release.yml'
-              - '.github/workflows/enforce-pr-target.yml'
-              - '.github/workflows/stale-needs-info.yml'
             # Native-gated surface: platform-macos, widget and desktop-shell
             # only run when the code they build or bundle could have changed.
             # The listed src/ entries are what the bundled sidecar executes,

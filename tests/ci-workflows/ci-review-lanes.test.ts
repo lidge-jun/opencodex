@@ -92,14 +92,13 @@ describe("CI review lanes", () => {
 
     // The push trigger and pull-request `changes` job share one expensive-CI
     // allowlist. PRs always create the workflow and aggregate check; this list
-    // decides whether the costly jobs run. Pin the entire list on both paths.
+    // decides whether the costly jobs run. Pin the entire list on both paths,
+    // including every script and workflow used by repository automation.
     const ciPaths = [
       ".dockerignore",
       ".gitattributes",
-      ".github/workflows/ci.yml",
-      ".github/workflows/enforce-pr-target.yml",
-      ".github/workflows/release.yml",
-      ".github/workflows/stale-needs-info.yml",
+      ".github/scripts/**",
+      ".github/workflows/**",
       ".npmignore",
       "Dockerfile",
       "LICENSE",
